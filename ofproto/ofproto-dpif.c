@@ -3099,17 +3099,9 @@ port_del(struct ofproto *ofproto_, ofp_port_t ofp_port)
     sset_find_and_delete(&ofproto->ghost_ports,
                          netdev_get_name(ofport->up.netdev));
     ofproto->backer->need_revalidate = REV_RECONFIGURE;
-    if (!ofport->is_tunnel) {
-        error = dpif_port_del(ofproto->backer->dpif, ofport->odp_port);
-        if (!error) {
-            /* The caller is going to close ofport->up.netdev.  If this is a
-             * bonded port, then the bond is using that netdev, so remove it
-             * from the bond.  The client will need to reconfigure everything
-             * after deleting ports, so then the slave will get re-added. */
-            bundle_remove(&ofport->up);
-        }
-    }
-    return error;
+    return (!ofport->is_tunnel
+            ? dpif_port_del(ofproto->backer->dpif, ofport->odp_port)
+            : 0);
 }
 
 static int
