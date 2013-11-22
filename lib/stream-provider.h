@@ -29,6 +29,7 @@ struct stream {
     const struct stream_class *class;
     int state;
     int error;
+    struct pcap_tcp *conn;
     char *name;
 };
 

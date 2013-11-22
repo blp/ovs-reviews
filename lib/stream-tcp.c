@@ -26,6 +26,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "packets.h"
+#include "pcap-file.h"
 #include "socket-util.h"
 #include "util.h"
 #include "stream-provider.h"
@@ -35,6 +36,8 @@
 VLOG_DEFINE_THIS_MODULE(stream_tcp);
 
 /* Active TCP. */
+
+static FILE *capture;
 
 static int
 new_tcp_stream(const char *name, int fd, int connect_status,
@@ -58,7 +61,22 @@ new_tcp_stream(const char *name, int fd, int connect_status,
         return errno;
     }
 
-    return new_fd_stream(name, fd, connect_status, streamp);
+    retval = new_fd_stream(name, fd, connect_status, streamp);
+    if (!retval) {
+        struct stream *stream = *streamp;
+        if (!capture) {
+            capture = pcap_open("capture.pcap", "wb");
+        }
+        if (capture) {
+            ovs_be32 hosts[2] = { local.sin_addr.s_addr,
+                                  remote->sin_addr.s_addr };
+            ovs_be16 ports[2] = { local.sin_port, remote->sin_port };
+
+            stream->conn = xmalloc(sizeof *stream->conn);
+            pcap_tcp_open(stream->conn, capture, hosts, ports);
+        }
+    }
+    return retval;
 }
 
 static int

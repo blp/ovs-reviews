@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Nicira, Inc.
+ * Copyright (c) 2009, 2013 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #define PCAP_FILE_H 1
 
 #include <stdio.h>
+#include "openvswitch/types.h"
 
 struct flow;
 struct ofpbuf;
@@ -35,5 +36,17 @@ struct tcp_reader *tcp_reader_open(void);
 void tcp_reader_close(struct tcp_reader *);
 struct ofpbuf *tcp_reader_run(struct tcp_reader *, const struct flow *,
                               const struct ofpbuf *);
+
+struct pcap_tcp {
+    FILE *file;
+    ovs_be32 hosts[2];
+    ovs_be16 ports[2];
+    uint32_t seqnos[2];
+};
+
+void pcap_tcp_open(struct pcap_tcp *, FILE *,
+                   ovs_be32 hosts[2], ovs_be16 ports[2]);
+void pcap_tcp_close(struct pcap_tcp *);
+void pcap_tcp_send(struct pcap_tcp *, int src, const void *, size_t);
 
 #endif /* pcap-file.h */

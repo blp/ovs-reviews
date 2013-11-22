@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include "byte-order.h"
 #include "compiler.h"
+#include "csum.h"
 #include "flow.h"
 #include "hmap.h"
 #include "ofpbuf.h"
@@ -335,5 +336,110 @@ tcp_reader_run(struct tcp_reader *r, const struct flow *flow,
         return payload;
     } else {
         return NULL;
+    }
+}
+
+static void
+put_tcp_packet(struct pcap_tcp *conn, int src, uint16_t tcp_flags,
+               const void *data, size_t n)
+{
+    int dst = !src;
+
+    do {
+        uint8_t macs[2][ETH_ADDR_LEN] = {
+            { 0x00, 0x23, 0x20, 0xaa, 0xaa, 0xaa },
+            { 0x00, 0x23, 0x20, 0xbb, 0xbb, 0xbb },
+        };
+
+        struct eth_header *eth;
+        struct ip_header *ip;
+        struct tcp_header *tcp;
+
+        uint64_t stub[65536];
+        struct ofpbuf packet;
+
+        size_t chunk = MIN(n, 64000);
+
+        ofpbuf_use_stack(&packet, stub, sizeof stub);
+        ofpbuf_reserve(&packet, 2);
+
+        /* Ethernet header. */
+        eth = ofpbuf_put_uninit(&packet, sizeof *eth);
+        memcpy(eth->eth_dst, macs[dst], ETH_ADDR_LEN);
+        memcpy(eth->eth_src, macs[src], ETH_ADDR_LEN);
+        eth->eth_type = htons(ETH_TYPE_IP);
+
+        /* IP header. */
+        ip = ofpbuf_put_uninit(&packet, sizeof *ip);
+        ip->ip_ihl_ver = IP_IHL_VER(sizeof *ip / 4, IP_VERSION);
+        ip->ip_tos = 0;
+        ip->ip_tot_len = htons(sizeof *ip + sizeof *tcp + chunk);
+        ip->ip_id = htons(0);
+        ip->ip_frag_off = htons(0);
+        ip->ip_ttl = 255;
+        ip->ip_proto = IPPROTO_TCP;
+        ip->ip_csum = htons(0);
+        put_16aligned_be32(&ip->ip_src, conn->hosts[src]);
+        put_16aligned_be32(&ip->ip_dst, conn->hosts[dst]);
+        ip->ip_csum = csum(ip, sizeof *ip);
+
+        /* TCP header. */
+        tcp = ofpbuf_put_uninit(&packet, sizeof *tcp);
+        tcp->tcp_src = conn->ports[src];
+        tcp->tcp_dst = conn->ports[dst];
+        put_16aligned_be32(&tcp->tcp_seq, htonl(conn->seqnos[src]));
+        put_16aligned_be32(&tcp->tcp_ack,
+                           htonl(tcp_flags & TCP_ACK ? conn->seqnos[dst] : 0));
+        tcp->tcp_ctl = TCP_CTL(tcp_flags, sizeof *tcp / 4);
+        tcp->tcp_winsz = OVS_BE16_MAX;
+        tcp->tcp_csum = htons(0);
+        tcp->tcp_urg = htons(0);
+
+        conn->seqnos[src] += tcp_flags & (TCP_SYN | TCP_FIN) ? 1 : chunk;
+
+        ofpbuf_put(&packet, data, chunk);
+
+        pcap_write(conn->file, &packet);
+
+        ofpbuf_uninit(&packet);
+
+        data = ((const uint8_t *) data) + chunk;
+        n -= chunk;
+    } while (n > 0);
+}
+
+void
+pcap_tcp_open(struct pcap_tcp *conn, FILE *file,
+              ovs_be32 hosts[2], ovs_be16 ports[2])
+{
+    conn->file = file;
+    conn->hosts[0] = hosts[0];
+    conn->hosts[1] = hosts[1];
+    conn->ports[0] = ports[0];
+    conn->ports[1] = ports[1];
+    conn->seqnos[0] = random_uint32();
+    conn->seqnos[1] = random_uint32();
+
+    put_tcp_packet(conn, 0, TCP_SYN, NULL, 0);
+    put_tcp_packet(conn, 1, TCP_SYN | TCP_ACK, NULL, 0);
+    put_tcp_packet(conn, 0, TCP_ACK, NULL, 0);
+}
+
+void
+pcap_tcp_close(struct pcap_tcp *conn)
+{
+    if (conn) {
+        put_tcp_packet(conn, 0, TCP_FIN, NULL, 0);
+        put_tcp_packet(conn, 1, TCP_FIN | TCP_ACK, NULL, 0);
+        put_tcp_packet(conn, 0, TCP_ACK, NULL, 0);
+    }
+}
+
+void
+pcap_tcp_send(struct pcap_tcp *conn, int src,
+              const void *data, size_t n)
+{
+    if (n > 0) {
+        put_tcp_packet(conn, src, TCP_ACK | TCP_PSH, data, n);
     }
 }

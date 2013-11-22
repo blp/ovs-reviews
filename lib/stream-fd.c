@@ -24,6 +24,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include "fatal-signal.h"
+#include "pcap-file.h"
 #include "poll-loop.h"
 #include "socket-util.h"
 #include "util.h"
@@ -77,6 +78,10 @@ static void
 fd_close(struct stream *stream)
 {
     struct stream_fd *s = stream_fd_cast(stream);
+    if (stream->conn) {
+        pcap_tcp_close(stream->conn);
+        free(stream->conn);
+    }
     close(s->fd);
     free(s);
 }
@@ -95,6 +100,10 @@ fd_recv(struct stream *stream, void *buffer, size_t n)
     ssize_t retval;
 
     retval = read(s->fd, buffer, n);
+    if (retval > 0 && stream->conn) {
+        pcap_tcp_send(stream->conn, 1, buffer, retval);
+        fflush(stream->conn->file);
+    }
     return retval >= 0 ? retval : -errno;
 }
 
@@ -105,6 +114,10 @@ fd_send(struct stream *stream, const void *buffer, size_t n)
     ssize_t retval;
 
     retval = write(s->fd, buffer, n);
+    if (retval > 0 && stream->conn) {
+        pcap_tcp_send(stream->conn, 0, buffer, retval);
+        fflush(stream->conn->file);
+    }
     return (retval > 0 ? retval
             : retval == 0 ? -EAGAIN
             : -errno);
