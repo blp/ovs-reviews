@@ -208,6 +208,14 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
         return !wc->masks.skb_priority;
     case MFF_PKT_MARK:
         return !wc->masks.pkt_mark;
+    case MFF_CT_STATE:
+        return !wc->masks.ct_state;
+    case MFF_CT_ZONE:
+        return !wc->masks.ct_zone;
+    case MFF_CT_MARK:
+        return !wc->masks.ct_mark;
+    case MFF_CT_LABEL:
+        return is_all_zeros(&wc->masks.ct_label, sizeof(wc->masks.ct_label));
     CASE_MFF_REGS:
         return !wc->masks.regs[mf->id - MFF_REG0];
     CASE_MFF_XREGS:
@@ -494,6 +502,10 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_IN_PORT:
     case MFF_SKB_PRIORITY:
     case MFF_PKT_MARK:
+    case MFF_CT_STATE:
+    case MFF_CT_ZONE:
+    case MFF_CT_MARK:
+    case MFF_CT_LABEL:
     CASE_MFF_REGS:
     CASE_MFF_XREGS:
     case MFF_ETH_SRC:
@@ -639,6 +651,22 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
 
     case MFF_PKT_MARK:
         value->be32 = htonl(flow->pkt_mark);
+        break;
+
+    case MFF_CT_STATE:
+        value->u8 = flow->ct_state;
+        break;
+
+    case MFF_CT_ZONE:
+        value->be16 = htons(flow->ct_zone);
+        break;
+
+    case MFF_CT_MARK:
+        value->be32 = htonl(flow->ct_mark);
+        break;
+
+    case MFF_CT_LABEL:
+        memcpy(&value->u128, &flow->ct_label, sizeof(flow->ct_label));
         break;
 
     CASE_MFF_REGS:
@@ -863,6 +891,22 @@ mf_set_value(const struct mf_field *mf,
 
     case MFF_PKT_MARK:
         match_set_pkt_mark(match, ntohl(value->be32));
+        break;
+
+    case MFF_CT_STATE:
+        match_set_ct_state(match, value->u8);
+        break;
+
+    case MFF_CT_ZONE:
+        match_set_ct_zone(match, ntohs(value->be16));
+        break;
+
+    case MFF_CT_MARK:
+        match_set_ct_mark(match, ntohl(value->be32));
+        break;
+
+    case MFF_CT_LABEL:
+        match_set_ct_label(match, value->u128);
         break;
 
     CASE_MFF_REGS:
@@ -1144,6 +1188,22 @@ mf_set_flow_value(const struct mf_field *mf,
         flow->pkt_mark = ntohl(value->be32);
         break;
 
+    case MFF_CT_STATE:
+        flow->ct_state = value->u8;
+        break;
+
+    case MFF_CT_ZONE:
+        flow->ct_zone = ntohs(value->be16);
+        break;
+
+    case MFF_CT_MARK:
+        flow->ct_mark = ntohl(value->be32);
+        break;
+
+    case MFF_CT_LABEL:
+        memcpy(&flow->ct_label, &value->u128, sizeof(flow->ct_label));
+        break;
+
     CASE_MFF_REGS:
         flow->regs[mf->id - MFF_REG0] = ntohl(value->be32);
         break;
@@ -1412,6 +1472,26 @@ mf_set_wild(const struct mf_field *mf, struct match *match)
         match->wc.masks.pkt_mark = 0;
         break;
 
+    case MFF_CT_STATE:
+        match->flow.ct_state = 0;
+        match->wc.masks.ct_state = 0;
+        break;
+
+    case MFF_CT_ZONE:
+        match->flow.ct_zone = 0;
+        match->wc.masks.ct_zone = 0;
+        break;
+
+    case MFF_CT_MARK:
+        match->flow.ct_mark = 0;
+        match->wc.masks.ct_mark = 0;
+        break;
+
+    case MFF_CT_LABEL:
+        memset(&match->flow.ct_label, 0, sizeof(match->flow.ct_label));
+        memset(&match->wc.masks.ct_label, 0, sizeof(match->wc.masks.ct_label));
+        break;
+
     CASE_MFF_REGS:
         match_set_reg_masked(match, mf->id - MFF_REG0, 0, 0);
         break;
@@ -1589,6 +1669,7 @@ mf_set(const struct mf_field *mf,
     }
 
     switch (mf->id) {
+    case MFF_CT_ZONE:
     case MFF_RECIRC_ID:
     case MFF_CONJ_ID:
     case MFF_IN_PORT:
@@ -1662,6 +1743,18 @@ mf_set(const struct mf_field *mf,
     case MFF_PKT_MARK:
         match_set_pkt_mark_masked(match, ntohl(value->be32),
                                   ntohl(mask->be32));
+        break;
+
+    case MFF_CT_STATE:
+        match_set_ct_state_masked(match, value->u8, mask->u8);
+        break;
+
+    case MFF_CT_MARK:
+        match_set_ct_mark_masked(match, ntohl(value->be32), ntohl(mask->be32));
+        break;
+
+    case MFF_CT_LABEL:
+        match_set_ct_label_masked(match, value->u128, mask->u128);
         break;
 
     case MFF_ETH_DST:
@@ -1852,6 +1945,32 @@ syntax_error:
     } else {
         return xasprintf("%s: bad syntax for %s %s", s, mf->name, err_str);
     }
+}
+
+static char *
+mf_from_u128_string(const struct mf_field *mf, const char *s_,
+                    ovs_u128 *valuep, ovs_u128 *maskp)
+{
+    char *s = CONST_CAST(char *, s_);
+
+    ovs_assert(mf->n_bytes == sizeof(*valuep));
+
+    if (!parse_int_string(s, (uint8_t *)valuep, sizeof(*valuep), &s)) {
+        if (strlen(s)) {
+            if (*s == '/'
+                && !parse_int_string(s + 1, (uint8_t *)maskp, sizeof(*maskp),
+                                     &s)) {
+                return NULL;
+            } else {
+                /* parse error */
+            }
+        } else {
+            memset(maskp, 0xff, sizeof(*maskp));
+            return NULL;
+        }
+    }
+
+    return xasprintf("%s: invalid u128 for %s", s, mf->name);
 }
 
 static char *
@@ -2057,6 +2176,83 @@ mf_from_tun_flags_string(const char *s, ovs_be16 *flagsp, ovs_be16 *maskp)
                           htons(FLOW_TNL_PUB_F_MASK), maskp);
 }
 
+/* xxx Possible to do a parse_flags()-like function from lib/odp-utils.c
+ * xxx and share it was mf_from_tcp_flags_string. */
+/* xxx reuse parse_mf_flags()? */
+static char *
+mf_from_ct_state_string(const char *s, uint8_t *flagsp, uint8_t *maskp)
+{
+    uint8_t flags = 0;
+    uint8_t mask = 0;
+    uint8_t bit;
+    int n;
+
+    if (ovs_scan(s, "%"SCNi8"/%"SCNi8"%n", &flags, &mask, &n) && !s[n]) {
+        *flagsp = flags;
+        *maskp = mask;
+        return NULL;
+    }
+    if (ovs_scan(s, "%"SCNi8"%n", &flags, &n) && !s[n]) {
+        *flagsp = flags;
+        *maskp = UINT8_MAX;
+        return NULL;
+    }
+
+    while (*s != '\0') {
+        bool set;
+        int name_len;
+
+        switch (*s) {
+        case '+':
+            set = true;
+            break;
+        case '-':
+            set = false;
+            break;
+        default:
+            return xasprintf("%s: Connection state flag must be preceded "
+                             "by '+' (for SET) or '-' (NOT SET)", s);
+        }
+        s++;
+
+        name_len = strcspn(s,"+-");
+
+        for (bit = 1; bit; bit <<= 1) {
+            const char *fname = packet_ct_state_to_string(bit);
+            size_t len;
+
+            if (!fname) {
+                continue;
+            }
+
+            len = strlen(fname);
+            if (len != name_len) {
+                continue;
+            }
+            if (!strncmp(s, fname, len)) {
+                if (mask & bit) {
+                    return xasprintf("%s: Each connection state flag can be "
+                                     "specified only once", s);
+                }
+                if (set) {
+                    flags |= bit;
+                }
+                mask |= bit;
+                break;
+            }
+        }
+
+        if (!bit) {
+            return xasprintf("%s: unknown connection state flag(s)", s);
+        }
+        s += name_len;
+    }
+
+    *flagsp = flags;
+    *maskp = mask;
+    return NULL;
+}
+
 /* Parses 's', a string value for field 'mf', into 'value' and 'mask'.  Returns
  * NULL if successful, otherwise a malloc()'d string describing the error. */
 char *
@@ -2076,6 +2272,16 @@ mf_parse(const struct mf_field *mf, const char *s,
     case MFS_HEXADECIMAL:
         error = mf_from_integer_string(mf, s,
                                        (uint8_t *) value, (uint8_t *) mask);
+        break;
+
+    case MFS_CT_STATE:
+        ovs_assert(mf->n_bytes == sizeof(uint8_t));
+        error = mf_from_ct_state_string(s, &value->u8, &mask->u8);
+        break;
+
+    case MFS_CT_LABEL:
+        ovs_assert(mf->n_bytes == sizeof(ovs_u128));
+        error = mf_from_u128_string(mf, s, &value->u128, &mask->u128);
         break;
 
     case MFS_ETHERNET:
@@ -2198,6 +2404,25 @@ mf_format_tcp_flags_string(ovs_be16 value, ovs_be16 mask, struct ds *s)
                         TCP_FLAGS(mask), TCP_FLAGS(OVS_BE16_MAX));
 }
 
+static void
+mf_format_ct_state_string(uint8_t value, uint8_t mask, struct ds *s)
+{
+    format_flags_masked(s, NULL, packet_ct_state_to_string, value, mask,
+                        UINT8_MAX);
+}
+
+static void
+mf_format_ct_label_string(const ovs_u128 *value, const ovs_u128 *mask,
+                            struct ds *s)
+{
+    ds_put_format(s, "ct_label=");
+    ds_put_hex(s, value, sizeof(*value));
+    if (mask) {
+        ds_put_char(s, '/');
+        ds_put_hex(s, mask, sizeof(*mask));
+    }
+}
+
 /* Appends to 's' a string representation of field 'mf' whose value is in
  * 'value' and 'mask'.  'mask' may be NULL to indicate an exact match. */
 void
@@ -2232,6 +2457,14 @@ mf_format(const struct mf_field *mf,
     case MFS_DECIMAL:
     case MFS_HEXADECIMAL:
         mf_format_integer_string(mf, (uint8_t *) value, (uint8_t *) mask, s);
+        break;
+
+    case MFS_CT_STATE:
+        mf_format_ct_state_string(value->u8, mask ? mask->u8 : UINT8_MAX, s);
+        break;
+
+    case MFS_CT_LABEL:
+        mf_format_ct_label_string(&value->u128, (ovs_u128 *)mask, s);
         break;
 
     case MFS_ETHERNET:

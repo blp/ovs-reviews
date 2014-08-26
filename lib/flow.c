@@ -199,6 +199,23 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
     }                                           \
 }
 
+#define miniflow_push_uint8_(MF, OFS, VALUE)                    \
+{                                                               \
+    MINIFLOW_ASSERT(MF.data < MF.end)                           \
+                                                                \
+    if ((OFS) % 8 == 0) {                                       \
+        miniflow_set_map(MF, OFS / 8);                          \
+        *(uint8_t *)MF.data = VALUE;                            \
+    } else if ((OFS) % 8 < 7) {                                 \
+        miniflow_assert_in_map(MF, OFS / 8);                    \
+        *((uint8_t *)MF.data + (OFS % 8)) = VALUE;              \
+    } else {                                                    \
+        miniflow_assert_in_map(MF, OFS / 8);                    \
+        *((uint8_t *)MF.data + 7) = VALUE;                      \
+        MF.data++;                                              \
+    }                                                           \
+}
+
 #define miniflow_pad_to_64_(MF, OFS)                            \
 {                                                               \
     MINIFLOW_ASSERT((OFS) % 8 != 0);                            \
@@ -250,6 +267,9 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
     MF.data += 1;                   /* First word only. */      \
 }
 
+#define miniflow_push_uint64(MF, FIELD, VALUE)                      \
+    miniflow_push_uint64_(MF, offsetof(struct flow, FIELD), VALUE)
+
 #define miniflow_push_uint32(MF, FIELD, VALUE)                      \
     miniflow_push_uint32_(MF, offsetof(struct flow, FIELD), VALUE)
 
@@ -261,6 +281,9 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
 
 #define miniflow_push_be16(MF, FIELD, VALUE)                        \
     miniflow_push_be16_(MF, offsetof(struct flow, FIELD), VALUE)
+
+#define miniflow_push_uint8(MF, FIELD, VALUE)                      \
+    miniflow_push_uint8_(MF, offsetof(struct flow, FIELD), VALUE)
 
 #define miniflow_pad_to_64(MF, FIELD)                       \
     miniflow_pad_to_64_(MF, offsetof(struct flow, FIELD))
@@ -478,6 +501,17 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     if (md->recirc_id) {
         miniflow_push_uint32(mf, recirc_id, md->recirc_id);
         miniflow_pad_to_64(mf, conj_id);
+    }
+
+    if (md->ct_mark || md->ct_zone || md->ct_state) {
+        miniflow_push_uint32(mf, ct_mark, md->ct_mark);
+        miniflow_push_uint16(mf, ct_zone, md->ct_zone);
+        miniflow_push_uint8(mf, ct_state, md->ct_state);
+        miniflow_pad_to_64(mf, pad1);
+    }
+    if (!is_all_zeros(&md->ct_label, sizeof md->ct_label)) {
+        miniflow_push_words(mf, ct_label, &md->ct_label,
+                            sizeof md->ct_label / 8);
     }
 
     /* Initialize packet's layer pointer and offsets. */
@@ -833,6 +867,18 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
     }
 
     match_set_in_port(flow_metadata, flow->in_port.ofp_port);
+    if (flow->ct_state != 0) {
+        match_set_ct_state(flow_metadata, flow->ct_state);
+    }
+    if (flow->ct_zone != 0) {
+        match_set_ct_zone(flow_metadata, flow->ct_zone);
+    }
+    if (flow->ct_mark != 0) {
+        match_set_ct_mark(flow_metadata, flow->ct_mark);
+    }
+    if (!is_all_zeros(&flow->ct_label, sizeof(flow->ct_label))) {
+        match_set_ct_label(flow_metadata, flow->ct_label);
+    }
 }
 
 char *
@@ -1108,6 +1154,18 @@ flow_format(struct ds *ds, const struct flow *flow)
     if (!flow->dp_hash) {
         WC_UNMASK_FIELD(wc, dp_hash);
     }
+    if (!flow->ct_state) {
+        WC_UNMASK_FIELD(wc, ct_state);
+    }
+    if (!flow->ct_zone) {
+        WC_UNMASK_FIELD(wc, ct_zone);
+    }
+    if (!flow->ct_mark) {
+        WC_UNMASK_FIELD(wc, ct_mark);
+    }
+    if (is_all_zeros(&flow->ct_label, sizeof(flow->ct_label))) {
+        WC_UNMASK_FIELD(wc, ct_label);
+    }
     for (int i = 0; i < FLOW_N_REGS; i++) {
         if (!flow->regs[i]) {
             WC_UNMASK_FIELD(wc, regs[i]);
@@ -1182,6 +1240,10 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
 
     WC_MASK_FIELD(wc, skb_priority);
     WC_MASK_FIELD(wc, pkt_mark);
+    WC_MASK_FIELD(wc, ct_state);
+    WC_MASK_FIELD(wc, ct_zone);
+    WC_MASK_FIELD(wc, ct_mark);
+    WC_MASK_FIELD(wc, ct_label);
     WC_MASK_FIELD(wc, recirc_id);
     WC_MASK_FIELD(wc, dp_hash);
     WC_MASK_FIELD(wc, in_port);
@@ -1285,6 +1347,10 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
     FLOWMAP_SET(map, dl_src);
     FLOWMAP_SET(map, dl_type);
     FLOWMAP_SET(map, vlan_tci);
+    FLOWMAP_SET(map, ct_state);
+    FLOWMAP_SET(map, ct_zone);
+    FLOWMAP_SET(map, ct_mark);
+    FLOWMAP_SET(map, ct_label);
 
     /* Ethertype-dependent fields. */
     if (OVS_LIKELY(flow->dl_type == htons(ETH_TYPE_IP))) {

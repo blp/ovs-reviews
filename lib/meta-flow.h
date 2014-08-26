@@ -703,6 +703,79 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_PKT_MARK,
 
+    /* "ct_state".
+     *
+     * Connection tracking state.  The field is populated by the NXAST_CT
+     * action. The following values describe the state of the connection:
+     *
+     *   - New (0x01): This is the beginning of a new connection.
+     *   - Established (0x02): This is part of an already existing connection.
+     *   - Related (0x04): This is a new connection that is related to an
+     *                     existing connection.
+     *   - Invalid (0x20): This flow could not be associated with a connection.
+     *   - Reply (0x40): This flow is in the reply direction, ie it did not
+     *                   initiate the connection.
+     *   - Tracked (0x80): Connection tracking has occurred.
+     *
+     * Type: u8.
+     * Maskable: bitwise.
+     * Formatting: conn state.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_STATE(105) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_STATE,
+
+    /* "ct_zone".
+     *
+     * Connection tracking zone.  The field is populated by the
+     * NXAST_CT action.
+     *
+     * Type: be16.
+     * Maskable: no.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_ZONE(106) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_ZONE,
+
+    /* "ct_mark".
+     *
+     * Connection tracking mark.  The mark is carried with the
+     * connection tracking state.  On Linux this corresponds to the
+     * nf_conn's "mark" member but the exact implementation is
+     * platform-dependent.
+     *
+     * Type: be32.
+     * Maskable: bitwise.
+     * Formatting: hexadecimal.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_CT_MARK(107) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_MARK,
+
+    /* "ct_label".
+     *
+     * Connection tracking label.  The label is carried with the
+     * connection tracking state.  On Linux this is held in the
+     * conntrack label extension but the exact implementation is
+     * platform-dependent.
+     *
+     * Type: u128.
+     * Maskable: bitwise.
+     * Formatting: conn label.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: NXM_NX_CT_LABEL(108) since v2.5.
+     * OXM: none.
+     */
+    MFF_CT_LABEL,
+
 #if FLOW_N_REGS == 8
     /* "reg<N>".
      *
@@ -1679,6 +1752,8 @@ enum OVS_PACKED_ENUM mf_string {
     MFS_HEXADECIMAL,
 
     /* Other formats. */
+    MFS_CT_STATE,               /* Connection tracking state */
+    MFS_CT_LABEL,               /* Connection tracking label */
     MFS_ETHERNET,
     MFS_IPV4,
     MFS_IPV6,
@@ -1746,6 +1821,7 @@ union mf_value {
     ovs_be32 be32;
     ovs_be16 be16;
     uint8_t u8;
+    ovs_u128 u128;
 };
 BUILD_ASSERT_DECL(sizeof(union mf_value) == 128);
 BUILD_ASSERT_DECL(sizeof(union mf_value) >= GENEVE_MAX_OPT_SIZE);

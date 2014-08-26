@@ -130,6 +130,7 @@ recirc_metadata_hash(const struct recirc_state *state)
 
     hash = hash_pointer(state->ofproto, 0);
     hash = hash_int(state->table_id, hash);
+    hash = hash_boolean(state->conntrack, hash);
     hash = hash_words64((const uint64_t *) &state->metadata,
                         sizeof state->metadata / sizeof(uint64_t),
                         hash);
@@ -158,6 +159,7 @@ recirc_metadata_equal(const struct recirc_state *a,
                  (!b->stack || !b->stack->size))
                 || (a->stack && b->stack && ofpbuf_equal(a->stack, b->stack)))
             && a->mirrors == b->mirrors
+            && a->conntrack == b->conntrack
             && a->action_set_len == b->action_set_len
             && ofpacts_equal(a->ofpacts, a->ofpacts_len,
                              b->ofpacts, b->ofpacts_len));
