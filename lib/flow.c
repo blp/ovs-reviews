@@ -72,9 +72,9 @@ BUILD_ASSERT_DECL(offsetof(struct flow, nw_frag) + 3
 
 /* TCP flags in the first half of a BE32, zeroes in the other half. */
 BUILD_ASSERT_DECL(offsetof(struct flow, tcp_flags) + 2
-                  == offsetof(struct flow, pad) &&
+                  == offsetof(struct flow, pad2) &&
                   offsetof(struct flow, tcp_flags) / 4
-                  == offsetof(struct flow, pad) / 4);
+                  == offsetof(struct flow, pad2) / 4);
 #if WORDS_BIGENDIAN
 #define TCP_FLAGS_BE32(tcp_ctl) ((OVS_FORCE ovs_be32)TCP_FLAGS_BE16(tcp_ctl) \
                                  << 16)
@@ -121,7 +121,7 @@ struct mf_ctx {
  * away.  Some GCC versions gave warnings on ALWAYS_INLINE, so these are
  * defined as macros. */
 
-#if (FLOW_WC_SEQ != 27)
+#if (FLOW_WC_SEQ != 28)
 #define MINIFLOW_ASSERT(X) ovs_assert(X)
 BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
                "assertions enabled. Consider updating FLOW_WC_SEQ after "
@@ -668,7 +668,7 @@ flow_unwildcard_tp_ports(const struct flow *flow, struct flow_wildcards *wc)
 void
 flow_get_metadata(const struct flow *flow, struct flow_metadata *fmd)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 27);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 28);
 
     fmd->dp_hash = flow->dp_hash;
     fmd->recirc_id = flow->recirc_id;
@@ -1519,7 +1519,7 @@ flow_push_mpls(struct flow *flow, int n, ovs_be16 mpls_eth_type,
         flow->mpls_lse[0] = set_mpls_lse_values(ttl, tc, 1, htonl(label));
 
         /* Clear all L3 and L4 fields. */
-        BUILD_ASSERT(FLOW_WC_SEQ == 27);
+        BUILD_ASSERT(FLOW_WC_SEQ == 28);
         memset((char *) flow + FLOW_SEGMENT_2_ENDS_AT, 0,
                sizeof(struct flow) - FLOW_SEGMENT_2_ENDS_AT);
     }
