@@ -270,8 +270,13 @@ def protocols_to_c(protocols):
     else:
         assert False        
 
+def autogen_c_comment():
+    return [
+"/* Generated automatically; do not modify!    -*- buffer-read-only: t -*- */",
+""]
+
 def make_meta_flow(fields):
-    output = []
+    output = autogen_c_comment()
     for f in fields:
         output += ["{"]
         output += ["    %s," % f['mff']]
@@ -341,7 +346,7 @@ def make_meta_flow(fields):
     return output
 
 def make_nx_match(fields):
-    output = []
+    output = autogen_c_comment()
     print "static struct nxm_field_index all_nxm_fields[] = {";
     for f in fields:
         # Sort by OpenFlow version number (nx-match.c depends on this).
@@ -351,8 +356,15 @@ def make_nx_match(fields):
     print "};"
     return output
 
-def extract_ofp_fields(mode):
+def extract_ofp_fields(fn):
+    global file_name
+    global input_file
+    global line_number
     global line
+
+    file_name = fn
+    input_file = open(file_name)
+    line_number = 0
 
     fields = []
 
@@ -456,39 +468,27 @@ def extract_ofp_fields(mode):
     if n_errors:
         sys.exit(1)
 
-    print """\
-/* Generated automatically; do not modify!    "-*- buffer-read-only: t -*- */
-"""
+    return fields
 
-    if mode == '--meta-flow':
-        output = make_meta_flow(fields)
-    elif mode == '--nx-match':
-        output = make_nx_match(fields)
-    else:
-        assert False
-
-    return output
-
+def bad_command_line():
+    sys.stderr.write("invalid arguments; use --help for help\n")
+    sys.exit(1)
 
 if __name__ == '__main__':
     if '--help' in sys.argv:
         usage()
-    elif len(sys.argv) != 3:
-        sys.stderr.write("exactly two arguments required; "
-                         "use --help for help\n")
-        sys.exit(1)
-    elif sys.argv[2] in ('--meta-flow', '--nx-match'):
-        global file_name
-        global input_file
-        global line_number
-        file_name = sys.argv[1]
-        input_file = open(file_name)
-        line_number = 0
+    options = [s for s in sys.argv[1:] if s.startswith('-')]
+    args = [s for s in sys.argv[1:] if not s.startswith('-')]
+    if not options or not args:
+        bad_command_line()
 
-        for oline in extract_ofp_fields(sys.argv[2]):
+    fields = extract_ofp_fields(args[0])
+
+    if options == ['--meta-flow'] and len(args) == 1:
+        for oline in make_meta_flow(fields):
+            print oline
+    elif options == ['--nx-match'] and len(args) == 1:
+        for oline in make_nx_match(fields):
             print oline
     else:
-        sys.stderr.write("invalid arguments; use --help for help\n")
-        sys.exit(1)
-
-        
+        bad_command_line();
