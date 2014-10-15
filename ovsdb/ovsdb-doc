@@ -407,7 +407,3 @@ if __name__ == "__main__":
     except error.Error, e:
         sys.stderr.write("%s: %s\n" % (argv0, e.msg))
         sys.exit(1)
-
-# Local variables:
-# mode: python
-# End:

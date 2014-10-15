@@ -443,10 +443,12 @@ lib/dirs.c: lib/dirs.c.in Makefile
 	mv lib/dirs.c.tmp lib/dirs.c
 
 lib/meta-flow.inc: $(srcdir)/build-aux/extract-ofp-fields lib/meta-flow.h
-	$(AM_V_GEN)$(run_python) $^ --meta-flow > $@.tmp && mv $@.tmp $@
+	$(AM_V_GEN)$(run_python) $< meta-flow $(srcdir)/lib/meta-flow.h > $@.tmp
+	$(AM_V_at)mv $@.tmp $@
 lib/meta-flow.lo: lib/meta-flow.inc
 lib/nx-match.inc: $(srcdir)/build-aux/extract-ofp-fields lib/meta-flow.h
-	$(AM_V_GEN)$(run_python) $^ --nx-match > $@.tmp && mv $@.tmp $@
+	$(AM_V_GEN)$(run_python) $< nx-match $(srcdir)/lib/meta-flow.h > $@.tmp
+	$(AM_V_at)mv $@.tmp $@
 lib/nx-match.lo: lib/nx-match.inc
 CLEANFILES += lib/meta-flow.inc lib/nx-match.inc
 EXTRA_DIST += build-aux/extract-ofp-fields
@@ -483,3 +485,10 @@ lib-install-data-local:
 	$(MKDIR_P) $(DESTDIR)$(LOGDIR)
 	$(MKDIR_P) $(DESTDIR)$(DBDIR)
 
+man_MANS += lib/ovs-fields.7
+lib/ovs-fields.7: $(srcdir)/build-aux/extract-ofp-fields lib/meta-flow.h lib/meta-flow.xml
+	$(AM_V_GEN)PYTHONIOENCODING=utf8 $(run_python) $< \
+            --ovs-version=$(VERSION) ovs-fields \
+	    $(srcdir)/lib/meta-flow.h $(srcdir)/lib/meta-flow.xml > $@.tmp
+	$(AM_V_at)mv $@.tmp $@
+EXTRA_DIST += lib/meta-flow.xml

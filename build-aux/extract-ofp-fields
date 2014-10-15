@@ -1,8 +1,10 @@
 #! /usr/bin/python
 
+import getopt
 import sys
 import os.path
 import re
+import xml.dom.minidom
 
 line = ""
 
@@ -13,6 +15,7 @@ VERSION = {"1.0": 0x01,
            "1.3": 0x04,
            "1.4": 0x05,
            "1.5": 0x06}
+VERSION_REVERSE = dict((v,k) for k, v in VERSION.iteritems())
 
 TYPES = {"u8": 1,
          "be16": 2,
@@ -146,9 +149,7 @@ def parse_oxm(s, prefix, n_bytes):
     oxm_length = n_bytes
     if oxm_class == 0xffff:
         oxm_length += 4
-
-    header = ("NXM_HEADER(0x%x,0x%x,%s,0,%d)"
-              % (oxm_vendor, oxm_class, oxm_type, oxm_length))
+    header = (oxm_vendor, oxm_class, int(oxm_type), oxm_length)
 
     if of_version:
         if of_version not in VERSION:
@@ -275,7 +276,8 @@ def autogen_c_comment():
 "/* Generated automatically; do not modify!    -*- buffer-read-only: t -*- */",
 ""]
 
-def make_meta_flow(fields):
+def make_meta_flow(meta_flow_h):
+    fields = extract_ofp_fields(meta_flow_h)
     output = autogen_c_comment()
     for f in fields:
         output += ["{"]
@@ -345,14 +347,16 @@ def make_meta_flow(fields):
         output += ["},"]
     return output
 
-def make_nx_match(fields):
+def make_nx_match(meta_flow_h):
+    fields = extract_ofp_fields(meta_flow_h)
     output = autogen_c_comment()
     print "static struct nxm_field_index all_nxm_fields[] = {";
     for f in fields:
         # Sort by OpenFlow version number (nx-match.c depends on this).
         for oxm in sorted(f['OXM'], key=lambda x: x[2]):
+            header = ("NXM_HEADER(0x%x,0x%x,%s,0,%d)" % oxm[0])
             print """{ .nf = { %s, %d, "%s", %s } },""" % (
-                oxm[0], oxm[2], oxm[1], f['mff'])
+                header, oxm[2], oxm[1], f['mff'])
     print "};"
     return output
 
@@ -469,26 +473,519 @@ def extract_ofp_fields(fn):
         sys.exit(1)
 
     return fields
+
+## ------------------------ ##
+## Documentation Generation ##
+## ------------------------ ##
 
-def bad_command_line():
-    sys.stderr.write("invalid arguments; use --help for help\n")
-    sys.exit(1)
+def text_to_nroff(s, font=r'\fR'):
+    def escape(match):
+        c = match.group(0)
+        if c.startswith('-'):
+            if c != '-' or font == r'\fB':
+                return '\\' + c
+            else:
+                return '-'
+        if c == '\\':
+            return r'\e'
+        elif c == '"':
+            return r'\(dq'
+        elif c == "'":
+            return r'\(cq'
+        else:
+            fatal("bad escape")
 
-if __name__ == '__main__':
-    if '--help' in sys.argv:
-        usage()
-    options = [s for s in sys.argv[1:] if s.startswith('-')]
-    args = [s for s in sys.argv[1:] if not s.startswith('-')]
-    if not options or not args:
-        bad_command_line()
+    # Escape - \ " ' as needed by nroff.
+    s = re.sub('(-[0-9]|[-"\'\\\\])', escape, s)
+    if s.startswith('.'):
+        s = '\\' + s
+    return s
 
-    fields = extract_ofp_fields(args[0])
+def escape_nroff_literal(s, font=r'\fB'):
+    return font + r'%s\fR' % text_to_nroff(s, font)
 
-    if options == ['--meta-flow'] and len(args) == 1:
-        for oline in make_meta_flow(fields):
-            print oline
-    elif options == ['--nx-match'] and len(args) == 1:
-        for oline in make_nx_match(fields):
-            print oline
+def inline_xml_to_nroff(node, font, xfrm=None):
+    if node.nodeType == node.TEXT_NODE:
+        text = node.data
+        if xfrm:
+            text = xfrm(text)
+        return text_to_nroff(text, font)
+    elif node.nodeType == node.ELEMENT_NODE:
+        if node.tagName in ['code', 'em', 'option', 'b']:
+            s = r'\fB'
+            for child in node.childNodes:
+                s += inline_xml_to_nroff(child, r'\fB')
+            return s + font
+        elif node.tagName == 'ref':
+            s = r'\fB'
+            if node.hasAttribute('field'):
+                s += node.attributes['field'].nodeValue
+            else:
+                fatal("'ref' lacks required attributes: %s" % node.attributes.keys())
+            return s + font
+        elif node.tagName in ['var', 'dfn', 'i', 'cite']:
+            s = r'\fI'
+            for child in node.childNodes:
+                s += inline_xml_to_nroff(child, r'\fI')
+            return s + font
+        elif node.tagName in ['literal']:
+            s = r'\fL'
+            for child in node.childNodes:
+                s += inline_xml_to_nroff(child, r'\fL')
+            return s + font
+        elif node.tagName == 'url':
+            return '\n.URL "' + text_to_nroff(node.attributes['href'].nodeValue) + '"\n'
+        else:
+            fatal("element <%s> unknown or invalid here" % node.tagName)
     else:
-        bad_command_line();
+        fatal("unknown node %s in inline xml" % node)
+
+def pre_to_nroff(nodes, para, font):
+    s = para + '\n.nf\n'
+    for node in nodes:
+        if node.nodeType != node.TEXT_NODE:
+            fatal("<pre> element may only have text children")
+        for line in node.data.split('\n'):
+            s += escape_nroff_literal(line, font) + '\n.br\n'
+    s += '.fi\n'
+    return s
+
+def pic_to_nroff(nodes, para):
+    s = para + '\n.PS\n'
+    for node in nodes:
+        if node.nodeType != node.TEXT_NODE:
+            fatal("<pic> element may only have text children")
+        s += node.data + '\n'
+    s += '.PE\n'
+    return s
+
+def tbl_to_nroff(nodes, para):
+    s = para + '\n.TS\n'
+    for node in nodes:
+        if node.nodeType != node.TEXT_NODE:
+            fatal("<tbl> element may only have text children")
+        s += node.data + '\n'
+    s += '.TE\n'
+    return s
+
+def diagram_header_to_nroff(header_node):
+    header_fields = []
+    i = 0
+    for node in header_node.childNodes:
+        if node.nodeType == node.ELEMENT_NODE and node.tagName == 'bits':
+            name = node.attributes['name'].nodeValue
+            width = node.attributes['width'].nodeValue
+            above = node.getAttribute('above')
+            below = node.getAttribute('below')
+            fill = node.getAttribute('fill')
+            header_fields += [{"name": name,
+                              "tag": "B%d" % i,
+                              "width": width,
+                              "above": above,
+                              "below": below,
+                              "fill": fill}]
+            i += 1
+        elif node.nodeType == node.COMMENT_NODE:
+            pass
+        elif node.nodeType == node.TEXT_NODE and node.data.isspace():
+            pass
+        else:
+            fatal("unknown node %s in diagram <header> element" % node)
+
+    s = ""
+    for f in header_fields:
+        s += "  %s: box \"%s\" width %s" % (f['tag'], f['name'], f['width'])
+        if f['fill'] == 'yes':
+            s += " fill"
+        s += '\n'
+    for f in header_fields:
+        s += "  \"%s\" at %s.n above\n" % (f['above'], f['tag'])
+        s += "  \"%s\" at %s.s below\n" % (f['below'], f['tag'])
+    name = header_node.getAttribute('name')
+    if name == "":
+        visible = " invis"
+    else:
+        visible = ""
+    s += "line <->%s \"%s\" above " % (visible, name)
+    s += "from %s.nw + (0,textht) " % header_fields[0]['tag']
+    s += "to %s.ne + (0,textht)\n" % header_fields[-1]['tag']
+    return s
+
+def diagram_to_nroff(nodes, para):
+    s = para + """
+.PS
+boxht = .2
+textht = 1/6
+fillval = .2
+"""
+    move = False
+    for node in nodes:
+        if node.nodeType == node.ELEMENT_NODE and node.tagName == 'header':
+            if move:
+                s += "move .1\n"
+            s += "[\n" + diagram_header_to_nroff(node) + "]\n"
+            move = True
+        elif node.nodeType == node.ELEMENT_NODE and node.tagName == 'nospace':
+            move = False
+        elif node.nodeType == node.ELEMENT_NODE and node.tagName == 'dots':
+            s += "move .1\n"
+            s += '". . ." ljust\n'
+        elif node.nodeType == node.COMMENT_NODE:
+            pass
+        elif node.nodeType == node.TEXT_NODE and node.data.isspace():
+            pass
+        else:
+            fatal("unknown node %s in diagram <header> element" % node)
+    s += '.PE\n'
+    return s
+
+def block_xml_to_nroff(nodes, para='.PP'):
+    s = ''
+    for node in nodes:
+        if node.nodeType == node.TEXT_NODE:
+            if s == '' and para != '.IP':
+                s = para + '\n'
+            text = re.sub(r'\s+', ' ', node.data)
+            if s.endswith(' '):
+                text = text.lstrip()
+            s += text_to_nroff(text)
+            s = s.lstrip()
+        elif node.nodeType == node.ELEMENT_NODE:
+            if node.tagName in ['ul', 'ol']:
+                if s != "":
+                    s += "\n"
+                s += ".RS\n"
+                i = 0
+                for liNode in node.childNodes:
+                    if (liNode.nodeType == node.ELEMENT_NODE
+                        and liNode.tagName == 'li'):
+                        i += 1
+                        if node.tagName == 'ul':
+                            s += ".IP \\(bu .25in\n"
+                        else:
+                            s += ".IP %d. .25in\n" % i
+                        s += block_xml_to_nroff(liNode.childNodes, ".IP")
+                    elif (liNode.nodeType != node.TEXT_NODE
+                          or not liNode.data.isspace()):
+                        fatal("<%s> element may only have <li> children" % node.tagName)
+                s += ".RE\n"
+            elif node.tagName == 'dl':
+                if s != "":
+                    s += "\n"
+                s += ".RS\n"
+                prev = "dd"
+                for liNode in node.childNodes:
+                    if (liNode.nodeType == node.ELEMENT_NODE
+                        and liNode.tagName == 'dt'):
+                        if prev == 'dd':
+                            s += '.TP\n'
+                        else:
+                            s += '.TQ\n'
+                        prev = 'dt'
+                    elif (liNode.nodeType == node.ELEMENT_NODE
+                          and liNode.tagName == 'dd'):
+                        if prev == 'dd':
+                            s += '.IP\n'
+                        prev = 'dd'
+                    elif (liNode.nodeType != node.TEXT_NODE
+                          or not liNode.data.isspace()):
+                        fatal("<dl> element may only have <dt> and <dd> children")
+                    s += block_xml_to_nroff(liNode.childNodes, ".IP")
+                s += ".RE\n"
+            elif node.tagName == 'p':
+                if s != "":
+                    if not s.endswith("\n"):
+                        s += "\n"
+                    s += para + "\n"
+                s += block_xml_to_nroff(node.childNodes, para)
+            elif node.tagName in ('h1', 'h2', 'h3', 'h4'):
+                if s != "":
+                    if not s.endswith("\n"):
+                        s += "\n"
+                nroffTag = {'h1': 'SH',
+                            'h2': 'SS',
+                            'h3': 'ST',
+                            'h4': 'SU'}[node.tagName]
+                if node.tagName == 'h1':
+                    xfrm = lambda s: s.upper()
+                else:
+                    xfrm = None
+                s += ".%s \"" % nroffTag
+                for child_node in node.childNodes:
+                    s += inline_xml_to_nroff(child_node, r'\fR', xfrm)
+                s += "\"\n"
+            elif node.tagName == 'pre':
+                fixed = node.getAttribute('fixed')
+                if fixed == 'yes':
+                    font = r'\fL'
+                else:
+                    font = r'\fB'
+                s += pre_to_nroff(node.childNodes, para, font)
+            elif node.tagName == 'pic':
+                s += pic_to_nroff(node.childNodes, para)
+            elif node.tagName == 'diagram':
+                s += diagram_to_nroff(node.childNodes, para)
+            elif node.tagName == 'tbl':
+                s += tbl_to_nroff(node.childNodes, para)
+            else:
+                s += inline_xml_to_nroff(node, r'\fR')
+        elif node.nodeType != node.COMMENT_NODE:
+            fatal("unknown node %s in block xml" % node)
+    if s != "" and not s.endswith('\n'):
+        s += '\n'
+    return s
+
+def oxm_to_nroff(oxm):
+    header, name, of_version_nr, ovs_version = oxm
+    oxm_vendor, oxm_class, oxm_type, oxm_length = header
+    s = "\\fB%s\\fR(%d) since" % (name, oxm_type)
+    if of_version_nr:
+        s += " OpenFlow %s and" % VERSION_REVERSE[of_version_nr]
+    s += " Open vSwitch %s" % ovs_version
+    return s
+
+def field_to_xml(field_node, f):
+    f["used"] = True
+    if field_node.hasAttribute('hidden'):
+        return ''
+
+    title = field_node.attributes['title'].nodeValue
+
+    s = """.PP
+\\fB%s Field\\fR
+.TS
+tab(;);
+l lx.
+""" % title
+
+    s += "Name:;\\fB%s\\fR" % f["name"]
+    if f["extra_name"]:
+        s += " (aka \\fB%s\\fR)" % f["extra_name"]
+    s += '\n'
+
+    s += "Width:;"
+    if f["n_bits"] == 8 * f["n_bytes"]:
+        s += "%d bits" % f["n_bits"]
+    else:
+        s += "%d bits (only the least-significant %d bits may be nonzero)" % (
+            f["n_bytes"] * 8, f["n_bits"])
+    s += '\n'
+
+    masks = {"MFM_NONE": "not maskable",
+             "MFM_FULLY": "arbitrary bitwise masks"}
+    s += "Masking:;%s\n" % masks[f["mask"]]
+    s += "Prerequisites:;%s\n" % f["prereqs"]
+
+    access = {True: "read/write",
+              False: "read-only"}[f["writable"]]
+    s += "Access:;%s\n" % access
+
+    of10 = {None: "not supported",
+            "exact match": "yes (exact match only)",
+            "CIDR mask": "yes (CIDR match only)"}
+    s += "OpenFlow 1.0:;%s\n" % of10[f["OF1.0"]]
+
+    of11 = {None: "not supported",
+            "exact match": "yes (exact match only)",
+            "bitwise mask": "yes"}
+    s += "OpenFlow 1.1:;%s\n" % of11[f["OF1.1"]]
+
+    s += "OXM/NXM:;"
+    oxms = sorted(f['OXM'], key=lambda x: x[2])
+    if not oxms:
+        s += "none\n";
+    else:
+        s += oxm_to_nroff(oxms[0]) + "\n"
+        for oxm in oxms[1:]:
+            s += ";" + oxm_to_nroff(oxm) + "\n"
+
+    """
+    oxm_name = f["oxm_name"]
+    nxm_name = f["nxm_name"]
+    for name, protocol in (("OpenFlow 1.0", P_OF10),
+                           ("OpenFlow 1.1", P_OF11),
+                           ("OpenFlow 1.2", P_OF12),
+                           ("OpenFlow 1.3", P_OF13),
+                           ("NXM",          P_NXM)):
+        if f["usable_protocols"] & protocol:
+            support = "yes"
+            if (f["usable_protocols_bitwise"] & protocol
+                or f["maskable"] == "MFM_NONE"):
+                pass
+            elif id_ in ("MFF_IPV4_SRC", "MFF_IPV4_DST",
+                         "MFF_ARP_SPA" "MFF_ARP_TPA"):
+                support += " (CIDR masks only)"
+            else:
+                support += " (exact match only)"
+
+            if protocol & (P_OF12 | P_OF13):
+                if oxm_name.startswith("NXM"):
+                    support += " (via NXM code point)"
+                elif (protocol == P_OF12
+                      and oxm_name and oxm_version[oxm_name] == "1.3"):
+                    support += " (via OpenFlow 1.3 code point)"
+            elif protocol == P_NXM:
+                if nxm_name.startswith("OXM"):
+                    support += " (via OXM code point)"
+                elif id_ == "MFF_ETH_DST":
+                    support += " (only partially maskable before Open vSwitch 1.8, see notes)"
+                elif id_ in ("MFF_IPV4_SRC", "MFF_IPV4_DST",
+                             "MFF_IPV6_SRC", "MFF_IPV6_DST",
+                             "MFF_ARP_SPA" "MFF_ARP_TPA",
+                             "MFF_ND_TARGET"):
+                    support += " (CIDR masks only before Open vSwitch 1.8)"
+                elif (nxm_name
+                      and f["maskable"] != "MFM_NONE"
+                      and nxm_version[nxm_name] != nxm_version[nxm_name + '_W']):
+                    support += " (maskable since Open vSwitch %s)" % nxm_version[nxm_name + '_W']
+        else:
+            support = "no"
+            
+        s += "%s:;%s\n" % (name, support)
+
+    s += "Code Points:;"
+    if not oxm_name:
+        s += "none\n"
+    else:
+        s += code_point_to_nroff(oxm_name)
+        if oxm_name != nxm_name:
+            s += ";" + code_point_to_nroff(nxm_name)
+"""
+    s += ".TE\n"
+
+    s += '.PP\n'
+    s += block_xml_to_nroff(field_node.childNodes)
+        
+    return s
+
+def group_xml_to_nroff(group_node, fields):
+    s = '.bp\n'
+    title = group_node.attributes['title'].nodeValue
+    s += '.SH \"%s\"\n' % text_to_nroff(title.upper() + " FIELDS")
+
+    for node in group_node.childNodes:
+        if (node.nodeType == node.ELEMENT_NODE
+            and node.tagName in ('field', 'group')):
+            id_ = node.attributes['id'].nodeValue
+            s += field_to_xml(node, fields[id_])
+        else:
+            s += block_xml_to_nroff([node])
+    return s
+
+def make_ovs_fields(meta_flow_h, meta_flow_xml):
+    fields = extract_ofp_fields(meta_flow_h)
+    fields_map = {}
+    for f in fields:
+        fields_map[f['mff']] = f
+
+    doc = xml.dom.minidom.parse(meta_flow_xml).documentElement
+
+    global version
+    if version == None:
+        version = "UNKNOWN"
+
+    print '''\
+'\\" tp
+.\\" -*- mode: troff; coding: utf-8 -*-
+.TH "ovs\-fields" 7 "%s" "Open vSwitch" "Open vSwitch Manual"
+.fp 5 L CR              \\" Make fixed-width font available as \\fL.
+.de ST
+.  PP
+.  RS -0.15in
+.  I "\\\\$1"
+.  RE
+..
+
+.de SU
+.  PP
+.  I "\\\\$1"
+..
+
+.de IQ
+.  br
+.  ns
+.  IP "\\\\$1"
+..
+.de URL
+\\\\$2 \\(laURL: \\\\$1 \\(ra\\\\$3
+..
+.if \\n[.g] .mso www.tmac
+.SH NAME
+ovs\-fields \- protocol header fields in OpenFlow and Open vSwitch
+.
+.PP
+''' % version
+
+    s = ''
+    for node in doc.childNodes:
+        if node.nodeType == node.ELEMENT_NODE and node.tagName == "group":
+            s += group_xml_to_nroff(node, fields_map)
+        elif node.nodeType == node.TEXT_NODE:
+            assert node.data.isspace()
+        elif node.nodeType == node.COMMENT_NODE:
+            pass
+        else:
+            s += block_xml_to_nroff([node])
+
+    for f in fields:
+        if "used" not in f:
+            error("%s: field not documented" % f["mff"])
+    if n_errors:
+        sys.exit(1)
+            
+    for oline in s.split("\n"):
+        oline = oline.strip()
+
+        # Life is easier with nroff if we don't try to feed it Unicode.
+        # Fortunately, we only use a few characters outside the ASCII range.
+        oline = oline.replace(u'\u2208', r'\[mo]')
+        oline = oline.replace(u'\u2260', r'\[!=]')
+        oline = oline.replace(u'\u2264', r'\[<=]')
+        if len(oline):
+            print oline
+
+## ------------ ##
+## Main Program ##
+## ------------ ##
+
+if __name__ == "__main__":
+    argv0 = sys.argv[0]
+    try:
+        options, args = getopt.gnu_getopt(sys.argv[1:], 'h',
+                                          ['help', 'ovs-version='])
+    except getopt.GetoptError, geo:
+        sys.stderr.write("%s: %s\n" % (argv0, geo.msg))
+        sys.exit(1)
+
+    global version
+    version = None
+    for key, value in options:
+        if key in ['-h', '--help']:
+            usage()
+        elif key == '--ovs-version':
+            version = value
+        else:
+            sys.exit(0)
+
+    if not args:
+        sys.stderr.write("%s: missing command argument "
+                         "(use --help for help)\n" % argv0)
+        sys.exit(1)
+
+    commands = {"meta-flow": (make_meta_flow, 1),
+                "nx-match": (make_nx_match, 1),
+                "ovs-fields": (make_ovs_fields, 2)}
+
+    if not args[0] in commands:
+        sys.stderr.write("%s: unknown command \"%s\" "
+                         "(use --help for help)\n" % (argv0, args[0]))
+        sys.exit(1)
+
+    func, n_args = commands[args[0]]
+    if len(args) - 1 != n_args:
+        sys.stderr.write("%s: \"%s\" requires %d arguments but %d "
+                         "provided\n"
+                         % (argv0, args[0], n_args, len(args) - 1))
+        sys.exit(1)
+
+    func(*args[1:])
