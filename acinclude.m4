@@ -420,6 +420,10 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
 
   OVS_GREP_IFELSE([$KSRC/include/net/sctp/checksum.h], [sctp_compute_cksum])
 
+  OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack.h], [nf_conntrack_tmpl_insert])
+  OVS_GREP_IFELSE([$KSRC/include/net/netns/conntrack.h], [tmpl],
+                  [OVS_DEFINE([HAVE_NF_CONNTRACK_TEMPLATES])])
+
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [ADD_ALL_VLANS_CMD],
                   [OVS_DEFINE([HAVE_VLAN_BUG_WORKAROUND])])
   OVS_GREP_IFELSE([$KSRC/include/linux/if_vlan.h], [vlan_insert_tag_set_proto])
