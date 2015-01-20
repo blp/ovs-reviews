@@ -26,10 +26,23 @@
 
 /* Active virtual connection to an OpenFlow device. */
 
+/* State of an active vconn.*/
+enum vconn_state {
+    /* This is the ordinary progression of states. */
+    VCS_CONNECTING,             /* Underlying vconn is not connected. */
+    VCS_SEND_HELLO,             /* Waiting to send OFPT_HELLO message. */
+    VCS_RECV_HELLO,             /* Waiting to receive OFPT_HELLO message. */
+    VCS_CONNECTED,              /* Connection established. */
+
+    /* These states are entered only when something goes wrong. */
+    VCS_SEND_ERROR,             /* Sending OFPT_ERROR message. */
+    VCS_DISCONNECTED            /* Connection failed or connection closed. */
+};
+
 /* This structure should be treated as opaque by vconn implementations. */
 struct vconn {
     const struct vconn_class *vclass;
-    int state;
+    enum vconn_state state;
     int error;
 
     /* OpenFlow versions. */

@@ -46,19 +46,6 @@ COVERAGE_DEFINE(vconn_open);
 COVERAGE_DEFINE(vconn_received);
 COVERAGE_DEFINE(vconn_sent);
 
-/* State of an active vconn.*/
-enum vconn_state {
-    /* This is the ordinary progression of states. */
-    VCS_CONNECTING,             /* Underlying vconn is not connected. */
-    VCS_SEND_HELLO,             /* Waiting to send OFPT_HELLO message. */
-    VCS_RECV_HELLO,             /* Waiting to receive OFPT_HELLO message. */
-    VCS_CONNECTED,              /* Connection established. */
-
-    /* These states are entered only when something goes wrong. */
-    VCS_SEND_ERROR,             /* Sending OFPT_ERROR message. */
-    VCS_DISCONNECTED            /* Connection failed or connection closed. */
-};
-
 static const struct vconn_class *vconn_classes[] = {
     &tcp_vconn_class,
     &unix_vconn_class,
