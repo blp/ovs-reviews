@@ -134,11 +134,6 @@ struct rconn {
 
     uint8_t dscp;
 
-    /* Messages sent or received are copied to the monitor connections. */
-#define MAXIMUM_MONITORS 8
-    struct vconn *monitors[MAXIMUM_MONITORS];
-    size_t n_monitors;
-
     uint32_t allowed_versions;
 };
 
@@ -165,9 +160,6 @@ static void report_error(struct rconn *rc, int error) OVS_REQUIRES(rc->mutex);
 static void rconn_disconnect__(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static void disconnect(struct rconn *rc, int error) OVS_REQUIRES(rc->mutex);
 static void flush_queue(struct rconn *rc) OVS_REQUIRES(rc->mutex);
-static void close_monitor(struct rconn *rc, size_t idx, int retval)
-    OVS_REQUIRES(rc->mutex);
-static void copy_to_monitor(struct rconn *, const struct ofpbuf *);
 static bool is_connected_state(enum state);
 static bool is_admitted_msg(const struct ofpbuf *);
 static bool rconn_logging_connection_attempts__(const struct rconn *rc)
@@ -198,8 +190,6 @@ int rconn_send(struct rconn *rc, struct ofpbuf *b,
 int rconn_send_with_limit(struct rconn *rc, struct ofpbuf *b,
                           struct rconn_packet_counter *counter,
                           int queue_limit)
-    OVS_EXCLUDED(rc->mutex);
-void rconn_add_monitor(struct rconn *rc, struct vconn *vconn)
     OVS_EXCLUDED(rc->mutex);
 void rconn_set_name(struct rconn *rc, const char *new_name)
     OVS_EXCLUDED(rc->mutex);
@@ -273,7 +263,6 @@ rconn_create(int probe_interval, int max_backoff, uint8_t dscp,
     rconn_set_probe_interval(rc, probe_interval);
     rconn_set_dscp(rc, dscp);
 
-    rc->n_monitors = 0;
     rc->allowed_versions = allowed_versions;
 
     return rc;
@@ -414,17 +403,12 @@ void
 rconn_destroy(struct rconn *rc)
 {
     if (rc) {
-        size_t i;
-
         ovs_mutex_lock(&rc->mutex);
         free(rc->name);
         free(rc->target);
         vconn_close(rc->vconn);
         flush_queue(rc);
         ofpbuf_list_delete(&rc->txq);
-        for (i = 0; i < rc->n_monitors; i++) {
-            vconn_close(rc->monitors[i]);
-        }
         ovs_mutex_unlock(&rc->mutex);
         ovs_mutex_destroy(&rc->mutex);
 
@@ -616,7 +600,6 @@ rconn_run(struct rconn *rc)
     OVS_EXCLUDED(rc->mutex)
 {
     int old_state;
-    size_t i;
 
     ovs_mutex_lock(&rc->mutex);
     if (rc->vconn) {
@@ -629,22 +612,6 @@ rconn_run(struct rconn *rc)
             report_error(rc, error);
             disconnect(rc, error);
         }
-    }
-    for (i = 0; i < rc->n_monitors; ) {
-        struct ofpbuf *msg;
-        int retval;
-
-        vconn_run(rc->monitors[i]);
-
-        /* Drain any stray message that came in on the monitor connection. */
-        retval = vconn_recv(rc->monitors[i], &msg);
-        if (!retval) {
-            ofpbuf_delete(msg);
-        } else if (retval != EAGAIN) {
-            close_monitor(rc, i, retval);
-            continue;
-        }
-        i++;
     }
 
     do {
@@ -667,7 +634,6 @@ rconn_run_wait(struct rconn *rc)
     OVS_EXCLUDED(rc->mutex)
 {
     unsigned int timeo;
-    size_t i;
 
     ovs_mutex_lock(&rc->mutex);
     if (rc->vconn) {
@@ -675,10 +641,6 @@ rconn_run_wait(struct rconn *rc)
         if ((rc->state & (S_ACTIVE | S_IDLE)) && !list_is_empty(&rc->txq)) {
             vconn_wait(rc->vconn, WAIT_SEND);
         }
-    }
-    for (i = 0; i < rc->n_monitors; i++) {
-        vconn_run_wait(rc->monitors[i]);
-        vconn_recv_wait(rc->monitors[i]);
     }
 
     timeo = timeout(rc);
@@ -702,7 +664,6 @@ rconn_recv(struct rconn *rc)
     if (rc->state & (S_ACTIVE | S_IDLE)) {
         int error = vconn_recv(rc->vconn, &buffer);
         if (!error) {
-            copy_to_monitor(rc, buffer);
             if (rc->probably_admitted || is_admitted_msg(buffer)
                 || time_now() - rc->last_connected >= 30) {
                 rc->probably_admitted = true;
@@ -742,7 +703,6 @@ rconn_send__(struct rconn *rc, struct ofpbuf *b,
 {
     if (rconn_is_connected(rc)) {
         COVERAGE_INC(rconn_queued);
-        copy_to_monitor(rc, b);
 
         if (counter) {
             rconn_packet_counter_inc(counter, b->size);
@@ -823,24 +783,6 @@ rconn_send_with_limit(struct rconn *rc, struct ofpbuf *b,
     ovs_mutex_unlock(&rc->mutex);
 
     return error;
-}
-
-/* Adds 'vconn' to 'rc' as a monitoring connection, to which all messages sent
- * and received on 'rconn' will be copied.  'rc' takes ownership of 'vconn'. */
-void
-rconn_add_monitor(struct rconn *rc, struct vconn *vconn)
-    OVS_EXCLUDED(rc->mutex)
-{
-    ovs_mutex_lock(&rc->mutex);
-    if (rc->n_monitors < ARRAY_SIZE(rc->monitors)) {
-        VLOG_INFO("new monitor connection from %s", vconn_get_name(vconn));
-        rc->monitors[rc->n_monitors++] = vconn;
-    } else {
-        VLOG_DBG("too many monitor connections, discarding %s",
-                 vconn_get_name(vconn));
-        vconn_close(vconn);
-    }
-    ovs_mutex_unlock(&rc->mutex);
 }
 
 /* Returns 'rc''s name.  This is a name for human consumption, appropriate for
@@ -1277,42 +1219,6 @@ state_transition(struct rconn *rc, enum state state)
     VLOG_DBG("%s: entering %s", rc->name, state_name(state));
     rc->state = state;
     rc->state_entered = time_now();
-}
-
-static void
-close_monitor(struct rconn *rc, size_t idx, int retval)
-    OVS_REQUIRES(rc->mutex)
-{
-    VLOG_DBG("%s: closing monitor connection to %s: %s",
-             rconn_get_name(rc), vconn_get_name(rc->monitors[idx]),
-             ovs_retval_to_string(retval));
-    rc->monitors[idx] = rc->monitors[--rc->n_monitors];
-}
-
-static void
-copy_to_monitor(struct rconn *rc, const struct ofpbuf *b)
-    OVS_REQUIRES(rc->mutex)
-{
-    struct ofpbuf *clone = NULL;
-    int retval;
-    size_t i;
-
-    for (i = 0; i < rc->n_monitors; ) {
-        struct vconn *vconn = rc->monitors[i];
-
-        if (!clone) {
-            clone = ofpbuf_clone(b);
-        }
-        retval = vconn_send(vconn, clone);
-        if (!retval) {
-            clone = NULL;
-        } else if (retval != EAGAIN) {
-            close_monitor(rc, i, retval);
-            continue;
-        }
-        i++;
-    }
-    ofpbuf_delete(clone);
 }
 
 static bool

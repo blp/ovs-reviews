@@ -103,6 +103,15 @@ struct ofconn {
     long long int next_op_report;    /* Time to report ops, or LLONG_MAX. */
     long long int op_backoff;        /* Earliest time to report ops again. */
 
+    /* Connections to send copies of packets sent or received on 'rconn'.
+     *
+     * (These are called "monitor connections" elsewhere, as in e.g. "ovs-ofctl
+     * monitor", but "monitor" is already used another way within ofconn so
+     * it's better to give them a different name here.) */
+#define MAX_CLONES 8
+    struct vconn *clones[MAX_CLONES];
+    int n_clones;
+
 /* Flow monitors (e.g. NXST_FLOW_MONITOR). */
 
     /* Configuration.  Contains "struct ofmonitor"s. */
@@ -161,6 +170,8 @@ static void ofconn_set_rate_limit(struct ofconn *, int rate, int burst);
 
 static void ofconn_send(const struct ofconn *, struct ofpbuf *,
                         struct rconn_packet_counter *);
+static void ofconn_close_clone(const struct ofconn *, int idx, int retval);
+static void ofconn_send_in_the_clones(const struct ofconn *, struct ofpbuf *);
 
 static void do_send_packet_ins(struct ofconn *, struct ovs_list *txq);
 
@@ -855,12 +866,16 @@ add_snooper(struct connmgr *mgr, struct vconn *vconn)
         }
     }
 
-    if (best) {
-        rconn_add_monitor(best->rconn, vconn);
-    } else {
+    if (!best) {
         VLOG_INFO_RL(&rl, "no controller connection to snoop");
-        vconn_close(vconn);
+    } else if (best->n_clones >= MAX_CLONES) {
+        VLOG_INFO_RL(&rl, "%s: too many snoop connections", 
+                     rconn_get_name(best->rconn));
+    } else {
+        best->clones[best->n_clones++] = vconn;
+        return;
     }
+    vconn_close(vconn);
 }
 
 /* Public ofconn functions. */
@@ -1324,6 +1339,11 @@ ofconn_flush(struct ofconn *ofconn)
     ofconn->next_op_report = LLONG_MAX;
     ofconn->op_backoff = LLONG_MIN;
 
+    for (i = 0; i < ofconn->n_clones; i++) {
+        vconn_close(ofconn->clones[i]);
+    }
+    ofconn->n_clones = 0;
+
     HMAP_FOR_EACH_SAFE (monitor, next_monitor, ofconn_node,
                         &ofconn->monitors) {
         ofmonitor_destroy(monitor);
@@ -1406,11 +1426,31 @@ ofconn_run(struct ofconn *ofconn,
 
     rconn_run(ofconn->rconn);
 
+    for (i = 0; i < ofconn->n_clones; ) {
+        struct ofpbuf *msg;
+        int retval;
+
+        vconn_run(ofconn->clones[i]);
+
+        /* Drain any stray message that came in on the clone connection. */
+        retval = vconn_recv(ofconn->clones[i], &msg);
+        if (!retval) {
+            ofpbuf_delete(msg);
+        } else if (retval != EAGAIN) {
+            ofconn_close_clone(ofconn, i, retval);
+            continue;
+        }
+        i++;
+    }
+
     /* Limit the number of iterations to avoid starving other tasks. */
     for (i = 0; i < 50 && ofconn_may_recv(ofconn); i++) {
         struct ofpbuf *of_msg = rconn_recv(ofconn->rconn);
         if (!of_msg) {
             break;
+        }
+        if (ofconn->n_clones) {
+            ofconn_send_in_the_clones(ofconn, ofpbuf_clone(of_msg));
         }
 
         if (mgr->fail_open) {
@@ -1443,6 +1483,10 @@ ofconn_wait(struct ofconn *ofconn)
         pinsched_wait(ofconn->schedulers[i]);
     }
     rconn_run_wait(ofconn->rconn);
+    for (i = 0; i < ofconn->n_clones; i++) {
+        vconn_run_wait(ofconn->clones[i]);
+        vconn_recv_wait(ofconn->clones[i]);
+    }
     if (ofconn_may_recv(ofconn)) {
         rconn_recv_wait(ofconn->rconn);
     }
@@ -1624,11 +1668,55 @@ ofconn_set_rate_limit(struct ofconn *ofconn, int rate, int burst)
 }
 
 static void
+ofconn_close_clone(const struct ofconn *ofconn_, int idx, int retval)
+{
+    struct ofconn *ofconn = CONST_CAST(struct ofconn *, ofconn_);
+
+    VLOG_DBG("%s: closing monitor connection to %s: %s",
+             rconn_get_name(ofconn->rconn),
+             vconn_get_name(ofconn->clones[idx]),
+             ovs_retval_to_string(retval));
+    ofconn->clones[idx] = ofconn->clones[--ofconn->n_clones];
+}
+
+static void
+ofconn_send_in_the_clones(const struct ofconn *ofconn, struct ofpbuf *msg)
+{
+    struct ofpbuf *copy = NULL;
+
+    for (int i = 0; i < ofconn->n_clones; ) {
+        if (!copy) {
+            if (i == ofconn->n_clones - 1) {
+                copy = msg;
+                msg = NULL;
+            } else {
+                copy = ofpbuf_clone(msg);
+            }
+        }
+
+        int error = vconn_send(ofconn->clones[i], copy);
+        if (!error) {
+            copy = NULL;
+        } else if (error != EAGAIN) {
+            ofconn_close_clone(ofconn, i, error);
+            continue;
+        }
+        i++;
+    }
+    ofpbuf_delete(copy);
+    ofpbuf_delete(msg);
+}
+
+static void
 ofconn_send(const struct ofconn *ofconn, struct ofpbuf *msg,
             struct rconn_packet_counter *counter)
 {
-    ofpmsg_update_length(msg);
-    rconn_send(ofconn->rconn, msg, counter);
+    struct ofpbuf *copy = ofconn->n_clones ? ofpbuf_clone(msg) : NULL;
+    if (!rconn_send(ofconn->rconn, msg, counter)) {
+        ofconn_send_in_the_clones(ofconn, copy);
+    } else {
+        ofpbuf_delete(copy);
+    }
 }
 
 /* Sending asynchronous messages. */
@@ -1769,8 +1857,9 @@ do_send_packet_ins(struct ofconn *ofconn, struct ovs_list *txq)
     struct ofpbuf *pin;
 
     LIST_FOR_EACH_POP (pin, list_node, txq) {
-        if (rconn_send_with_limit(ofconn->rconn, pin,
-                                  ofconn->packet_in_counter, 100) == EAGAIN) {
+        if (rconn_packet_counter_n_packets(ofconn->packet_in_counter) < 100) {
+            ofconn_send(ofconn, pin, ofconn->packet_in_counter);
+        } else {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
 
             VLOG_INFO_RL(&rl, "%s: dropping packet-in due to queue overflow",

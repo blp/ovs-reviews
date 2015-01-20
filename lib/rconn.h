@@ -70,8 +70,6 @@ int rconn_send(struct rconn *, struct ofpbuf *, struct rconn_packet_counter *);
 int rconn_send_with_limit(struct rconn *, struct ofpbuf *,
                           struct rconn_packet_counter *, int queue_limit);
 
-void rconn_add_monitor(struct rconn *, struct vconn *);
-
 const char *rconn_get_name(const struct rconn *);
 void rconn_set_name(struct rconn *, const char *new_name);
 const char *rconn_get_target(const struct rconn *);
