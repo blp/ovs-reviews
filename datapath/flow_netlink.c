@@ -1545,6 +1545,7 @@ static struct sw_flow_actions *nla_alloc_flow_actions(int size, bool log)
 		return ERR_PTR(-ENOMEM);
 
 	sfa->actions_len = 0;
+	sfa->orig_len = size;
 	return sfa;
 }
 
