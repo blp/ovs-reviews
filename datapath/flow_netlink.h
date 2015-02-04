@@ -62,12 +62,14 @@ int ovs_nla_get_identifier(struct sw_flow_id *sfid, const struct nlattr *ufid,
 			   const struct sw_flow_key *key, bool log);
 u32 ovs_nla_get_ufid_flags(const struct nlattr *attr);
 
-int ovs_nla_copy_actions(const struct nlattr *attr,
+int ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 			 const struct sw_flow_key *key,
 			 struct sw_flow_actions **sfa, bool log);
+int ovs_nla_add_action(struct sw_flow_actions **sfa, int attrtype,
+		       void *data, int len, bool log);
 int ovs_nla_put_actions(const struct nlattr *attr,
 			int len, struct sk_buff *skb);
 
-void ovs_nla_free_flow_actions(struct sw_flow_actions *);
+void ovs_nla_free_flow_actions(struct sw_flow_actions *, bool rcu);
 
 #endif /* flow_netlink.h */

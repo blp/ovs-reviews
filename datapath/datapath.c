@@ -541,6 +541,7 @@ static int ovs_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	struct sk_buff *packet;
 	struct sw_flow *flow;
 	struct sw_flow_actions *sf_acts;
+	struct net *net = sock_net(skb->sk);
 	struct datapath *dp;
 	struct ethhdr *eth;
 	struct vport *input_vport;
@@ -585,7 +586,7 @@ static int ovs_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	if (err)
 		goto err_flow_free;
 
-	err = ovs_nla_copy_actions(a[OVS_PACKET_ATTR_ACTIONS],
+	err = ovs_nla_copy_actions(net, a[OVS_PACKET_ATTR_ACTIONS],
 				   &flow->key, &acts, log);
 	if (err)
 		goto err_flow_free;
@@ -891,6 +892,7 @@ static struct sk_buff *ovs_flow_cmd_build_info(const struct sw_flow *flow,
 
 static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 {
+	struct net *net = sock_net(skb->sk);
 	struct nlattr **a = info->attrs;
 	struct ovs_header *ovs_header = info->userhdr;
 	struct sw_flow *flow = NULL, *new_flow;
@@ -940,7 +942,7 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 		goto err_kfree_flow;
 
 	/* Validate actions. */
-	error = ovs_nla_copy_actions(a[OVS_FLOW_ATTR_ACTIONS], &new_flow->key,
+	error = ovs_nla_copy_actions(net, a[OVS_FLOW_ATTR_ACTIONS], &new_flow->key,
 				     &acts, log);
 	if (error) {
 		OVS_NLERR(log, "Flow actions may not be safe on all matching packets.");
@@ -1029,7 +1031,7 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 		}
 		ovs_unlock();
 
-		ovs_nla_free_flow_actions(old_acts);
+		ovs_nla_free_flow_actions(old_acts, true);
 		ovs_flow_free(new_flow, false);
 	}
 
@@ -1049,7 +1051,7 @@ error:
 }
 
 /* Factor out action copy to avoid "Wframe-larger-than=1024" warning. */
-static struct sw_flow_actions *get_flow_actions(const struct nlattr *a,
+static struct sw_flow_actions *get_flow_actions(struct net *net, const struct nlattr *a,
 						const struct sw_flow_key *key,
 						const struct sw_flow_mask *mask,
 						bool log)
@@ -1059,7 +1061,7 @@ static struct sw_flow_actions *get_flow_actions(const struct nlattr *a,
 	int error;
 
 	ovs_flow_mask_key(&masked_key, key, mask);
-	error = ovs_nla_copy_actions(a, &masked_key, &acts, log);
+	error = ovs_nla_copy_actions(net, a, &masked_key, &acts, log);
 	if (error) {
 		OVS_NLERR(log,
 			  "Actions may not be safe on all matching packets");
@@ -1071,6 +1073,7 @@ static struct sw_flow_actions *get_flow_actions(const struct nlattr *a,
 
 static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 {
+	struct net *net = sock_net(skb->sk);
 	struct nlattr **a = info->attrs;
 	struct ovs_header *ovs_header = info->userhdr;
 	struct sw_flow_key key;
@@ -1102,7 +1105,7 @@ static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 
 	/* Validate actions. */
 	if (a[OVS_FLOW_ATTR_ACTIONS]) {
-		acts = get_flow_actions(a[OVS_FLOW_ATTR_ACTIONS], &key, &mask,
+		acts = get_flow_actions(net, a[OVS_FLOW_ATTR_ACTIONS], &key, &mask,
 					log);
 		if (IS_ERR(acts)) {
 			error = PTR_ERR(acts);
@@ -1168,7 +1171,7 @@ static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 	if (reply)
 		ovs_notify(&dp_flow_genl_family, &ovs_dp_flow_multicast_group, reply, info);
 	if (old_acts)
-		ovs_nla_free_flow_actions(old_acts);
+		ovs_nla_free_flow_actions(old_acts, true);
 
 	return 0;
 
@@ -1560,6 +1563,9 @@ static int ovs_dp_cmd_new(struct sk_buff *skb, struct genl_info *info)
 
 	ovs_dp_change(dp, a);
 
+	/* Set up conntrack dependencies. */
+	ovs_ct_init(ovs_dp_get_net(dp), &dp->ct);
+
 	/* So far only local changes have been made, now need the lock. */
 	ovs_lock();
 
@@ -1596,6 +1602,7 @@ static int ovs_dp_cmd_new(struct sk_buff *skb, struct genl_info *info)
 err_destroy_ports_array:
 	ovs_unlock();
 	kfree(dp->ports);
+        ovs_ct_exit(read_pnet(&dp->net), &dp->ct);
 err_destroy_percpu:
 	free_percpu(dp->stats_percpu);
 err_destroy_table:
@@ -1629,6 +1636,8 @@ static void __dp_destroy(struct datapath *dp)
 	 * all ports in datapath are destroyed first before freeing datapath.
 	 */
 	ovs_dp_detach_port(ovs_vport_ovsl(dp, OVSP_LOCAL));
+
+	ovs_ct_exit(read_pnet(&dp->net), &dp->ct);
 
 	/* RCU destroy the flow table */
 	call_rcu(&dp->rcu, destroy_dp_rcu);

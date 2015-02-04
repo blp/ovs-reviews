@@ -27,6 +27,7 @@
 #include <linux/u64_stats_sync.h>
 
 #include "compat.h"
+#include "conntrack.h"
 #include "flow.h"
 #include "flow_table.h"
 #include "vlan.h"
@@ -92,6 +93,7 @@ struct datapath {
 #endif
 
 	u32 user_features;
+	struct ovs_ct_perdp_data ct;
 };
 
 /**

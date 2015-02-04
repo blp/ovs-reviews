@@ -344,10 +344,10 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_MPLS,      /* array of struct ovs_key_mpls.
 				 * The implementation may restrict
 				 * the accepted length of the array. */
-	OVS_KEY_ATTR_CT_STATE,	/* u8 bitmask of OVS_CS_F_* */
-	OVS_KEY_ATTR_CT_ZONE,	/* u16 connection tracking zone. */
-	OVS_KEY_ATTR_CT_MARK,	/* u32 connection tracking mark */
-	OVS_KEY_ATTR_CT_LABEL,	/* 16-octet connection tracking label */
+	OVS_KEY_ATTR_CT_STATE,  /* u8 bitmask of OVS_CS_F_* */
+	OVS_KEY_ATTR_CT_ZONE,   /* u16 connection tracking zone. */
+	OVS_KEY_ATTR_CT_MARK,   /* u32 connection tracking mark */
+	OVS_KEY_ATTR_CT_LABEL,  /* 16-octet connection tracking label */
 
 #ifdef __KERNEL__
 	/* Only used within kernel data path. */

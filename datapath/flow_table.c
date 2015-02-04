@@ -16,8 +16,9 @@
  * 02110-1301, USA
  */
 
-#include "flow.h"
 #include "datapath.h"
+#include "flow.h"
+#include "flow_netlink.h"
 #include <linux/uaccess.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -150,7 +151,7 @@ static void flow_free(struct sw_flow *flow)
 
 	if (ovs_identifier_is_key(&flow->id))
 		kfree(flow->id.unmasked_key);
-	kfree(rcu_dereference_raw(flow->sf_acts));
+	ovs_nla_free_flow_actions(flow->sf_acts, false);
 	for_each_node(node)
 		if (flow->stats[node])
 			kmem_cache_free(flow_stats_cache,

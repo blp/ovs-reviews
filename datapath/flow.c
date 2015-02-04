@@ -48,6 +48,7 @@
 #include "datapath.h"
 #include "flow.h"
 #include "flow_netlink.h"
+#include "conntrack.h"
 
 #include "vlan.h"
 
@@ -707,6 +708,10 @@ int ovs_flow_key_extract(const struct ovs_tunnel_info *tun_info,
 	key->phy.priority = skb->priority;
 	key->phy.in_port = OVS_CB(skb)->input_vport->port_no;
 	key->phy.skb_mark = skb->mark;
+	key->ct.state = ovs_ct_get_state(skb);
+	key->ct.zone = ovs_ct_get_zone(skb);
+	key->ct.mark = ovs_ct_get_mark(skb);
+	ovs_ct_get_label(skb, &key->ct.label);
 	key->ovs_flow_hash = 0;
 	key->recirc_id = 0;
 
