@@ -244,6 +244,21 @@ printf-check:
 	fi
 .PHONY: printf-check
 
+# Check for strncpy().
+ALL_LOCAL += strncpy-check
+strncpy-check:
+	@cd $(srcdir); \
+	if test -e .git && (git --version) >/dev/null 2>&1 && \
+	   git --no-pager grep -n -e '\bstrncpy(' `git ls-files | grep '\.[ch]$$' \
+               | grep -vE '^datapath'` \
+	       | $(EGREP) -v ':[ 	]*/?\*'; \
+	then \
+	    echo "See above for list of uses of strncpy().  Please use"; \
+	    echo "another function, e.g. ovs_strlcpy() or ovs_strzcpy()."; \
+	    exit 1; \
+	fi
+.PHONY: strncpy-check
+
 # Check that certain data structures are always declared "static".
 ALL_LOCAL += static-check
 static-check:
