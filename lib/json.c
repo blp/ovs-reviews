@@ -880,6 +880,16 @@ exit:
     return ok;
 }
 
+void
+json_string_escape(const char *in, struct ds *out)
+{
+    struct json json = {
+        .type = JSON_STRING,
+        .u.string = CONST_CAST(char *, in),
+    };
+    json_to_ds(&json, 0, out);
+}
+
 static void
 json_parser_input_string(struct json_parser *p, const char *s)
 {
