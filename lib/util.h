@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -537,19 +537,33 @@ bool is_all_ones(const void *, size_t);
 void bitwise_copy(const void *src, unsigned int src_len, unsigned int src_ofs,
                   void *dst, unsigned int dst_len, unsigned int dst_ofs,
                   unsigned int n_bits);
+void bitwise_copy_adapt(const void *src_, unsigned int src_len,
+                        unsigned int src_ofs, unsigned int src_nbits,
+                        bool src_signed,
+                        void *dst_, unsigned int dst_len, unsigned int dst_ofs,
+                        unsigned int dst_nbits);
 void bitwise_zero(void *dst_, unsigned int dst_len, unsigned dst_ofs,
                   unsigned int n_bits);
 void bitwise_one(void *dst_, unsigned int dst_len, unsigned dst_ofs,
                  unsigned int n_bits);
 bool bitwise_is_all_zeros(const void *, unsigned int len, unsigned int ofs,
                           unsigned int n_bits);
+bool bitwise_is_all_ones(const void *, unsigned int len, unsigned int ofs,
+                         unsigned int n_bits);
 unsigned int bitwise_scan(const void *, unsigned int len,
                           bool target, unsigned int start, unsigned int end);
+int bitwise_rscan(const void *, unsigned int len, bool target,
+                  int start, int end);
 void bitwise_put(uint64_t value,
                  void *dst, unsigned int dst_len, unsigned int dst_ofs,
                  unsigned int n_bits);
 uint64_t bitwise_get(const void *src, unsigned int src_len,
                      unsigned int src_ofs, unsigned int n_bits);
+bool bitwise_get_bit(const void *src, unsigned int len, unsigned int ofs);
+void bitwise_put0(void *dst, unsigned int len, unsigned int ofs);
+void bitwise_put1(void *dst, unsigned int len, unsigned int ofs);
+void bitwise_put_bit(void *dst, unsigned int len, unsigned int ofs, bool);
+void bitwise_toggle_bit(void *dst, unsigned int len, unsigned int ofs);
 
 void xsleep(unsigned int seconds);
 

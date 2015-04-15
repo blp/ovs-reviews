@@ -1213,6 +1213,31 @@ bitwise_copy(const void *src_, unsigned int src_len, unsigned int src_ofs,
     }
 }
 
+void
+bitwise_copy_adapt(const void *src, unsigned int src_len,
+                   unsigned int src_ofs, unsigned int src_nbits,
+                   bool src_signed,
+                   void *dst, unsigned int dst_len, unsigned int dst_ofs,
+                   unsigned int dst_nbits)
+{
+    if (src_nbits == dst_nbits) {
+        bitwise_copy(src, src_len, src_ofs, dst, dst_len, dst_ofs, dst_nbits);
+    } else if (src_nbits < dst_nbits) {
+        bitwise_copy(src, src_len, src_ofs, dst, dst_len, dst_ofs, src_nbits);
+        if (src_signed
+            && bitwise_get_bit(src, src_len, src_ofs + src_nbits - 1)) {
+            bitwise_one(dst, dst_len, dst_ofs + src_nbits,
+                        dst_nbits - src_nbits);
+        } else {
+            bitwise_zero(dst, dst_len, dst_ofs + src_nbits,
+                         dst_nbits - src_nbits);
+        }
+    } else {
+        /* XXX */
+        OVS_NOT_REACHED();
+    }
+}
+
 /* Zeros the 'n_bits' bits starting from bit 'dst_ofs' in 'dst'.  'dst' is
  * 'dst_len' bytes long.
  *
@@ -1365,9 +1390,64 @@ bitwise_is_all_zeros(const void *p_, unsigned int len, unsigned int ofs,
     return true;
 }
 
-/* Scans the bits in 'p' that have bit offsets 'start' through 'end'
- * (inclusive) for the first bit with value 'target'.  If one is found, returns
- * its offset, otherwise 'end'.  'p' is 'len' bytes long.
+/* Scans the 'n_bits' bits starting from bit 'ofs' in 'p' for 0-bits.  Returns
+ * false if any 0-bits are found, otherwise true.  'p' is 'len' bytes long.
+ *
+ * If you consider all of 'p' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in p[len - 1], bit 1 is the bit with value 2, bit 2 is the bit
+ * with value 4, ..., bit 8 is the bit with value 1 in p[len - 2], and so on.
+ *
+ * Required invariant:
+ *   ofs + n_bits <= len * 8
+ */
+bool
+bitwise_is_all_ones(const void *p_, unsigned int len, unsigned int ofs,
+                    unsigned int n_bits)
+{
+    const uint8_t *p = p_;
+
+    if (!n_bits) {
+        return true;
+    }
+
+    p += len - (ofs / 8 + 1);
+    ofs %= 8;
+
+    if (ofs) {
+        unsigned int chunk = MIN(n_bits, 8 - ofs);
+        uint8_t mask = ((1 << chunk) - 1) << ofs;
+        if ((*p & mask) != mask) {
+            return false;
+        }
+
+        n_bits -= chunk;
+        if (!n_bits) {
+            return true;
+        }
+
+        p--;
+    }
+
+    while (n_bits >= 8) {
+        if (*p != 0xff) {
+            return false;
+        }
+        n_bits -= 8;
+        p--;
+    }
+
+    uint8_t mask = (1 << n_bits) - 1;
+    if (n_bits && (*p & mask) != mask) {
+        return false;
+    }
+
+    return true;
+}
+
+/* Scans the bits in 'p' that have bit offsets 'start' (inclusive) through
+ * 'end' (exclusive) for the first bit with value 'target'.  If one is found,
+ * returns its offset, otherwise 'end'.  'p' is 'len' bytes long.
  *
  * If you consider all of 'p' to be a single unsigned integer in network byte
  * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
@@ -1378,21 +1458,48 @@ bitwise_is_all_zeros(const void *p_, unsigned int len, unsigned int ofs,
  *   start <= end
  */
 unsigned int
-bitwise_scan(const void *p_, unsigned int len, bool target, unsigned int start,
+bitwise_scan(const void *p, unsigned int len, bool target, unsigned int start,
              unsigned int end)
 {
-    const uint8_t *p = p_;
     unsigned int ofs;
 
     for (ofs = start; ofs < end; ofs++) {
-        bool bit = (p[len - (ofs / 8 + 1)] & (1u << (ofs % 8))) != 0;
-        if (bit == target) {
+        if (bitwise_get_bit(p, len, ofs) == target) {
             break;
         }
     }
     return ofs;
 }
 
+/* Scans the bits in 'p' that have bit offsets 'start' (inclusive) through
+ * 'end' (exclusive) for the first bit with value 'target', in reverse order.
+ * If one is found, returns its offset, otherwise 'end'.  'p' is 'len' bytes
+ * long.
+ *
+ * If you consider all of 'p' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in p[len - 1], bit 1 is the bit with value 2, bit 2 is the bit
+ * with value 4, ..., bit 8 is the bit with value 1 in p[len - 2], and so on.
+ *
+ * To scan an entire bit array in reverse order, specify start == len * 8 - 1
+ * and end == -1, in which case the return value is nonnegative if successful
+ * and -1 if no 'target' match is found.
+ *
+ * Required invariant:
+ *   start >= end
+ */
+int
+bitwise_rscan(const void *p, unsigned int len, bool target, int start, int end)
+{
+    int ofs;
+
+    for (ofs = start; ofs > end; ofs--) {
+        if (bitwise_get_bit(p, len, ofs) == target) {
+            break;
+        }
+    }
+    return ofs;
+}
 
 /* Copies the 'n_bits' low-order bits of 'value' into the 'n_bits' bits
  * starting at bit 'dst_ofs' in 'dst', which is 'dst_len' bytes long.
@@ -1441,6 +1548,104 @@ bitwise_get(const void *src, unsigned int src_len,
                  &value, sizeof value, 0,
                  n_bits);
     return ntohll(value);
+}
+
+/* Returns the value of the bit with offset 'ofs' in 'src', which is 'len'
+ * bytes long.
+ *
+ * If you consider all of 'src' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in src[len - 1], bit 1 is the bit with value 2, bit 2 is the
+ * bit with value 4, ..., bit 8 is the bit with value 1 in src[len - 2], and so
+ * on.
+ *
+ * Required invariants:
+ *   ofs < len * 8
+ */
+bool
+bitwise_get_bit(const void *src_, unsigned int len, unsigned int ofs)
+{
+    const uint8_t *src = src_;
+
+    return (src[len - (ofs / 8 + 1)] & (1u << (ofs % 8))) != 0;
+}
+
+/* Sets the bit with offset 'ofs' in 'dst', which is 'len' bytes long, to 0.
+ *
+ * If you consider all of 'dst' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in dst[len - 1], bit 1 is the bit with value 2, bit 2 is the
+ * bit with value 4, ..., bit 8 is the bit with value 1 in dst[len - 2], and so
+ * on.
+ *
+ * Required invariants:
+ *   ofs < len * 8
+ */
+void
+bitwise_put0(void *dst_, unsigned int len, unsigned int ofs)
+{
+    uint8_t *dst = dst_;
+
+    dst[len - (ofs / 8 + 1)] &= ~(1u << (ofs % 8));
+}
+
+/* Sets the bit with offset 'ofs' in 'dst', which is 'len' bytes long, to 1.
+ *
+ * If you consider all of 'dst' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in dst[len - 1], bit 1 is the bit with value 2, bit 2 is the
+ * bit with value 4, ..., bit 8 is the bit with value 1 in dst[len - 2], and so
+ * on.
+ *
+ * Required invariants:
+ *   ofs < len * 8
+ */
+void
+bitwise_put1(void *dst_, unsigned int len, unsigned int ofs)
+{
+    uint8_t *dst = dst_;
+
+    dst[len - (ofs / 8 + 1)] |= 1u << (ofs % 8);
+}
+
+/* Sets the bit with offset 'ofs' in 'dst', which is 'len' bytes long, to 'b'.
+ *
+ * If you consider all of 'dst' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in dst[len - 1], bit 1 is the bit with value 2, bit 2 is the
+ * bit with value 4, ..., bit 8 is the bit with value 1 in dst[len - 2], and so
+ * on.
+ *
+ * Required invariants:
+ *   ofs < len * 8
+ */
+void
+bitwise_put_bit(void *dst, unsigned int len, unsigned int ofs, bool b)
+{
+    if (b) {
+        bitwise_put1(dst, len, ofs);
+    } else {
+        bitwise_put0(dst, len, ofs);
+    }
+}
+
+/* Flips the bit with offset 'ofs' in 'dst', which is 'len' bytes long.
+ *
+ * If you consider all of 'dst' to be a single unsigned integer in network byte
+ * order, then bit N is the bit with value 2**N.  That is, bit 0 is the bit
+ * with value 1 in dst[len - 1], bit 1 is the bit with value 2, bit 2 is the
+ * bit with value 4, ..., bit 8 is the bit with value 1 in dst[len - 2], and so
+ * on.
+ *
+ * Required invariants:
+ *   ofs < len * 8
+ */
+void
+bitwise_toggle_bit(void *dst_, unsigned int len, unsigned int ofs)
+{
+    uint8_t *dst = dst_;
+
+    dst[len - (ofs / 8 + 1)] ^= 1u << (ofs % 8);
 }
 
 /* ovs_scan */
