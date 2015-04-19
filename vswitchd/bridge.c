@@ -3359,9 +3359,9 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
  * The caller must free oc->target when it is no longer needed. */
 static void
 bridge_ofproto_controller_for_mgmt(const struct bridge *br,
-                                   struct ofproto_controller *oc)
+                                   struct shash *controllers)
 {
-    oc->target = xasprintf("punix:%s/%s.mgmt", ovs_rundir(), br->name);
+    struct ofproto_controller *oc = xzalloc(sizeof *oc);
     oc->max_backoff = 0;
     oc->probe_interval = 60;
     oc->band = OFPROTO_OUT_OF_BAND;
@@ -3369,30 +3369,34 @@ bridge_ofproto_controller_for_mgmt(const struct bridge *br,
     oc->burst_limit = 0;
     oc->enable_async_msgs = true;
     oc->dscp = 0;
+    shash_add_nocopy(controllers,
+                     xasprintf("punix:%s/%s.mgmt", ovs_rundir(), br->name),
+                     oc);
 }
 
 /* Converts ovsrec_controller 'c' into an ofproto_controller in 'oc'.  */
 static void
 bridge_ofproto_controller_from_ovsrec(const struct ovsrec_controller *c,
-                                      struct ofproto_controller *oc)
+                                      bool disable_in_band,
+                                      struct shash *controllers)
 {
-    int dscp;
-
-    oc->target = c->target;
+    struct ofproto_controller *oc = xzalloc(sizeof *oc);
     oc->max_backoff = c->max_backoff ? *c->max_backoff / 1000 : 8;
     oc->probe_interval = c->inactivity_probe ? *c->inactivity_probe / 1000 : 5;
-    oc->band = (!c->connection_mode || !strcmp(c->connection_mode, "in-band")
+    oc->band = (disable_in_band ? OFPROTO_OUT_OF_BAND
+                : !c->connection_mode || !strcmp(c->connection_mode, "in-band")
                 ? OFPROTO_IN_BAND : OFPROTO_OUT_OF_BAND);
     oc->rate_limit = c->controller_rate_limit ? *c->controller_rate_limit : 0;
     oc->burst_limit = (c->controller_burst_limit
                        ? *c->controller_burst_limit : 0);
     oc->enable_async_msgs = (!c->enable_async_messages
                              || *c->enable_async_messages);
-    dscp = smap_get_int(&c->other_config, "dscp", DSCP_DEFAULT);
+    int dscp = smap_get_int(&c->other_config, "dscp", DSCP_DEFAULT);
     if (dscp < 0 || dscp > 63) {
         dscp = DSCP_DEFAULT;
     }
     oc->dscp = dscp;
+    shash_add(controllers, c->target, oc);
 }
 
 /* Configures the IP stack for 'br''s local interface properly according to the
@@ -3481,9 +3485,7 @@ bridge_configure_remotes(struct bridge *br,
 
     enum ofproto_fail_mode fail_mode;
 
-    struct ofproto_controller *ocs;
-    size_t n_ocs;
-    size_t i;
+    struct shash ocs;
 
     /* Check if we should disable in-band control on this bridge. */
     disable_in_band = smap_get_bool(&br->cfg->other_config, "disable-in-band",
@@ -3502,11 +3504,9 @@ bridge_configure_remotes(struct bridge *br,
 
     n_controllers = bridge_get_controllers(br, &controllers);
 
-    ocs = xmalloc((n_controllers + 1) * sizeof *ocs);
-    n_ocs = 0;
-
-    bridge_ofproto_controller_for_mgmt(br, &ocs[n_ocs++]);
-    for (i = 0; i < n_controllers; i++) {
+    shash_init(&ocs);
+    bridge_ofproto_controller_for_mgmt(br, &ocs);
+    for (size_t i = 0; i < n_controllers; i++) {
         struct ovsrec_controller *c = controllers[i];
 
         if (!strncmp(c->target, "punix:", 6)
@@ -3556,17 +3556,12 @@ bridge_configure_remotes(struct bridge *br,
         }
 
         bridge_configure_local_iface_netdev(br, c);
-        bridge_ofproto_controller_from_ovsrec(c, &ocs[n_ocs]);
-        if (disable_in_band) {
-            ocs[n_ocs].band = OFPROTO_OUT_OF_BAND;
-        }
-        n_ocs++;
+        bridge_ofproto_controller_from_ovsrec(c, disable_in_band, &ocs);
     }
 
-    ofproto_set_controllers(br->ofproto, ocs, n_ocs,
+    ofproto_set_controllers(br->ofproto, &ocs,
                             bridge_get_allowed_versions(br));
-    free(ocs[0].target); /* From bridge_ofproto_controller_for_mgmt(). */
-    free(ocs);
+    shash_destroy_free_data(&ocs);
 
     /* Set the fail-mode. */
     fail_mode = !br->cfg->fail_mode

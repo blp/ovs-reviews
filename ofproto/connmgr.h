@@ -27,6 +27,7 @@
 #include "ofproto-provider.h"
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
+#include "shash.h"
 
 struct nlattr;
 struct ofconn;
@@ -111,7 +112,7 @@ bool connmgr_has_controllers(const struct connmgr *);
 void connmgr_get_controller_info(struct connmgr *, struct shash *);
 void connmgr_free_controller_info(struct shash *);
 void connmgr_set_controllers(struct connmgr *,
-                             const struct ofproto_controller[], size_t n,
+                             const struct shash *controllers,
                              uint32_t allowed_versions);
 void connmgr_reconnect(const struct connmgr *);
 
