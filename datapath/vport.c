@@ -487,6 +487,9 @@ void ovs_vport_receive(struct vport *vport, struct sk_buff *skb,
 	struct sw_flow_key key;
 	int error;
 
+	if (!skb->sk || (sock_net(skb->sk) != read_pnet(&vport->dp->net)))
+		nf_reset(skb);
+
 	stats = this_cpu_ptr(vport->percpu_stats);
 	u64_stats_update_begin(&stats->syncp);
 	stats->rx_packets++;
