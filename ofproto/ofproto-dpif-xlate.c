@@ -4873,6 +4873,11 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
      *   kernel does.  If we wish to maintain the original values an action
      *   needs to be generated. */
 
+    struct ds local_trace;
+    if (OVS_UNLIKELY(flow->pkt_mark & (1u << 31)) && !xin->trace && xin->packet) {
+        ds_init(&local_trace);
+        xin->trace = &local_trace;
+    }
     if (OVS_UNLIKELY(xin->trace)) {
         ctx.trace_orig_flow = xin->flow;
         ctx.trace_last_flow = xin->flow;
@@ -5255,6 +5260,10 @@ exit:
         format_odp_actions(xin->trace, xout->odp_actions->data,
                            xout->odp_actions->size);
 
+        if (xin->trace == &local_trace) {
+            xout->slow |= SLOW_TRACE;
+        }
+
         if (xout->slow) {
             enum slow_path_reason slow;
 
@@ -5270,6 +5279,12 @@ exit:
 
                 slow &= ~bit;
             }
+        }
+
+        if (xin->trace == &local_trace) {
+            VLOG_INFO("%s", ds_cstr(&local_trace));
+            ds_destroy(&local_trace);
+            xin->trace = NULL;
         }
     }
 }
