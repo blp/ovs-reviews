@@ -30,6 +30,7 @@
 #include "dynamic-string.h"
 #include "ovs-thread.h"
 #include "odp-util.h"
+#include "ofpbuf.h"
 #include "dp-packet.h"
 #include "unaligned.h"
 
@@ -355,7 +356,22 @@ eth_from_hex(const char *hex, struct dp_packet **packetp)
     /* Use 2 bytes of headroom to 32-bit align the L3 header. */
     packet = *packetp = dp_packet_new_with_headroom(strlen(hex) / 2, 2);
 
-    if (dp_packet_put_hex(packet, hex, NULL)[0] != '\0') {
+    const char *tail = dp_packet_put_hex(packet, hex, NULL);
+    if (*tail == ',') {
+        /* Convert string to datapath key. */
+        struct ofpbuf odp_key;
+        ofpbuf_init(&odp_key, 0);
+        if (odp_flow_from_string(tail + 1, NULL, &odp_key, NULL)) {
+            ofpbuf_uninit(&odp_key);
+            dp_packet_delete(packet);
+            *packetp = NULL;
+            return "syntax error in packet metadata";
+        }
+
+        /* Convert odp_key to packet metadata. */
+        odp_key_to_pkt_metadata(odp_key.data, odp_key.size, &packet->md);
+        ofpbuf_uninit(&odp_key);
+    } else if (*tail != '\0') {
         dp_packet_delete(packet);
         *packetp = NULL;
         return "Trailing garbage in packet data";
