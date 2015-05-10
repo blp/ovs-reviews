@@ -387,7 +387,7 @@ tnl_xlate_init(struct flow *flow, struct flow_wildcards *wc)
             return false;
         }
 
-        flow->pkt_mark &= ~IPSEC_MARK;
+        //flow->pkt_mark &= ~IPSEC_MARK;
     }
 
     return true;
@@ -426,7 +426,7 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
     if (!cfg->ip_dst_flow) {
         flow->tunnel.ip_dst = tnl_port->match.ip_dst;
     }
-    flow->pkt_mark = tnl_port->match.pkt_mark;
+    //flow->pkt_mark = tnl_port->match.pkt_mark;
 
     if (!cfg->out_key_flow) {
         flow->tunnel.tun_id = cfg->out_key;
