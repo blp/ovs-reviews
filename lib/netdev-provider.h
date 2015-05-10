@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -714,8 +714,12 @@ struct netdev_class {
      * '*cnt' points to packet count for given batch. Once packets are returned
      * to caller, netdev should give up ownership of ofpbuf data.
      *
-     * Implementations should allocate buffer with DP_NETDEV_HEADROOM headroom
-     * and add a VLAN header which is obtained out-of-band to the packet.
+     * Implementations should allocate buffer with DP_NETDEV_HEADROOM headroom.
+     * If a VLAN header is obtained out-of-band (e.g. via VLAN acceleration),
+     * the implementation should insert it into the packet.
+     *
+     * The implementation should initialize packet metadata (the 'md' in each
+     * dp_packet), generally to zeros.
      *
      * Caller is expected to pass array of size MAX_RX_BATCH.
      * This function may be set to null if it would always return EOPNOTSUPP

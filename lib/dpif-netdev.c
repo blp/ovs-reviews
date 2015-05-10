@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -2556,7 +2556,6 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
 
         *recirc_depth_get() = 0;
 
-        /* XXX: initialize md in netdev implementation. */
         for (i = 0; i < cnt; i++) {
             pkt_metadata_init(&packets[i]->md, port->port_no);
         }
