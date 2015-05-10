@@ -51,6 +51,7 @@ struct dummy_packet_stream {
     struct stream *stream;
     struct dp_packet rxbuf;
     struct ovs_list txq;
+    int header_len;
 };
 
 enum dummy_packet_conn_type {
@@ -82,6 +83,7 @@ struct dummy_packet_conn {
         struct dummy_packet_pconn pconn;
         struct dummy_packet_rconn rconn;
     } u;
+    int header_len;
 };
 
 struct pkt_list_node {
@@ -159,21 +161,23 @@ netdev_rxq_dummy_cast(const struct netdev_rxq *rx)
 }
 
 static void
-dummy_packet_stream_init(struct dummy_packet_stream *s, struct stream *stream)
+dummy_packet_stream_init(struct dummy_packet_stream *s, struct stream *stream,
+                         int header_len)
 {
     int rxbuf_size = stream ? 2048 : 0;
     s->stream = stream;
     dp_packet_init(&s->rxbuf, rxbuf_size);
     list_init(&s->txq);
+    s->header_len = header_len;
 }
 
 static struct dummy_packet_stream *
-dummy_packet_stream_create(struct stream *stream)
+dummy_packet_stream_create(struct stream *stream, int header_len)
 {
     struct dummy_packet_stream *s;
 
     s = xzalloc(sizeof *s);
-    dummy_packet_stream_init(s, stream);
+    dummy_packet_stream_init(s, stream, header_len);
 
     return s;
 }
@@ -189,13 +193,20 @@ dummy_packet_stream_wait(struct dummy_packet_stream *s)
 }
 
 static void
-dummy_packet_stream_send(struct dummy_packet_stream *s, const void *buffer, size_t size)
+dummy_packet_stream_send(struct dummy_packet_stream *s,
+                         const struct dp_packet *pkt)
 {
     if (list_size(&s->txq) < NETDEV_DUMMY_MAX_QUEUE) {
+        const void *buffer = dp_packet_data(pkt);
+        size_t size = dp_packet_size(pkt);
         struct dp_packet *b;
         struct pkt_list_node *node;
 
-        b = dp_packet_clone_data_with_headroom(buffer, size, 2);
+        b = dp_packet_clone_data_with_headroom(buffer, size, s->header_len);
+        if (s->header_len > 2) {
+            put_unaligned_be32(dp_packet_push_uninit(b, 4),
+                               htonl(pkt->md.pkt_mark));
+        }
         put_unaligned_be16(dp_packet_push_uninit(b, 2), htons(size));
 
         node = xmalloc(sizeof *node);
@@ -234,8 +245,8 @@ dummy_packet_stream_run(struct netdev_dummy *dev, struct dummy_packet_stream *s)
     }
 
     if (!error) {
-        if (dp_packet_size(&s->rxbuf) < 2) {
-            n = 2 - dp_packet_size(&s->rxbuf);
+        if (dp_packet_size(&s->rxbuf) < s->header_len) {
+            n = s->header_len - dp_packet_size(&s->rxbuf);
         } else {
             uint16_t frame_len;
 
@@ -244,7 +255,7 @@ dummy_packet_stream_run(struct netdev_dummy *dev, struct dummy_packet_stream *s)
                 error = EPROTO;
                 n = 0;
             } else {
-                n = (2 + frame_len) - dp_packet_size(&s->rxbuf);
+                n = (s->header_len + frame_len) - dp_packet_size(&s->rxbuf);
             }
         }
     }
@@ -256,10 +267,15 @@ dummy_packet_stream_run(struct netdev_dummy *dev, struct dummy_packet_stream *s)
 
         if (retval > 0) {
             dp_packet_set_size(&s->rxbuf, dp_packet_size(&s->rxbuf) + retval);
-            if (retval == n && dp_packet_size(&s->rxbuf) > 2) {
+            if (retval == n && dp_packet_size(&s->rxbuf) > s->header_len) {
                 dp_packet_pull(&s->rxbuf, 2);
-                netdev_dummy_queue_packet(dev,
-                                          dp_packet_clone(&s->rxbuf));
+                if (s->header_len > 2) {
+                    const ovs_be32 *pkt_markp = dp_packet_pull(&s->rxbuf, 4);
+                    s->rxbuf.md.pkt_mark = ntohl(*pkt_markp);
+                } else {
+                    s->rxbuf.md.pkt_mark = 0;
+                }
+                netdev_dummy_queue_packet(dev, dp_packet_clone(&s->rxbuf));
                 dp_packet_clear(&s->rxbuf);
             }
         } else if (retval != -EAGAIN) {
@@ -354,6 +370,20 @@ dummy_packet_conn_set_config(struct dummy_packet_conn *conn,
          return;
     }
 
+    const char *header = smap_get(args, "header");
+    if (header) {
+        if (!strcmp(header, "extended")) {
+            conn->header_len = 6;
+        } else if (!strcmp(header, "compatible")) {
+            conn->header_len = 2;
+        } else {
+            VLOG_WARN("header type %s unknown", header);
+            return;
+        }
+    } else {
+        conn->header_len = 2;
+    }
+
     switch (conn->type) {
     case PASSIVE:
         if (pstream &&
@@ -400,7 +430,8 @@ dummy_packet_conn_set_config(struct dummy_packet_conn *conn,
         conn->type = ACTIVE;
 
         error = stream_open(stream, &active_stream, DSCP_DEFAULT);
-        conn->u.rconn.rstream = dummy_packet_stream_create(active_stream);
+        conn->u.rconn.rstream = dummy_packet_stream_create(active_stream,
+                                                           conn->header_len);
 
         switch (error) {
         case 0:
@@ -437,7 +468,7 @@ dummy_pconn_run(struct netdev_dummy *dev)
                                 ((pconn->n_streams + 1)
                                  * sizeof *s));
         s = &pconn->streams[pconn->n_streams++];
-        dummy_packet_stream_init(s, new_stream);
+        dummy_packet_stream_init(s, new_stream, dev->conn.header_len);
     } else if (error != EAGAIN) {
         VLOG_WARN("%s: accept failed (%s)",
                   pstream_get_name(pconn->pstream), ovs_strerror(error));
@@ -560,7 +591,7 @@ dummy_packet_conn_wait(struct dummy_packet_conn *conn)
 
 static void
 dummy_packet_conn_send(struct dummy_packet_conn *conn,
-                       const void *buffer, size_t size)
+                       const struct dp_packet *pkt)
 {
     int i;
 
@@ -569,14 +600,14 @@ dummy_packet_conn_send(struct dummy_packet_conn *conn,
         for (i = 0; i < conn->u.pconn.n_streams; i++) {
             struct dummy_packet_stream *s = &conn->u.pconn.streams[i];
 
-            dummy_packet_stream_send(s, buffer, size);
+            dummy_packet_stream_send(s, pkt);
             pstream_wait(conn->u.pconn.pstream);
         }
         break;
 
     case ACTIVE:
         if (reconnect_is_connected(conn->u.rconn.reconnect)) {
-            dummy_packet_stream_send(conn->u.rconn.rstream, buffer, size);
+            dummy_packet_stream_send(conn->u.rconn.rstream, pkt);
             dummy_packet_stream_wait(conn->u.rconn.rstream);
         }
         break;
@@ -930,7 +961,7 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
         dev->stats.tx_packets++;
         dev->stats.tx_bytes += size;
 
-        dummy_packet_conn_send(&dev->conn, buffer, size);
+        dummy_packet_conn_send(&dev->conn, pkts[i]);
 
         /* Reply to ARP requests for 'dev''s assigned IP address. */
         if (dev->address.s_addr) {
