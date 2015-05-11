@@ -4874,7 +4874,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
      *   needs to be generated. */
 
     struct ds local_trace;
-    if (OVS_UNLIKELY(flow->pkt_mark & (1u << 31)) && !xin->trace && xin->packet) {
+    if (OVS_UNLIKELY(flow->pkt_mark & (1u << 31))
+        && !xin->trace && xin->packet) {
         ds_init(&local_trace);
         xin->trace = &local_trace;
     }
@@ -4939,6 +4940,13 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         }
     }
     is_icmp = is_icmpv4(flow) || is_icmpv6(flow);
+
+    if (OVS_UNLIKELY(flow->pkt_mark & (1u << 31))) {
+        flow->pkt_mark += 0x10000;
+        if (wc) {
+            wc->masks.pkt_mark |= 0xffff << 16;
+        }
+    }
 
     tnl_may_send = tnl_xlate_init(flow, wc);
 
