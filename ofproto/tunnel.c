@@ -165,7 +165,7 @@ tnl_port_add__(const struct ofport_dpif *ofport, const struct netdev *netdev,
     tnl_port->match.ip_dst = cfg->ip_dst;
     tnl_port->match.ip_src_flow = cfg->ip_src_flow;
     tnl_port->match.ip_dst_flow = cfg->ip_dst_flow;
-    tnl_port->match.pkt_mark = cfg->ipsec ? IPSEC_MARK : 0;
+    tnl_port->match.pkt_mark = 0;
     tnl_port->match.in_key_flow = cfg->in_key_flow;
     tnl_port->match.odp_port = odp_port;
 
@@ -549,7 +549,7 @@ tnl_find(const struct flow *flow) OVS_REQ_RDLOCK(rwlock)
                                     : 0);
                     match.ip_dst = ip_dst_flow ? 0 : flow->tunnel.ip_src;
                     match.odp_port = flow->in_port.odp_port;
-                    match.pkt_mark = flow->pkt_mark;
+                    match.pkt_mark = 0;
                     match.in_key_flow = in_key_flow;
                     match.ip_dst_flow = ip_dst_flow;
                     match.ip_src_flow = ip_src == IP_SRC_FLOW;
