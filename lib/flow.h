@@ -793,6 +793,17 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
     md->in_port = flow->in_port;
 }
 
+static inline void
+pkt_metadata_to_flow(const struct pkt_metadata *md, struct flow *flow)
+{
+    flow->recirc_id = md->recirc_id;
+    flow->dp_hash = md->dp_hash;
+    flow->tunnel = md->tunnel;
+    flow->skb_priority = md->skb_priority;
+    flow->pkt_mark = md->pkt_mark;
+    flow->in_port = md->in_port;
+}
+
 static inline bool is_ip_any(const struct flow *flow)
 {
     return dl_type_is_ip_any(flow->dl_type);

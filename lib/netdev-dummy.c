@@ -957,6 +957,18 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
             }
         }
 
+        if (pkts[i]->md.pkt_mark & 0x80000000) {
+            struct dp_packet packet;
+            struct flow flow;
+
+            dp_packet_use_const(&packet, buffer, size);
+            flow_extract(&packet, &flow);
+            pkt_metadata_to_flow(&pkts[i]->md, &flow);
+            char *s = flow_to_string(&flow);
+            VLOG_INFO("sent on %s: %s", netdev_get_name(netdev), s);
+            free(s);
+        }
+
         ovs_mutex_lock(&dev->mutex);
         dev->stats.tx_packets++;
         dev->stats.tx_bytes += size;
@@ -1250,6 +1262,15 @@ netdev_dummy_queue_packet(struct netdev_dummy *dummy, struct dp_packet *packet)
     OVS_REQUIRES(dummy->mutex)
 {
     struct netdev_rxq_dummy *rx, *prev;
+
+    if (packet->md.pkt_mark & 0x80000000) {
+        struct flow flow;
+
+        flow_extract(packet, &flow);
+        char *s = flow_to_string(&flow);
+        VLOG_INFO("received on %s: %s", netdev_get_name(&dummy->up), s);
+        free(s);
+    }
 
     if (dummy->rxq_pcap) {
         ovs_pcap_write(dummy->rxq_pcap, packet);
