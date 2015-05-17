@@ -1,0 +1,44 @@
+m4_define([OFTEST_ADD_PORT],
+   [add-port br0 p$1 -- \
+    set interface p$1 type=dummy options:pstream=punix:$OVS_RUNDIR/p$1 \
+                     options:tx_pcap=p$1-tx.pcap options:rxq_pcap=p$1-rx.pcap \
+		     ofport_request=$1])
+
+m4_define(
+  [OFTEST_TEST_GROUP],
+  [AT_SETUP([oftest tests - m4_incr([$1]) of $2])
+
+   dnl Intentionally disables OpenFlow 1.5 because OFTest fails if it is
+   dnl enabled.
+   OVS_VSWITCHD_START(
+     [set-controller br0 ptcp:0:127.0.0.1 -- \
+      set controller br0 type=primary -- \
+      remove Bridge br0 protocols OpenFlow15 -- \
+      OFTEST_ADD_PORT([1]) -- \
+      OFTEST_ADD_PORT([2]) -- \
+      OFTEST_ADD_PORT([3]) -- \
+      OFTEST_ADD_PORT([4])])
+   sleep 1
+   TCP_PORT=`parse_listening_port < ovs-vswitchd.log`
+
+   i=0
+   n=$2
+   tests=
+   while read name; do
+       if test $i = $1; then
+           AS_VAR_APPEND([tests], [" $name"])
+       fi
+       AS_VAR_ARITH([i], [\( $i + 1 \) % $n])
+   done <<EOF
+`oft --list-test-names`
+EOF
+
+   if test X"$tests" != X; then
+       AT_CHECK([oft -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $tests], [0], [ignore], [ignore])
+   fi
+   OVS_VSWITCHD_STOP([d])
+   AT_CLEANUP])
+
+m4_for([myvar], [0], [99], [1], [OFTEST_TEST_GROUP(myvar, [100])])
+Have a secure alternative to OVSDB’s
+JSON-RPC.
