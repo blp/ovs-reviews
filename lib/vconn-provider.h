@@ -51,6 +51,9 @@ struct vconn {
     enum ofp_version version;   /* Negotiated version (or 0). */
     bool recv_any_version;      /* True to receive a message of any version. */
 
+    struct ovs_list txq;        /* Contains "struct ofpbuf"s. */
+    time_t last_activity;       /* Last time of packet rx or tx. */
+
     char *name;
 };
 

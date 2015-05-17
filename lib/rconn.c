@@ -34,10 +34,7 @@
 
 VLOG_DEFINE_THIS_MODULE(rconn);
 
-COVERAGE_DEFINE(rconn_discarded);
 COVERAGE_DEFINE(rconn_overflow);
-COVERAGE_DEFINE(rconn_queued);
-COVERAGE_DEFINE(rconn_sent);
 
 /* The connection states have the following meanings:
  *
@@ -95,8 +92,6 @@ struct rconn {
     char *target;               /* vconn name, passed to vconn_open(). */
     bool reliable;
 
-    struct ovs_list txq;        /* Contains "struct ofpbuf"s. */
-
     int backoff;
     int max_backoff;
     time_t backoff_deadline;
@@ -128,9 +123,8 @@ struct rconn {
      * response.
      *
      * "Activity" is defined as either receiving an OpenFlow message from the
-     * peer or successfully sending a message that had been in 'txq'. */
+     * peer or successfully sending a message that had been in the . */
     int probe_interval;         /* Secs of inactivity before sending probe. */
-    time_t last_activity;       /* Last time we saw some activity. */
 
     uint8_t dscp;
 
@@ -152,14 +146,12 @@ static void rconn_set_target__(struct rconn *rc,
                                const char *target, const char *name)
     OVS_REQUIRES(rc->mutex);
 static int rconn_send__(struct rconn *rc, struct ofpbuf *,
-                        struct rconn_packet_counter *)
+                        struct vconn_packet_counter *)
     OVS_REQUIRES(rc->mutex);
-static int try_send(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static void reconnect(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static void report_error(struct rconn *rc, int error) OVS_REQUIRES(rc->mutex);
 static void rconn_disconnect__(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static void disconnect(struct rconn *rc, int error) OVS_REQUIRES(rc->mutex);
-static void flush_queue(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static bool is_connected_state(enum state);
 static bool is_admitted_msg(const struct ofpbuf *);
 static bool rconn_logging_connection_attempts__(const struct rconn *rc)
@@ -185,10 +177,10 @@ void rconn_run_wait(struct rconn *rc) OVS_EXCLUDED(rc->mutex);
 struct ofpbuf *rconn_recv(struct rconn *rc) OVS_EXCLUDED(rc->mutex);
 void rconn_recv_wait(struct rconn *rc) OVS_EXCLUDED(rc->mutex);
 int rconn_send(struct rconn *rc, struct ofpbuf *b,
-               struct rconn_packet_counter *counter)
+               struct vconn_packet_counter *counter)
     OVS_EXCLUDED(rc->mutex);
 int rconn_send_with_limit(struct rconn *rc, struct ofpbuf *b,
-                          struct rconn_packet_counter *counter,
+                          struct vconn_packet_counter *counter,
                           int queue_limit)
     OVS_EXCLUDED(rc->mutex);
 void rconn_set_name(struct rconn *rc, const char *new_name)
@@ -241,8 +233,6 @@ rconn_create(int probe_interval, int max_backoff, uint8_t dscp,
     rc->target = xstrdup("void");
     rc->reliable = false;
 
-    list_init(&rc->txq);
-
     rc->backoff = 0;
     rc->max_backoff = max_backoff ? max_backoff : 8;
     rc->backoff_deadline = TIME_MIN;
@@ -257,8 +247,6 @@ rconn_create(int probe_interval, int max_backoff, uint8_t dscp,
     rc->n_successful_connections = 0;
     rc->creation_time = time_now();
     rc->total_time_connected = 0;
-
-    rc->last_activity = time_now();
 
     rconn_set_probe_interval(rc, probe_interval);
     rconn_set_dscp(rc, dscp);
@@ -407,8 +395,6 @@ rconn_destroy(struct rconn *rc)
         free(rc->name);
         free(rc->target);
         vconn_close(rc->vconn);
-        flush_queue(rc);
-        ofpbuf_list_delete(&rc->txq);
         ovs_mutex_unlock(&rc->mutex);
         ovs_mutex_destroy(&rc->mutex);
 
@@ -501,31 +487,13 @@ run_CONNECTING(struct rconn *rc)
     }
 }
 
-static void
-do_tx_work(struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
-{
-    if (list_is_empty(&rc->txq)) {
-        return;
-    }
-    while (!list_is_empty(&rc->txq)) {
-        int error = try_send(rc);
-        if (error) {
-            break;
-        }
-        rc->last_activity = time_now();
-    }
-    if (list_is_empty(&rc->txq)) {
-        poll_immediate_wake();
-    }
-}
-
 static unsigned int
 timeout_ACTIVE(const struct rconn *rc)
     OVS_REQUIRES(rc->mutex)
 {
     if (rc->probe_interval) {
-        unsigned int base = MAX(rc->last_activity, rc->state_entered);
+        time_t last_activity = vconn_get_last_activity(rc->vconn);
+        unsigned int base = MAX(last_activity, rc->state_entered);
         unsigned int arg = base + rc->probe_interval - rc->state_entered;
         return arg;
     }
@@ -537,7 +505,8 @@ run_ACTIVE(struct rconn *rc)
     OVS_REQUIRES(rc->mutex)
 {
     if (timed_out(rc)) {
-        unsigned int base = MAX(rc->last_activity, rc->state_entered);
+        time_t last_activity = vconn_get_last_activity(rc->vconn);
+        unsigned int base = MAX(last_activity, rc->state_entered);
         int version;
 
         VLOG_DBG("%s: idle %u seconds, sending inactivity probe",
@@ -553,8 +522,6 @@ run_ACTIVE(struct rconn *rc)
         rconn_send__(rc, make_echo_request(version), NULL);
         return;
     }
-
-    do_tx_work(rc);
 }
 
 static unsigned int
@@ -573,8 +540,6 @@ run_IDLE(struct rconn *rc)
                  "seconds, disconnecting",
                  rc->name, elapsed_in_this_state(rc));
         disconnect(rc, ETIMEDOUT);
-    } else {
-        do_tx_work(rc);
     }
 }
 
@@ -638,9 +603,6 @@ rconn_run_wait(struct rconn *rc)
     ovs_mutex_lock(&rc->mutex);
     if (rc->vconn) {
         vconn_run_wait(rc->vconn);
-        if ((rc->state & (S_ACTIVE | S_IDLE)) && !list_is_empty(&rc->txq)) {
-            vconn_wait(rc->vconn, WAIT_SEND);
-        }
     }
 
     timeo = timeout(rc);
@@ -669,7 +631,6 @@ rconn_recv(struct rconn *rc)
                 rc->probably_admitted = true;
                 rc->last_admitted = time_now();
             }
-            rc->last_activity = time_now();
             if (rc->state == S_IDLE) {
                 state_transition(rc, S_ACTIVE);
             }
@@ -698,29 +659,11 @@ rconn_recv_wait(struct rconn *rc)
 
 static int
 rconn_send__(struct rconn *rc, struct ofpbuf *b,
-           struct rconn_packet_counter *counter)
+           struct vconn_packet_counter *counter)
     OVS_REQUIRES(rc->mutex)
 {
-    if (rconn_is_connected(rc)) {
-        COVERAGE_INC(rconn_queued);
-
-        if (counter) {
-            rconn_packet_counter_inc(counter, b->size);
-        }
-
-        /* Reuse 'frame' as a private pointer while 'b' is in txq. */
-        b->header = counter;
-
-        list_push_back(&rc->txq, &b->list_node);
-
-        /* If the queue was empty before we added 'b', try to send some
-         * packets.  (But if the queue had packets in it, it's because the
-         * vconn is backlogged and there's no point in stuffing more into it
-         * now.  We'll get back to that in rconn_run().) */
-        if (rc->txq.next == &b->list_node) {
-            try_send(rc);
-        }
-        return 0;
+    if (rc->vconn) {
+        return vconn_send(rc->vconn, b, counter);
     } else {
         ofpbuf_delete(b);
         return ENOTCONN;
@@ -741,7 +684,7 @@ rconn_send__(struct rconn *rc, struct ofpbuf *b,
  * effect of waking up poll_block(). */
 int
 rconn_send(struct rconn *rc, struct ofpbuf *b,
-           struct rconn_packet_counter *counter)
+           struct vconn_packet_counter *counter)
     OVS_EXCLUDED(rc->mutex)
 {
     int error;
@@ -767,13 +710,13 @@ rconn_send(struct rconn *rc, struct ofpbuf *b,
  * effect of waking up poll_block(). */
 int
 rconn_send_with_limit(struct rconn *rc, struct ofpbuf *b,
-                      struct rconn_packet_counter *counter, int queue_limit)
+                      struct vconn_packet_counter *counter, int queue_limit)
     OVS_EXCLUDED(rc->mutex)
 {
     int error;
 
     ovs_mutex_lock(&rc->mutex);
-    if (rconn_packet_counter_n_packets(counter) < queue_limit) {
+    if (vconn_packet_counter_n_packets(counter) < queue_limit) {
         error = rconn_send__(rc, b, counter);
     } else {
         COVERAGE_INC(rconn_overflow);
@@ -947,93 +890,10 @@ rconn_count_txqlen(const struct rconn *rc)
     unsigned int len;
 
     ovs_mutex_lock(&rc->mutex);
-    len = list_size(&rc->txq);
+    len = rc->vconn ? vconn_count_txqlen(rc->vconn) : 0;
     ovs_mutex_unlock(&rc->mutex);
 
     return len;
-}
-
-struct rconn_packet_counter *
-rconn_packet_counter_create(void)
-{
-    struct rconn_packet_counter *c = xzalloc(sizeof *c);
-    ovs_mutex_init(&c->mutex);
-    ovs_mutex_lock(&c->mutex);
-    c->ref_cnt = 1;
-    ovs_mutex_unlock(&c->mutex);
-    return c;
-}
-
-void
-rconn_packet_counter_destroy(struct rconn_packet_counter *c)
-{
-    if (c) {
-        bool dead;
-
-        ovs_mutex_lock(&c->mutex);
-        ovs_assert(c->ref_cnt > 0);
-        dead = !--c->ref_cnt && !c->n_packets;
-        ovs_mutex_unlock(&c->mutex);
-
-        if (dead) {
-            ovs_mutex_destroy(&c->mutex);
-            free(c);
-        }
-    }
-}
-
-void
-rconn_packet_counter_inc(struct rconn_packet_counter *c, unsigned int n_bytes)
-{
-    ovs_mutex_lock(&c->mutex);
-    c->n_packets++;
-    c->n_bytes += n_bytes;
-    ovs_mutex_unlock(&c->mutex);
-}
-
-void
-rconn_packet_counter_dec(struct rconn_packet_counter *c, unsigned int n_bytes)
-{
-    bool dead = false;
-
-    ovs_mutex_lock(&c->mutex);
-    ovs_assert(c->n_packets > 0);
-    ovs_assert(c->n_packets == 1
-               ? c->n_bytes == n_bytes
-               : c->n_bytes > n_bytes);
-    c->n_packets--;
-    c->n_bytes -= n_bytes;
-    dead = !c->n_packets && !c->ref_cnt;
-    ovs_mutex_unlock(&c->mutex);
-
-    if (dead) {
-        ovs_mutex_destroy(&c->mutex);
-        free(c);
-    }
-}
-
-unsigned int
-rconn_packet_counter_n_packets(const struct rconn_packet_counter *c)
-{
-    unsigned int n;
-
-    ovs_mutex_lock(&c->mutex);
-    n = c->n_packets;
-    ovs_mutex_unlock(&c->mutex);
-
-    return n;
-}
-
-unsigned int
-rconn_packet_counter_n_bytes(const struct rconn_packet_counter *c)
-{
-    unsigned int n;
-
-    ovs_mutex_lock(&c->mutex);
-    n = c->n_bytes;
-    ovs_mutex_unlock(&c->mutex);
-
-    return n;
 }
 
 /* Set rc->target and rc->name to 'target' and 'name', respectively.  If 'name'
@@ -1046,40 +906,6 @@ rconn_set_target__(struct rconn *rc, const char *target, const char *name)
     rc->name = xstrdup(name ? name : target);
     free(rc->target);
     rc->target = xstrdup(target);
-}
-
-/* Tries to send a packet from 'rc''s send buffer.  Returns 0 if successful,
- * otherwise a positive errno value. */
-static int
-try_send(struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
-{
-    struct ofpbuf *msg = ofpbuf_from_list(rc->txq.next);
-    unsigned int n_bytes = msg->size;
-    struct rconn_packet_counter *counter = msg->header;
-    int retval;
-
-    /* Eagerly remove 'msg' from the txq.  We can't remove it from the list
-     * after sending, if sending is successful, because it is then owned by the
-     * vconn, which might have freed it already. */
-    list_remove(&msg->list_node);
-    msg->header = NULL;
-
-    retval = vconn_send(rc->vconn, msg);
-    if (retval) {
-        msg->header = counter;
-        list_push_front(&rc->txq, &msg->list_node);
-        if (retval != EAGAIN) {
-            report_error(rc, retval);
-            disconnect(rc, retval);
-        }
-        return retval;
-    }
-    COVERAGE_INC(rconn_sent);
-    if (counter) {
-        rconn_packet_counter_dec(counter, n_bytes);
-    }
-    return 0;
 }
 
 /* Reports that 'error' caused 'rc' to disconnect.  'error' may be a positive
@@ -1132,7 +958,6 @@ disconnect(struct rconn *rc, int error)
 
         if (rc->state & (S_CONNECTING | S_ACTIVE | S_IDLE)) {
             rc->last_disconnected = now;
-            flush_queue(rc);
         }
 
         if (now >= rc->backoff_deadline) {
@@ -1155,27 +980,6 @@ disconnect(struct rconn *rc, int error)
         rc->last_disconnected = time_now();
         state_transition(rc, S_DISCONNECTED);
     }
-}
-
-/* Drops all the packets from 'rc''s send queue and decrements their queue
- * counts. */
-static void
-flush_queue(struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
-{
-    if (list_is_empty(&rc->txq)) {
-        return;
-    }
-    while (!list_is_empty(&rc->txq)) {
-        struct ofpbuf *b = ofpbuf_from_list(list_pop_front(&rc->txq));
-        struct rconn_packet_counter *counter = b->header;
-        if (counter) {
-            rconn_packet_counter_dec(counter, b->size);
-        }
-        COVERAGE_INC(rconn_discarded);
-        ofpbuf_delete(b);
-    }
-    poll_immediate_wake();
 }
 
 static unsigned int

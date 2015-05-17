@@ -77,7 +77,7 @@ struct ofconn {
     enum nx_packet_in_format packet_in_format; /* OFPT_PACKET_IN format. */
 
     /* OFPT_PACKET_IN related data. */
-    struct rconn_packet_counter *packet_in_counter; /* # queued on 'rconn'. */
+    struct vconn_packet_counter *packet_in_counter; /* # queued on 'rconn'. */
 #define N_SCHEDULERS 2
     struct pinsched *schedulers[N_SCHEDULERS];
     struct pktbuf *pktbuf;         /* OpenFlow packet buffers. */
@@ -88,7 +88,7 @@ struct ofconn {
      * requests, and the maximum number before we stop reading OpenFlow
      * requests.  */
 #define OFCONN_REPLY_MAX 100
-    struct rconn_packet_counter *reply_counter;
+    struct vconn_packet_counter *reply_counter;
 
     /* Asynchronous message configuration in each possible roles.
      *
@@ -130,7 +130,7 @@ struct ofconn {
      * 'monitor_counter' counts the OpenFlow messages and bytes currently in
      * flight.  This value growing too large triggers pausing. */
     uint64_t monitor_paused OVS_GUARDED_BY(ofproto_mutex);
-    struct rconn_packet_counter *monitor_counter OVS_GUARDED_BY(ofproto_mutex);
+    struct vconn_packet_counter *monitor_counter OVS_GUARDED_BY(ofproto_mutex);
 
     /* State of monitors for a single ongoing flow_mod.
      *
@@ -169,7 +169,7 @@ static char *ofconn_make_name(const struct connmgr *, const char *target);
 static void ofconn_set_rate_limit(struct ofconn *, int rate, int burst);
 
 static void ofconn_send(const struct ofconn *, struct ofpbuf *,
-                        struct rconn_packet_counter *);
+                        struct vconn_packet_counter *);
 static void ofconn_close_clone(const struct ofconn *, int idx, int retval);
 static void ofconn_send_in_the_clones(const struct ofconn *, struct ofpbuf *);
 
@@ -1275,8 +1275,8 @@ ofconn_flush(struct ofconn *ofconn)
     ofconn_set_protocol(ofconn, OFPUTIL_P_NONE);
     ofconn->packet_in_format = NXPIF_OPENFLOW10;
 
-    rconn_packet_counter_destroy(ofconn->packet_in_counter);
-    ofconn->packet_in_counter = rconn_packet_counter_create();
+    vconn_packet_counter_destroy(ofconn->packet_in_counter);
+    ofconn->packet_in_counter = vconn_packet_counter_create();
     for (i = 0; i < N_SCHEDULERS; i++) {
         if (ofconn->schedulers[i]) {
             int rate, burst;
@@ -1295,8 +1295,8 @@ ofconn_flush(struct ofconn *ofconn)
                              : 0);
     ofconn->controller_id = 0;
 
-    rconn_packet_counter_destroy(ofconn->reply_counter);
-    ofconn->reply_counter = rconn_packet_counter_create();
+    vconn_packet_counter_destroy(ofconn->reply_counter);
+    ofconn->reply_counter = vconn_packet_counter_create();
 
     if (ofconn->enable_async_msgs) {
         uint32_t *master = ofconn->master_async_config;
@@ -1343,8 +1343,8 @@ ofconn_flush(struct ofconn *ofconn)
                         &ofconn->monitors) {
         ofmonitor_destroy(monitor);
     }
-    rconn_packet_counter_destroy(ofconn->monitor_counter);
-    ofconn->monitor_counter = rconn_packet_counter_create();
+    vconn_packet_counter_destroy(ofconn->monitor_counter);
+    ofconn->monitor_counter = vconn_packet_counter_create();
     ofpbuf_list_delete(&ofconn->updates); /* ...but it should be empty. */
 }
 
@@ -1364,10 +1364,10 @@ ofconn_destroy(struct ofconn *ofconn)
     hmap_destroy(&ofconn->monitors);
     list_remove(&ofconn->node);
     rconn_destroy(ofconn->rconn);
-    rconn_packet_counter_destroy(ofconn->packet_in_counter);
-    rconn_packet_counter_destroy(ofconn->reply_counter);
+    vconn_packet_counter_destroy(ofconn->packet_in_counter);
+    vconn_packet_counter_destroy(ofconn->reply_counter);
     pktbuf_destroy(ofconn->pktbuf);
-    rconn_packet_counter_destroy(ofconn->monitor_counter);
+    vconn_packet_counter_destroy(ofconn->monitor_counter);
     free(ofconn);
 }
 
@@ -1400,7 +1400,7 @@ ofconn_reconfigure(struct ofconn *ofconn, const struct ofproto_controller *c)
 static bool
 ofconn_may_recv(const struct ofconn *ofconn)
 {
-    int count = rconn_packet_counter_n_packets(ofconn->reply_counter);
+    int count = vconn_packet_counter_n_packets(ofconn->reply_counter);
     return count < OFCONN_REPLY_MAX;
 }
 
@@ -1689,7 +1689,7 @@ ofconn_send_in_the_clones(const struct ofconn *ofconn, struct ofpbuf *msg)
             }
         }
 
-        int error = vconn_send(ofconn->clones[i], copy);
+        int error = vconn_send(ofconn->clones[i], copy, NULL /* XXX */ );
         if (!error) {
             copy = NULL;
         } else if (error != EAGAIN) {
@@ -1704,7 +1704,7 @@ ofconn_send_in_the_clones(const struct ofconn *ofconn, struct ofpbuf *msg)
 
 static void
 ofconn_send(const struct ofconn *ofconn, struct ofpbuf *msg,
-            struct rconn_packet_counter *counter)
+            struct vconn_packet_counter *counter)
 {
     struct ofpbuf *copy = ofconn->n_clones ? ofpbuf_clone(msg) : NULL;
     if (!rconn_send(ofconn->rconn, msg, counter)) {
@@ -1852,7 +1852,7 @@ do_send_packet_ins(struct ofconn *ofconn, struct ovs_list *txq)
     struct ofpbuf *pin;
 
     LIST_FOR_EACH_POP (pin, list_node, txq) {
-        if (rconn_packet_counter_n_packets(ofconn->packet_in_counter) < 100) {
+        if (vconn_packet_counter_n_packets(ofconn->packet_in_counter) < 100) {
             ofconn_send(ofconn, pin, ofconn->packet_in_counter);
         } else {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
@@ -2385,7 +2385,7 @@ ofmonitor_flush(struct connmgr *mgr)
             unsigned int n_bytes;
 
             ofconn_send(ofconn, msg, ofconn->monitor_counter);
-            n_bytes = rconn_packet_counter_n_bytes(ofconn->monitor_counter);
+            n_bytes = vconn_packet_counter_n_bytes(ofconn->monitor_counter);
             if (!ofconn->monitor_paused && n_bytes > 128 * 1024) {
                 struct ofpbuf *pause;
 
@@ -2429,7 +2429,7 @@ ofmonitor_may_resume(const struct ofconn *ofconn)
     OVS_REQUIRES(ofproto_mutex)
 {
     return (ofconn->monitor_paused != 0
-            && !rconn_packet_counter_n_packets(ofconn->monitor_counter));
+            && !vconn_packet_counter_n_packets(ofconn->monitor_counter));
 }
 
 static void

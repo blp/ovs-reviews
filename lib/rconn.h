@@ -23,12 +23,7 @@
 #include "openvswitch/types.h"
 #include "ovs-thread.h"
 
-/* A wrapper around vconn that provides queuing and optionally reliability.
- *
- * An rconn maintains a message transmission queue of bounded length specified
- * by the caller.  The rconn does not guarantee reliable delivery of
- * queued messages: all queued messages are dropped when reconnection becomes
- * necessary.
+/* A wrapper around vconn that provides (optional) reliability.
  *
  * An rconn optionally provides reliable communication, in this sense: the
  * rconn will re-connect, with exponential backoff, when the underlying vconn
@@ -42,7 +37,7 @@
  */
 
 struct vconn;
-struct rconn_packet_counter;
+struct vconn_packet_counter;
 
 struct rconn *rconn_create(int inactivity_probe_interval,
 			   int max_backoff, uint8_t dscp,
@@ -66,9 +61,9 @@ void rconn_run(struct rconn *);
 void rconn_run_wait(struct rconn *);
 struct ofpbuf *rconn_recv(struct rconn *);
 void rconn_recv_wait(struct rconn *);
-int rconn_send(struct rconn *, struct ofpbuf *, struct rconn_packet_counter *);
+int rconn_send(struct rconn *, struct ofpbuf *, struct vconn_packet_counter *);
 int rconn_send_with_limit(struct rconn *, struct ofpbuf *,
-                          struct rconn_packet_counter *, int queue_limit);
+                          struct vconn_packet_counter *, int queue_limit);
 
 const char *rconn_get_name(const struct rconn *);
 void rconn_set_name(struct rconn *, const char *new_name);
@@ -87,22 +82,5 @@ time_t rconn_get_last_disconnect(const struct rconn *);
 unsigned int rconn_get_connection_seqno(const struct rconn *);
 int rconn_get_last_error(const struct rconn *);
 unsigned int rconn_count_txqlen(const struct rconn *);
-
-/* Counts packets and bytes queued into an rconn by a given source. */
-struct rconn_packet_counter {
-    struct ovs_mutex mutex;
-    unsigned int n_packets OVS_GUARDED; /* Number of packets queued. */
-    unsigned int n_bytes OVS_GUARDED;   /* Number of bytes queued. */
-    int ref_cnt OVS_GUARDED;            /* Number of owners. */
-};
-
-struct rconn_packet_counter *rconn_packet_counter_create(void);
-void rconn_packet_counter_destroy(struct rconn_packet_counter *);
-void rconn_packet_counter_inc(struct rconn_packet_counter *, unsigned n_bytes);
-void rconn_packet_counter_dec(struct rconn_packet_counter *, unsigned n_bytes);
-
-unsigned int rconn_packet_counter_n_packets(
-    const struct rconn_packet_counter *);
-unsigned int rconn_packet_counter_n_bytes(const struct rconn_packet_counter *);
 
 #endif /* rconn.h */

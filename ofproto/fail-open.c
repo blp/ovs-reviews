@@ -76,7 +76,7 @@ struct fail_open {
     struct connmgr *connmgr;
     int last_disconn_secs;
     long long int next_bogus_packet_in;
-    struct rconn_packet_counter *bogus_packet_counter;
+    struct vconn_packet_counter *bogus_packet_counter;
     bool fail_open_active;
 };
 
@@ -257,7 +257,7 @@ fail_open_create(struct ofproto *ofproto, struct connmgr *mgr)
     fo->connmgr = mgr;
     fo->last_disconn_secs = 0;
     fo->next_bogus_packet_in = LLONG_MAX;
-    fo->bogus_packet_counter = rconn_packet_counter_create();
+    fo->bogus_packet_counter = vconn_packet_counter_create();
     fo->fail_open_active = false;
     return fo;
 }
@@ -272,7 +272,7 @@ fail_open_destroy(struct fail_open *fo)
             fail_open_recover(fo);
         }
         /* We don't own fo->connmgr. */
-        rconn_packet_counter_destroy(fo->bogus_packet_counter);
+        vconn_packet_counter_destroy(fo->bogus_packet_counter);
         free(fo);
     }
 }

@@ -80,7 +80,7 @@ struct lswitch {
     struct shash queue_names;   /* Map from port name to lswitch_port. */
 
     /* Number of outgoing queued packets on the rconn. */
-    struct rconn_packet_counter *queued;
+    struct vconn_packet_counter *queued;
 
     /* If true, do not reply to any messages from the switch (for debugging
      * fail-open mode). */
@@ -172,7 +172,7 @@ lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
     sw->n_default_flows = cfg->n_default_flows;
     sw->usable_protocols = cfg->usable_protocols;
 
-    sw->queued = rconn_packet_counter_create();
+    sw->queued = vconn_packet_counter_create();
 
     return sw;
 }
@@ -286,7 +286,7 @@ lswitch_destroy(struct lswitch *sw)
         }
         shash_destroy(&sw->queue_names);
         mac_learning_unref(sw->ml);
-        rconn_packet_counter_destroy(sw->queued);
+        vconn_packet_counter_destroy(sw->queued);
         free(sw);
     }
 }

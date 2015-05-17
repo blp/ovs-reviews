@@ -35,7 +35,7 @@
 #include "openflow/openflow.h"
 #include "packets.h"
 #include "poll-loop.h"
-#include "random.h"
+#include "timeval.h"
 #include "util.h"
 #include "openvswitch/vlog.h"
 #include "socket-util.h"
@@ -45,6 +45,21 @@ VLOG_DEFINE_THIS_MODULE(vconn);
 COVERAGE_DEFINE(vconn_open);
 COVERAGE_DEFINE(vconn_received);
 COVERAGE_DEFINE(vconn_sent);
+COVERAGE_DEFINE(vconn_discarded);
+COVERAGE_DEFINE(vconn_overflow);
+
+/* Counts packets and bytes queued into an vconn by a given source. */
+struct vconn_packet_counter {
+    struct ovs_mutex mutex;
+    unsigned int n_packets OVS_GUARDED; /* Number of packets queued. */
+    unsigned int n_bytes OVS_GUARDED;   /* Number of bytes queued. */
+    int ref_cnt OVS_GUARDED;            /* Number of owners. */
+};
+
+static void vconn_packet_counter_inc(struct vconn_packet_counter *,
+                                     unsigned int n_bytes);
+static void vconn_packet_counter_dec(struct vconn_packet_counter *,
+                                     unsigned int n_bytes);
 
 static const struct vconn_class *vconn_classes[] = {
     &tcp_vconn_class,
@@ -72,7 +87,12 @@ static struct vlog_rate_limit ofmsg_rl = VLOG_RATE_LIMIT_INIT(600, 600);
 static struct vlog_rate_limit bad_ofmsg_rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
 static int do_recv(struct vconn *, struct ofpbuf **);
-static int do_send(struct vconn *, struct ofpbuf *);
+static void vconn_send__(struct vconn *, struct ofpbuf *,
+                         struct vconn_packet_counter *);
+static int vconn_run_tx__(struct vconn *);
+static void vconn_run_tx(struct vconn *);
+static void vconn_flush_tx(struct vconn *);
+static void vconn_record_error(struct vconn *, int error);
 
 /* Check the validity of the vconn class structures. */
 static void
@@ -262,6 +282,8 @@ vconn_run(struct vconn *vconn)
     if (vconn->vclass->run) {
         (vconn->vclass->run)(vconn);
     }
+
+    vconn_run_tx(vconn);
 }
 
 /* Arranges for the poll loop to wake up when 'vconn' needs to perform
@@ -287,6 +309,18 @@ int
 vconn_get_status(const struct vconn *vconn)
 {
     return vconn->error == EAGAIN ? 0 : vconn->error;
+}
+
+unsigned int
+vconn_count_txqlen(const struct vconn *vconn)
+{
+    return list_size(&vconn->txq);
+}
+
+time_t
+vconn_get_last_activity(const struct vconn *vconn)
+{
+    return vconn->last_activity;
 }
 
 int
@@ -317,6 +351,8 @@ void
 vconn_close(struct vconn *vconn)
 {
     if (vconn != NULL) {
+        vconn_flush_tx(vconn);
+
         char *name = vconn->name;
         (vconn->vclass->close)(vconn);
         free(name);
@@ -362,8 +398,8 @@ vconn_get_version(const struct vconn *vconn)
  * version is an error that causes the vconn to drop the connection.
  *
  * This functions allows 'vconn' to accept messages with any OpenFlow version.
- * This is useful in the special case where 'vconn' is used as an rconn
- * "monitor" connection (see rconn_add_monitor()), that is, where 'vconn' is
+ * This is useful in the special case where 'vconn' is used as an vconn
+ * "monitor" connection (see vconn_add_monitor()), that is, where 'vconn' is
  * used as a target for mirroring OpenFlow messages for debugging and
  * troubleshooting.
  *
@@ -385,29 +421,16 @@ vcs_connecting(struct vconn *vconn)
     ovs_assert(retval != EINPROGRESS);
     if (!retval) {
         vconn->state = VCS_SEND_HELLO;
-    } else if (retval != EAGAIN) {
-        vconn->state = VCS_DISCONNECTED;
-        vconn->error = retval;
+    } else {
+        vconn_record_error(vconn, retval);
     }
 }
 
 static void
 vcs_send_hello(struct vconn *vconn)
 {
-    struct ofpbuf *b;
-    int retval;
-
-    b = ofputil_encode_hello(vconn->allowed_versions);
-    retval = do_send(vconn, b);
-    if (!retval) {
-        vconn->state = VCS_RECV_HELLO;
-    } else {
-        ofpbuf_delete(b);
-        if (retval != EAGAIN) {
-            vconn->state = VCS_DISCONNECTED;
-            vconn->error = retval;
-        }
-    }
+    vconn_send__(vconn, ofputil_encode_hello(vconn->allowed_versions), NULL);
+    vconn->state = VCS_RECV_HELLO;
 }
 
 static char *
@@ -492,18 +515,13 @@ vcs_recv_hello(struct vconn *vconn)
         }
     }
 
-    if (retval != EAGAIN) {
-        vconn->state = VCS_DISCONNECTED;
-        vconn->error = retval == EOF ? ECONNRESET : retval;
-    }
+    vconn_record_error(vconn, retval == EOF ? ECONNRESET : retval);
 }
 
 static void
 vcs_send_error(struct vconn *vconn)
 {
-    struct ofpbuf *b;
     char s[128];
-    int retval;
     char *local_s, *peer_s;
 
     local_s = version_bitmap_to_string(vconn->allowed_versions);
@@ -513,15 +531,10 @@ vcs_send_error(struct vconn *vconn)
     free(peer_s);
     free(local_s);
 
-    b = ofperr_encode_hello(OFPERR_OFPHFC_INCOMPATIBLE, vconn->version, s);
-    retval = do_send(vconn, b);
-    if (retval) {
-        ofpbuf_delete(b);
-    }
-    if (retval != EAGAIN) {
-        vconn->state = VCS_DISCONNECTED;
-        vconn->error = retval ? retval : EPROTO;
-    }
+    vconn_send__(vconn, ofperr_encode_hello(OFPERR_OFPHFC_INCOMPATIBLE,
+                                            vconn->version, s), NULL);
+    /* XXX this won't wait for the txq to empty */
+    vconn_record_error(vconn, EPROTO);
 }
 
 /* Tries to complete the connection on 'vconn'. If 'vconn''s connection is
@@ -566,6 +579,62 @@ vconn_connect(struct vconn *vconn)
     return EAGAIN;
 }
 
+static int
+check_msg_version(struct vconn *vconn, const struct ofpbuf *msg)
+{
+    /* It's OK if 'msg' has the expected version. */
+    const struct ofp_header *oh = msg->data;
+    if (oh->version == vconn->version) {
+        return 0;
+    }
+
+    /* It's OK if 'vconn' can receive any version of OpenFlow. */
+    if (vconn->recv_any_version) {
+        return 0;
+    }
+
+    /* It's OK if 'msg' is one of the special invariant messages. */
+    enum ofptype type;
+    if (!ofptype_decode(&type, oh)
+        && (type == OFPTYPE_HELLO ||
+            type == OFPTYPE_ERROR ||
+            type == OFPTYPE_ECHO_REQUEST ||
+            type == OFPTYPE_ECHO_REPLY)) {
+        return 0;
+    }
+
+    /* Not OK.  Log it and send an error reply. */
+    VLOG_ERR_RL(&bad_ofmsg_rl, "%s: received OpenFlow version "
+                "0x%02"PRIx8" != expected %02x",
+                vconn->name, oh->version, vconn->version);
+    vconn_send__(vconn, ofperr_encode_reply(OFPERR_OFPBRC_BAD_VERSION, oh),
+                 NULL);
+    return EAGAIN;
+}
+
+static void
+vconn_record_error(struct vconn *vconn, int error)
+{
+    if (error != EAGAIN && vconn->state != VCS_DISCONNECTED) {
+        /* On Windows, when a peer terminates without calling a closesocket()
+         * on socket fd, we get WSAECONNRESET. Don't print warning messages for
+         * that case. */
+        if (error == EOF
+#ifdef _WIN32
+            || error == WSAECONNRESET
+#endif
+            ) {
+            VLOG_DBG("%s: connection closed by peer", vconn->name);
+        } else {
+            VLOG_WARN("%s: connection dropped (%s)", vconn->name,
+                      ovs_strerror(error));
+        }
+
+        vconn->state = VCS_DISCONNECTED;
+        vconn->error = error;
+    }
+}
+
 /* Tries to receive an OpenFlow message from 'vconn'.  If successful, stores
  * the received message into '*msgp' and returns 0.  The caller is responsible
  * for destroying the message with ofpbuf_delete().  On failure, returns a
@@ -577,47 +646,25 @@ vconn_connect(struct vconn *vconn)
 int
 vconn_recv(struct vconn *vconn, struct ofpbuf **msgp)
 {
-    struct ofpbuf *msg;
     int retval;
 
     retval = vconn_connect(vconn);
     if (!retval) {
+        struct ofpbuf *msg;
+
         retval = do_recv(vconn, &msg);
-    }
-    if (!retval && !vconn->recv_any_version) {
-        const struct ofp_header *oh = msg->data;
-        if (oh->version != vconn->version) {
-            enum ofptype type;
-
-            if (ofptype_decode(&type, msg->data)
-                || (type != OFPTYPE_HELLO &&
-                    type != OFPTYPE_ERROR &&
-                    type != OFPTYPE_ECHO_REQUEST &&
-                    type != OFPTYPE_ECHO_REPLY)) {
-                struct ofpbuf *reply;
-
-                VLOG_ERR_RL(&bad_ofmsg_rl, "%s: received OpenFlow version "
-                            "0x%02"PRIx8" != expected %02x",
-                            vconn->name, oh->version, vconn->version);
-
-                /* Send a "bad version" reply, if we can. */
-                reply = ofperr_encode_reply(OFPERR_OFPBRC_BAD_VERSION, oh);
-                retval = vconn_send(vconn, reply);
-                if (retval) {
-                    VLOG_INFO_RL(&bad_ofmsg_rl,
-                                 "%s: failed to queue error reply (%s)",
-                                 vconn->name, ovs_strerror(retval));
-                    ofpbuf_delete(reply);
-                }
-
-                /* Suppress the received message, as if it had not arrived. */
-                retval = EAGAIN;
-                ofpbuf_delete(msg);
+        if (!retval) {
+            retval = check_msg_version(vconn, msg);
+            if (!retval) {
+                *msgp = msg;
+                return 0;
             }
+            ofpbuf_delete(msg);
         }
     }
 
-    *msgp = retval ? NULL : msg;
+    vconn_record_error(vconn, retval);
+    *msgp = NULL;
     return retval;
 }
 
@@ -632,51 +679,147 @@ do_recv(struct vconn *vconn, struct ofpbuf **msgp)
             VLOG_DBG_RL(&ofmsg_rl, "%s: received: %s", vconn->name, s);
             free(s);
         }
+        vconn->last_activity = time_now();
     }
     return retval;
 }
 
-/* Tries to queue 'msg' for transmission on 'vconn'.  If successful, returns 0,
- * in which case ownership of 'msg' is transferred to the vconn.  Success does
- * not guarantee that 'msg' has been or ever will be delivered to the peer,
- * only that it has been queued for transmission.
- *
- * Returns a positive errno value on failure, in which case the caller
- * retains ownership of 'msg'.
- *
- * vconn_send will not block.  If 'msg' cannot be immediately accepted for
- * transmission, it returns EAGAIN immediately. */
-int
-vconn_send(struct vconn *vconn, struct ofpbuf *msg)
+static void
+vconn_send__(struct vconn *vconn, struct ofpbuf *msg,
+             struct vconn_packet_counter *counter)
 {
-    int retval = vconn_connect(vconn);
-    if (!retval) {
-        retval = do_send(vconn, msg);
+    ofpmsg_update_length(msg);
+
+    /* Add to counter, if any.
+     *
+     * This reuses 'msg->header' as a private pointer while 'msg' is in the
+     * txq. */
+    if (counter) {
+        vconn_packet_counter_inc(counter, msg->size);
     }
-    return retval;
+    msg->header = counter;
+
+    list_push_back(&vconn->txq, &msg->list_node);
+
+    /* If the queue was empty before we added 'msg', try to send some
+     * packets.  (But if the queue had packets in it, it's because the
+     * vconn is backlogged and there's no point in stuffing more into it
+     * now.  We'll get back to that in vconn_run().) */
+    if (vconn->txq.next == &msg->list_node) {
+        vconn_run_tx__(vconn);
+    }
+}
+
+/* Queues 'msg' for transmission on 'vconn'.  Increments 'counter', if nonnull,
+ * while the packet is in flight, and decrements again when it has been sent
+ * (or discarded due to disconnection).  Returns 0 if successful, otherwise a
+ * positive errno value.  Either way, 'vconn' takes ownership of 'msg'.
+ *
+ * This function does not inherently limit the size of the queue maintained for
+ * 'vconn', so the caller must use it carefully to avoid using an arbitrary
+ * amount of memory.
+ *
+ * Because 'msg' may be sent (or discarded) before this function returns, the
+ * caller may not be able to observe any change in 'counter'. */
+int
+vconn_send(struct vconn *vconn, struct ofpbuf *msg,
+           struct vconn_packet_counter *counter)
+{
+    ovs_assert(msg->size >= sizeof(struct ofp_header));
+
+    int error = vconn_connect(vconn);
+    if (!error) {
+        vconn_send__(vconn, msg, counter);
+        return 0;
+    } else {
+        ofpbuf_delete(msg);
+        return ENOTCONN;
+    }
+}
+
+/* Like vconn_send(), but returns EAGAIN (and deletes 'msg') if 'counter' is
+ * already at 'queue_limit' or more packets. */
+int
+vconn_send_with_limit(struct vconn *rc, struct ofpbuf *msg,
+                      struct vconn_packet_counter *counter, int queue_limit)
+{
+    if (vconn_packet_counter_n_packets(counter) < queue_limit) {
+        vconn_send__(rc, msg, counter);
+        return 0;
+    } else {
+        COVERAGE_INC(vconn_overflow);
+        ofpbuf_delete(msg);
+        return EAGAIN;
+    }
 }
 
 static int
-do_send(struct vconn *vconn, struct ofpbuf *msg)
+vconn_run_tx__(struct vconn *vconn)
 {
-    int retval;
+    struct ofpbuf *msg = ofpbuf_from_list(list_pop_front(&vconn->txq));
+    unsigned int n_bytes = msg->size;
+    struct vconn_packet_counter *counter = msg->header;
 
-    ovs_assert(msg->size >= sizeof(struct ofp_header));
+    /* Eagerly remove 'msg' from the txq.  We can't remove it from the list
+     * after sending, if sending is successful, because it is then owned by the
+     * vconn, which might have freed it already. */
+    list_remove(&msg->list_node);
+    msg->header = NULL;
 
-    ofpmsg_update_length(msg);
+    int error;
     if (!VLOG_IS_DBG_ENABLED()) {
         COVERAGE_INC(vconn_sent);
-        retval = (vconn->vclass->send)(vconn, msg);
+        error = (vconn->vclass->send)(vconn, msg);
     } else {
         char *s = ofp_to_string(msg->data, msg->size, 1);
-        retval = (vconn->vclass->send)(vconn, msg);
-        if (retval != EAGAIN) {
+        error = (vconn->vclass->send)(vconn, msg);
+        if (error != EAGAIN) {
             VLOG_DBG_RL(&ofmsg_rl, "%s: sent (%s): %s",
-                        vconn->name, ovs_strerror(retval), s);
+                        vconn->name, ovs_strerror(error), s);
         }
         free(s);
     }
-    return retval;
+
+    if (error) {
+        msg->header = counter;
+        list_push_front(&vconn->txq, &msg->list_node);
+        vconn_record_error(vconn, error);
+        return error;
+    }
+
+    COVERAGE_INC(vconn_sent);
+    if (counter) {
+        vconn_packet_counter_dec(counter, n_bytes);
+    }
+    return 0;
+}
+
+static void
+vconn_run_tx(struct vconn *vconn)
+{
+    while (!list_is_empty(&vconn->txq)) {
+        int error = vconn_run_tx__(vconn);
+        if (error) {
+            break;
+        }
+        vconn->last_activity = time_now();
+    }
+}
+
+/* Drops all the packets from 'rc''s send queue and decrements their queue
+ * counts. */
+static void
+vconn_flush_tx(struct vconn *vconn)
+{
+    while (!list_is_empty(&vconn->txq)) {
+        struct ofpbuf *b = ofpbuf_from_list(list_pop_front(&vconn->txq));
+        struct vconn_packet_counter *counter = b->header;
+        if (counter) {
+            vconn_packet_counter_dec(counter, b->size);
+        }
+        COVERAGE_INC(vconn_discarded);
+        ofpbuf_delete(b);
+    }
 }
 
 /* Same as vconn_connect(), except that it waits until the connection on
@@ -705,7 +848,7 @@ vconn_send_block(struct vconn *vconn, struct ofpbuf *msg)
 
     fatal_signal_run();
 
-    while ((retval = vconn_send(vconn, msg)) == EAGAIN) {
+    while ((retval = vconn_send(vconn, msg, NULL)) == EAGAIN) {
         vconn_run(vconn);
         vconn_run_wait(vconn);
         vconn_send_wait(vconn);
@@ -1292,6 +1435,8 @@ vconn_init(struct vconn *vconn, const struct vconn_class *class,
     vconn->error = connect_status;
     vconn->allowed_versions = allowed_versions;
     vconn->name = xstrdup(name);
+    list_init(&vconn->txq);
+    vconn->last_activity = time_now();
     ovs_assert(vconn->state != VCS_CONNECTING || class->connect);
 }
 
@@ -1302,4 +1447,87 @@ pvconn_init(struct pvconn *pvconn, const struct pvconn_class *class,
     pvconn->pvclass = class;
     pvconn->name = xstrdup(name);
     pvconn->allowed_versions = allowed_versions;
+}
+
+struct vconn_packet_counter *
+vconn_packet_counter_create(void)
+{
+    struct vconn_packet_counter *c = xzalloc(sizeof *c);
+    ovs_mutex_init(&c->mutex);
+    ovs_mutex_lock(&c->mutex);
+    c->ref_cnt = 1;
+    ovs_mutex_unlock(&c->mutex);
+    return c;
+}
+
+void
+vconn_packet_counter_destroy(struct vconn_packet_counter *c)
+{
+    if (c) {
+        bool dead;
+
+        ovs_mutex_lock(&c->mutex);
+        ovs_assert(c->ref_cnt > 0);
+        dead = !--c->ref_cnt && !c->n_packets;
+        ovs_mutex_unlock(&c->mutex);
+
+        if (dead) {
+            ovs_mutex_destroy(&c->mutex);
+            free(c);
+        }
+    }
+}
+
+static void
+vconn_packet_counter_inc(struct vconn_packet_counter *c, unsigned int n_bytes)
+{
+    ovs_mutex_lock(&c->mutex);
+    c->n_packets++;
+    c->n_bytes += n_bytes;
+    ovs_mutex_unlock(&c->mutex);
+}
+
+static void
+vconn_packet_counter_dec(struct vconn_packet_counter *c, unsigned int n_bytes)
+{
+    bool dead = false;
+
+    ovs_mutex_lock(&c->mutex);
+    ovs_assert(c->n_packets > 0);
+    ovs_assert(c->n_packets == 1
+               ? c->n_bytes == n_bytes
+               : c->n_bytes > n_bytes);
+    c->n_packets--;
+    c->n_bytes -= n_bytes;
+    dead = !c->n_packets && !c->ref_cnt;
+    ovs_mutex_unlock(&c->mutex);
+
+    if (dead) {
+        ovs_mutex_destroy(&c->mutex);
+        free(c);
+    }
+}
+
+unsigned int
+vconn_packet_counter_n_packets(const struct vconn_packet_counter *c)
+{
+    unsigned int n;
+
+    ovs_mutex_lock(&c->mutex);
+    n = c->n_packets;
+    ovs_mutex_unlock(&c->mutex);
+
+    return n;
+}
+
+unsigned int
+vconn_packet_counter_n_bytes(const struct vconn_packet_counter *c)
+{
+    unsigned int n;
+
+    ovs_mutex_lock(&c->mutex);
+    n = c->n_bytes;
+    ovs_mutex_unlock(&c->mutex);
+
+    return n;
 }
