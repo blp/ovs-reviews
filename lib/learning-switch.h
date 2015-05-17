@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2010, 2011, 2012, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 #include "ofp-util.h"
 
 struct ofpbuf;
-struct rconn;
+struct vconn;
 
 enum lswitch_mode {
     LSW_NORMAL,                 /* Always use OFPP_NORMAL. */
@@ -65,13 +65,10 @@ struct lswitch_config {
     bool mute;
 };
 
-struct lswitch *lswitch_create(struct rconn *, const struct lswitch_config *);
+struct lswitch *lswitch_create(struct vconn *, const struct lswitch_config *);
 bool lswitch_is_alive(const struct lswitch *);
-void lswitch_set_queue(struct lswitch *sw, uint32_t queue);
 void lswitch_run(struct lswitch *);
 void lswitch_wait(struct lswitch *);
 void lswitch_destroy(struct lswitch *);
-
-void lswitch_mute(struct lswitch *);
 
 #endif /* learning-switch.h */

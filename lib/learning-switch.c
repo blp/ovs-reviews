@@ -38,7 +38,6 @@
 #include "ofp-util.h"
 #include "openflow/openflow.h"
 #include "poll-loop.h"
-#include "rconn.h"
 #include "shash.h"
 #include "simap.h"
 #include "timeval.h"
@@ -60,7 +59,7 @@ enum lswitch_state {
 };
 
 struct lswitch {
-    struct rconn *rconn;
+    struct vconn *vconn;
     enum lswitch_state state;
 
     /* If nonnegative, the switch sets up flows that expire after the given
@@ -79,12 +78,8 @@ struct lswitch {
     struct hmap queue_numbers;  /* Map from port number to lswitch_port. */
     struct shash queue_names;   /* Map from port name to lswitch_port. */
 
-    /* Number of outgoing queued packets on the rconn. */
+    /* Number of outgoing queued packets on the vconn. */
     struct vconn_packet_counter *queued;
-
-    /* If true, do not reply to any messages from the switch (for debugging
-     * fail-open mode). */
-    bool mute;
 
     /* Optional "flow mod" requests to send to the switch at connection time,
      * to set up the flow table. */
@@ -101,6 +96,7 @@ static void queue_tx(struct lswitch *, struct ofpbuf *);
 static void send_features_request(struct lswitch *);
 
 static void lswitch_process_packet(struct lswitch *, const struct ofpbuf *);
+static void lswitch_disconnect(struct lswitch *);
 static enum ofperr process_switch_features(struct lswitch *,
                                            struct ofp_header *);
 static void process_packet_in(struct lswitch *, const struct ofp_header *);
@@ -116,15 +112,15 @@ static void set_mac_entry_ofp_port(struct mac_learning *ml,
 /* Creates and returns a new learning switch whose configuration is given by
  * 'cfg'.
  *
- * 'rconn' is used to send out an OpenFlow features request. */
+ * 'vconn' is used to send out an OpenFlow features request. */
 struct lswitch *
-lswitch_create(struct rconn *rconn, const struct lswitch_config *cfg)
+lswitch_create(struct vconn *vconn, const struct lswitch_config *cfg)
 {
     struct lswitch *sw;
     uint32_t ofpfw;
 
     sw = xzalloc(sizeof *sw);
-    sw->rconn = rconn;
+    sw->vconn = vconn;
     sw->state = S_CONNECTING;
     sw->max_idle = cfg->max_idle;
     sw->datapath_id = 0;
@@ -185,7 +181,7 @@ lswitch_handshake(struct lswitch *sw)
 
     send_features_request(sw);
 
-    version = rconn_get_version(sw->rconn);
+    version = vconn_get_version(sw->vconn);
     protocol = ofputil_protocol_from_ofp_version(version);
     if (version >= OFP13_VERSION) {
         /* OpenFlow 1.3 and later by default drop packets that miss in the flow
@@ -220,10 +216,10 @@ lswitch_handshake(struct lswitch *sw)
         fm.delete_reason = 0;
 
         msg = ofputil_encode_flow_mod(&fm, protocol);
-        error = rconn_send(sw->rconn, msg, NULL);
+        error = vconn_send(sw->vconn, msg, NULL);
         if (error) {
             VLOG_INFO_RL(&rl, "%s: failed to add default flow (%s)",
-                         rconn_get_name(sw->rconn), ovs_strerror(error));
+                         vconn_get_name(sw->vconn), ovs_strerror(error));
         }
     }
     if (sw->default_flows) {
@@ -245,22 +241,22 @@ lswitch_handshake(struct lswitch *sw)
                 if (!msg) {
                     break;
                 }
-                error = rconn_send(sw->rconn, msg, NULL);
+                error = vconn_send(sw->vconn, msg, NULL);
             }
         }
         if (protocol & sw->usable_protocols) {
             for (i = 0; !error && i < sw->n_default_flows; i++) {
                 msg = ofputil_encode_flow_mod(&sw->default_flows[i], protocol);
-                error = rconn_send(sw->rconn, msg, NULL);
+                error = vconn_send(sw->vconn, msg, NULL);
             }
 
             if (error) {
                 VLOG_INFO_RL(&rl, "%s: failed to queue default flows (%s)",
-                             rconn_get_name(sw->rconn), ovs_strerror(error));
+                             vconn_get_name(sw->vconn), ovs_strerror(error));
             }
         } else {
             VLOG_INFO_RL(&rl, "%s: failed to set usable protocol",
-                         rconn_get_name(sw->rconn));
+                         vconn_get_name(sw->vconn));
         }
     }
     sw->protocol = protocol;
@@ -269,7 +265,7 @@ lswitch_handshake(struct lswitch *sw)
 bool
 lswitch_is_alive(const struct lswitch *sw)
 {
-    return rconn_is_alive(sw->rconn);
+    return sw->vconn && !vconn_get_status(sw->vconn);
 }
 
 /* Destroys 'sw'. */
@@ -279,7 +275,7 @@ lswitch_destroy(struct lswitch *sw)
     if (sw) {
         struct lswitch_port *node, *next;
 
-        rconn_destroy(sw->rconn);
+        vconn_close(sw->vconn);
         HMAP_FOR_EACH_SAFE (node, next, hmap_node, &sw->queue_numbers) {
             hmap_remove(&sw->queue_numbers, &node->hmap_node);
             free(node);
@@ -296,7 +292,9 @@ lswitch_destroy(struct lswitch *sw)
 void
 lswitch_run(struct lswitch *sw)
 {
-    int i;
+    if (!sw->vconn) {
+        return;
+    }
 
     if (sw->ml) {
         ovs_rwlock_wrlock(&sw->ml->rwlock);
@@ -304,47 +302,49 @@ lswitch_run(struct lswitch *sw)
         ovs_rwlock_unlock(&sw->ml->rwlock);
     }
 
-    rconn_run(sw->rconn);
+    vconn_run(sw->vconn);
 
     if (sw->state == S_CONNECTING) {
-        if (rconn_get_version(sw->rconn) != -1) {
+        if (vconn_get_version(sw->vconn) != -1) {
             lswitch_handshake(sw);
             sw->state = S_FEATURES_REPLY;
         }
         return;
     }
 
-    for (i = 0; i < 50; i++) {
+    for (int i = 0; i < 50; i++) {
         struct ofpbuf *msg;
-
-        msg = rconn_recv(sw->rconn);
-        if (!msg) {
+        if (vconn_recv(sw->vconn, &msg)) {
             break;
         }
 
-        if (!sw->mute) {
-            lswitch_process_packet(sw, msg);
-        }
+        lswitch_process_packet(sw, msg);
         ofpbuf_delete(msg);
+        if (!sw->vconn) {
+            break;
+        }
     }
 }
 
 void
 lswitch_wait(struct lswitch *sw)
 {
+    if (!sw->vconn) {
+        return;
+    }
     if (sw->ml) {
         ovs_rwlock_rdlock(&sw->ml->rwlock);
         mac_learning_wait(sw->ml);
         ovs_rwlock_unlock(&sw->ml->rwlock);
     }
-    rconn_run_wait(sw->rconn);
-    rconn_recv_wait(sw->rconn);
+    vconn_run_wait(sw->vconn);
+    vconn_recv_wait(sw->vconn);
 }
 
-/* Processes 'msg', which should be an OpenFlow received on 'rconn', according
+/* Processes 'msg', which should be an OpenFlow received on 'vconn', according
  * to the learning switch state in 'sw'.  The most likely result of processing
  * is that flow-setup and packet-out OpenFlow messages will be sent out on
- * 'rconn'.  */
+ * 'vconn'.  */
 static void
 lswitch_process_packet(struct lswitch *sw, const struct ofpbuf *msg)
 {
@@ -372,7 +372,7 @@ lswitch_process_packet(struct lswitch *sw, const struct ofpbuf *msg)
             if (!process_switch_features(sw, msg->data)) {
                 sw->state = S_SWITCHING;
             } else {
-                rconn_disconnect(sw->rconn);
+                lswitch_disconnect(sw);
             }
         }
         break;
@@ -463,13 +463,20 @@ lswitch_process_packet(struct lswitch *sw, const struct ofpbuf *msg)
         }
     }
 }
+
+static void
+lswitch_disconnect(struct lswitch *sw)
+{
+    vconn_close(sw->vconn);
+    sw->vconn = NULL;
+}
 
 static void
 send_features_request(struct lswitch *sw)
 {
     struct ofpbuf *b;
     struct ofp_switch_config *osc;
-    int ofp_version = rconn_get_version(sw->rconn);
+    int ofp_version = vconn_get_version(sw->vconn);
 
     ovs_assert(ofp_version > 0 && ofp_version < 0xff);
 
@@ -487,14 +494,14 @@ send_features_request(struct lswitch *sw)
 static void
 queue_tx(struct lswitch *sw, struct ofpbuf *b)
 {
-    int retval = rconn_send_with_limit(sw->rconn, b, sw->queued, 10);
+    int retval = vconn_send_with_limit(sw->vconn, b, sw->queued, 10);
     if (retval && retval != ENOTCONN) {
         if (retval == EAGAIN) {
             VLOG_INFO_RL(&rl, "%016llx: %s: tx queue overflow",
-                         sw->datapath_id, rconn_get_name(sw->rconn));
+                         sw->datapath_id, vconn_get_name(sw->vconn));
         } else {
             VLOG_WARN_RL(&rl, "%016llx: %s: send: %s",
-                         sw->datapath_id, rconn_get_name(sw->rconn),
+                         sw->datapath_id, vconn_get_name(sw->vconn),
                          ovs_strerror(retval));
         }
     }

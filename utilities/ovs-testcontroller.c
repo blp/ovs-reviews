@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,13 +45,12 @@
 #include "socket-util.h"
 #include "ofp-util.h"
 
-VLOG_DEFINE_THIS_MODULE(controller);
-
 #define MAX_SWITCHES 16
 #define MAX_LISTENERS 16
 
 struct switch_ {
     struct lswitch *lswitch;
+    struct rconn *rconn;
 };
 
 /* -H, --hub: Learn the ports on which MAC addresses appear? */
@@ -98,7 +97,7 @@ main(int argc, char *argv[])
 {
     struct unixctl_server *unixctl;
     struct switch_ switches[MAX_SWITCHES];
-    struct pvconn *listeners[MAX_LISTENERS];
+    struct rconn *listeners[MAX_LISTENERS];
     int n_switches, n_listeners;
     int retval;
     int i;
@@ -116,32 +115,18 @@ main(int argc, char *argv[])
     n_switches = n_listeners = 0;
     for (i = optind; i < argc; i++) {
         const char *name = argv[i];
-        struct vconn *vconn;
+        struct rconn *rconn;
 
-        retval = vconn_open(name, get_allowed_ofp_versions(), DSCP_DEFAULT,
-                            &vconn);
-        if (!retval) {
-            if (n_switches >= MAX_SWITCHES) {
-                ovs_fatal(0, "max %d switch connections", n_switches);
+        rconn = rconn_create(name, name);
+        if (rconn) {
+            if (n_listeners >= MAX_LISTENERS) {
+                ovs_fatal(0, "max %d passive connections", n_listeners);
             }
-            new_switch(&switches[n_switches++], vconn);
-            continue;
-        } else if (retval == EAFNOSUPPORT) {
-            struct pvconn *pvconn;
-            retval = pvconn_open(name, get_allowed_ofp_versions(),
-                                 DSCP_DEFAULT, &pvconn);
-            if (!retval) {
-                if (n_listeners >= MAX_LISTENERS) {
-                    ovs_fatal(0, "max %d passive connections", n_listeners);
-                }
-                listeners[n_listeners++] = pvconn;
-            }
-        }
-        if (retval) {
-            VLOG_ERR("%s: connect: %s", name, ovs_strerror(retval));
+            rconn_set_allowed_versions(rconn, get_allowed_ofp_versions());
+            listeners[n_listeners++] = rconn;
         }
     }
-    if (n_switches == 0 && n_listeners == 0) {
+    if (n_listeners == 0) {
         ovs_fatal(0, "no active or passive switch connections");
     }
 
@@ -155,19 +140,14 @@ main(int argc, char *argv[])
     daemonize_complete();
 
     while (n_switches > 0 || n_listeners > 0) {
-        /* Accept connections on listening vconns. */
+        /* Accept connections on listeners. */
         for (i = 0; i < n_listeners && n_switches < MAX_SWITCHES; ) {
-            struct vconn *new_vconn;
+            struct rconn *rconn = listeners[i];
+            rconn_run(rconn);
 
-            retval = pvconn_accept(listeners[i], &new_vconn);
-            if (!retval || retval == EAGAIN) {
-                if (!retval) {
-                    new_switch(&switches[n_switches++], new_vconn);
-                }
-                i++;
-            } else {
-                pvconn_close(listeners[i]);
-                listeners[i] = listeners[--n_listeners];
+            struct vconn *new_vconn = rconn_accept(rconn);
+            if (new_vconn) {
+                new_switch(&switches[n_switches++], new_vconn);
             }
         }
 
@@ -178,6 +158,7 @@ main(int argc, char *argv[])
             if (lswitch_is_alive(this->lswitch)) {
                 i++;
             } else {
+                rconn_disconnected(this->rconn);
                 lswitch_destroy(this->lswitch);
                 switches[i] = switches[--n_switches];
             }
@@ -188,7 +169,7 @@ main(int argc, char *argv[])
         /* Wait for something to happen. */
         if (n_switches < MAX_SWITCHES) {
             for (i = 0; i < n_listeners; i++) {
-                pvconn_wait(listeners[i]);
+                rconn_wait(listeners[i]);
             }
         }
         for (i = 0; i < n_switches; i++) {
@@ -206,10 +187,6 @@ static void
 new_switch(struct switch_ *sw, struct vconn *vconn)
 {
     struct lswitch_config cfg;
-    struct rconn *rconn;
-
-    rconn = rconn_create(60, 0, DSCP_DEFAULT, get_allowed_ofp_versions());
-    rconn_connect_unreliably(rconn, vconn, NULL);
 
     cfg.mode = (action_normal ? LSW_NORMAL
                 : learn_macs ? LSW_LEARN
@@ -222,7 +199,7 @@ new_switch(struct switch_ *sw, struct vconn *vconn)
     cfg.default_queue = default_queue;
     cfg.port_queues = &port_queues;
     cfg.mute = mute;
-    sw->lswitch = lswitch_create(rconn, &cfg);
+    sw->lswitch = lswitch_create(vconn, &cfg);
 }
 
 static void

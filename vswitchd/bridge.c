@@ -65,6 +65,7 @@
 #include "xenserver.h"
 #include "openvswitch/vlog.h"
 #include "sflow_api.h"
+#include "openvswitch/vconn.h"
 #include "vlan-bitmap.h"
 #include "packets.h"
 
@@ -2668,8 +2669,12 @@ refresh_controller_status(void)
 
         if (cinfo) {
             ovsrec_controller_set_is_connected(cfg, cinfo->is_connected);
-            ovsrec_controller_set_role(cfg, ofp12_controller_role_to_str(
-                                           cinfo->role));
+            if (cinfo->is_connected) {
+                ovsrec_controller_set_role(cfg, ofp12_controller_role_to_str(
+                                               cinfo->role));
+            } else {
+                ovsrec_controller_set_role(cfg, NULL);
+            }
             ovsrec_controller_set_status(cfg, &cinfo->pairs);
         } else {
             ovsrec_controller_set_is_connected(cfg, false);

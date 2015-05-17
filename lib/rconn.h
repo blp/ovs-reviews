@@ -36,51 +36,41 @@
  * Fully thread-safe.
  */
 
-struct vconn;
-struct vconn_packet_counter;
-
-struct rconn *rconn_create(int inactivity_probe_interval,
-			   int max_backoff, uint8_t dscp,
-			   uint32_t allowed_versions);
-void rconn_set_dscp(struct rconn *rc, uint8_t dscp);
-uint32_t rconn_get_allowed_versions(const struct rconn *);
-uint8_t rconn_get_dscp(const struct rconn *rc);
-void rconn_set_max_backoff(struct rconn *, int max_backoff);
-int rconn_get_max_backoff(const struct rconn *);
-void rconn_set_probe_interval(struct rconn *, int inactivity_probe_interval);
-int rconn_get_probe_interval(const struct rconn *);
-
-void rconn_connect(struct rconn *, const char *target, const char *name);
-void rconn_connect_unreliably(struct rconn *,
-                              struct vconn *, const char *name);
-void rconn_reconnect(struct rconn *);
-void rconn_disconnect(struct rconn *);
+struct rconn *rconn_create(const char *target, const char *name);
 void rconn_destroy(struct rconn *);
 
 void rconn_run(struct rconn *);
-void rconn_run_wait(struct rconn *);
-struct ofpbuf *rconn_recv(struct rconn *);
-void rconn_recv_wait(struct rconn *);
-int rconn_send(struct rconn *, struct ofpbuf *, struct vconn_packet_counter *);
-int rconn_send_with_limit(struct rconn *, struct ofpbuf *,
-                          struct vconn_packet_counter *, int queue_limit);
+void rconn_wait(struct rconn *);
+void rconn_accept_wait(struct rconn *);
 
-const char *rconn_get_name(const struct rconn *);
-void rconn_set_name(struct rconn *, const char *new_name);
+struct vconn *rconn_accept(struct rconn *);
+void rconn_disconnected(struct rconn *);
+
 const char *rconn_get_target(const struct rconn *);
+const char *rconn_get_name(const struct rconn *);
+
+bool rconn_is_passive(const struct rconn *);
 
-bool rconn_is_alive(const struct rconn *);
-bool rconn_is_connected(const struct rconn *);
-bool rconn_is_admitted(const struct rconn *);
+void rconn_set_dscp(struct rconn *rc, uint8_t dscp);
+uint8_t rconn_get_dscp(const struct rconn *rc);
+
+void rconn_set_allowed_versions(struct rconn *, uint32_t allowed_versions);
+uint32_t rconn_get_allowed_versions(const struct rconn *);
+
+void rconn_set_max_backoff(struct rconn *, int max_backoff);
+int rconn_get_max_backoff(const struct rconn *);
+
+void rconn_set_probe_interval(struct rconn *, int inactivity_probe_interval);
+int rconn_get_probe_interval(const struct rconn *);
+
+void rconn_reconnect(struct rconn *);
+void rconn_disconnect(struct rconn *);
+
 int rconn_failure_duration(const struct rconn *);
-
-int rconn_get_version(const struct rconn *);
 
 const char *rconn_get_state(const struct rconn *);
 time_t rconn_get_last_connection(const struct rconn *);
 time_t rconn_get_last_disconnect(const struct rconn *);
-unsigned int rconn_get_connection_seqno(const struct rconn *);
 int rconn_get_last_error(const struct rconn *);
-unsigned int rconn_count_txqlen(const struct rconn *);
 
 #endif /* rconn.h */

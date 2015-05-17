@@ -25,6 +25,7 @@
 #include "ofp-util.h"
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
+#include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
 #include "ovn-controller.h"
 #include "rconn.h"
@@ -52,17 +53,18 @@ static char *ovn_flow_to_string(const struct ovn_flow *);
 static void ovn_flow_log(const struct ovn_flow *, const char *action);
 static void ovn_flow_destroy(struct ovn_flow *);
 
-/* OpenFlow connection to the switch. */
-static struct rconn *swconn;
+static void queue_flow_mod(struct ofputil_flow_mod *);
 
-/* Last seen sequence number for 'swconn'.  When this differs from
- * rconn_get_connection_seqno(rconn), 'swconn' has reconnected. */
-static unsigned int seqno;
+/* Maintains an OpenFlow connection to the switch. */
+static struct rconn *rconn;
 
-/* Counter for in-flight OpenFlow messages on 'swconn'.  We only send a new
+/* Current OpenFlow connection to the switch. */
+static struct vconn *vconn;
+
+/* Counter for in-flight OpenFlow messages on 'vconn'.  We only send a new
  * round of flow table modifications to the switch when the counter falls to
  * zero, to avoid unbounded buffering. */
-static struct rconn_packet_counter *tx_counter;
+static struct vconn_packet_counter *tx_counter;
 
 /* Flow tables.  Each holds "struct ovn_flow"s.
  *
@@ -80,8 +82,7 @@ static void ofctrl_recv(const struct ofpbuf *msg);
 void
 ofctrl_init(void)
 {
-    swconn = rconn_create(5, 0, DSCP_DEFAULT, 1 << OFP13_VERSION);
-    tx_counter = rconn_packet_counter_create();
+    tx_counter = vconn_packet_counter_create();
     hmap_init(&desired_flows);
     hmap_init(&installed_flows);
 }
@@ -92,53 +93,91 @@ ofctrl_init(void)
 void
 ofctrl_run(struct controller_ctx *ctx)
 {
+    /* Start connecting to the switch, if we haven't already done that or if
+     * the switch target changed. */
     char *target;
     target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), ctx->br_int_name);
-    if (strcmp(target, rconn_get_target(swconn))) {
-        rconn_connect(swconn, target, target);
+    if (!rconn || strcmp(target, rconn_get_target(rconn))) {
+        rconn_destroy(rconn);
+        rconn = rconn_create(target, target);
+
+        vconn_close(vconn);
+        vconn = NULL;
     }
     free(target);
 
-    rconn_run(swconn);
+    /* Maintain the connection to the switch.  If we've newly connected,
+     * replace the old vconn (if any) by the new one. */
+    rconn_run(rconn);
+    struct vconn *new_vconn = rconn_accept(rconn);
+    if (new_vconn) {
+        vconn_close(vconn);
+        vconn = new_vconn;
 
-    if (!rconn_is_connected(swconn)) {
+        /* Delete all of the flows in the switch.  We'll repopulate them later
+         * from ofctrl_update_flows().  */
+        struct ofputil_flow_mod fm = {
+            .match = MATCH_CATCHALL_INITIALIZER,
+            .table_id = OFPTT_ALL,
+            .command = OFPFC_DELETE,
+        };
+        queue_flow_mod(&fm);
+        VLOG_DBG("clearing all flows");
+
+        /* Clear installed_flows, to match the state of the switch. */
+        ovn_flow_table_clear(&installed_flows);
+    }
+
+    if (!vconn) {
         return;
     }
-    if (!rconn_packet_counter_n_packets(tx_counter)) {
+
+    if (!vconn_packet_counter_n_packets(tx_counter)) {
         ofctrl_update_flows();
     }
 
     for (int i = 0; i < 50; i++) {
-        struct ofpbuf *msg = rconn_recv(swconn);
-        if (!msg) {
+        struct ofpbuf *msg;
+        int retval = vconn_recv(vconn, &msg);
+        if (!retval) {
+            ofctrl_recv(msg);
+            ofpbuf_delete(msg);
+        } else if (retval != EAGAIN) {
+            vconn_close(vconn);
+            vconn = NULL;
+            rconn_disconnected(rconn);
             break;
         }
-
-        ofctrl_recv(msg);
-        ofpbuf_delete(msg);
     }
 }
 
 void
 ofctrl_wait(void)
 {
-    rconn_run_wait(swconn);
-    rconn_recv_wait(swconn);
+    if (rconn) {
+        rconn_wait(rconn);
+        rconn_accept_wait(rconn);
+    }
+
+    if (vconn) {
+        vconn_recv_wait(vconn);
+    }
 }
 
 void
 ofctrl_destroy(void)
 {
-    rconn_destroy(swconn);
+    rconn_destroy(rconn);
+    vconn_close(vconn);
     ovn_flow_table_destroy(&installed_flows);
     ovn_flow_table_destroy(&desired_flows);
-    rconn_packet_counter_destroy(tx_counter);
+    vconn_packet_counter_destroy(tx_counter);
 }
 
 static void
 queue_msg(struct ofpbuf *msg)
 {
-    rconn_send(swconn, msg, tx_counter);
+    vconn_send(vconn, msg, tx_counter);
 }
 
 static void
@@ -378,25 +417,6 @@ queue_flow_mod(struct ofputil_flow_mod *fm)
 static void
 ofctrl_update_flows(void)
 {
-    /* If we've (re)connected, don't make any assumptions about the flows in
-     * the switch: delete all of them.  (We'll immediately repopulate it
-     * below.) */
-    if (seqno != rconn_get_connection_seqno(swconn)) {
-        seqno = rconn_get_connection_seqno(swconn);
-
-        /* Send a flow_mod to delete all flows. */
-        struct ofputil_flow_mod fm = {
-            .match = MATCH_CATCHALL_INITIALIZER,
-            .table_id = OFPTT_ALL,
-            .command = OFPFC_DELETE,
-        };
-        queue_flow_mod(&fm);
-        VLOG_DBG("clearing all flows");
-
-        /* Clear installed_flows, to match the state of the switch. */
-        ovn_flow_table_clear(&installed_flows);
-    }
-
     /* Iterate through all of the installed flows.  If any of them are no
      * longer desired, delete them; if any of them should have different
      * actions, update them. */
