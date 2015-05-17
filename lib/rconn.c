@@ -45,11 +45,7 @@ COVERAGE_DEFINE(rconn_overflow);
  *    - S_CONNECTING: A connection attempt is in progress and has not yet
  *      succeeded or failed.
  *
- *    - S_ACTIVE: A connection has been established and appears to be healthy.
- *
- *    - S_IDLE: A connection has been established but has been idle for some
- *      time.  An echo request has been sent, but no reply has yet been
- *      received.
+ *    - S_ACTIVE: A connection is established.
  *
  *    - S_DISCONNECTED: An unreliable connection has disconnected and cannot be
  *      automatically retried.
@@ -59,7 +55,6 @@ COVERAGE_DEFINE(rconn_overflow);
     STATE(BACKOFF, 1 << 1)                      \
     STATE(CONNECTING, 1 << 2)                   \
     STATE(ACTIVE, 1 << 3)                       \
-    STATE(IDLE, 1 << 4)                         \
     STATE(DISCONNECTED, 1 << 5)
 enum state {
 #define STATE(NAME, VALUE) S_##NAME = VALUE,
@@ -100,11 +95,11 @@ struct rconn {
     unsigned int seqno;
     int last_error;
 
-    /* In S_ACTIVE and S_IDLE, probably_admitted reports whether we believe
-     * that the peer has made a (positive) admission control decision on our
-     * connection.  If we have not yet been (probably) admitted, then the
-     * connection does not reset the timer used for deciding whether the switch
-     * should go into fail-open mode.
+    /* In S_ACTIVE, probably_admitted reports whether we believe that the peer
+     * has made a (positive) admission control decision on our connection.  If
+     * we have not yet been (probably) admitted, then the connection does not
+     * reset the timer used for deciding whether the switch should go into
+     * fail-open mode.
      *
      * last_admitted reports the last time we believe such a positive admission
      * control decision was made. */
@@ -117,17 +112,8 @@ struct rconn {
     time_t creation_time;
     unsigned long int total_time_connected;
 
-    /* Throughout this file, "probe" is shorthand for "inactivity probe".  When
-     * no activity has been observed from the peer for a while, we send out an
-     * echo request as an inactivity probe packet.  We should receive back a
-     * response.
-     *
-     * "Activity" is defined as either receiving an OpenFlow message from the
-     * peer or successfully sending a message that had been in the . */
     int probe_interval;         /* Secs of inactivity before sending probe. */
-
     uint8_t dscp;
-
     uint32_t allowed_versions;
 };
 
@@ -152,7 +138,6 @@ static void reconnect(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static void report_error(struct rconn *rc, int error) OVS_REQUIRES(rc->mutex);
 static void rconn_disconnect__(struct rconn *rc) OVS_REQUIRES(rc->mutex);
 static void disconnect(struct rconn *rc, int error) OVS_REQUIRES(rc->mutex);
-static bool is_connected_state(enum state);
 static bool is_admitted_msg(const struct ofpbuf *);
 static bool rconn_logging_connection_attempts__(const struct rconn *rc)
     OVS_REQUIRES(rc->mutex);
@@ -248,9 +233,8 @@ rconn_create(int probe_interval, int max_backoff, uint8_t dscp,
     rc->creation_time = time_now();
     rc->total_time_connected = 0;
 
-    rconn_set_probe_interval(rc, probe_interval);
+    rc->probe_interval = probe_interval;
     rconn_set_dscp(rc, dscp);
-
     rc->allowed_versions = allowed_versions;
 
     return rc;
@@ -292,7 +276,10 @@ rconn_get_dscp(const struct rconn *rc)
 void
 rconn_set_probe_interval(struct rconn *rc, int probe_interval)
 {
-    rc->probe_interval = probe_interval ? MAX(5, probe_interval) : 0;
+    rc->probe_interval = probe_interval;
+    if (rc->vconn) {
+        vconn_set_probe_interval(rc->vconn, probe_interval);
+    }
 }
 
 int
@@ -351,7 +338,7 @@ rconn_reconnect(struct rconn *rc)
     OVS_EXCLUDED(rc->mutex)
 {
     ovs_mutex_lock(&rc->mutex);
-    if (rc->state & (S_ACTIVE | S_IDLE)) {
+    if (rc->state == S_ACTIVE) {
         VLOG_INFO("%s: disconnecting", rc->name);
         disconnect(rc, 0);
     }
@@ -488,59 +475,15 @@ run_CONNECTING(struct rconn *rc)
 }
 
 static unsigned int
-timeout_ACTIVE(const struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
+timeout_ACTIVE(const struct rconn *rc OVS_UNUSED)
 {
-    if (rc->probe_interval) {
-        time_t last_activity = vconn_get_last_activity(rc->vconn);
-        unsigned int base = MAX(last_activity, rc->state_entered);
-        unsigned int arg = base + rc->probe_interval - rc->state_entered;
-        return arg;
-    }
     return UINT_MAX;
 }
 
 static void
-run_ACTIVE(struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
+run_ACTIVE(struct rconn *rc OVS_UNUSED)
 {
-    if (timed_out(rc)) {
-        time_t last_activity = vconn_get_last_activity(rc->vconn);
-        unsigned int base = MAX(last_activity, rc->state_entered);
-        int version;
-
-        VLOG_DBG("%s: idle %u seconds, sending inactivity probe",
-                 rc->name, (unsigned int) (time_now() - base));
-
-        version = rconn_get_version__(rc);
-        ovs_assert(version >= 0 && version <= 0xff);
-
-        /* Ordering is important here: rconn_send() can transition to BACKOFF,
-         * and we don't want to transition back to IDLE if so, because then we
-         * can end up queuing a packet with vconn == NULL and then *boom*. */
-        state_transition(rc, S_IDLE);
-        rconn_send__(rc, make_echo_request(version), NULL);
-        return;
-    }
-}
-
-static unsigned int
-timeout_IDLE(const struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
-{
-    return rc->probe_interval;
-}
-
-static void
-run_IDLE(struct rconn *rc)
-    OVS_REQUIRES(rc->mutex)
-{
-    if (timed_out(rc)) {
-        VLOG_ERR("%s: no response to inactivity probe after %u "
-                 "seconds, disconnecting",
-                 rc->name, elapsed_in_this_state(rc));
-        disconnect(rc, ETIMEDOUT);
-    }
+    /* Nothing to do. */
 }
 
 static unsigned int
@@ -623,16 +566,13 @@ rconn_recv(struct rconn *rc)
     struct ofpbuf *buffer = NULL;
 
     ovs_mutex_lock(&rc->mutex);
-    if (rc->state & (S_ACTIVE | S_IDLE)) {
+    if (rc->state == S_ACTIVE) {
         int error = vconn_recv(rc->vconn, &buffer);
         if (!error) {
             if (rc->probably_admitted || is_admitted_msg(buffer)
                 || time_now() - rc->last_connected >= 30) {
                 rc->probably_admitted = true;
                 rc->last_admitted = time_now();
-            }
-            if (rc->state == S_IDLE) {
-                state_transition(rc, S_ACTIVE);
             }
         } else if (error != EAGAIN) {
             report_error(rc, error);
@@ -768,7 +708,7 @@ rconn_is_alive(const struct rconn *rconn)
 bool
 rconn_is_connected(const struct rconn *rconn)
 {
-    return is_connected_state(rconn->state);
+    return rconn->state == S_ACTIVE;
 }
 
 static bool
@@ -956,7 +896,7 @@ disconnect(struct rconn *rc, int error)
     if (rc->reliable) {
         time_t now = time_now();
 
-        if (rc->state & (S_CONNECTING | S_ACTIVE | S_IDLE)) {
+        if (rc->state & (S_CONNECTING | S_ACTIVE)) {
             rc->last_disconnected = now;
         }
 
@@ -1023,12 +963,6 @@ state_transition(struct rconn *rc, enum state state)
     VLOG_DBG("%s: entering %s", rc->name, state_name(state));
     rc->state = state;
     rc->state_entered = time_now();
-}
-
-static bool
-is_connected_state(enum state state)
-{
-    return (state & (S_ACTIVE | S_IDLE)) != 0;
 }
 
 /* When a switch initially connects to a controller, the controller may spend a

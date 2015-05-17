@@ -35,6 +35,7 @@ enum vconn_state {
     VCS_CONNECTED,              /* Connection established. */
 
     /* These states are entered only when something goes wrong. */
+    VCS_IDLE,                   /* Connection has become idle. */
     VCS_SEND_ERROR,             /* Sending OFPT_ERROR message. */
     VCS_DISCONNECTED            /* Connection failed or connection closed. */
 };
@@ -53,6 +54,8 @@ struct vconn {
 
     struct ovs_list txq;        /* Contains "struct ofpbuf"s. */
     time_t last_activity;       /* Last time of packet rx or tx. */
+    int probe_interval;         /* Secs of inactivity before sending probe. */
+    time_t probe_time;          /* Time at which probe was sent. */
 
     char *name;
 };

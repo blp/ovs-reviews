@@ -273,10 +273,43 @@ error:
 void
 vconn_run(struct vconn *vconn)
 {
-    if (vconn->state == VCS_CONNECTING ||
-        vconn->state == VCS_SEND_HELLO ||
-        vconn->state == VCS_RECV_HELLO) {
+    switch (vconn->state) {
+    case VCS_CONNECTING:
+    case VCS_SEND_HELLO:
+    case VCS_RECV_HELLO:
         vconn_connect(vconn);
+        break;
+
+    case VCS_CONNECTED:
+        if (vconn->probe_interval) {
+            time_t now = time_now();
+            time_t idle = now - vconn->last_activity;
+            if (idle >= vconn->probe_interval) {
+                VLOG_DBG("%s: idle %u seconds, sending inactivity probe",
+                         vconn->name, (unsigned int) idle);
+                vconn->probe_time = now;
+
+                /* The order is important: if vconn_send__() transitions to
+                 * VCS_DISCONNECTED, we don't want to transition back to
+                 * VCS_IDLE. */
+                vconn->state = VCS_IDLE;
+                vconn_send__(vconn, make_echo_request(vconn->version), NULL);
+            }
+        }
+        break;
+
+    case VCS_IDLE:
+        if (time_now() >= vconn->probe_time + vconn->probe_interval) {
+            VLOG_ERR("%s: no response to inactivity probe after %u "
+                     "seconds, disconnecting", vconn->name,
+                     (unsigned int) (time_now() - vconn->probe_time));
+            vconn_record_error(vconn, ETIMEDOUT);
+        }
+        break;
+
+    case VCS_SEND_ERROR:
+    case VCS_DISCONNECTED:
+        break;
     }
 
     if (vconn->vclass->run) {
@@ -315,12 +348,6 @@ unsigned int
 vconn_count_txqlen(const struct vconn *vconn)
 {
     return list_size(&vconn->txq);
-}
-
-time_t
-vconn_get_last_activity(const struct vconn *vconn)
-{
-    return vconn->last_activity;
 }
 
 int
@@ -412,6 +439,26 @@ void
 vconn_set_recv_any_version(struct vconn *vconn)
 {
     vconn->recv_any_version = true;
+}
+
+/* Configures the "probe interval", used for detecting an OpenFlow session that
+ * has been disconnected, to 'probe_interval' seconds.  A 'probe_interval' of 0
+ * disables connection probing.
+ *
+ * See the large comment at the top of vconn.h for more information on
+ * connection probing. */
+void
+vconn_set_probe_interval(struct vconn *vconn, int probe_interval)
+{
+    vconn->probe_interval = probe_interval ? MAX(5, probe_interval) : 0;
+}
+
+/* Returns the probe interval, in seconds.  An interval of 0 indicates that
+ * connection probing is disabled. */
+int
+vconn_get_probe_interval(const struct vconn *vconn)
+{
+    return vconn->probe_interval;
 }
 
 static void
@@ -562,6 +609,7 @@ vconn_connect(struct vconn *vconn)
             break;
 
         case VCS_CONNECTED:
+        case VCS_IDLE:
             return 0;
 
         case VCS_SEND_ERROR:
@@ -678,6 +726,9 @@ do_recv(struct vconn *vconn, struct ofpbuf **msgp)
             char *s = ofp_to_string((*msgp)->data, (*msgp)->size, 1);
             VLOG_DBG_RL(&ofmsg_rl, "%s: received: %s", vconn->name, s);
             free(s);
+        }
+        if (vconn->state == VCS_IDLE) {
+            vconn->state = VCS_CONNECTED;
         }
         vconn->last_activity = time_now();
     }
@@ -1244,6 +1295,15 @@ vconn_wait(struct vconn *vconn, enum vconn_wait_type wait)
         break;
 
     case VCS_CONNECTED:
+        if (vconn->probe_interval) {
+            poll_timer_wait_until(1000LL * (vconn->last_activity
+                                            + vconn->probe_interval));
+        }
+        break;
+
+    case VCS_IDLE:
+        poll_timer_wait_until(1000LL * (vconn->probe_time
+                                        + vconn->probe_interval));
         break;
 
     case VCS_DISCONNECTED:

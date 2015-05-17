@@ -34,6 +34,17 @@
  * drops, then there is no inherent way to determine whether a queued message
  * was received by the peer.
  *
+ * a vconn can optionally ensure that a connection is still functional.  This
+ * duplicates functionality that most network transports, such as TCP, have
+ * built in, but acts at a pace under the direct control of the client, whereas
+ * TCP usually takes minutes to hours to detect disconnection.  When this
+ * feature "connection probing" feature is active, whenever the vconn fails to
+ * receive any OpenFlow message for an interval specified by the client, the
+ * vconn automatically sends an OpenFlow "echo request" message.  If no
+ * OpenFlow message (whether a corresponding "echo reply" or any other message)
+ * is received during an additional interval of the same length, the vconn
+ * concludes that the connection has failed and disconnects automatically.
+ *
  * (The "v" in "vconn" stands for "vswitch" or "virtual".)
  *
  *
@@ -112,6 +123,9 @@ void vconn_set_allowed_versions(struct vconn *, uint32_t allowed_versions);
 int vconn_get_version(const struct vconn *);
 void vconn_set_recv_any_version(struct vconn *);
 
+void vconn_set_probe_interval(struct vconn *, int probe_interval);
+int vconn_get_probe_interval(const struct vconn *);
+
 int vconn_connect(struct vconn *);
 int vconn_recv(struct vconn *, struct ofpbuf **);
 int vconn_send(struct vconn *, struct ofpbuf *, struct vconn_packet_counter *);
@@ -132,7 +146,6 @@ void vconn_run_wait(struct vconn *);
 
 int vconn_get_status(const struct vconn *);
 unsigned int vconn_count_txqlen(const struct vconn *);
-time_t vconn_get_last_activity(const struct vconn *);
 
 int vconn_open_block(const char *name, uint32_t allowed_versions, uint8_t dscp,
                      struct vconn **);
