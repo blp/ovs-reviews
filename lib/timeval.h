@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,6 +75,8 @@ int get_cpu_usage(void);
 long long int time_boot_msec(void);
 
 void timewarp_run(void);
+
+long long int timeval_add(long long int a, long long int b);
 
 #ifdef  __cplusplus
 }

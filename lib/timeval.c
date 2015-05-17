@@ -787,3 +787,12 @@ gmtime_msec(long long int now, struct tm_msec *result)
   result->msec = now % 1000;
   return result;
 }
+
+/* Returns 'a + b', saturating overflow to LLONG_MIN or LLONG_MAX. */
+long long int
+timeval_add(long long int a, long long int b)
+{
+    return (a > 0 && b > LLONG_MAX - a ? LLONG_MAX
+            : a < 0 && b < LLONG_MIN - a ? LLONG_MIN
+            : a + b);
+}
