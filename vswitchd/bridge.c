@@ -3367,6 +3367,7 @@ bridge_ofproto_controller_for_mgmt(const struct bridge *br,
                                    struct shash *controllers)
 {
     struct ofproto_controller *oc = xzalloc(sizeof *oc);
+    oc->type = OFCONN_SERVICE;
     oc->max_backoff = 0;
     oc->probe_interval = 60;
     oc->band = OFPROTO_OUT_OF_BAND;
@@ -3385,7 +3386,21 @@ bridge_ofproto_controller_from_ovsrec(const struct ovsrec_controller *c,
                                       bool disable_in_band,
                                       struct shash *controllers)
 {
+    enum ofconn_type type;
+
+    if (c->type) {
+        type = !strcmp(c->type, "primary") ? OFCONN_PRIMARY : OFCONN_SERVICE;
+    } else if (!vconn_verify_name(c->target)) {
+        type = OFCONN_PRIMARY;
+    } else if (!pvconn_verify_name(c->target)) {
+        type = OFCONN_SERVICE;
+    } else {
+        VLOG_WARN("%s: not a valid controller target", c->target);
+        return;
+    }
+
     struct ofproto_controller *oc = xzalloc(sizeof *oc);
+    oc->type = type;
     oc->max_backoff = c->max_backoff ? *c->max_backoff / 1000 : 8;
     oc->probe_interval = c->inactivity_probe ? *c->inactivity_probe / 1000 : 5;
     oc->band = (disable_in_band ? OFPROTO_OUT_OF_BAND

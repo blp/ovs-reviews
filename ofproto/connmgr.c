@@ -173,7 +173,6 @@ struct ofremote {
 
     struct rconn *rconn;        /* OpenFlow connection listener. */
     struct ofproto_controller cfg;
-    enum ofconn_type type;
 };
 
 static void ofremote_reconfigure(struct ofremote *,
@@ -428,7 +427,7 @@ connmgr_has_controllers(const struct connmgr *mgr)
     const struct ofremote *ofremote;
 
     HMAP_FOR_EACH (ofremote, node, &mgr->remotes) {
-        if (ofremote->type == OFCONN_PRIMARY) {
+        if (ofremote->cfg.type == OFCONN_PRIMARY) {
             return true;
         }
     }
@@ -447,7 +446,7 @@ connmgr_get_controller_info(struct connmgr *mgr, struct shash *info)
     const struct ofremote *ofremote;
 
     HMAP_FOR_EACH (ofremote, node, &mgr->remotes) {
-        if (ofremote->type != OFCONN_PRIMARY) {
+        if (ofremote->cfg.type != OFCONN_PRIMARY) {
             continue;
         }
 
@@ -551,7 +550,7 @@ connmgr_set_controllers(struct connmgr *mgr,
         c = shash_find_data(controllers, target);
         if (!c) {
             VLOG_INFO("%s: removed %s controller \"%s\"",
-                      (ofremote->type == OFCONN_PRIMARY
+                      (ofremote->cfg.type == OFCONN_PRIMARY
                        ? "primary" : "service"),
                       mgr->name, target);
             ofremote_destroy(mgr, ofremote);
@@ -753,7 +752,7 @@ add_snooper(struct connmgr *mgr, struct vconn *vconn)
     /* Pick a controller for monitoring. */
     best = NULL;
     LIST_FOR_EACH (ofconn, connmgr_node, &mgr->all_ofconns) {
-        if (ofconn->ofremote->type == OFCONN_PRIMARY
+        if (ofconn->ofremote->cfg.type == OFCONN_PRIMARY
             && (!best || snoop_preference(ofconn) > snoop_preference(best))) {
             best = ofconn;
         }
@@ -777,7 +776,7 @@ add_snooper(struct connmgr *mgr, struct vconn *vconn)
 enum ofconn_type
 ofconn_get_type(const struct ofconn *ofconn)
 {
-    return ofconn->ofremote->type;
+    return ofconn->ofremote->cfg.type;
 }
 
 /* If a master election id is defined, stores it into '*idp' and returns
@@ -1150,7 +1149,7 @@ ofconn_create(struct connmgr *mgr, struct vconn *vconn,
 
     ofconn->packet_in_counter = vconn_packet_counter_create();
     /* Later call to ofconn_reconfigure() initializes ofconn->schedulers[]. */
-    if (ofremote->type == OFCONN_PRIMARY) {
+    if (ofremote->cfg.type == OFCONN_PRIMARY) {
         ofconn->pktbuf = pktbuf_create();
         ofconn->miss_send_len = OFP_DEFAULT_MISS_SEND_LEN;
     }
@@ -1410,7 +1409,7 @@ ofconn_receives_async_msg(const struct ofconn *ofconn,
     /* Keep the following code in sync with the documentation in the
      * "Asynchronous Messages" section in DESIGN. */
 
-    if (ofconn->ofremote->type == OFCONN_SERVICE
+    if (ofconn->ofremote->cfg.type == OFCONN_SERVICE
         && !ofconn->miss_send_len) {
         /* Service connections don't get asynchronous messages unless they have
          * explicitly asked for them by setting a nonzero miss send length. */
@@ -1780,7 +1779,7 @@ connmgr_get_max_probe_interval(const struct connmgr *mgr)
 
     max_probe_interval = 0;
     HMAP_FOR_EACH (ofremote, node, &mgr->remotes) {
-        if (ofremote->type == OFCONN_PRIMARY) {
+        if (ofremote->cfg.type == OFCONN_PRIMARY) {
             int probe_interval = rconn_get_probe_interval(ofremote->rconn);
             max_probe_interval = MAX(max_probe_interval, probe_interval);
         }
@@ -1821,7 +1820,7 @@ connmgr_is_any_controller_connected(const struct connmgr *mgr)
     const struct ofremote *ofremote;
 
     HMAP_FOR_EACH (ofremote, node, &mgr->remotes) {
-        if (ofremote->type == OFCONN_PRIMARY
+        if (ofremote->cfg.type == OFCONN_PRIMARY
             && !list_is_empty(&ofremote->ofremote_ofconns)) {
             return true;
         }
@@ -1838,7 +1837,7 @@ connmgr_is_any_controller_admitted(const struct connmgr *mgr)
 
     HMAP_FOR_EACH (ofremote, node, &mgr->remotes) {
         /* XXX */
-        if (ofremote->type == OFCONN_PRIMARY
+        if (ofremote->cfg.type == OFCONN_PRIMARY
             && !list_is_empty(&ofremote->ofremote_ofconns)) {
             return true;
         }
@@ -1981,7 +1980,6 @@ ofremote_create(struct connmgr *mgr, const char *target,
     hmap_insert(&mgr->remotes, &ofremote->node, hash_string(target, 0));
     list_init(&ofremote->ofremote_ofconns);
     ofremote->rconn = rconn;
-    ofremote->type = rconn_is_passive(rconn) ? OFCONN_SERVICE : OFCONN_PRIMARY;
 
     ofremote_reconfigure(ofremote, c, allowed_versions);
 
@@ -2002,7 +2000,8 @@ ofremote_reconfigure(struct ofremote *ofremote,
                      uint32_t allowed_versions)
     OVS_REQUIRES(ofproto_mutex)
 {
-    if (ofremote->cfg.enable_async_msgs != c->enable_async_msgs
+    if (ofremote->cfg.type != c->type
+        || ofremote->cfg.enable_async_msgs != c->enable_async_msgs
         || ofremote->cfg.dscp != c->dscp) {
         /* It's not really reasonable to change type or enable_async_msgs for
          * an active connection, e.g. because that could change miss_send_len,
