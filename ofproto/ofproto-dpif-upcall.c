@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -115,6 +115,9 @@ struct udpif {
     long long int dump_duration;       /* Duration of the last flow dump. */
     struct seq *dump_seq;              /* Increments each dump iteration. */
     atomic_bool enable_ufid;           /* If true, skip dumping flow attrs. */
+
+    struct seq *sync_seq;
+    atomic_ullong sync;
 
     /* There are 'N_UMAPS' maps containing 'struct udpif_key' elements.
      *
@@ -334,6 +337,8 @@ udpif_create(struct dpif_backer *backer, struct dpif *dpif)
     udpif->backer = backer;
     atomic_init(&udpif->flow_limit, MIN(ofproto_flow_limit, 10000));
     udpif->reval_seq = seq_create();
+    udpif->sync_seq = seq_create();
+    atomic_init(&udpif->sync, seq_read(udpif->reval_seq));
     udpif->dump_seq = seq_create();
     latch_init(&udpif->exit_latch);
     list_push_back(&all_udpifs, &udpif->list_node);
@@ -382,6 +387,7 @@ udpif_destroy(struct udpif *udpif)
     list_remove(&udpif->list_node);
     latch_destroy(&udpif->exit_latch);
     seq_destroy(udpif->reval_seq);
+    seq_destroy(udpif->sync_seq);
     seq_destroy(udpif->dump_seq);
     ovs_mutex_destroy(&udpif->n_flows_mutex);
     free(udpif);
@@ -511,16 +517,17 @@ udpif_set_threads(struct udpif *udpif, size_t n_handlers,
 void
 udpif_synchronize(struct udpif *udpif)
 {
-    /* This is stronger than necessary.  It would be sufficient to ensure
-     * (somehow) that each handler and revalidator thread had passed through
-     * its main loop once. */
-    size_t n_handlers = udpif->n_handlers;
-    size_t n_revalidators = udpif->n_revalidators;
-
-    ovsrcu_quiesce_start();
-    udpif_stop_threads(udpif);
-    udpif_start_threads(udpif, n_handlers, n_revalidators);
-    ovsrcu_quiesce_end();
+    uint64_t reval_seq = seq_read(udpif->reval_seq);
+    for (;;) {
+        uint64_t sync_seq = seq_read(udpif->sync_seq);
+        uint64_t sync;
+        atomic_read_relaxed(&udpif->sync, &sync);
+        if (sync >= reval_seq) {
+            break;
+        }
+        seq_wait(udpif->sync_seq, sync_seq);
+        poll_block();
+    }
 }
 
 /* Notifies 'udpif' that something changed which may render previous
@@ -740,9 +747,9 @@ udpif_revalidator(void *arg)
 
     revalidator->id = ovsthread_id_self();
     for (;;) {
-        if (leader) {
-            uint64_t reval_seq;
+        uint64_t reval_seq;
 
+        if (leader) {
             recirc_run(); /* Recirculation cleanup. */
 
             reval_seq = seq_read(udpif->reval_seq);
@@ -783,6 +790,9 @@ udpif_revalidator(void *arg)
         if (leader) {
             unsigned int flow_limit;
             long long int duration;
+
+            atomic_store_relaxed(&udpif->sync, reval_seq);
+            seq_change(udpif->sync_seq);
 
             atomic_read_relaxed(&udpif->flow_limit, &flow_limit);
 

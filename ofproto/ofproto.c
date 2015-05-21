@@ -5436,9 +5436,10 @@ handle_nxt_set_controller_id(struct ofconn *ofconn,
 static enum ofperr
 handle_barrier_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
     struct ofpbuf *buf;
 
-    /* wait for revalidation to finish */
+    ofproto->ofproto_class->barrier(ofproto);
     buf = ofpraw_alloc_reply((oh->version == OFP10_VERSION
                               ? OFPRAW_OFPT10_BARRIER_REPLY
                               : OFPRAW_OFPT11_BARRIER_REPLY), oh, 0);
