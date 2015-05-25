@@ -834,7 +834,7 @@ struct ofpact_learn {
 
         uint16_t idle_timeout;     /* Idle time before discarding (seconds). */
         uint16_t hard_timeout;     /* Max time before discarding (seconds). */
-        uint16_t priority;         /* Priority level of flow entry. */
+        int priority;              /* Priority level of flow entry. */
         uint8_t table_id;          /* Table to insert flow entry. */
         enum nx_learn_flags flags; /* NX_LEARN_F_*. */
         ovs_be64 cookie;           /* Cookie for new flow. */
@@ -849,6 +849,7 @@ struct ofpact_learn {
         struct mf_subfield result_dst;
     );
 
+    unsigned int n_specs;
     struct ofpact_learn_spec specs[];
 };
 

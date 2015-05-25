@@ -32,6 +32,7 @@
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-actions.h"
+#include "openvswitch/ofp-match.h"
 #include "openvswitch/ofp-packet.h"
 #include "openvswitch/ofp-parse.h"
 #include "openvswitch/ofp-port.h"
@@ -5206,7 +5207,7 @@ decode_LEARN_common(const struct nx_action_learn *nal,
     learn->ofpact.raw = raw;
     learn->idle_timeout = ntohs(nal->idle_timeout);
     learn->hard_timeout = ntohs(nal->hard_timeout);
-    learn->priority = ntohs(nal->priority);
+    learn->priority = ofputil_priority_from_openflow(nal->priority);
     learn->cookie = nal->cookie;
     learn->table_id = nal->table_id;
     learn->fin_idle_timeout = ntohs(nal->fin_idle_timeout);
@@ -5429,7 +5430,7 @@ encode_LEARN(const struct ofpact_learn *learn,
     nal->hard_timeout = htons(learn->hard_timeout);
     nal->fin_idle_timeout = htons(learn->fin_idle_timeout);
     nal->fin_hard_timeout = htons(learn->fin_hard_timeout);
-    nal->priority = htons(learn->priority);
+    nal->priority = ofputil_priority_to_openflow(learn->priority);
     nal->cookie = learn->cookie;
     nal->flags = htons(learn->flags);
     nal->table_id = learn->table_id;

@@ -43,6 +43,12 @@ void ofp10_match_print(struct ds *, const struct ofp10_match *,
 char *ofp10_match_to_string(const struct ofp10_match *,
                             const struct ofputil_port_map *, int verbosity);
 
+/* Flow priorities. */
+int ofputil_priority_from_openflow10(ovs_be16 ofp_priority,
+                                     ovs_be32 wildcards);
+int ofputil_priority_from_openflow(ovs_be16 priority);
+ovs_be16 ofputil_priority_to_openflow(int priority);
+
 /* Work with ofp11_match. */
 enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, const struct tun_table *,
                                      const struct vl_mff_map *, struct match *,

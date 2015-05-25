@@ -92,7 +92,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         }
 
         fr->cookie = ofr->cookie;
-        fr->priority = ntohs(ofr->priority);
+        fr->priority = ofputil_priority_from_openflow(ofr->priority);
         fr->reason = ofr->reason;
         fr->table_id = ofr->table_id;
         fr->duration_sec = stats.duration_sec;
@@ -112,7 +112,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
             return error;
         }
 
-        fr->priority = ntohs(ofr->priority);
+        fr->priority = ofputil_priority_from_openflow(ofr->priority);
         fr->cookie = ofr->cookie;
         fr->reason = ofr->reason;
         fr->table_id = ofr->table_id;
@@ -128,7 +128,8 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
         ofr = ofpbuf_pull(&b, sizeof *ofr);
 
         ofputil_match_from_ofp10_match(&ofr->match, &fr->match);
-        fr->priority = ntohs(ofr->priority);
+        fr->priority = ofputil_priority_from_openflow10(ofr->priority,
+                                                        ofr->match.wildcards);
         fr->cookie = ofr->cookie;
         fr->reason = ofr->reason;
         fr->table_id = 255;
@@ -152,7 +153,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
             return OFPERR_OFPBRC_BAD_LEN;
         }
 
-        fr->priority = ntohs(nfr->priority);
+        fr->priority = ofputil_priority_from_openflow(nfr->priority);
         fr->cookie = nfr->cookie;
         fr->reason = nfr->reason;
         fr->table_id = nfr->table_id ? nfr->table_id - 1 : 255;
@@ -206,7 +207,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
                                ofputil_match_typical_len(protocol));
         ofr = ofpbuf_put_zeros(msg, sizeof *ofr);
         ofr->cookie = fr->cookie;
-        ofr->priority = htons(fr->priority);
+        ofr->priority = ofputil_priority_to_openflow(fr->priority);
         ofr->reason = reason;
         ofr->table_id = fr->table_id;
         ofr->duration_sec = htonl(fr->duration_sec);
@@ -227,7 +228,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
                                ofputil_match_typical_len(protocol));
         ofr = ofpbuf_put_zeros(msg, sizeof *ofr);
         ofr->cookie = fr->cookie;
-        ofr->priority = htons(fr->priority);
+        ofr->priority = ofputil_priority_to_openflow(fr->priority);
         ofr->reason = reason;
         ofr->table_id = fr->table_id;
         ofr->idle_timeout = htons(fr->idle_timeout);
@@ -254,7 +255,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
         ofr = ofpbuf_put_zeros(msg, sizeof *ofr);
         ofputil_match_to_ofp10_match(&fr->match, &ofr->match);
         ofr->cookie = fr->cookie;
-        ofr->priority = htons(fr->priority);
+        ofr->priority = ofputil_priority_to_openflow(fr->priority);
         ofr->reason = reason;
         ofr->duration_sec = htonl(fr->duration_sec);
         ofr->duration_nsec = htonl(fr->duration_nsec);
@@ -276,7 +277,7 @@ ofputil_encode_flow_removed(const struct ofputil_flow_removed *fr,
 
         nfr = msg->msg;
         nfr->cookie = fr->cookie;
-        nfr->priority = htons(fr->priority);
+        nfr->priority = ofputil_priority_to_openflow(fr->priority);
         nfr->reason = reason;
         nfr->table_id = fr->table_id + 1;
         nfr->duration_sec = htonl(fr->duration_sec);

@@ -255,6 +255,28 @@ ofputil_match_to_ofp10_match(const struct match *match,
     memset(ofmatch->pad2, '\0', sizeof ofmatch->pad2);
 }
 
+int
+ofputil_priority_from_openflow10(ovs_be16 ofp_priority, ovs_be32 wildcards)
+{
+    int priority = ntohs(ofp_priority);
+    if (!(wildcards & htonl(OFPFW10_ALL))) {
+        priority += 0x10000;
+    }
+    return priority;
+}
+
+int
+ofputil_priority_from_openflow(ovs_be16 ofp_priority)
+{
+    return ntohs(ofp_priority);
+}
+
+ovs_be16
+ofputil_priority_to_openflow(int priority)
+{
+    return htons(priority & 0xffff);
+}
+
 enum ofperr
 ofputil_pull_ofp11_match(struct ofpbuf *buf, const struct tun_table *tun_table,
                          const struct vl_mff_map *vl_mff_map,

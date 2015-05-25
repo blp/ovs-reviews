@@ -171,7 +171,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
         }
 
         /* Translate the message. */
-        fm->priority = ntohs(ofm->priority);
+        fm->priority = ofputil_priority_from_openflow(ofm->priority);
         if (ofm->command == OFPFC_ADD
             || (oh->version == OFP11_VERSION
                 && (ofm->command == OFPFC_MODIFY ||
@@ -235,11 +235,8 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
             ofputil_match_from_ofp10_match(&ofm->match, &match);
             ofputil_normalize_match(&match);
 
-            /* OpenFlow 1.0 says that exact-match rules have to have the
-             * highest possible priority. */
-            fm->priority = (ofm->match.wildcards & htonl(OFPFW10_ALL)
-                            ? ntohs(ofm->priority)
-                            : UINT16_MAX);
+            fm->priority = ofputil_priority_from_openflow10(
+                ofm->priority, ofm->match.wildcards);
 
             /* Translate the message. */
             command = ntohs(ofm->command);
@@ -273,7 +270,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
                  * existing cookie. */
                 return OFPERR_NXBRC_NXM_INVALID;
             }
-            fm->priority = ntohs(nfm->priority);
+            fm->priority = ofputil_priority_from_openflow(nfm->priority);
             fm->new_cookie = nfm->cookie;
             fm->idle_timeout = ntohs(nfm->idle_timeout);
             fm->hard_timeout = ntohs(nfm->hard_timeout);
@@ -412,7 +409,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         ofm->command = fm->command;
         ofm->idle_timeout = htons(fm->idle_timeout);
         ofm->hard_timeout = htons(fm->hard_timeout);
-        ofm->priority = htons(fm->priority);
+        ofm->priority = ofputil_priority_to_openflow(fm->priority);
         ofm->buffer_id = htonl(fm->buffer_id);
         ofm->out_port = ofputil_port_to_ofp11(fm->out_port);
         ofm->out_group = htonl(fm->out_group);
@@ -440,7 +437,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         ofm->command = ofputil_tid_command(fm, protocol);
         ofm->idle_timeout = htons(fm->idle_timeout);
         ofm->hard_timeout = htons(fm->hard_timeout);
-        ofm->priority = htons(fm->priority);
+        ofm->priority = ofputil_priority_to_openflow(fm->priority);
         ofm->buffer_id = htonl(fm->buffer_id);
         ofm->out_port = htons(ofp_to_u16(fm->out_port));
         ofm->flags = raw_flags;
@@ -463,7 +460,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         nfm = msg->msg;
         nfm->idle_timeout = htons(fm->idle_timeout);
         nfm->hard_timeout = htons(fm->hard_timeout);
-        nfm->priority = htons(fm->priority);
+        nfm->priority = ofputil_priority_to_openflow(fm->priority);
         nfm->buffer_id = htonl(fm->buffer_id);
         nfm->out_port = htons(ofp_to_u16(fm->out_port));
         nfm->flags = raw_flags;
@@ -935,7 +932,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
             return EINVAL;
         }
 
-        fs->priority = ntohs(ofd->priority);
+        fs->priority = ofputil_priority_from_openflow(ofd->priority);
         fs->table_id = ofd->table_id;
         fs->cookie = ofd->cookie;
         fs->idle_timeout = ntohs(ofd->idle_timeout);
@@ -989,7 +986,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
         }
         instructions_len = length - sizeof *ofs - padded_match_len;
 
-        fs->priority = ntohs(ofs->priority);
+        fs->priority = ofputil_priority_from_openflow(ofs->priority);
         fs->table_id = ofs->table_id;
         fs->duration_sec = ntohl(ofs->duration_sec);
         fs->duration_nsec = ntohl(ofs->duration_nsec);
@@ -1035,7 +1032,8 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
 
         fs->cookie = get_32aligned_be64(&ofs->cookie);
         ofputil_match_from_ofp10_match(&ofs->match, &fs->match);
-        fs->priority = ntohs(ofs->priority);
+        fs->priority = ofputil_priority_from_openflow10(ofs->priority,
+                                                        ofs->match.wildcards);
         fs->table_id = ofs->table_id;
         fs->duration_sec = ntohl(ofs->duration_sec);
         fs->duration_nsec = ntohl(ofs->duration_nsec);
@@ -1076,7 +1074,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
         fs->table_id = nfs->table_id;
         fs->duration_sec = ntohl(nfs->duration_sec);
         fs->duration_nsec = ntohl(nfs->duration_nsec);
-        fs->priority = ntohs(nfs->priority);
+        fs->priority = ofputil_priority_from_openflow(nfs->priority);
         fs->idle_timeout = ntohs(nfs->idle_timeout);
         fs->hard_timeout = ntohs(nfs->hard_timeout);
         fs->importance = 0;
@@ -1161,7 +1159,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         ofd = ofpbuf_at_assert(reply, start_ofs, sizeof *ofd);
         ofd->length = htons(reply->size - start_ofs);
         ofd->table_id = fs->table_id;
-        ofd->priority = htons(fs->priority);
+        ofd->priority = ofputil_priority_to_openflow(fs->priority);
         ofd->idle_timeout = htons(fs->idle_timeout);
         ofd->hard_timeout = htons(fs->hard_timeout);
         ofd->cookie = fs->cookie;
@@ -1184,7 +1182,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         ofs->pad = 0;
         ofs->duration_sec = htonl(fs->duration_sec);
         ofs->duration_nsec = htonl(fs->duration_nsec);
-        ofs->priority = htons(fs->priority);
+        ofs->priority = ofputil_priority_to_openflow(fs->priority);
         ofs->idle_timeout = htons(fs->idle_timeout);
         ofs->hard_timeout = htons(fs->hard_timeout);
         if (version >= OFP14_VERSION) {
@@ -1214,7 +1212,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         ofputil_match_to_ofp10_match(&fs->match, &ofs->match);
         ofs->duration_sec = htonl(fs->duration_sec);
         ofs->duration_nsec = htonl(fs->duration_nsec);
-        ofs->priority = htons(fs->priority);
+        ofs->priority = ofputil_priority_to_openflow(fs->priority);
         ofs->idle_timeout = htons(fs->idle_timeout);
         ofs->hard_timeout = htons(fs->hard_timeout);
         memset(ofs->pad2, 0, sizeof ofs->pad2);
@@ -1237,7 +1235,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         nfs->pad = 0;
         nfs->duration_sec = htonl(fs->duration_sec);
         nfs->duration_nsec = htonl(fs->duration_nsec);
-        nfs->priority = htons(fs->priority);
+        nfs->priority = ofputil_priority_to_openflow(fs->priority);
         nfs->idle_timeout = htons(fs->idle_timeout);
         nfs->hard_timeout = htons(fs->hard_timeout);
         nfs->idle_age = htons(fs->idle_age < 0 ? 0
@@ -1628,7 +1626,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
                 uint16_t priority = 0;
 
                 error = str_to_u16(value, name, &priority);
-                fm->priority = priority;
+                fm->priority = ofputil_priority_from_openflow(htons(priority));
             } else if (fields & F_TIMEOUT && !strcmp(name, "idle_timeout")) {
                 error = str_to_u16(value, name, &fm->idle_timeout);
             } else if (fields & F_TIMEOUT && !strcmp(name, "hard_timeout")) {

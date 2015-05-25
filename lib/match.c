@@ -22,6 +22,7 @@
 #include "colors.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
+#include "openvswitch/ofp-match.h"
 #include "openvswitch/ofp-port.h"
 #include "packets.h"
 #include "tun-metadata.h"
@@ -1393,8 +1394,9 @@ match_format(const struct match *match,
     BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
-        ds_put_format(s, "%spriority=%s%d,",
-                      colors.special, colors.end, priority);
+        ds_put_format(s, "%spriority=%s%"PRIu16",",
+                      colors.special, colors.end,
+                      ntohs(ofputil_priority_to_openflow(priority)));
     }
 
     format_uint32_masked(s, "pkt_mark", f->pkt_mark, wc->masks.pkt_mark);
