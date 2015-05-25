@@ -52,9 +52,10 @@
 
 static void ofp_print_queue_name(struct ds *string, uint32_t port);
 static void ofp_print_error(struct ds *, enum ofperr);
-static void ofp_print_table_features(struct ds *,
-                                     const struct ofputil_table_features *,
-                                     const struct ofputil_table_stats *);
+static void ofp_print_table_features(
+    struct ds *, const struct ofputil_table_features *features,
+    const struct ofputil_table_features *prev_features,
+    const struct ofputil_table_stats *);
 
 /* Returns a string that represents the contents of the Ethernet frame in the
  * 'len' bytes starting at 'data'.  The caller must free the returned string.*/
@@ -1621,7 +1622,8 @@ ofp_print_table_stats_reply(struct ds *string, const struct ofp_header *oh)
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     ofpraw_pull_assert(&b);
 
-    for (;;) {
+    struct ofputil_table_features prev;
+    for (int i = 0;; i++) {
         struct ofputil_table_features features;
         struct ofputil_table_stats stats;
         int retval;
@@ -1634,7 +1636,8 @@ ofp_print_table_stats_reply(struct ds *string, const struct ofp_header *oh)
             return;
         }
 
-        ofp_print_table_features(string, &features, &stats);
+        ofp_print_table_features(string, &features, i ? &prev : NULL, &stats);
+        prev = features;
     }
 }
 
@@ -2527,9 +2530,23 @@ table_instruction_features_empty(
             && table_action_features_empty(&tif->apply));
 }
 
+static bool
+table_features_equal(const struct ofputil_table_features *a,
+                     const struct ofputil_table_features *b)
+{
+    return (a->metadata_match != b->metadata_match
+            || a->metadata_write != b->metadata_write
+            || a->miss_config != b->miss_config
+            || a->max_entries != b->max_entries
+            || !table_instruction_features_equal(&a->nonmiss, &b->nonmiss)
+            || !table_instruction_features_equal(&a->miss, &b->miss)
+            || !bitmap_equal(a->match.bm, b->match.bm, MFF_N_IDS));
+}
+
 static void
 ofp_print_table_features(struct ds *s,
                          const struct ofputil_table_features *features,
+                         const struct ofputil_table_features *prev_features,
                          const struct ofputil_table_stats *stats)
 {
     int i;
@@ -2543,6 +2560,10 @@ ofp_print_table_features(struct ds *s,
         ds_put_format(s, "    active=%"PRIu32", ", stats->active_count);
         ds_put_format(s, "lookup=%"PRIu64", ", stats->lookup_count);
         ds_put_format(s, "matched=%"PRIu64"\n", stats->matched_count);
+    }
+    if (prev_features && table_features_equal(features, prev_features)) {
+        ds_put_cstr(s, "    (same features)\n");
+        return;
     }
     if (features->metadata_match || features->metadata_match) {
         ds_put_format(s, "    metadata: match=%#"PRIx64" write=%#"PRIx64"\n",
@@ -2604,7 +2625,8 @@ ofp_print_table_features_reply(struct ds *s, const struct ofp_header *oh)
 
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
 
-    for (;;) {
+    struct ofputil_table_features prev;
+    for (int i = 0; ; i++) {
         struct ofputil_table_features tf;
         int retval;
 
@@ -2615,7 +2637,9 @@ ofp_print_table_features_reply(struct ds *s, const struct ofp_header *oh)
             }
             return;
         }
-        ofp_print_table_features(s, &tf, NULL);
+
+        ofp_print_table_features(s, &tf, i ? &prev : NULL, NULL);
+        prev = tf;
     }
 }
 
