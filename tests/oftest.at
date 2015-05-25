@@ -8,6 +8,19 @@ m4_define(
   [OFTEST_TEST_GROUP],
   [AT_SETUP([oftest tests - m4_incr([$1]) of $2])
 
+   i=0
+   n=$2
+   tests=
+   while read name; do
+       if test $i = $1; then
+           AS_VAR_APPEND([tests], [" $name"])
+       fi
+       AS_VAR_ARITH([i], [\( $i + 1 \) % $n])
+   done <<EOF
+`oft --list-test-names`
+EOF
+   echo "Running tests: $tests"
+
    dnl Intentionally disables OpenFlow 1.5 because OFTest fails if it is
    dnl enabled.
    OVS_VSWITCHD_START(
@@ -20,18 +33,6 @@ m4_define(
       OFTEST_ADD_PORT([4])])
    sleep 1
    TCP_PORT=`parse_listening_port < ovs-vswitchd.log`
-
-   i=0
-   n=$2
-   tests=
-   while read name; do
-       if test $i = $1; then
-           AS_VAR_APPEND([tests], [" $name"])
-       fi
-       AS_VAR_ARITH([i], [\( $i + 1 \) % $n])
-   done <<EOF
-`oft --list-test-names`
-EOF
 
    if test X"$tests" != X; then
        AT_CHECK([oft -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $tests], [0], [ignore], [ignore])
