@@ -8606,6 +8606,10 @@ ofputil_decode_group_mod(const struct ofp_header *oh,
     }
 
     LIST_FOR_EACH (bucket, list_node, &gm->buckets) {
+        if (bucket->weight && gm->type != OFPGT11_SELECT) {
+            return OFPERR_OFPGMFC_INVALID_GROUP;
+        }
+
         switch (gm->type) {
         case OFPGT11_ALL:
         case OFPGT11_INDIRECT:
