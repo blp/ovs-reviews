@@ -2534,13 +2534,13 @@ static bool
 table_features_equal(const struct ofputil_table_features *a,
                      const struct ofputil_table_features *b)
 {
-    return (a->metadata_match != b->metadata_match
-            || a->metadata_write != b->metadata_write
-            || a->miss_config != b->miss_config
-            || a->max_entries != b->max_entries
-            || !table_instruction_features_equal(&a->nonmiss, &b->nonmiss)
-            || !table_instruction_features_equal(&a->miss, &b->miss)
-            || !bitmap_equal(a->match.bm, b->match.bm, MFF_N_IDS));
+    return (a->metadata_match == b->metadata_match
+            && a->metadata_write == b->metadata_write
+            && a->miss_config == b->miss_config
+            && a->max_entries == b->max_entries
+            && table_instruction_features_equal(&a->nonmiss, &b->nonmiss)
+            && table_instruction_features_equal(&a->miss, &b->miss)
+            && bitmap_equal(a->match.bm, b->match.bm, MFF_N_IDS));
 }
 
 static void
