@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2011, 2012, 2013, 2014 The Board of Trustees of The Leland Stanford
+/* Copyright (c) 2008, 2011, 2012, 2013, 2014, 2015 The Board of Trustees of The Leland Stanford
  * Junior University
  *
  * We are making the OpenFlow specification and associated documentation
@@ -405,6 +405,7 @@ OFP_ASSERT(sizeof(struct ofp_vendor_header) == 12);
 enum ofp_table {
     /* Last usable table number. */
     OFPTT_MAX = 0xfe,
+    OFPTT_EMERG = 0xfe,
 
     /* Fake tables. */
     OFPTT_ALL = 0xff         /* Wildcard table used for table config,

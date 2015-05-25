@@ -1309,6 +1309,7 @@ construct(struct ofproto *ofproto_)
     ofproto_init_tables(ofproto_, N_TABLES);
     error = add_internal_flows(ofproto);
 
+    ofproto->up.tables[OFPTT_EMERG].flags = OFTABLE_HIDDEN;
     ofproto->up.tables[TBL_INTERNAL].flags = OFTABLE_HIDDEN | OFTABLE_READONLY;
 
     return error;
@@ -3857,16 +3858,12 @@ rule_dpif_lookup_from_table(struct ofproto_dpif *ofproto,
      * have surprising behavior). */
     flow->in_port.ofp_port = in_port;
 
-    /* Our current implementation depends on n_tables == N_TABLES, and
-     * TBL_INTERNAL being the last table. */
-    BUILD_ASSERT_DECL(N_TABLES == TBL_INTERNAL + 1);
-
     miss_config = OFPUTIL_TABLE_MISS_CONTINUE;
+    for (next_id = *table_id; next_id < ofproto->up.n_tables; next_id++) {
+        if (next_id == TBL_INTERNAL || next_id == OFPTT_EMERG) {
+            continue;
+        }
 
-    for (next_id = *table_id;
-         next_id < ofproto->up.n_tables;
-         next_id++, next_id += (next_id == TBL_INTERNAL))
-    {
         *table_id = next_id;
         rule = rule_dpif_lookup_in_table(ofproto, version, next_id, flow, wc,
                                          take_ref);
