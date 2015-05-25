@@ -55,7 +55,8 @@ static void ofp_print_error(struct ds *, enum ofperr);
 static void ofp_print_table_features(
     struct ds *, const struct ofputil_table_features *features,
     const struct ofputil_table_features *prev_features,
-    const struct ofputil_table_stats *);
+    const struct ofputil_table_stats *stats,
+    const struct ofputil_table_stats *prev_stats);
 
 /* Returns a string that represents the contents of the Ethernet frame in the
  * 'len' bytes starting at 'data'.  The caller must free the returned string.*/
@@ -1622,7 +1623,8 @@ ofp_print_table_stats_reply(struct ds *string, const struct ofp_header *oh)
     ofpbuf_use_const(&b, oh, ntohs(oh->length));
     ofpraw_pull_assert(&b);
 
-    struct ofputil_table_features prev;
+    struct ofputil_table_features prev_features;
+    struct ofputil_table_stats prev_stats;
     for (int i = 0;; i++) {
         struct ofputil_table_features features;
         struct ofputil_table_stats stats;
@@ -1636,8 +1638,11 @@ ofp_print_table_stats_reply(struct ds *string, const struct ofp_header *oh)
             return;
         }
 
-        ofp_print_table_features(string, &features, i ? &prev : NULL, &stats);
-        prev = features;
+        ofp_print_table_features(string,
+                                 &features, i ? &prev_features : NULL,
+                                 &stats, i ? &prev_stats : NULL);
+        prev_features = features;
+        prev_stats = stats;
     }
 }
 
@@ -2543,11 +2548,21 @@ table_features_equal(const struct ofputil_table_features *a,
             && bitmap_equal(a->match.bm, b->match.bm, MFF_N_IDS));
 }
 
+static bool
+table_stats_equal(const struct ofputil_table_stats *a,
+                  const struct ofputil_table_stats *b)
+{
+    return (a->active_count == b->active_count
+            && a->lookup_count == b->lookup_count
+            && a->matched_count == b->matched_count);
+}
+
 static void
 ofp_print_table_features(struct ds *s,
                          const struct ofputil_table_features *features,
                          const struct ofputil_table_features *prev_features,
-                         const struct ofputil_table_stats *stats)
+                         const struct ofputil_table_stats *stats,
+                         const struct ofputil_table_stats *prev_stats)
 {
     int i;
 
@@ -2555,7 +2570,16 @@ ofp_print_table_features(struct ds *s,
     if (features->name[0]) {
         ds_put_format(s, " (\"%s\")", features->name);
     }
-    ds_put_cstr(s, ":\n");
+    ds_put_char(s, ':');
+
+    bool same_stats = prev_stats && table_stats_equal(stats, prev_stats);
+    bool same_features = prev_features && table_features_equal(features,
+                                                               prev_features);
+    if ((!stats || same_stats) && (!features || same_features)) {
+        ds_put_cstr(s, " ditto");
+        return;
+    }
+    ds_put_char(s, '\n');
     if (stats) {
         ds_put_format(s, "    active=%"PRIu32", ", stats->active_count);
         ds_put_format(s, "lookup=%"PRIu64", ", stats->lookup_count);
@@ -2638,7 +2662,7 @@ ofp_print_table_features_reply(struct ds *s, const struct ofp_header *oh)
             return;
         }
 
-        ofp_print_table_features(s, &tf, i ? &prev : NULL, NULL);
+        ofp_print_table_features(s, &tf, i ? &prev : NULL, NULL, NULL);
         prev = tf;
     }
 }
