@@ -31,7 +31,6 @@ EOF
       OFTEST_ADD_PORT([2]) -- \
       OFTEST_ADD_PORT([3]) -- \
       OFTEST_ADD_PORT([4])])
-   sleep 1
    TCP_PORT=`parse_listening_port < ovs-vswitchd.log`
 
    if test X"$tests" != X; then
@@ -41,5 +40,3 @@ EOF
    AT_CLEANUP])
 
 m4_for([myvar], [0], [99], [1], [OFTEST_TEST_GROUP(myvar, [100])])
-Have a secure alternative to OVSDB’s
-JSON-RPC.
