@@ -1756,7 +1756,8 @@ struct ofproto_class {
      */
     const char *(*get_datapath_version)(const struct ofproto *);
 
-    void (*barrier)(struct ofproto *);
+    void *(*barrier)(struct ofproto *);
+    bool (*pass_barrier)(struct ofproto *, void *);
 };
 
 extern const struct ofproto_class ofproto_dpif_class;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2014 Nicira, Inc.
+/* Copyright (c) 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 #ifndef OFPROTO_DPIF_UPCALL_H
 #define OFPROTO_DPIF_UPCALL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 struct dpif;
@@ -38,5 +39,8 @@ void udpif_revalidate(struct udpif *);
 void udpif_get_memory_usage(struct udpif *, struct simap *usage);
 struct seq *udpif_dump_seq(struct udpif *);
 void udpif_flush(struct udpif *);
+
+void *udpif_get_barrier(struct udpif *);
+bool udpif_pass_barrier(struct udpif *, void *barrier);
 
 #endif /* ofproto-dpif-upcall.h */

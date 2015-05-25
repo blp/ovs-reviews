@@ -530,6 +530,29 @@ udpif_synchronize(struct udpif *udpif)
     }
 }
 
+void *
+udpif_get_barrier(struct udpif *udpif)
+{
+    uint64_t reval_seq = seq_read(udpif->reval_seq);
+    uint64_t sync;
+    atomic_read_relaxed(&udpif->sync, &sync);
+    return sync >= reval_seq ? NULL : xmemdup(&reval_seq, sizeof reval_seq);
+}
+
+bool
+udpif_pass_barrier(struct udpif *udpif, void *barrier)
+{
+    uint64_t reval_seq = seq_read(udpif->reval_seq);
+    uint64_t sync;
+    atomic_read_relaxed(&udpif->sync, &sync);
+    if (sync >= reval_seq) {
+        free(barrier);
+        return true;
+    } else {
+        return false;
+    }
+}
+
 /* Notifies 'udpif' that something changed which may render previous
  * xlate_actions() results invalid. */
 void
