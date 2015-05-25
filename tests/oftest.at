@@ -34,6 +34,7 @@ EOF
    TCP_PORT=`parse_listening_port < ovs-vswitchd.log`
 
    if test X"$tests" != X; then
+       AT_CAPTURE_FILE([oft.log])
        AT_CHECK([oft -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $tests], [0], [ignore], [ignore])
    fi
    OVS_VSWITCHD_STOP([d])
