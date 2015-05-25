@@ -2071,7 +2071,7 @@ simple_flow_mod(struct ofproto *ofproto,
  * timeout.
  *
  * If cls_rule->priority is in the range of priorities supported by OpenFlow
- * (0...65535, inclusive) then the flow will be visible to OpenFlow
+ * (0...0x1ffff, inclusive) then the flow will be visible to OpenFlow
  * controllers; otherwise, it will be hidden.
  *
  * The caller retains ownership of 'cls_rule' and 'ofpacts'.
@@ -3826,9 +3826,9 @@ rule_criteria_init(struct rule_criteria *criteria, uint8_t table_id,
      * code internal to OVS to modify and delete them, so if the criteria
      * specify a priority that can only be for a hidden flow, then allow hidden
      * rules to be selected.  (This doesn't allow OpenFlow clients to meddle
-     * with hidden flows because OpenFlow uses only a 16-bit field to specify
-     * priority.) */
-    criteria->include_hidden = priority > UINT16_MAX;
+     * with hidden flows, because OpenFlow only specifies priorities in the
+     * range 0...0x1ffff.) */
+    criteria->include_hidden = priority > 0x1ffff;
 
     /* We assume that the criteria are being used to collect flows for reading
      * but not modification.  Thus, we should collect read-only flows. */

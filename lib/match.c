@@ -1007,7 +1007,8 @@ match_format(const struct match *match, struct ds *s, int priority)
     BUILD_ASSERT_DECL(FLOW_WC_SEQ == 34);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
-        ds_put_format(s, "priority=%d,", priority);
+        ds_put_format(s, "priority=%"PRIu16",",
+                      ntohs(ofputil_priority_to_openflow(priority)));
     }
 
     format_uint32_masked(s, "pkt_mark", f->pkt_mark, wc->masks.pkt_mark);
