@@ -442,6 +442,7 @@ OFP_ASSERT(sizeof(struct ofp_hello_elem_header) == 4);
 enum ofp_table {
     /* Last usable table number. */
     OFPTT_MAX = 0xfe,
+    OFPTT_EMERG = 0xfe,
 
     /* Fake tables. */
     OFPTT_ALL = 0xff         /* Wildcard table used for table config,

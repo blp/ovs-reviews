@@ -65,7 +65,7 @@ struct xlate_ctx;
 
 /* Number of implemented OpenFlow tables. */
 enum { N_TABLES = 255 };
-enum { TBL_INTERNAL = N_TABLES - 1 };    /* Used for internal hidden rules. */
+enum { TBL_INTERNAL = N_TABLES - 2 };    /* Used for internal hidden rules. */
 BUILD_ASSERT_DECL(N_TABLES >= 2 && N_TABLES <= 255);
 
 struct rule_dpif {
