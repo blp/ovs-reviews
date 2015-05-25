@@ -249,19 +249,18 @@ struct ofpbuf *ofputil_make_flow_mod_table_id(bool flow_mod_table_id);
 
 /* Protocol-independent flow_mod flags. */
 enum ofputil_flow_mod_flags {
-    /* Flags that are maintained with a flow as part of its state.
-     *
-     * (OFPUTIL_FF_EMERG would be here too, if OVS supported it.) */
+    /* Flags that are maintained with a flow as part of its state. */
     OFPUTIL_FF_SEND_FLOW_REM = 1 << 0, /* All versions. */
     OFPUTIL_FF_NO_PKT_COUNTS = 1 << 1, /* OpenFlow 1.3+. */
     OFPUTIL_FF_NO_BYT_COUNTS = 1 << 2, /* OpenFlow 1.3+. */
+    OFPUTIL_FF_EMERG         = 1 << 3, /* OpenFlow 1.0 only. */
 #define OFPUTIL_FF_STATE (OFPUTIL_FF_SEND_FLOW_REM      \
                           | OFPUTIL_FF_NO_PKT_COUNTS    \
-                          | OFPUTIL_FF_NO_BYT_COUNTS)
+                          | OFPUTIL_FF_NO_BYT_COUNTS    \
+                          | OFPUTIL_FF_EMERG)
 
     /* Flags that affect flow_mod behavior but are not part of flow state. */
-    OFPUTIL_FF_CHECK_OVERLAP = 1 << 3, /* All versions. */
-    OFPUTIL_FF_EMERG         = 1 << 4, /* OpenFlow 1.0 only. */
+    OFPUTIL_FF_CHECK_OVERLAP = 1 << 4, /* All versions. */
     OFPUTIL_FF_RESET_COUNTS  = 1 << 5, /* OpenFlow 1.2+. */
 
     /* Flags that are only set by OVS for its internal use.  Cannot be set via
