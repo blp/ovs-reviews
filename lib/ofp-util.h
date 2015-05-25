@@ -215,6 +215,12 @@ void ofputil_normalize_match(struct match *);
 void ofputil_normalize_match_quiet(struct match *);
 void ofputil_match_to_ofp10_match(const struct match *, struct ofp10_match *);
 
+/* Flow priorities. */
+int ofputil_priority_from_openflow10(ovs_be16 ofp_priority,
+                                     ovs_be32 wildcards);
+int ofputil_priority_from_openflow(ovs_be16 priority);
+ovs_be16 ofputil_priority_to_openflow(int priority);
+
 /* Work with ofp11_match. */
 enum ofperr ofputil_pull_ofp11_match(struct ofpbuf *, struct match *,
                                      uint16_t *padded_match_len);
@@ -347,7 +353,7 @@ struct ofputil_flow_stats {
     struct match match;
     ovs_be64 cookie;
     uint8_t table_id;
-    uint16_t priority;
+    int priority;
     uint16_t idle_timeout;
     uint16_t hard_timeout;
     uint32_t duration_sec;
@@ -387,7 +393,7 @@ enum ofperr ofputil_decode_aggregate_stats_reply(
 struct ofputil_flow_removed {
     struct match match;
     ovs_be64 cookie;
-    uint16_t priority;
+    int priority;
     uint8_t reason;             /* One of OFPRR_*. */
     uint8_t table_id;           /* 255 if message didn't include table ID. */
     uint32_t duration_sec;
@@ -937,7 +943,7 @@ struct ofputil_flow_update {
     uint16_t idle_timeout;
     uint16_t hard_timeout;
     uint8_t table_id;
-    uint16_t priority;
+    int priority;
     ovs_be64 cookie;
     struct match *match;
     const struct ofpact *ofpacts;

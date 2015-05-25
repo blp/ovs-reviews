@@ -1795,13 +1795,13 @@ rule_is_table_miss(const struct rule *rule)
 
 /* Returns true if 'rule' should be hidden from the controller.
  *
- * Rules with priority higher than UINT16_MAX are set up by ofproto itself
+ * Rules with priority higher than 0x1ffff are set up by ofproto itself
  * (e.g. by in-band control) and are intentionally hidden from the
  * controller. */
 static inline bool
 rule_is_hidden(const struct rule *rule)
 {
-    return rule->cr.priority > UINT16_MAX;
+    return rule->cr.priority > 0x1ffff;
 }
 
 static inline struct rule *

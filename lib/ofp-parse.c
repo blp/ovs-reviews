@@ -385,7 +385,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
                 uint16_t priority = 0;
 
                 error = str_to_u16(value, name, &priority);
-                fm->priority = priority;
+                fm->priority = ofputil_priority_from_openflow(htons(priority));
             } else if (fields & F_TIMEOUT && !strcmp(name, "idle_timeout")) {
                 error = str_to_u16(value, name, &fm->idle_timeout);
             } else if (fields & F_TIMEOUT && !strcmp(name, "hard_timeout")) {
