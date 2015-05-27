@@ -77,6 +77,7 @@ TESTSUITE_AT = \
 	tests/ovs-vsctl.at \
 	tests/ovs-monitor-ipsec.at \
 	tests/ovs-xapi-sync.at \
+	tests/p4.at \
 	tests/stp.at \
 	tests/rstp.at \
 	tests/interface-reconfigure.at \
@@ -280,6 +281,7 @@ tests_ovstest_SOURCES = \
 	tests/test-multipath.c \
 	tests/test-netflow.c \
 	tests/test-odp.c \
+	tests/test-p4.c \
 	tests/test-packets.c \
 	tests/test-random.c \
 	tests/test-reconnect.c \

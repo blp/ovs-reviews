@@ -460,7 +460,7 @@ learn_format(const struct ofpact_learn *learn, struct ds *s)
             } else {
                 mf_format_subfield(&spec->dst, s);
                 ds_put_char(s, '=');
-                mf_format_subvalue(&spec->src_imm, s);
+                mf_format_subvalue(&spec->src_imm, 16, s);
             }
             break;
 
@@ -475,7 +475,7 @@ learn_format(const struct ofpact_learn *learn, struct ds *s)
 
         case NX_LEARN_SRC_IMMEDIATE | NX_LEARN_DST_LOAD:
             ds_put_format(s, "load:");
-            mf_format_subvalue(&spec->src_imm, s);
+            mf_format_subvalue(&spec->src_imm, 16, s);
             ds_put_cstr(s, "->");
             mf_format_subfield(&spec->dst, s);
             break;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -158,6 +158,20 @@ mf_subvalue_shift(union mf_subvalue *value, int n)
                          8 * sizeof tmp + n);
         }
         *value = tmp;
+    }
+}
+
+void
+mf_subvalue_2c_negate(union mf_subvalue *value, int width)
+{
+    bitwise_toggle(value, sizeof *value, 0, width);
+    for (size_t i = 0; i < width; i++) {
+        if (!bitwise_get_bit(value, sizeof *value, i)) {
+            bitwise_put1(value, sizeof *value, i);
+            return;
+        } else {
+            bitwise_put0(value, sizeof *value, i);
+        }
     }
 }
 
@@ -2367,10 +2381,39 @@ mf_get_subfield(const struct mf_subfield *sf, const struct flow *flow)
     return bitwise_get(&value, sf->field->n_bytes, sf->ofs, sf->n_bits);
 }
 
-void
-mf_format_subvalue(const union mf_subvalue *subvalue, struct ds *s)
+static void
+put_binary(uint8_t byte, int start, struct ds *s)
 {
-    ds_put_hex(s, subvalue->u8, sizeof subvalue->u8);
+    for (int j = start; j >= 0; j--) {
+        ds_put_char(s, (byte >> j) & 1 ? '1' : '0');
+    }
+}
+
+void
+mf_format_subvalue(const union mf_subvalue *subvalue, int radix, struct ds *s)
+{
+    int i;
+
+    ovs_assert(radix == 16 || radix == 2);
+    for (i = 0; i < ARRAY_SIZE(subvalue->u8); i++) {
+        if (subvalue->u8[i]) {
+            if (radix == 16) {
+                ds_put_format(s, "0x%"PRIx8, subvalue->u8[i]);
+                for (i++; i < ARRAY_SIZE(subvalue->u8); i++) {
+                    ds_put_format(s, "%02"PRIx8, subvalue->u8[i]);
+                }
+            } else {
+                ds_put_format(s, "0b");
+                put_binary(subvalue->u8[i],
+                           leftmost_1bit_idx(subvalue->u8[i]), s);
+                for (i++; i < ARRAY_SIZE(subvalue->u8); i++) {
+                    put_binary(subvalue->u8[i], 7, s);
+                }
+            }
+            return;
+        }
+    }
+    ds_put_char(s, '0');
 }
 
 void

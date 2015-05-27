@@ -1,0 +1,95 @@
+AT_BANNER([P4])
+
+AT_SETUP([P4 -- lexer])
+dnl For lines without =>, input and expected output are identical.
+dnl For lines with =>, input precedes => and expected output follows =>.
+AT_DATA([test-cases.txt], [dnl
+foo bar baz quuxquuxquux _abcd_ a123_
+"abc\u0020def" => "abc def"
+" => error("Input ends inside quoted string.")dnl "
+
+apply current default else hit if last latest parse_error payload select switch
+
+a/*b*/c => a c
+a//b c => a
+a/**/b => a b
+a/*/b => a error("`/*' without matching `*/'.")
+a/*/**/b => a b
+a/b => a / b
+
+dnl Examples from 1.0.2 spec:
+42 => 42(w6)
+16'42
+0b101010 => 0b101010(w6)
+0'0x2a => 0x2a(w6)
+12'0x100
+7'0b1 => 7'0b1
+-0B101 => 0b1011(w4)
+
+0 => 0(w1)
+1 => 1(w1)
+12345 => 12345(w14)
+-12345 => 20423(w15)
+16'12345 => 16'12345
++16'12345 => 16'12345
+-16'12345 => 53191(w16)
+-16'53191 => 16'12345
+-15'53191 => error("Constant width 15 is less than natural width 16.")
+18446744073709551615 => 18446744073709551615(w64)
+-18446744073709551615 => 0x10000000000000001(w65)
+18446744073709551616 => error("Decimal constants must be less than 2**64.")
+-18446744073709551616 => error("Decimal constants must be less than 2**64.")
+9999999999999999999999 => error("Decimal constants must be less than 2**64.")
+01 => error("Decimal constants must not have leading zeros.")
+1x => error("Constant followed by unexpected character `x'.")
+
+1024'0 => error("Width must be between 0 and 128.")
+
+0x1234 => 0x1234(w13)
+0x01234 => 0x1234(w13)
++0x1234 => 0x1234(w13)
++0x01234 => 0x1234(w13)
+-0x1234 => 0x2dcc(w14)
+-0x01234 => 0x2dcc(w14)
+16'0x123 => 16'0x123
++16'0x123 => 16'0x123
+-16'0x123 => 0xfedd(w16)
+-16'0xfffe => 16'0x2
+0x0 => 0(w1)
+0x000 => 0(w1)
+0xfedcba9876543210 => 0xfedcba9876543210(w64)
+0xfedc_ba98_7654_3210 => 0xfedcba9876543210(w64)
+0XFEDCBA9876543210 => 0xfedcba9876543210(w64)
+0xfedcba9876543210fedcba9876543210 => 0xfedcba9876543210fedcba9876543210(w128)
+0xfedcba9876543210fedcba98765432100 => error("Constant exceeds supported 128-bit width.")
+0x0000fedcba9876543210fedcba9876543210 => 0xfedcba9876543210fedcba9876543210(w128)
+0x => error("Digits expected following `0x'.")
+0X => error("Digits expected following `0X'.")
+0x_ => 0 => error("Digits expected following `0x'.")
+
+0b1010 => 0b1010(w4)
+0b1001000110100 => 0b1001000110100(w13)
+-0b1001000110100 => 0b10110111001100(w14)
+-16'0b1001000110100 => 0b1110110111001100(w16)
+-16'0b1111_1111_1111_1111 => 16'0b1
+0b2 => error("`2' is not a valid base-2 digit.")
+0b => 0 => error("Digits expected following `0b'.")
+0B_ => 0 => error("Digits expected following `0B'.")
+0b10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 => 0b10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000(w128)
+0b00010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 => 0b10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000(w128)
+0b110000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 => error("Constant exceeds supported 128-bit width.")
+3'0b1011 => error("Constant width 3 is less than natural width 4.")
+
++-*/%<<>>|&^~ => + - * / % << >> | & ^ ~
+(){}[[]]==!=<><=>=.,:; => ( ) { } [[ ]] == != < > <= >= . , : ;
+
+= => error("`=' is only valid as part of `=='.")
+! => error("'!' is only valid as part of `!='.")
+
+` => error("Invalid character ``' in input.")
+])
+AT_CAPTURE_FILE([input.txt])
+sed 's/ =>.*//' test-cases.txt > input.txt
+sed 's/.* => //' test-cases.txt > expout
+AT_CHECK([ovstest test-p4 lex < input.txt], [0], [expout])
+AT_CLEANUP

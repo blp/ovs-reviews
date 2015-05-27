@@ -1598,6 +1598,7 @@ bool mf_subvalue_intersect(const union mf_subvalue *a_value,
                            union mf_subvalue *dst_mask);
 int mf_subvalue_width(const union mf_subvalue *);
 void mf_subvalue_shift(union mf_subvalue *, int n);
+void mf_subvalue_2c_negate(union mf_subvalue *, int width);
 
 /* An array of fields with values */
 struct field_array {
@@ -1687,7 +1688,8 @@ char *mf_parse_value(const struct mf_field *, const char *, union mf_value *);
 void mf_format(const struct mf_field *,
                const union mf_value *value, const union mf_value *mask,
                struct ds *);
-void mf_format_subvalue(const union mf_subvalue *subvalue, struct ds *s);
+void mf_format_subvalue(const union mf_subvalue *subvalue, int radix,
+                        struct ds *s);
 
 /* Field Arrays. */
 void field_array_set(enum mf_field_id id, const union mf_value *,

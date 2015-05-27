@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -181,6 +181,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ovsdb-parser.h \
 	lib/ovsdb-types.c \
 	lib/ovsdb-types.h \
+	lib/p4-lex.c \
+	lib/p4-lex.h \
 	lib/packets.c \
 	lib/packets.h \
 	lib/pcap-file.c \
