@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include "dynamic-string.h"
 #include "p4-lex.h"
+#include "p4-parse.h"
 #include "ovstest.h"
 
 static void
@@ -99,6 +100,56 @@ test_lex(struct ovs_cmdl_context *ctx OVS_UNUSED)
 }
 
 static void
+test_parse(struct ovs_cmdl_context *ctx)
+{
+    const char *file_name = ctx->argv[1];
+    struct ds input;
+    FILE *stream;
+
+    stream = !strcmp(file_name, "-") ? stdin : fopen(file_name, "r");
+    if (stream == NULL) {
+        ovs_fatal(errno, "%s: open failed", file_name);
+    }
+
+    ds_init(&input);
+    for (;;) {
+        int c = getc(stream);
+        if (c == EOF) {
+            break;
+        }
+        ds_put_char(&input, c);
+    }
+    if (stream != stdin) {
+        fclose(stream);
+    }
+
+    struct p4_lexer lexer;
+    p4_lexer_init(&lexer, ds_cstr(&input), file_name);
+    p4_lexer_get(&lexer);
+
+    struct p4_parser *parser;
+    char *diagnostics = p4_parse(&lexer, &parser);
+    p4_lexer_destroy(&lexer);
+
+    if (parser) {
+        struct ds output;
+
+        if (*diagnostics) {
+            puts("/*");
+            fputs(diagnostics, stdout);
+            puts("*/\n");
+        }
+
+        ds_init(&output);
+        p4_format(parser, &output);
+        fputs(ds_cstr(&output), stdout);
+    } else {
+        fputs(diagnostics, stderr);
+        exit(1);
+    }
+}
+
+static void
 usage(void)
 {
     printf("\
@@ -107,6 +158,9 @@ usage: test-p4 %s [OPTIONS] COMMAND [ARG...]\n\
 \n\
 lex\n\
   Lexically analyzes P4 input from stdin and prints it back on stdout.\n\
+\n\
+parses\n\
+  Parses P4 input from stdin and prints it back on stdout.\n\
 ",
            program_name, program_name);
     exit(EXIT_SUCCESS);
@@ -143,6 +197,9 @@ test_p4_main(int argc, char *argv[])
     static const struct ovs_cmdl_command commands[] = {
         /* Lexer. */
         {"lex", NULL, 0, 0, test_lex},
+
+        /* Parser. */
+        {"parse", NULL, 1, 1, test_parse},
 
         {NULL, NULL, 0, 0, NULL},
     };
