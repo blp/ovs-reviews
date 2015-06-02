@@ -523,3 +523,82 @@ AT_CHECK([echo 'parser x { return y; }' | ovstest test-p4 parse -], [1], [],
     [-:2: error: parser state y referenced but never defined
 ])
 AT_CLEANUP
+
+AT_SETUP([BPF disassembler])
+AT_CHECK([ovstest test-p4 disassemble], [0],
+[[   0: ld #0x7654321089abcdef, r1
+   2: ldd 0x7b[r10], r2
+   3: ldw -1[r9], r3
+   4: ldh [r8], r4
+   5: ldb 0x36[r7], r5
+   6: std r1, 0x7b[r6]
+   7: stw r5, -127[r8]
+   8: sth r2, 0x80[r10]
+   9: stb r6, [r2]
+  10: if (r5 == #12345) jmp 16
+  11: if (r5 > #12345) jmp 17
+  12: if (r5 & #12345) jmp 18
+  13: if (r5 != #12345) jmp 19
+  14: if (r5 s> #12345) jmp 20
+  15: if (r5 s>= #12345) jmp 21
+  16: if (r5 == r2) jmp 17
+  17: if (r5 > r1) jmp 19
+  18: if (r5 & r3) jmp 21
+  19: if (r5 != r5) jmp 23
+  20: if (r5 s> r4) jmp 25
+  21: if (r5 s>= r6) jmp 27
+  22: exit
+  23: addw #-1, r9
+  24: subw #1, r1
+  25: mulw #-2, r8
+  26: divw #2, r8
+  27: orw #-3, r1
+  28: andw #3, r6
+  29: lshw #-4, r1
+  30: rshw #4, r2
+  31: modw #-5, r3
+  32: xorw #5, r4
+  33: movw #-6, r5
+  34: addd #6, r9
+  35: subd #-7, r1
+  36: muld #7, r8
+  37: divd #-8, r8
+  38: ord #8, r1
+  39: andd #-9, r6
+  40: lshd #9, r1
+  41: rshd #-10, r2
+  42: modd #10, r3
+  43: xord #-11, r4
+  44: movd #11, r5
+  45: addw r1, r9
+  46: subw r9, r1
+  47: mulw r1, r8
+  48: divw r5, r8
+  49: orw r4, r1
+  50: andw r8, r6
+  51: lshw r2, r1
+  52: rshw r3, r2
+  53: modw r4, r3
+  54: xorw r5, r4
+  55: movw r4, r5
+  56: addd r1, r9
+  57: subd r9, r1
+  58: muld r1, r8
+  59: divd r5, r8
+  60: ord r4, r1
+  61: andd r8, r6
+  62: lshd r2, r1
+  63: rshd r3, r2
+  64: modd r4, r3
+  65: xord r5, r4
+  66: movd r4, r5
+  67: negw r1
+  68: negd r1
+  69: htobeh r4
+  70: htobew r3
+  71: htobed r2
+  72: htoleh r5
+  73: htolew r1
+  74: htoled r6
+]])
+AT_CLEANUP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2010, 2011, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2010, 2011, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,19 +21,35 @@
 #include <inttypes.h>
 #include "openvswitch/types.h"
 
-#ifndef __CHECKER__
-#ifndef _WIN32
-static inline ovs_be64
-htonll(uint64_t n)
+static inline uint16_t
+uint16_byteswap(uint16_t x)
 {
-    return htonl(1) == 1 ? n : ((uint64_t) htonl(n) << 32) | htonl(n >> 32);
+    return (x >> 8) | (x << 8);
+}
+
+static inline uint32_t
+uint32_byteswap(uint32_t x)
+{
+    return (((x & 0x000000ff) << 24) |
+            ((x & 0x0000ff00) <<  8) |
+            ((x & 0x00ff0000) >>  8) |
+            ((x & 0xff000000) >> 24));
 }
 
 static inline uint64_t
-ntohll(ovs_be64 n)
+uint64_byteswap(uint64_t x)
 {
-    return htonl(1) == 1 ? n : ((uint64_t) ntohl(n) << 32) | ntohl(n >> 32);
+    return ((uint64_t) uint32_byteswap(x) << 32) | uint32_byteswap(x >> 32);
 }
+
+#ifndef __CHECKER__
+#ifndef _WIN32
+#ifndef WORDS_BIGENDIAN
+static inline ovs_be64 htonll(uint64_t x) { return uint64_byteswap(x); }
+#else
+static inline ovs_be64 htonll(uint64_t x) { return x; }
+#endif
+static inline uint64_t ntohll(ovs_be64 x) { return htonll(x); }
 #endif /* _WIN32 */
 #else
 /* Making sparse happy with these functions also makes them unreadable, so
@@ -41,14 +57,6 @@ ntohll(ovs_be64 n)
 ovs_be64 htonll(uint64_t);
 uint64_t ntohll(ovs_be64);
 #endif
-
-static inline uint32_t
-uint32_byteswap(uint32_t crc) {
-    return (((crc & 0x000000ff) << 24) |
-            ((crc & 0x0000ff00) <<  8) |
-            ((crc & 0x00ff0000) >>  8) |
-            ((crc & 0xff000000) >> 24));
-}
 
 /* These macros may substitute for htons(), htonl(), and htonll() in contexts
  * where function calls are not allowed, such as case labels.  They should not
@@ -88,6 +96,31 @@ uint32_byteswap(uint32_t crc) {
     (OVS_FORCE ovs_be32)((uint32_t)(B1) | (B2) << 8 | (B3) << 16 | (B4) << 24)
 #define BE16S_TO_BE32(B1, B2) \
     (OVS_FORCE ovs_be32)((uint32_t)(B1) | (B2) << 16)
+#endif
+
+/* Conversion between host and "Intel" byte order. */
+#ifndef __CHECKER__
+#ifdef WORDS_BIGENDIAN
+static inline ovs_le16 htois(uint16_t x) { return uint16_byteswap(x); }
+static inline ovs_le32 htoil(uint32_t x) { return uint32_byteswap(x); }
+static inline ovs_le64 htoill(uint64_t x) { return uint64_byteswap(x); }
+#else
+static inline ovs_le16 htois(uint16_t x) { return x; }
+static inline ovs_le32 htoil(uint32_t x) { return x; }
+static inline ovs_le64 htoill(uint64_t x) { return x; }
+#endif
+static inline uint16_t itohs(ovs_be16 x) { return htois(x); }
+static inline uint32_t itohl(ovs_be32 x) { return htoil(x); }
+static inline uint64_t itohll(ovs_be64 x) { return htoill(x); }
+#else
+/* Making sparse happy with these functions also makes them unreadable, so
+ * don't bother to show it their implementations. */
+ovs_le16 htois(uint16_t x);
+ovs_le32 htoil(uint32_t x);
+ovs_le64 htoill(uint64_t x);
+uint16_t itohs(ovs_be16 x);
+uint32_t itohl(ovs_be32 x);
+uint64_t itohll(ovs_be64 x);
 #endif
 
 #endif /* byte-order.h */

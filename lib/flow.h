@@ -777,5 +777,8 @@ static inline bool is_stp(const struct flow *flow)
     return (eth_addr_equals(flow->dl_dst, eth_addr_stp)
             && flow->dl_type == htons(FLOW_DL_TYPE_NONE));
 }
+
+bool init_flow_parser_bpf(const char *p4);
+void flow_extract_bpf(struct dp_packet *, struct flow *);
 
 #endif /* flow.h */

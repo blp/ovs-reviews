@@ -52,6 +52,10 @@
     one record in the <ref table="Open_vSwitch"/> table.
 
     <group title="Configuration">
+      <column name="p4">
+        Optional P4 program for flow extraction.
+      </column>
+
       <column name="bridges">
         Set of bridges managed by the daemon.
       </column>

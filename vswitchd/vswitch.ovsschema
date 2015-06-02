@@ -1,6 +1,6 @@
 {"name": "Open_vSwitch",
  "version": "7.12.1",
- "cksum": "2211824403 22535",
+ "cksum": "4207586987 22635",
  "tables": {
    "Open_vSwitch": {
      "columns": {
@@ -45,7 +45,10 @@
                   "min": 0, "max": "unlimited"}},
        "iface_types": {
          "type": {"key": {"type": "string"},
-                  "min": 0, "max": "unlimited"}}},
+                  "min": 0, "max": "unlimited"}},
+       "p4": {
+       	 "type": {"key": {"type": "string"},
+                  "min": 0, "max": 1}}},
      "isRoot": true,
      "maxRows": 1},
    "Bridge": {

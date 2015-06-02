@@ -27,6 +27,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/bfd.c \
 	lib/bfd.h \
 	lib/bitmap.h \
+	lib/bpf.c \
+	lib/bpf.h \
 	lib/bundle.c \
 	lib/bundle.h \
 	lib/byte-order.h \
@@ -181,6 +183,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ovsdb-parser.h \
 	lib/ovsdb-types.c \
 	lib/ovsdb-types.h \
+	lib/p4-bpf.c \
+	lib/p4-bpf.h \
 	lib/p4-lex.c \
 	lib/p4-lex.h \
 	lib/p4-parse.c \

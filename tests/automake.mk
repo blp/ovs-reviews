@@ -366,3 +366,5 @@ clean-pki:
 	rm -f tests/pki/stamp
 	rm -rf tests/pki
 endif
+
+EXTRA_DIST += tests/ovs.p4

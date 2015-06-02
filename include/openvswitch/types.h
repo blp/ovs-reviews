@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,16 @@ typedef uint64_t OVS_BITWISE ovs_be64;
 #define OVS_BE16_MAX ((OVS_FORCE ovs_be16) 0xffff)
 #define OVS_BE32_MAX ((OVS_FORCE ovs_be32) 0xffffffff)
 #define OVS_BE64_MAX ((OVS_FORCE ovs_be64) 0xffffffffffffffffULL)
+
+/* The ovs_le<N> types indicate that an object is in little-endian, not
+ * native-endian, byte order.  They are otherwise equivalent to uint<N>_t. */
+typedef uint16_t OVS_BITWISE ovs_le16;
+typedef uint32_t OVS_BITWISE ovs_le32;
+typedef uint64_t OVS_BITWISE ovs_le64;
+
+#define OVS_LE16_MAX ((OVS_FORCE ovs_le16) 0xffff)
+#define OVS_LE32_MAX ((OVS_FORCE ovs_le32) 0xffffffff)
+#define OVS_LE64_MAX ((OVS_FORCE ovs_le64) 0xffffffffffffffffULL)
 
 /* These types help with a few funny situations:
  *

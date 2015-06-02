@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "bpf.h"
 #include "byte-order.h"
 #include "coverage.h"
 #include "csum.h"
@@ -32,12 +33,19 @@
 #include "hash.h"
 #include "jhash.h"
 #include "match.h"
+#include "ofpbuf.h"
 #include "dp-packet.h"
 #include "openflow/openflow.h"
+#include "openvswitch/vlog.h"
+#include "p4-bpf.h"
+#include "p4-lex.h"
+#include "p4-parse.h"
 #include "packets.h"
 #include "odp-util.h"
 #include "random.h"
 #include "unaligned.h"
+
+VLOG_DEFINE_THIS_MODULE(flow);
 
 COVERAGE_DEFINE(flow_extract);
 COVERAGE_DEFINE(miniflow_malloc);
@@ -2224,4 +2232,135 @@ minimask_has_extra(const struct minimask *a, const struct minimask *b)
     }
 
     return false;
+}
+
+static struct ofpbuf *flow_parser_bpf;
+
+bool
+init_flow_parser_bpf(const char *p4)
+{
+    if (!p4 || !*p4) {
+        ofpbuf_delete(flow_parser_bpf);
+        flow_parser_bpf = NULL;
+        return true;
+    }
+
+    struct p4_lexer lexer;
+    p4_lexer_init(&lexer, p4, "p4");
+    p4_lexer_get(&lexer);
+
+    struct p4_parser *parser;
+    char *diagnostics = p4_parse(&lexer, &parser);
+    p4_lexer_destroy(&lexer);
+
+    if (!parser) {
+        VLOG_ERR("p4 parse failed:\n%s", diagnostics);
+        free(diagnostics);
+        return false;
+    }
+
+    if (*diagnostics) {
+        VLOG_INFO("p4 warnings:\n%s", diagnostics);
+        free(diagnostics);
+    }
+
+    struct ofpbuf *bpf = ofpbuf_new(0);
+    char *error = p4_bpf_from_parser(parser, bpf, NULL, NULL);
+    if (error) {
+        ofpbuf_delete(bpf);
+        VLOG_ERR("p4 compile failed:\n%s", error);
+        free(error);
+        return false;
+    }
+
+    ofpbuf_delete(flow_parser_bpf);
+    flow_parser_bpf = bpf;
+    return true;
+}
+
+struct flow_aux {
+    const struct dp_packet *packet;
+    struct flow *flow;
+};
+
+static bool
+load_op(size_t offset, uint64_t *valuep, size_t n, void *aux_)
+{
+    struct flow_aux *aux = aux_;
+    ovs_be64 value = 0;
+    uint8_t *vp = (uint8_t *) &value + (8 - n);
+
+    if (offset + n <= dp_packet_size(aux->packet)) {
+        memcpy(vp, (uint8_t *) dp_packet_data(aux->packet) + offset, n);
+    } else if (offset >= 0x10000
+               && offset + n <= 0x10000 + sizeof *aux->flow) {
+        memcpy(vp, (uint8_t *) aux->flow + (offset - 0x10000), n);
+    } else {
+        VLOG_WARN("bad load offset 0x%"PRIxSIZE", length %"PRIuSIZE,
+                  offset, n);
+        return false;
+    }
+    *valuep = ntohll(value);
+    return true;
+}
+
+static bool
+store_op(size_t offset, uint64_t value_, size_t n, void *aux_)
+{
+    struct flow_aux *aux = aux_;
+    ovs_be64 value = htonll(value_);
+    const uint8_t *vp = (const uint8_t *) &value + (8 - n);
+
+    if (offset >= 0x10000 && offset + n <= 0x10000 + sizeof *aux->flow) {
+        memcpy((uint8_t *) aux->flow + (offset - 0x10000), vp, n);
+    } else {
+        VLOG_WARN("bad store offset 0x%"PRIxSIZE", length %"PRIuSIZE,
+                  offset, n);
+        return false;
+    }
+    return true;
+}
+
+static const struct bpf_ops ops = { load_op, store_op };
+
+void
+flow_extract_bpf(struct dp_packet *packet, struct flow *flow)
+{
+    if (!flow_parser_bpf) {
+        flow_extract(packet, flow);
+        return;
+    }
+
+    uint64_t regs[10];
+    memset(regs, 0, sizeof regs);
+    regs[0] = -1;
+    regs[1] = -1;
+    regs[2] = -1;
+    regs[9] = dp_packet_size(packet);
+
+    memset(flow, 0, sizeof *flow);
+
+    struct flow_aux aux;
+    aux.packet = packet;
+    aux.flow = flow;
+
+    bool ok = bpf_execute(flow_parser_bpf->data,
+                          flow_parser_bpf->size / sizeof(struct bpf_insn),
+                          &ops, &aux, regs);
+    if (!ok) {
+        VLOG_WARN("flow extract failed");
+        return;
+    }
+
+    dp_packet_reset_offsets(packet);
+    if (regs[0] != UINT64_MAX) {
+        dp_packet_set_l2_5(packet,
+                           (uint8_t *) dp_packet_data(packet) + regs[0]);
+    }
+    if (regs[1] != UINT64_MAX) {
+        dp_packet_set_l3(packet, (uint8_t *) dp_packet_data(packet) + regs[1]);
+    }
+    if (regs[2] != UINT64_MAX) {
+        dp_packet_set_l4(packet, (uint8_t *) dp_packet_data(packet) + regs[2]);
+    }
 }
