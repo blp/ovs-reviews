@@ -21,6 +21,9 @@
 #include "type-props.h"
 #include "util.h"
 
+#include "openvswitch/vlog.h"
+VLOG_DEFINE_THIS_MODULE(bpf);
+
 bool
 bpf_execute(const struct bpf_insn code[], size_t n,
             const struct bpf_ops *ops, void *aux,
@@ -31,12 +34,14 @@ bpf_execute(const struct bpf_insn code[], size_t n,
         uint64_t *dst = &regs[i->dst_reg];
         uint64_t kx = BPF_SRC(i->code) == BPF_X ? src : i->imm;
 
+        const struct bpf_insn *pos = i;
         switch (i->code) {
         case BPF_LD | BPF_IMM | BPF_DW:
             regs[i->dst_reg] = ((uint32_t) i[0].imm
                                 | ((uint64_t) i[1].imm << 32));
+            VLOG_INFO("%"PRIuSIZE": r%d = %#"PRIx64, i - code, i->dst_reg,*dst);
             i++;
-            break;
+            continue;
 
 #define MEM(SUFFIX, WIDTH)                                              \
         case BPF_LDX | BPF_MEM | BPF_##SUFFIX:                          \
@@ -170,6 +175,10 @@ bpf_execute(const struct bpf_insn code[], size_t n,
             default: OVS_NOT_REACHED();
             }
             break;
+        }
+        VLOG_INFO("%"PRIuSIZE": r%d = %#"PRIx64, i - code, i->dst_reg,*dst);
+        if (i != pos) {
+            VLOG_INFO("jump from %"PRIuSIZE" to %"PRIuSIZE, pos - code, (i + 1) - code);
         }
     }
     return true;
