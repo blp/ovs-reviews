@@ -71,7 +71,7 @@ const uint8_t flow_segment_u64s[4] = {
 
 /* miniflow_extract() assumes the following to be true to optimize the
  * extraction process. */
-ASSERT_SEQUENTIAL_SAME_WORD(dl_type, vlan_tci);
+ASSERT_SEQUENTIAL_SAME_WORD(dl_type, pad3);
 
 ASSERT_SEQUENTIAL_SAME_WORD(nw_frag, nw_tos);
 ASSERT_SEQUENTIAL_SAME_WORD(nw_tos, nw_ttl);
@@ -279,8 +279,8 @@ parse_mpls(const void **datap, size_t *sizep)
     return MIN(count, FLOW_MAX_MPLS_LABELS);
 }
 
-static inline ovs_be16
-parse_vlan(const void **datap, size_t *sizep)
+static inline void
+parse_vlan(const void **datap, size_t *sizep, struct vlan_flow *vlan)
 {
     const struct eth_header *eth = *datap;
 
@@ -295,10 +295,12 @@ parse_vlan(const void **datap, size_t *sizep)
         if (OVS_LIKELY(*sizep
                        >= sizeof(struct qtag_prefix) + sizeof(ovs_be16))) {
             const struct qtag_prefix *qp = data_pull(datap, sizep, sizeof *qp);
-            return qp->tci | htons(VLAN_CFI);
+            vlan->tpid = qp->eth_type;
+            vlan->tci = qp->tci;
+            return;
         }
     }
-    return 0;
+    vlan->tpid = vlan->tci = 0;
 }
 
 static inline ovs_be16
@@ -459,16 +461,20 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     if (OVS_UNLIKELY(size < sizeof(struct eth_header))) {
         goto out;
     } else {
-        ovs_be16 vlan_tci;
+        struct vlan_flow vlan;
 
         /* Link layer. */
         ASSERT_SEQUENTIAL(dl_dst, dl_src);
+
         miniflow_push_macs(mf, dl_dst, data);
-        /* dl_type, vlan_tci. */
-        vlan_tci = parse_vlan(&data, &size);
+        parse_vlan(&data, &size, &vlan);
         dl_type = parse_ethertype(&data, &size);
         miniflow_push_be16(mf, dl_type, dl_type);
-        miniflow_push_be16(mf, vlan_tci, vlan_tci);
+        miniflow_push_be16(mf, pad3, 0);
+
+        if (vlan.tpid) {
+            miniflow_push_be32(mf, vlans[0], be16s_to_be32(vlan.tpid, vlan.tci));
+        }
     }
 
     /* Parse mpls. */
@@ -661,7 +667,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
     packet->l4_ofs = (char *)data - l2;
     miniflow_push_be32(mf, nw_frag,
-                       BYTES_TO_BE32(nw_frag, nw_tos, nw_ttl, nw_proto));
+                       bytes_to_be32(nw_frag, nw_tos, nw_ttl, nw_proto));
 
     if (OVS_LIKELY(!(nw_frag & FLOW_NW_FRAG_LATER))) {
         if (OVS_LIKELY(nw_proto == IPPROTO_TCP)) {
@@ -974,7 +980,7 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
     WC_MASK_FIELD(wc, dl_dst);
     WC_MASK_FIELD(wc, dl_src);
     WC_MASK_FIELD(wc, dl_type);
-    WC_MASK_FIELD(wc, vlan_tci);
+    WC_MASK_FIELD(wc, vlans[0]);
 
     if (flow->dl_type == htons(ETH_TYPE_IP)) {
         WC_MASK_FIELD(wc, nw_src);
@@ -1050,7 +1056,7 @@ flow_wc_map(const struct flow *flow)
         | MINIFLOW_MAP(recirc_id) | MINIFLOW_MAP(dp_hash)
         | MINIFLOW_MAP(in_port)
         | MINIFLOW_MAP(dl_dst) | MINIFLOW_MAP(dl_src)
-        | MINIFLOW_MAP(dl_type) | MINIFLOW_MAP(vlan_tci);
+        | MINIFLOW_MAP(dl_type) | MINIFLOW_MAP(vlans[0]);
 
     /* Ethertype-dependent fields. */
     if (OVS_LIKELY(flow->dl_type == htons(ETH_TYPE_IP))) {
@@ -1309,7 +1315,7 @@ flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis)
     for (i = 0; i < ETH_ADDR_LEN; i++) {
         fields.eth_addr[i] = flow->dl_src[i] ^ flow->dl_dst[i];
     }
-    fields.vlan_tci = flow->vlan_tci & htons(VLAN_VID_MASK);
+    fields.vlan_tci = flow->vlans[0].tci & htons(VLAN_VID_MASK);
     fields.eth_type = flow->dl_type;
 
     /* UDP source and destination port are not taken into account because they
@@ -1348,7 +1354,9 @@ flow_random_hash_fields(struct flow *flow)
     eth_addr_random(flow->dl_src);
     eth_addr_random(flow->dl_dst);
 
-    flow->vlan_tci = (OVS_FORCE ovs_be16) (random_uint16() & VLAN_VID_MASK);
+    struct vlan_flow *vlan = &flow->vlans[0];
+    vlan->tpid = htons(ETH_TYPE_VLAN);
+    vlan->tci = (OVS_FORCE ovs_be16) (random_uint16() & VLAN_VID_MASK);
 
     /* Make most of the random flows IPv4, some IPv6, and rest random. */
     flow->dl_type = rnd < 0x8000 ? htons(ETH_TYPE_IP) :
@@ -1400,7 +1408,8 @@ flow_mask_hash_fields(const struct flow *flow, struct flow_wildcards *wc,
             memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
             flow_unwildcard_tp_ports(flow, wc);
         }
-        wc->masks.vlan_tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+        wc->masks.vlans[0].tpid = OVS_BE16_MAX;
+        wc->masks.vlans[0].tci |= htons(VLAN_VID_MASK);
         break;
 
     default:
@@ -1477,11 +1486,13 @@ void
 flow_set_dl_vlan(struct flow *flow, ovs_be16 vid)
 {
     if (vid == htons(OFP10_VLAN_NONE)) {
-        flow->vlan_tci = htons(0);
+        flow->vlans[0].tpid = htons(0);
+        flow->vlans[0].tci = htons(0);
     } else {
         vid &= htons(VLAN_VID_MASK);
-        flow->vlan_tci &= ~htons(VLAN_VID_MASK);
-        flow->vlan_tci |= htons(VLAN_CFI) | vid;
+        flow->vlans[0].tpid = htons(ETH_TYPE_VLAN);
+        flow->vlans[0].tci &= ~htons(VLAN_VID_MASK);
+        flow->vlans[0].tci |= htons(VLAN_CFI) | vid;
     }
 }
 
@@ -1491,9 +1502,13 @@ flow_set_dl_vlan(struct flow *flow, ovs_be16 vid)
 void
 flow_set_vlan_vid(struct flow *flow, ovs_be16 vid)
 {
-    ovs_be16 mask = htons(VLAN_VID_MASK | VLAN_CFI);
-    flow->vlan_tci &= ~mask;
-    flow->vlan_tci |= vid & mask;
+    flow->vlans[0].tci &= htons(VLAN_VID_MASK);
+    if (vid) {
+        flow->vlans[0].tpid = htons(ETH_TYPE_VLAN);
+        flow->vlans[0].tci |= vid & htons(VLAN_VID_MASK);
+    } else {
+        flow->vlans[0].tpid = htons(0);
+    }
 }
 
 /* Sets the VLAN PCP that 'flow' matches to 'pcp', which should be in the
@@ -1507,8 +1522,9 @@ void
 flow_set_vlan_pcp(struct flow *flow, uint8_t pcp)
 {
     pcp &= 0x07;
-    flow->vlan_tci &= ~htons(VLAN_PCP_MASK);
-    flow->vlan_tci |= htons((pcp << VLAN_PCP_SHIFT) | VLAN_CFI);
+    flow->vlans[0].tpid = htons(ETH_TYPE_VLAN);
+    flow->vlans[0].tci &= ~htons(VLAN_PCP_MASK);
+    flow->vlans[0].tci |= htons(pcp << VLAN_PCP_SHIFT);
 }
 
 /* Returns the number of MPLS LSEs present in 'flow'
@@ -1835,8 +1851,8 @@ flow_compose(struct dp_packet *p, const struct flow *flow)
         return;
     }
 
-    if (flow->vlan_tci & htons(VLAN_CFI)) {
-        eth_push_vlan(p, htons(ETH_TYPE_VLAN), flow->vlan_tci);
+    if (flow->vlans[0].tpid) {
+        eth_push_vlan(p, flow->vlans[0].tpid, flow->vlans[0].tci);
     }
 
     if (flow->dl_type == htons(ETH_TYPE_IP)) {

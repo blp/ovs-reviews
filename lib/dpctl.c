@@ -1435,12 +1435,15 @@ dpctl_normalize_actions(int argc, const char *argv[],
         const struct ovs_action_push_vlan *push;
         switch(nl_attr_type(a)) {
         case OVS_ACTION_ATTR_POP_VLAN:
-            flow.vlan_tci = htons(0);
+            flow_pop_vlan(&flow, flow_count_vlans(&flow, NULL), NULL);
             continue;
 
         case OVS_ACTION_ATTR_PUSH_VLAN:
             push = nl_attr_get_unspec(a, sizeof *push);
-            flow.vlan_tci = push->vlan_tci;
+            struct vlan_flow *vlan;
+            vlan = flow_push_vlan(&flow, flow_count_vlans(&flow, NULL), NULL);
+            vlan->tpid = ETH_TYPE_VLAN;
+            vlan->tci = push->vlan_tci & htons(~VLAN_CFI);
             continue;
         }
 
@@ -1466,11 +1469,14 @@ dpctl_normalize_actions(int argc, const char *argv[],
 
         sort_output_actions(af->actions.data, af->actions.size);
 
-        if (af->flow.vlan_tci != htons(0)) {
+        int n_vlans = flow_count_vlans(&af->flow, NULL);
+        for (i = 0; i < n_vlans; i++) {
+            const struct vlan_flow *vlan = &af->flow.vlans[i];
             dpctl_print(dpctl_p, "vlan(vid=%"PRIu16",pcp=%d): ",
-                        vlan_tci_to_vid(af->flow.vlan_tci),
-                        vlan_tci_to_pcp(af->flow.vlan_tci));
-        } else {
+                        vlan_tci_to_vid(vlan->tci),
+                        vlan_tci_to_pcp(vlan->tci));
+        }
+        if (!n_vlans) {
             dpctl_print(dpctl_p, "no vlan: ");
         }
 

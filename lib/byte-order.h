@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2010, 2011, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2010, 2011, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,16 +78,33 @@ uint32_byteswap(uint32_t crc) {
          ((((ovs_be64) (VALUE)) & UINT64_C(0xff00000000000000)) >> 56))
 #endif
 
-#if WORDS_BIGENDIAN
-#define BYTES_TO_BE32(B1, B2, B3, B4) \
-    (OVS_FORCE ovs_be32)((uint32_t)(B1) << 24 | (B2) << 16 | (B3) << 8 | (B4))
-#define BE16S_TO_BE32(B1, B2) \
-    (OVS_FORCE ovs_be32)((uint32_t)(B1) << 16 | (B2))
+#ifdef __CHECKER__
+ovs_be32 bytes_to_be32(uint8_t, uint8_t, uint8_t, uint8_t);
+ovs_be32 be16s_to_be32(ovs_be16, ovs_be16);
+#elif WORDS_BIGENDIAN
+static inline ovs_be32
+bytes_to_be32(uint8_t b1, uint8_t b2, uint8_t b3, uint8_t b4)
+{
+    return ((uint32_t) b1 << 24) | ((uint32_t) b2 << 16) | (b3 << 8) | b4;
+}
+
+static inline ovs_be32
+be16s_to_be32(ovs_be16 b1, ovs_be16 b2)
+{
+    return ((uint32_t)b1 << 16) | b2;
+}
 #else
-#define BYTES_TO_BE32(B1, B2, B3, B4) \
-    (OVS_FORCE ovs_be32)((uint32_t)(B1) | (B2) << 8 | (B3) << 16 | (B4) << 24)
-#define BE16S_TO_BE32(B1, B2) \
-    (OVS_FORCE ovs_be32)((uint32_t)(B1) | (B2) << 16)
+static inline ovs_be32
+bytes_to_be32(uint8_t b1, uint8_t b2, uint8_t b3, uint8_t b4)
+{
+    return ((uint32_t) b4 << 24) | ((uint32_t) b3 << 16) | (b2 << 8) | b1;
+}
+
+static inline ovs_be32
+be16s_to_be32(ovs_be16 b1, ovs_be16 b2)
+{
+    return ((uint32_t)b2 << 16) | b1;
+}
 #endif
 
 #endif /* byte-order.h */

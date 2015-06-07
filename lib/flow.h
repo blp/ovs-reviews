@@ -76,6 +76,14 @@ const char *flow_tun_flag_to_string(uint32_t flags);
 /* Maximum number of supported MPLS labels. */
 #define FLOW_MAX_MPLS_LABELS 3
 
+/* Maximum number of supported VLANs. */
+#define FLOW_MAX_VLANS 1
+
+struct vlan_flow {
+    ovs_be16 tpid;              /* VLAN ethertype or 0 if not present.. */
+    ovs_be16 tci;               /* VID and PCP. */
+};
+
 /*
  * A flow in the network.
  *
@@ -110,14 +118,19 @@ struct flow {
     ofp_port_t actset_output;   /* Output port in action set. */
     uint8_t pad1[6];            /* Pad to 64 bits. */
 
-    /* L2, Order the same as in the Ethernet header! (64-bit aligned) */
+    /* L2 (64-bit aligned). */
     uint8_t dl_dst[ETH_ADDR_LEN]; /* Ethernet destination address. */
     uint8_t dl_src[ETH_ADDR_LEN]; /* Ethernet source address. */
     ovs_be16 dl_type;           /* Ethernet frame type. */
-    ovs_be16 vlan_tci;          /* If 802.1Q, TCI | VLAN_CFI; otherwise 0. */
-    ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
-                                                             (with padding). */
-    /* L3 (64-bit aligned) */
+    ovs_be16 pad3;              /* Pad to 32 bits. */
+
+    struct vlan_flow vlans[FLOW_MAX_VLANS];  /* VLAN stack. */
+    ovs_be32 mpls_lse[FLOW_MAX_MPLS_LABELS]; /* MPLS label stack. */
+#if (FLOW_MAX_VLANS + FLOW_MAX_MPLS_LABELS) % 2
+    ovs_be32 pad4;              /* Pad to 64 bits. */
+#endif
+
+    /* L3 (64-bit aligned). */
     ovs_be32 nw_src;            /* IPv4 source address. */
     ovs_be32 nw_dst;            /* IPv4 destination address. */
     struct in6_addr ipv6_src;   /* IPv6 source address. */
@@ -202,6 +215,12 @@ static inline size_t flow_hash(const struct flow *, uint32_t basis);
 void flow_set_dl_vlan(struct flow *, ovs_be16 vid);
 void flow_set_vlan_vid(struct flow *, ovs_be16 vid);
 void flow_set_vlan_pcp(struct flow *, uint8_t pcp);
+
+int flow_count_vlans(const struct flow *, struct flow_wildcards *);
+struct vlan_flow *flow_push_vlan(struct flow *, int n,
+                                 struct flow_wildcards *wc)
+    OVS_WARN_UNUSED_RESULT;
+bool flow_pop_vlan(struct flow *, int n, struct flow_wildcards *);
 
 int flow_count_mpls_labels(const struct flow *, struct flow_wildcards *);
 int flow_count_common_mpls_labels(const struct flow *a, int an,
@@ -659,12 +678,12 @@ static inline ovs_be32 miniflow_get_be32(const struct miniflow *flow,
     return (OVS_FORCE ovs_be32)miniflow_get_u32(flow, be32_ofs);
 }
 
-/* Returns the VID within the vlan_tci member of the "struct flow" represented
- * by 'flow'. */
+/* Returns the VID for the first VLAN in the "struct flow" represented by
+ * 'flow'. */
 static inline uint16_t
 miniflow_get_vid(const struct miniflow *flow)
 {
-    ovs_be16 tci = MINIFLOW_GET_BE16(flow, vlan_tci);
+    ovs_be16 tci = MINIFLOW_GET_BE16(flow, vlans[0].tci);
     return vlan_tci_to_vid(tci);
 }
 
