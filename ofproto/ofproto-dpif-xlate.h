@@ -159,26 +159,9 @@ struct xlate_in {
      * timeouts.) */
     uint16_t tcp_flags;
 
-    /* If nonnull, flow translation calls this function just before executing a
-     * resubmit or OFPP_TABLE action.  In addition, disables logging of traces
-     * when the recursion depth is exceeded.
-     *
-     * 'rule' is the rule being submitted into.  It will be null if the
-     * resubmit or OFPP_TABLE action didn't find a matching rule.
-     *
-     * 'recurse' is the resubmit recursion depth at time of invocation.
-     *
-     * This is normally null so the client has to set it manually after
-     * calling xlate_in_init(). */
-    void (*resubmit_hook)(struct xlate_in *, struct rule_dpif *rule,
-                          int recurse);
-
-    /* If nonnull, flow translation calls this function to report some
-     * significant decision, e.g. to explain why OFPP_NORMAL translation
-     * dropped a packet.  'recurse' is the resubmit recursion depth at time of
-     * invocation. */
-    void (*report_hook)(struct xlate_in *, int recurse,
-                        const char *format, va_list args);
+    /* If nonnull, flow translation appends a description of packet
+     * translation. */
+    struct ds *trace;
 
     /* If nonnull, flow translation credits the specified statistics to each
      * rule reached through a resubmit or OFPP_TABLE action.
