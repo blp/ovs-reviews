@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -198,6 +198,9 @@ ovs_prefetch_range(const void *start, size_t size)
 #define OBJECT_OFFSETOF(OBJECT, MEMBER) \
     ((char *) &(OBJECT)->MEMBER - (char *) (OBJECT))
 #endif
+
+/* Yields the size of MEMBER within STRUCT. */
+#define MEMBER_SIZEOF(STRUCT, MEMBER) (sizeof(((STRUCT *) NULL)->MEMBER))
 
 /* Given POINTER, the address of the given MEMBER in a STRUCT object, returns
    the STRUCT object. */
