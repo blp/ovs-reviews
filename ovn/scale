@@ -1,0 +1,23 @@
+ovn_start
+net_add n1
+ovn-nbctl lswitch-add br0
+n=200; export n
+for i in `seq $n`; do
+    (sim_add hv$i
+    as hv$i
+    ovs-vsctl add-br br-phys
+    y=$(expr $i / 256)
+    x=$(expr $i % 256)
+    ovn_attach n1 br-phys 192.168.$y.$x
+    ovs-vsctl add-port br-int vif$i -- set Interface vif$i external-ids:iface-id=lp$i) &
+    case $i in
+    	 *50|*00) echo $i; wait ;;
+    esac
+done
+wait
+for i in `seq $n`; do
+    yy=$(printf %02x $(expr $i / 256))
+    xx=$(printf $02x $(expr $i % 256))
+    ovn-nbctl lport-add br0 lp$i
+    ovn-nbctl lport-set-macs lp$i f0:00:00:00:$yy:$xx
+done

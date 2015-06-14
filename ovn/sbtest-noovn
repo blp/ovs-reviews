@@ -1,0 +1,13 @@
+set -v
+
+net_add n1
+
+# Create a pair of sandboxes, add a vif to each one, and connect them together.
+for i in 0 1; do
+    sim_add hv$i
+    as hv$i ovs-vsctl add-br br0 -- add-port br0 vif$i
+    as hv$i net_attach n1 br0
+done
+
+# Trace the path of a packet from vif0 to vif1.
+as hv0 ovn-trace vif0 'f01111111111f000000000001234'

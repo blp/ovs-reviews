@@ -73,12 +73,15 @@ DISTCLEANFILES += ovn/ovn-nbctl.8 ovn/ovn-architecture.7
 EXTRA_DIST += \
 	ovn/TODO \
 	ovn/CONTAINERS.OpenStack.md \
-	ovn/OVN-GW-HA.md
+	ovn/OVN-GW-HA.md \
+	ovn/ovn-trace
 
 # ovn-nbctl
 bin_PROGRAMS += ovn/ovn-nbctl
 ovn_ovn_nbctl_SOURCES = ovn/ovn-nbctl.c
 ovn_ovn_nbctl_LDADD = ovn/lib/libovn.la ovsdb/libovsdb.la lib/libopenvswitch.la
+
+EXTRA_DIST += ovn/sbtest ovn/scale ovn/sbtest-noovn
 
 include ovn/controller/automake.mk
 include ovn/lib/automake.mk

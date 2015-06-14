@@ -1,0 +1,18 @@
+ovn_start
+ovn-nbctl lswitch-add lsw0
+
+net_add n1
+for i in 0 1; do
+    sim_add hv$i
+    as hv$i
+    ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.`expr $i + 1`
+    ovs-vsctl add-port br-int vif$i -- set Interface vif$i external-ids:iface-id=lp$i
+    ovn-nbctl lport-add lsw0 lp$i
+    ovn-nbctl lport-set-macs lp$i f0:00:00:00:00:0$i
+done
+
+# Run once for ARP resolution.
+as hv0 ovn-trace vif0 'f00000000001f000000000001234'
+# Run again for end-to-end test.
+as hv0 ovn-trace vif0 'f00000000001f000000000001234'
