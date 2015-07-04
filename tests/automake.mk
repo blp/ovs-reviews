@@ -371,10 +371,6 @@ endif
 
 OFT = $(abs_top_srcdir)/oftest/oft
 refresh-oftest:
-	$(AM_V_GEN)($(ro_shell); \
-	for version in 1.0 1.1 1.2 1.3 1.4; do \
-		echo "AT_BANNER([OFTest - OpenFlow version $$version])"; \
-		for testname in `$(OFT) -V $$version --list-test-names | grep -v bsn_`; do \
-			echo "CHECK_OFTEST([$$version], [$$testname])"; \
-		done; \
-	done) > $(top_srcdir)/tests/oftest.at
+	$(AM_V_GEN)($(ro_shell) && \
+	  OFT='$(OFT)' $(srcdir)/tests/refresh-oftest) > $(srcdir)/tests/oftest.at
+EXTRA_DIST += tests/refresh-oftest

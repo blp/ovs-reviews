@@ -19,6 +19,6 @@ m4_define(
       OFTEST_ADD_PORT([4])])
    TCP_PORT=`parse_listening_port < ovs-vswitchd.log`
    AT_CAPTURE_FILE([oft.log])
-   AT_CHECK([oft -V $1 -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $2], [0], [ignore], [ignore])
+   AT_CHECK([$top_srcdir/oftest/oft -V $1 -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $2], [0], [ignore], [ignore])
    OVS_VSWITCHD_STOP([d])
    AT_CLEANUP])
