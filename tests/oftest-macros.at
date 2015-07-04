@@ -6,7 +6,7 @@ m4_define([OFTEST_ADD_PORT],
 
 m4_define(
   [CHECK_OFTEST],
-  [AT_SETUP([OFTest $2 (OF$1)])
+  [AT_SETUP([OFTest $2 - OF$1])
    dnl Intentionally disables OpenFlow 1.5 because OFTest fails if it is
    dnl enabled.
    OVS_VSWITCHD_START(
