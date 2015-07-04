@@ -1357,9 +1357,10 @@ classifier_rule_overlaps(const struct classifier *cls,
                          const struct cls_rule *target)
 {
     struct cls_subtable *subtable;
+    int max_priority = MIN(target->priority, 65535);
 
     /* Iterate subtables in the descending max priority order. */
-    PVECTOR_FOR_EACH_PRIORITY (subtable, target->priority - 1, 2,
+    PVECTOR_FOR_EACH_PRIORITY (subtable, max_priority - 1, 2,
                                sizeof(struct cls_subtable), &cls->subtables) {
         uint64_t storage[FLOW_U64S];
         struct minimask mask;
@@ -1368,11 +1369,12 @@ classifier_rule_overlaps(const struct classifier *cls,
         minimask_combine(&mask, &target->match.mask, &subtable->mask, storage);
 
         RCULIST_FOR_EACH (rule, node, &subtable->rules_list) {
-            if (rule->priority == target->priority
+            if (ofputil_priority_to_openflow(rule->priority)
+                == ofputil_priority_to_openflow(target->priority)
                 && miniflow_equal_in_minimask(&target->match.flow,
                                               &rule->match.flow, &mask)
                 && cls_match_visible_in_version(rule->cls_match,
-                                                target->version)) {
+                  target->version)) {
                 return true;
             }
         }

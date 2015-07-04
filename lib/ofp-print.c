@@ -794,7 +794,7 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh, int verbosity)
     }
     if (fm.priority != OFP_DEFAULT_PRIORITY && need_priority) {
         ds_put_format(s, "pri:%"PRIu16" ",
-                      ofputil_priority_to_openflow(fm.priority));
+                      ntohs(ofputil_priority_to_openflow(fm.priority)));
     }
     if (fm.buffer_id != UINT32_MAX) {
         ds_put_format(s, "buf:0x%"PRIx32" ", fm.buffer_id);
