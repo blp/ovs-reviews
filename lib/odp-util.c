@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -4721,11 +4721,10 @@ commit_set_ipv6_action(const struct flow *flow, struct flow *base_flow,
     get_ipv6_key(flow, &key, false);
     get_ipv6_key(base_flow, &base, false);
     get_ipv6_key(&wc->masks, &mask, true);
-    mask.ipv6_proto = 0;        /* Not writeable. */
-    mask.ipv6_frag = 0;         /* Not writable. */
 
     if (commit(OVS_KEY_ATTR_IPV6, use_masked, &key, &base, &mask, sizeof key,
                odp_actions)) {
+        VLOG_WARN("key.ipv6_proto=%d", key.ipv6_proto);
         put_ipv6_key(&base, base_flow, false);
         if (mask.ipv6_proto != 0) { /* Mask was changed by commit(). */
             put_ipv6_key(&mask, &wc->masks, true);
