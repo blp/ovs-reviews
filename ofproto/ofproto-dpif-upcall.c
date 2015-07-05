@@ -923,10 +923,9 @@ udpif_revalidator(void *arg)
 
             start_time = time_msec();
             if (!udpif->reval_exit) {
-                bool terse_dump;
-
-                terse_dump = udpif_use_ufid(udpif);
-                udpif->dump = dpif_flow_dump_create(udpif->dpif, terse_dump,
+                seq_change(udpif->dump_seq);
+                udpif->dump = dpif_flow_dump_create(udpif->dpif,
+                                                    udpif_use_ufid(udpif),
                                                     NULL);
             }
         }
@@ -956,7 +955,6 @@ udpif_revalidator(void *arg)
             atomic_read_relaxed(&udpif->flow_limit, &flow_limit);
 
             dpif_flow_dump_destroy(udpif->dump);
-            seq_change(udpif->dump_seq);
             if (netdev_is_offload_rebalance_policy_enabled()) {
                 udpif_run_flow_rebalance(udpif);
             }
