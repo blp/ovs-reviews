@@ -371,6 +371,6 @@ endif
 
 OFT = $(abs_top_srcdir)/oftest/oft
 refresh-oftest:
-	$(AM_V_GEN)($(ro_shell) && \
-	  OFT='$(OFT)' $(srcdir)/tests/refresh-oftest) > $(srcdir)/tests/oftest.at
+	$(AM_V_GEN)($(ro_shell); OFT='$(OFT)' $(srcdir)/tests/refresh-oftest) \
+	  > $(srcdir)/tests/oftest.at
 EXTRA_DIST += tests/refresh-oftest
