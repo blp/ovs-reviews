@@ -540,12 +540,12 @@ udpif_get_barrier(struct udpif *udpif)
 }
 
 bool
-udpif_pass_barrier(struct udpif *udpif, void *barrier)
+udpif_pass_barrier(struct udpif *udpif, void *barrier_)
 {
-    uint64_t reval_seq = seq_read(udpif->reval_seq);
+    uint64_t *barrier = barrier_;
     uint64_t sync;
     atomic_read_relaxed(&udpif->sync, &sync);
-    if (sync >= reval_seq) {
+    if (sync >= *barrier) {
         free(barrier);
         return true;
     } else {

@@ -1319,9 +1319,6 @@ ofconn_run(struct ofconn *ofconn,
         if (!of_msg) {
             break;
         }
-        if (ofconn->n_clones) {
-            ofconn_send_in_the_clones(ofconn, of_msg);
-        }
 
         if (mgr->fail_open) {
             fail_open_maybe_recover(mgr->fail_open);
@@ -1338,6 +1335,9 @@ ofconn_run(struct ofconn *ofconn,
             }
         }
         ofconn->delayed = NULL;
+        if (ofconn->n_clones) {
+            ofconn_send_in_the_clones(ofconn, of_msg);
+        }
         handle_openflow(ofconn, of_msg);
         ofpbuf_delete(of_msg);
     }
