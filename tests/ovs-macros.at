@@ -7,7 +7,10 @@ m4_include([m4/compat.at])
 m4_divert_push([PREPARE_TESTS])
 [
 ovs_wait () {
-    # First try a quick sleep, so that the test completes very quickly
+    # First try the condition without waiting.
+    ovs_wait_cond && return 0
+
+    # Try a quick sleep, so that the test completes very quickly
     # in the normal case.  POSIX doesn't require fractional times to
     # work, so this might not work.
     sleep 0.1
