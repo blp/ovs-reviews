@@ -1175,7 +1175,8 @@ ofconn_create(struct connmgr *mgr, struct vconn *vconn,
                                    | (1u << OFPPR_MODIFY));
         master[OAM_FLOW_REMOVED] = ((1u << OFPRR_IDLE_TIMEOUT)
                                     | (1u << OFPRR_HARD_TIMEOUT)
-                                    | (1u << OFPRR_DELETE));
+                                    | (1u << OFPRR_DELETE)
+                                    | (1u << OFPRR_GROUP_DELETE));
 
         /* "slave" role gets port status updates by default. */
         slave[OAM_PACKET_IN] = 0;
