@@ -63,6 +63,18 @@ for version in 1.0 1.1 1.2 1.3 1.4; do
 	    # not support such checking, the forwarding behavior is undefined."
 	    1.3:groups.GroupModifyLoop)
 		omit=# ;;
+
+	    # The specification for OpenFlow 1.4 bundles only requires bundles
+	    # to support flow mod and port mod request.  All of these tests
+	    # for bundles try to add echo requests (the Barrier test also
+	    # tries to add a barrier), and OVS doesn't support either one.
+	    1.4:bundle.Disconnect | \
+	    1.4:bundle.Barrier | \
+	    1.4:bundle.TooManyBytes | \
+	    1.4:bundle.Commit | \
+	    1.4:bundle.Discard | \
+	    1.4:bundle.TooManyMsgs)
+		omit=# ;;
 	esac
 	echo "${omit}CHECK_OFTEST([$version], [$test])"
     done
