@@ -1,0 +1,82 @@
+#! /bin/sh
+
+for version in 1.0 1.1 1.2 1.3 1.4; do
+    echo "AT_BANNER([OFTest - OpenFlow version $version])"
+
+    # --disable-ipv6 below disables a warning
+    #
+    #    WARNING: No route found for IPv6 destination :: (no default route?)
+    #
+    # that 'oft' otherwise prints on stderr.  It doesn't otherwise change
+    # behavior of --list-test-names (that is, it still lists IPv6 tests).
+    for test in `$OFT -V $version --list-test-names --disable-ipv6`; do
+	omit=
+	case $version:$test in
+	    # Omit tests for Big Switch Network extensions, because OVS does
+	    # not yet implement any of them.
+	    *:bsn_*)
+		omit=# ;;
+
+	    # Omit tests that fail due to what appears to be bugs in OFTest,
+	    # that yield tracebacks like the following:
+	    #
+	    # Traceback (most recent call last):
+	    #   File "oftest/tests-1.2/ipv6.py", line 188, in runTest
+	    #     rv = self.controller.message_send(request)
+	    #   File "oftest/src/python/oftest/controller.py", line 676, in message_send
+	    #     outpkt = msg.pack()
+	    #   File "oftest/src/python/loxi/of12/message.py", line 4089, in pack
+	    #     packed.append(loxi.generic_util.pack_list(self.instructions))
+	    #   File "oftest/src/python/loxi/generic_util.py", line 16, in pack_list
+	    #     return "".join([x.pack() for x in values])
+	    #   File "oftest/src/python/loxi/of12/instruction.py", line 81, in pack
+	    #     packed.append(loxi.generic_util.pack_list(self.actions))
+	    #   File "oftest/src/python/loxi/generic_util.py", line 16, in pack_list
+	    #     return "".join([x.pack() for x in values])
+	    #   File "oftest/src/python/loxi/of12/action.py", line 951, in pack
+	    #     packed.append(self.field.pack())
+	    # AttributeError: 'str' object has no attribute 'pack'
+	    1.2:ipv6.IPv6SetField | \
+	    1.2:groups.GroupProcIndirect | \
+	    1.2:groups.GroupProcSelect | \
+	    1.2:groups.GroupDescStats | \
+	    1.2:groups.GroupStats | \
+	    1.2:groups.GroupProcAll | \
+	    1.2:groups.GroupProcAllChain | \
+	    1.2:groups.GroupProcChain | \
+	    1.2:groups.GroupStatsAll | \
+	    1.2:groups.GroupProcMod | \
+	    1.2:groups.GroupProcSimple)
+		omit=# ;;
+
+	    # This test checks that, in OF1.2, a bucket with weight 0 in a
+	    # select group yields an error.  OF1.2 doesn't actually say that,
+	    # though, and OF1.3+ define a zero weight to mean that the switch
+	    # should not use the bucket (not as an error).
+	    1.2:groups.GroupAddSelectNoWeight)
+		omit=# ;;
+
+	    # This test checks that the switch reports an error when modifying
+	    # a group yields a loop among groups.  OVS doesn't do that, however
+	    # it's an optional feature: "A switch *may* support checking that
+	    # no loop is created while chaining groups...  If the switch does
+	    # not support such checking, the forwarding behavior is undefined."
+	    1.3:groups.GroupModifyLoop)
+		omit=# ;;
+
+	    # The specification for OpenFlow 1.4 bundles only requires bundles
+	    # to support flow mod and port mod request.  All of these tests
+	    # for bundles try to add echo requests (the Barrier test also
+	    # tries to add a barrier), and OVS doesn't support either one.
+	    1.4:bundle.Disconnect | \
+	    1.4:bundle.Barrier | \
+	    1.4:bundle.TooManyBytes | \
+	    1.4:bundle.Commit | \
+	    1.4:bundle.Discard | \
+	    1.4:bundle.TooManyMsgs)
+		omit=# ;;
+	esac
+	echo "${omit}CHECK_OFTEST([$version], [$test])"
+    done
+    echo
+done

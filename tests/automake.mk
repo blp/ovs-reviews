@@ -13,6 +13,7 @@ EXTRA_DIST += \
 	$(srcdir)/tests/testsuite.patch
 
 COMMON_MACROS_AT = \
+	tests/oftest-macros.at \
 	tests/ovsdb-macros.at \
 	tests/ovs-macros.at \
 	tests/ofproto-macros.at
@@ -86,6 +87,7 @@ TESTSUITE_AT = \
 	tests/vlog.at \
 	tests/vtep-ctl.at \
 	tests/auto-attach.at \
+	tests/oftest.at \
 	tests/ovn.at \
 	tests/ovn-nbctl.at \
 	tests/ovn-sbctl.at \
@@ -390,3 +392,9 @@ clean-pki:
 	rm -f tests/pki/stamp
 	rm -rf tests/pki
 endif
+
+OFT = $(abs_top_srcdir)/oftest/oft
+refresh-oftest:
+	$(AM_V_GEN)($(ro_shell); OFT='$(OFT)' $(srcdir)/tests/refresh-oftest) \
+	  > $(srcdir)/tests/oftest.at
+EXTRA_DIST += tests/refresh-oftest

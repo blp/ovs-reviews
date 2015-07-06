@@ -1,0 +1,24 @@
+m4_define([OFTEST_ADD_PORT],
+   [add-port br0 p$1 -- \
+    set interface p$1 type=dummy options:pstream=punix:$OVS_RUNDIR/p$1 \
+                     options:tx_pcap=p$1-tx.pcap options:rxq_pcap=p$1-rx.pcap \
+		     ofport_request=$1])
+
+m4_define(
+  [CHECK_OFTEST],
+  [AT_SETUP([OFTest $2 - OF$1])
+   dnl Intentionally disables OpenFlow 1.5 because OFTest fails if it is
+   dnl enabled.
+   OVS_VSWITCHD_START(
+     [set-controller br0 ptcp:0:127.0.0.1 -- \
+      set controller br0 type=primary -- \
+      remove Bridge br0 protocols OpenFlow15 -- \
+      OFTEST_ADD_PORT([1]) -- \
+      OFTEST_ADD_PORT([2]) -- \
+      OFTEST_ADD_PORT([3]) -- \
+      OFTEST_ADD_PORT([4])])
+   PARSE_LISTENING_PORT([ovs-vswitchd.log], [TCP_PORT])
+   AT_CAPTURE_FILE([oft.log])
+   AT_CHECK([$top_srcdir/oftest/oft -V $1 -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $2], [0], [ignore], [ignore], [ovs-ofctl dump-flows br0 > flows; ovs-appctl dpctl/dump-flows > dpflows])
+   OVS_VSWITCHD_STOP([d])
+   AT_CLEANUP])
