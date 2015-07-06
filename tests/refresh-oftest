@@ -55,6 +55,14 @@ for version in 1.0 1.1 1.2 1.3 1.4; do
 	    # should not use the bucket (not as an error).
 	    1.2:groups.GroupAddSelectNoWeight)
 		omit=# ;;
+
+	    # This test checks that the switch reports an error when modifying
+	    # a group yields a loop among groups.  OVS doesn't do that, however
+	    # it's an optional feature: "A switch *may* support checking that
+	    # no loop is created while chaining groups...  If the switch does
+	    # not support such checking, the forwarding behavior is undefined."
+	    1.3:groups.GroupModifyLoop)
+		omit=# ;;
 	esac
 	echo "${omit}CHECK_OFTEST([$version], [$test])"
     done
