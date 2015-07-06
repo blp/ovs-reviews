@@ -1,0 +1,28 @@
+m4_define([OFTEST_ADD_PORT],
+   [add-port br0 p$1 -- \
+    set interface p$1 type=dummy options:pstream=punix:$OVS_RUNDIR/p$1 \
+                     options:tx_pcap=p$1-tx.pcap options:rxq_pcap=p$1-rx.pcap \
+                     ofport_request=$1])
+
+m4_define(
+  [CHECK_OFTEST],
+  [AT_SETUP([OFTest $2 - OF$1])
+   AT_KEYWORDS([m4_translit([$2], [.], [ ])])
+   AT_SKIP_IF([test ! -x $top_srcdir/oftest/oft])
+   dnl Enable only OpenFlow 1.0 to 1.4 because OFTest cannot abide it
+   dnl when OpenFlow 1.5+ is enabled.
+   OVS_VSWITCHD_START(
+     [set-controller br0 ptcp:0:127.0.0.1 -- \
+      set controller br0 type=primary -- \
+      remove Bridge br0 protocols OpenFlow15 -- \
+      set Bridge br0 protocols=[OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14] -- \
+      OFTEST_ADD_PORT([1]) -- \
+      OFTEST_ADD_PORT([2]) -- \
+      OFTEST_ADD_PORT([3]) -- \
+      OFTEST_ADD_PORT([4])])
+   ovs-appctl vlog/set dpif
+   PARSE_LISTENING_PORT([ovs-vswitchd.log], [TCP_PORT])
+   AT_CAPTURE_FILE([oft.log])
+   AT_CHECK([oft -V $1 -P ovs-dummy -S 127.0.0.1 -p $TCP_PORT $2], [0], [ignore], [ignore], [ovs-ofctl dump-flows br0 > flows; ovs-appctl dpctl/dump-flows > dpflows])
+   OVS_VSWITCHD_STOP([d])
+   AT_CLEANUP])

@@ -17,6 +17,7 @@ EXTRA_DIST += \
 	$(srcdir)/tests/testsuite.patch
 
 COMMON_MACROS_AT = \
+	tests/oftest-macros.at \
 	tests/ovsdb-macros.at \
 	tests/ovs-macros.at \
 	tests/ofproto-macros.at
@@ -100,6 +101,7 @@ TESTSUITE_AT = \
 	tests/vlog.at \
 	tests/vtep-ctl.at \
 	tests/auto-attach.at \
+	tests/oftest.at \
 	tests/ovn.at \
 	tests/ovn-northd.at \
 	tests/ovn-nbctl.at \
@@ -277,10 +279,11 @@ check-helgrind: all $(valgrind_wrappers) $(check_DATA)
 
 
 # OFTest support.
-
-check-oftest: all
-	$(AM_V_at)srcdir='$(srcdir)' $(SHELL) $(srcdir)/tests/run-oftest
-EXTRA_DIST += tests/run-oftest
+OFT = $(abs_top_srcdir)/oftest/oft
+refresh-oftest:
+	$(AM_V_GEN)($(ro_shell); OFT='$(OFT)' $(srcdir)/tests/refresh-oftest) \
+	  > $(srcdir)/tests/oftest.at
+EXTRA_DIST += tests/refresh-oftest
 
 # Ryu support.
 check-ryu: all
