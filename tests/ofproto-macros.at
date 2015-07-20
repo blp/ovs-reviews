@@ -48,6 +48,106 @@ s/No error/Success/
 parse_listening_port () {
     sed -n 's/.*0:.*: listening on port \([0-9]*\)$/\1/p'
 }]
+
+start_daemon () {
+    "$@" -vconsole:off --detach --no-chdir --pidfile --log-file
+    pid=`cat "$OVS_RUNDIR"/$1.pid`
+    on_exit "kill $pid"
+}
+
+sims=
+sim_add () {
+   echo "adding simulator '$1'"
+
+   sims="$sims $1"
+
+   # Create sandbox.
+   local d="$ovs_base"/$1
+   mkdir "$d" || return 1
+   ovs_setenv $1
+
+   # Create database and start ovsdb-server.
+   : > "$d"/.conf.db.~lock~
+   as $1 ovsdb-tool create "$d"/conf.db "$abs_top_srcdir"/vswitchd/vswitch.ovsschema || return 1
+   as $1 start_daemon ovsdb-server --remote=punix:"$d"/db.sock || return 1
+
+   # Initialize database.
+   as $1 ovs-vsctl --no-wait -- init || return 1
+
+   # Start ovs-vswitchd
+   as $1 start_daemon ovs-vswitchd --enable-dummy=system -vvconn -vofproto_dpif
+}
+
+ovn_start () {
+    for db in ovn-sb ovn-nb; do
+        echo "creating $db database"
+        d=$ovs_base/$db
+	mkdir "$d" || return 1
+	: > "$d"/.$db.db.~lock~
+	as $db ovsdb-tool create "$d"/$db.db "$abs_top_srcdir"/ovn/$db.ovsschema
+	as $db start_daemon ovsdb-server --remote=punix:"$d"/$db.sock "$d"/$db.db
+    done
+
+    OVN_NB_DB=unix:$ovs_base/ovn-nb/ovn-nb.sock; export OVN_NB_DB
+
+    echo "starting ovn-northd"
+    mkdir "$ovs_base"/northd
+    as northd start_daemon ovn-northd \
+	       --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
+	       --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
+}
+
+net_add () {
+    test -d "$ovs_base"/main || sim_add main || return 1
+    as main ovs-vsctl add-br "$1"
+}
+
+net_attach () {
+    local net=$1 bridge=$2
+
+    local port=${sandbox}_$bridge
+    as main ovs-vsctl \
+	-- add-port $net $port \
+	-- set Interface $port options:pstream="punix:$ovs_base/main/$port.sock" options:rxq_pcap="$ovs_base/main/$port-rx.pcap" options:tx_pcap="$ovs_base/main/$port-tx.pcap" \
+	|| return 1
+
+    ovs-vsctl \
+	-- set Interface $bridge options:tx_pcap="$ovs_base/$sandbox/$bridge-tx.pcap" options:rxq_pcap="$ovs_base/$sandbox/$bridge-rx.pcap" \
+	-- add-port $bridge ${bridge}_$net \
+	-- set Interface ${bridge}_$net options:stream="unix:$ovs_base/main/$port.sock" options:rxq_pcap="$ovs_base/$sandbox/${bridge}_$net-rx.pcap" options:tx_pcap="$ovs_base/$sandbox/${bridge}_$net-tx.pcap" \
+	|| return 1
+}
+
+ovn_attach() {
+    local net=$1 bridge=$2 ip=$3 masklen=${4-24}
+    net_attach $net $bridge || return 1
+
+    mac=`ovs-vsctl get Interface $bridge mac_in_use | sed s/\"//g`
+    arp_table="$arp_table $sandbox,$bridge,$ip,$mac"
+    ovs-appctl netdev-dummy/ip4addr $bridge $ip/$masklen >/dev/null || return 1
+    ovs-appctl ovs/route/add $ip/$masklen $bridge >/dev/null || return 1
+    ovs-vsctl \
+	-- set Open_vSwitch . external-ids:system-id=$sandbox \
+        -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \
+	-- set Open_vSwitch . external-ids:ovn-encap-type=geneve \
+	-- set Open_vSwitch . external-ids:ovn-encap-ip=$ip \
+	-- add-br br-int \
+	-- set bridge br-int fail-mode=secure other-config:disable-in-band=true \
+	|| return 1
+    start_daemon ovn-controller || return 1
+}
+
+ovn_populate_arp() {
+    for e1 in $arp_table; do
+        set `echo $e1 | sed 's/,/ /g'`; sb1=$1 br1=$2 ip=$3 mac=$4
+	for e2 in $arp_table; do
+            set `echo $e2 | sed 's/,/ /g'`; sb2=$1 br2=$2
+	    if test $sb1,$br1 != $sb2,$br2; then
+                as $sb2 ovs-appctl tnl/arp/set $br2 $ip $mac
+	    fi
+	done
+    done
+}
 m4_divert_pop([PREPARE_TESTS])
 
 m4_define([STRIP_XIDS], [[sed 's/ (xid=0x[0-9a-fA-F]*)//']])

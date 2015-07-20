@@ -1,4 +1,4 @@
-AT_BANNER([OVN])
+AT_BANNER([OVN components])
 
 AT_SETUP([ovn -- lexer])
 dnl For lines without =>, input and expected output are identical.
@@ -422,4 +422,31 @@ vlan.present = 0; => Can't assign to predicate symbol vlan.present.
 sed 's/ =>.*//' test-cases.txt > input.txt
 sed 's/.* => //' test-cases.txt > expout
 AT_CHECK([ovstest test-ovn parse-actions < input.txt], [0], [expout])
+AT_CLEANUP
+
+AT_BANNER([OVN end-to-end tests])
+
+AT_SETUP([ovn -- hypervisor simulation])
+ovn_start
+ovn-nbctl lswitch-add lsw0
+net_add n1
+for i in 0 1 2; do
+    sim_add hv$i
+    as hv$i
+    ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.`expr $i + 1`
+
+    for j in 0 1 2; do
+	ovs-vsctl add-port br-int vif$i$j -- set Interface vif$i$j external-ids:iface-id=lp$i$j options:tx_pcap=hv$i/vif$i$j-tx.pcap options:rxq_pcap=hv$i/vif$i$j-rx.pcap
+	ovn-nbctl lport-add lsw0 lp$i$j
+	ovn-nbctl lport-set-macs lp$i$j f0:00:00:00:00:$i$j
+    done
+done
+ovn_populate_arp
+sleep 1
+as hv0 ovs-appctl netdev-dummy/receive vif01 'f00000000010f000000000011234'
+as hv1 ovs-ofctl dump-flows br-phys
+as hv1 ovs-ofctl dump-flows br-int
+sleep 1
+/usr/sbin/tcpdump -n -r hv1/vif10-tx.pcap
 AT_CLEANUP
