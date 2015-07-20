@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -790,7 +790,14 @@ netdev_push_header(const struct netdev *netdev,
 
     for (i = 0; i < cnt; i++) {
         netdev->netdev_class->push_header(buffers[i], data);
-        pkt_metadata_init(&buffers[i]->md, u32_to_odp(data->out_port));
+
+        /* Reinitialize most metadata, preserving skb_priority and pkt_mark. */
+        struct pkt_metadata *md = &buffers[i]->md;
+        uint32_t pkt_mark = md->pkt_mark;
+        uint32_t skb_priority = md->skb_priority;
+        pkt_metadata_init(md, u32_to_odp(data->out_port));
+        md->pkt_mark = pkt_mark;
+        md->skb_priority = skb_priority;
     }
 
     return 0;
