@@ -62,12 +62,7 @@ m4_define([TESTABLE_LOG], [-vPATTERN:ANY:'%c|%p|%m'])
 # Starts ovs-vswitchd, with additional arguments 'vswitchd-aux-args'.
 #
 m4_define([_OVS_VSWITCHD_START],
-  [OVS_RUNDIR=`pwd`; export OVS_RUNDIR
-   OVS_LOGDIR=`pwd`; export OVS_LOGDIR
-   OVS_DBDIR=`pwd`; export OVS_DBDIR
-   OVS_SYSCONFDIR=`pwd`; export OVS_SYSCONFDIR
-
-   dnl Create database.
+  [dnl Create database.
    touch .conf.db.~lock~
    AT_CHECK([ovsdb-tool create conf.db $abs_top_srcdir/vswitchd/vswitch.ovsschema])
 
