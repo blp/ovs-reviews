@@ -23,6 +23,11 @@
 #include "util.h"
 #include "openvswitch/list.h"
 
+/* Initializer for a list with pointers that will (probably) cause segfaults if
+ * dereferenced and, better yet, show up clearly in a debugger. */
+#define OVS_LIST_POISON { (void *) (uintptr_t) 0xccccccccccccccccULL, \
+                          (void *) (uintptr_t) 0xccccccccccccccccULL }
+
 static inline void list_init(struct ovs_list *);
 static inline void list_poison(struct ovs_list *);
 
@@ -91,7 +96,7 @@ list_init(struct ovs_list *list)
 static inline void
 list_poison(struct ovs_list *list)
 {
-    memset(list, 0xcc, sizeof *list);
+    *list = (struct ovs_list) OVS_LIST_POISON;
 }
 
 /* Inserts 'elem' just before 'before'. */

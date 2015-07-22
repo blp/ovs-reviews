@@ -57,6 +57,7 @@
 #include "ovs-router.h"
 #include "tnl-ports.h"
 #include "tunnel.h"
+#include "unixctl.h"
 #include "openvswitch/vlog.h"
 
 COVERAGE_DEFINE(xlate_actions);
@@ -175,7 +176,6 @@ struct xlate_ctx {
 
     /* Stack for the push and pop actions.  Each stack element is of type
      * "union mf_subvalue". */
-    union mf_subvalue init_stack[1024 / sizeof(union mf_subvalue)];
     struct ofpbuf stack;
 
     /* The rule that we are currently translating, or NULL. */
@@ -294,13 +294,12 @@ struct xlate_ctx {
      * datapath actions. */
     bool action_set_has_group;  /* Action set contains OFPACT_GROUP? */
     struct ofpbuf action_set;   /* Action set. */
-    uint64_t action_set_stub[1024 / 8];
 
     /* Tracing state, used when xin->trace != NULL, e.g. for "ovs-appctl
      * ofproto/trace". */
-    struct flow trace_orig_flow;
-    struct flow trace_last_flow;
-    struct flow_wildcards trace_wc;
+    struct flow *trace_orig_flow;
+    struct flow *trace_last_flow;
+    struct flow_wildcards *trace_wc;
 };
 
 static void xlate_action_set(struct xlate_ctx *ctx);
@@ -3192,13 +3191,13 @@ trace_format_flow(struct xlate_ctx *ctx, int level, const char *title)
     ds_put_char_multiple(trace, '\t', level);
     ds_put_format(trace, "%s: ", title);
     /* Do not report unchanged flows for resubmits. */
-    if ((level > 0 && flow_equal(&ctx->xin->flow, &ctx->trace_last_flow))
+    if ((level > 0 && flow_equal(&ctx->xin->flow, ctx->trace_last_flow))
         || (level == 0
-            && flow_equal(&ctx->xin->flow, &ctx->trace_orig_flow))) {
+            && flow_equal(&ctx->xin->flow, ctx->trace_orig_flow))) {
         ds_put_cstr(trace, "unchanged");
     } else {
         flow_format(trace, &ctx->xin->flow);
-        ctx->trace_last_flow = ctx->xin->flow;
+        *ctx->trace_last_flow = ctx->xin->flow;
     }
     ds_put_char(trace, '\n');
 }
@@ -3213,7 +3212,7 @@ trace_format_regs(struct xlate_ctx *ctx, int level, const char *title)
     ds_put_format(trace, "%s:", title);
     for (i = 0; i < FLOW_N_REGS; i++) {
         ds_put_format(trace, " reg%"PRIuSIZE"=0x%"PRIx32,
-                      i, ctx->trace_last_flow.regs[i]);
+                      i, ctx->trace_last_flow->regs[i]);
     }
     ds_put_char(trace, '\n');
 }
@@ -3238,8 +3237,8 @@ trace_format_megaflow(struct xlate_ctx *ctx, int level, const char *title)
 
     ds_put_char_multiple(trace, '\t', level);
     ds_put_format(trace, "%s: ", title);
-    flow_wildcards_or(&ctx->trace_wc, &ctx->xout->wc, &ctx->trace_wc);
-    match_init(&match, &ctx->trace_orig_flow, &ctx->trace_wc);
+    flow_wildcards_or(ctx->trace_wc, &ctx->xout->wc, ctx->trace_wc);
+    match_init(&match, ctx->trace_orig_flow, ctx->trace_wc);
     match_format(&match, trace, OFP_DEFAULT_PRIORITY);
     ds_put_char(trace, '\n');
 }
@@ -4836,16 +4835,56 @@ void
 xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 {
     struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
+    struct xbridge *xbridge = xbridge_lookup(xcfg, xin->ofproto);
+    if (!xbridge) {
+        return;
+    }
+
     struct flow_wildcards *wc = NULL;
     struct flow *flow = &xin->flow;
     struct rule_dpif *rule = NULL;
 
+    union mf_subvalue stack_stub[1024 / sizeof(union mf_subvalue)];
+    uint64_t action_set_stub[1024 / 8];
+    struct xlate_ctx ctx = {
+        .xin = xin,
+        .xout = xout,
+        .base_flow = *flow,
+        .orig_tunnel_ip_dst = flow->tunnel.ip_dst,
+        .xbridge = xbridge,
+        .stack = OFPBUF_STUB_INITIALIZER(stack_stub),
+        .rule = xin->rule,
+
+        .recurse = 0,
+        .resubmits = 0,
+        .in_group = false,
+        .in_action_set = false,
+
+        .table_id = 0,
+        .rule_cookie = OVS_BE64_MAX,
+        .orig_skb_priority = flow->skb_priority,
+        .sflow_n_outputs = 0,
+        .sflow_odp_port = 0,
+        .user_cookie_offset = 0,
+        .exit = false,
+
+        .recirc_action_offset = -1,
+        .last_unroll_offset = -1,
+
+        .was_mpls = false,
+
+        .action_set_has_group = false,
+        .action_set = OFPBUF_STUB_INITIALIZER(action_set_stub),
+
+        .trace_orig_flow = NULL,
+        .trace_last_flow = NULL,
+        .trace_wc = NULL,
+    };
+
     enum slow_path_reason special;
     const struct ofpact *ofpacts;
-    struct xbridge *xbridge;
     struct xport *in_port;
     struct flow orig_flow;
-    struct xlate_ctx ctx;
     size_t ofpacts_len;
     bool tnl_may_send;
     bool is_icmp;
@@ -4879,10 +4918,17 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         ds_init(&local_trace);
         xin->trace = &local_trace;
     }
+    struct flow trace_orig_flow;
+    struct flow trace_last_flow;
+    struct flow_wildcards trace_wc;
     if (OVS_UNLIKELY(xin->trace)) {
-        ctx.trace_orig_flow = xin->flow;
-        ctx.trace_last_flow = xin->flow;
-        flow_wildcards_init_catchall(&ctx.trace_wc);
+        trace_orig_flow = xin->flow;
+        trace_last_flow = xin->flow;
+        flow_wildcards_init_catchall(&trace_wc);
+
+        ctx.trace_orig_flow = &trace_orig_flow;
+        ctx.trace_last_flow = &trace_last_flow;
+        ctx.trace_wc = &trace_wc;
 
         ds_put_format(xin->trace, "Bridge: %s\n",
                       ofproto_dpif_get_name(xin->ofproto));
@@ -4891,8 +4937,6 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         ds_put_char(xin->trace, '\n');
     }
 
-    ctx.xin = xin;
-    ctx.xout = xout;
     ctx.xout->slow = 0;
     ctx.xout->has_learn = false;
     ctx.xout->has_normal = false;
@@ -4909,18 +4953,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     }
     ofpbuf_reserve(xout->odp_actions, NL_A_U32_SIZE);
 
-    xbridge = xbridge_lookup(xcfg, xin->ofproto);
-    if (!xbridge) {
-        goto exit;
-    }
-    /* 'ctx.xbridge' may be changed by action processing, whereas 'xbridge'
-     * will remain set on the original input bridge. */
-    ctx.xbridge = xbridge;
-    ctx.rule = xin->rule;
 
-    ctx.base_flow = *flow;
     memset(&ctx.base_flow.tunnel, 0, sizeof ctx.base_flow.tunnel);
-    ctx.orig_tunnel_ip_dst = flow->tunnel.ip_dst;
 
     if (!xin->skip_wildcards) {
         wc = &xout->wc;
@@ -4949,24 +4983,6 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     }
 
     tnl_may_send = tnl_xlate_init(flow, wc);
-
-    ctx.recurse = 0;
-    ctx.resubmits = 0;
-    ctx.in_group = false;
-    ctx.in_action_set = false;
-    ctx.orig_skb_priority = flow->skb_priority;
-    ctx.table_id = 0;
-    ctx.rule_cookie = OVS_BE64_MAX;
-    ctx.exit = false;
-    ctx.was_mpls = false;
-    ctx.recirc_action_offset = -1;
-    ctx.last_unroll_offset = -1;
-
-    ctx.action_set_has_group = false;
-    ofpbuf_use_stub(&ctx.action_set,
-                    ctx.action_set_stub, sizeof ctx.action_set_stub);
-
-    ofpbuf_use_stub(&ctx.stack, ctx.init_stack, sizeof ctx.init_stack);
 
     /* The in_port of the original packet before recirculation. */
     in_port = get_ofp_port(xbridge, flow->in_port.ofp_port);
