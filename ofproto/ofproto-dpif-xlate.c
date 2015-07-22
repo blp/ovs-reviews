@@ -302,6 +302,8 @@ struct xlate_ctx {
     struct flow_wildcards *trace_wc;
 };
 
+static ATOMIC(enum mf_field_id) trace_field;
+
 static void xlate_action_set(struct xlate_ctx *ctx);
 
 static void
@@ -4913,11 +4915,18 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
      *   needs to be generated. */
 
     struct ds local_trace;
-    if (OVS_UNLIKELY(flow->pkt_mark & (1u << 31))
+
+#if 0
+    enum mf_field_id tf;
+    atomic_read_relaxed(&trace_field, &tf);
+    if (OVS_UNLIKELY(tf)) {
+        enum 
+        mf_
         && !xin->trace && xin->packet) {
         ds_init(&local_trace);
         xin->trace = &local_trace;
     }
+#endif
     struct flow trace_orig_flow;
     struct flow trace_last_flow;
     struct flow_wildcards trace_wc;
@@ -5536,4 +5545,31 @@ xlate_cache_delete(struct xlate_cache *xcache)
     xlate_cache_clear(xcache);
     ofpbuf_uninit(&xcache->entries);
     free(xcache);
+}
+
+static void
+ofproto_dpif_xlate_unixctl_set_trace_field(
+    struct unixctl_conn *conn, int argc OVS_UNUSED,
+    const char *argv[], void *aux OVS_UNUSED)
+{
+    const char *field_name = argv[1];
+
+    enum mf_field_id id = 0;
+    if (strcmp(field_name, "none")) {
+        const struct mf_field *field = mf_from_name(field_name);
+        if (!field) {
+            unixctl_command_reply_error(conn, "unknown field");
+            return;
+        }
+        id = field->id;
+    }
+    atomic_store(&trace_field, id);
+}
+
+void
+xlate_init(void)
+{
+    unixctl_command_register(
+        "ofproto/set-trace-field", "FIELD",
+        1, 1, ofproto_dpif_xlate_unixctl_set_trace_field, NULL);
 }

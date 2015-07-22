@@ -189,6 +189,8 @@ struct xlate_in {
     const struct recirc_id_node *recirc;
 };
 
+void xlate_init(void);
+
 void xlate_ofproto_set(struct ofproto_dpif *, const char *name, struct dpif *,
                        const struct mac_learning *, struct stp *,
                        struct rstp *, const struct mcast_snooping *,
