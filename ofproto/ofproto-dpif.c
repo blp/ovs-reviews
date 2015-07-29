@@ -495,6 +495,7 @@ port_open_type(const char *datapath_type, const char *port_type)
 
 /* Type functions. */
 
+static void process_dpif_revalidate(struct dpif_backer *);
 static void process_dpif_port_changes(struct dpif_backer *);
 static void process_dpif_all_ports_changed(struct dpif_backer *);
 static void process_dpif_port_change(struct dpif_backer *,
@@ -563,6 +564,15 @@ type_run(const char *type)
 
     dpif_poll_threads_set(backer->dpif, n_dpdk_rxqs, pmd_cpu_mask);
 
+    process_dpif_revalidate(backer);
+    process_dpif_port_changes(backer);
+
+    return 0;
+}
+
+static void
+process_dpif_revalidate(struct dpif_backer *backer)
+{
     if (backer->need_revalidate) {
         struct ofproto_dpif *ofproto;
         struct simap_node *node;
@@ -678,10 +688,6 @@ type_run(const char *type)
 
         udpif_revalidate(backer->udpif);
     }
-
-    process_dpif_port_changes(backer);
-
-    return 0;
 }
 
 /* Check for and handle port changes in 'backer''s dpif. */
@@ -5665,6 +5671,23 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
     return 0;
 }
 
+static void *
+barrier(struct ofproto *ofproto_)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    process_dpif_revalidate(ofproto->backer);
+    return udpif_get_barrier(ofproto->backer->udpif);
+}
+
+static bool
+pass_barrier(struct ofproto *ofproto_, void *barrier)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    return udpif_pass_barrier(ofproto->backer->udpif, barrier);
+}
+
 const struct ofproto_class ofproto_dpif_class = {
     init,
     enumerate_types,
@@ -5761,4 +5784,6 @@ const struct ofproto_class ofproto_dpif_class = {
     group_modify,               /* group_modify */
     group_get_stats,            /* group_get_stats */
     get_datapath_version,       /* get_datapath_version */
+    barrier,
+    pass_barrier,
 };

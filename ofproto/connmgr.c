@@ -136,6 +136,9 @@ struct ofconn {
 
     /* Active bundles. Contains "struct ofp_bundle"s. */
     struct hmap bundles;
+
+    void *barrier;
+    struct ofpbuf *delayed;
 };
 
 static struct ofconn *ofconn_create(struct connmgr *, struct rconn *,
@@ -1408,10 +1411,21 @@ ofconn_reconfigure(struct ofconn *ofconn, const struct ofproto_controller *c)
 /* Returns true if it makes sense for 'ofconn' to receive and process OpenFlow
  * messages. */
 static bool
-ofconn_may_recv(const struct ofconn *ofconn)
+ofconn_may_recv(struct ofconn *ofconn)
 {
+    if (ofconn->barrier && ofconn->connmgr->ofproto->ofproto_class->pass_barrier(ofconn->connmgr->ofproto, ofconn->barrier)) {
+        ofconn->barrier = NULL;
+        return false;
+    }
+
     int count = rconn_packet_counter_n_packets(ofconn->reply_counter);
     return count < OFCONN_REPLY_MAX;
+}
+
+void
+ofconn_barrier(struct ofconn *ofconn)
+{
+    ofconn->barrier = ofconn->connmgr->ofproto->ofproto_class->barrier(ofconn->connmgr->ofproto);
 }
 
 static void
@@ -1433,7 +1447,12 @@ ofconn_run(struct ofconn *ofconn,
 
     /* Limit the number of iterations to avoid starving other tasks. */
     for (i = 0; i < 50 && ofconn_may_recv(ofconn); i++) {
-        struct ofpbuf *of_msg = rconn_recv(ofconn->rconn);
+        struct ofpbuf *of_msg;
+
+        of_msg = ofconn->delayed;
+        if (!of_msg) {
+            of_msg = rconn_recv(ofconn->rconn);
+        }
         if (!of_msg) {
             break;
         }
@@ -1442,6 +1461,17 @@ ofconn_run(struct ofconn *ofconn,
             fail_open_maybe_recover(mgr->fail_open);
         }
 
+        enum ofptype type;
+        if (!ofptype_decode(&type, of_msg->data)
+            && type == OFPTYPE_BARRIER_REQUEST
+            && !ofconn->delayed) {
+            ofconn_barrier(ofconn);
+            if (ofconn->barrier) {
+                ofconn->delayed = of_msg;
+                break;
+            }
+        }
+        ofconn->delayed = NULL;
         handle_openflow(ofconn, of_msg);
         ofpbuf_delete(of_msg);
     }

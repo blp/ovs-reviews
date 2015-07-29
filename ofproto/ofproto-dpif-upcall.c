@@ -130,6 +130,9 @@ struct udpif {
     struct ovs_barrier pause_barrier;  /* Barrier used to pause all */
                                        /* revalidators by main thread. */
 
+    struct seq *sync_seq;
+    atomic_ullong sync;
+
     /* There are 'N_UMAPS' maps containing 'struct udpif_key' elements.
      *
      * During the flow dump phase, revalidators insert into these with a random
@@ -374,6 +377,8 @@ udpif_create(struct dpif_backer *backer, struct dpif *dpif)
     udpif->backer = backer;
     atomic_init(&udpif->flow_limit, MIN(ofproto_flow_limit, 10000));
     udpif->reval_seq = seq_create();
+    udpif->sync_seq = seq_create();
+    atomic_init(&udpif->sync, seq_read(udpif->reval_seq));
     udpif->dump_seq = seq_create();
     latch_init(&udpif->exit_latch);
     latch_init(&udpif->pause_latch);
@@ -425,6 +430,7 @@ udpif_destroy(struct udpif *udpif)
     latch_destroy(&udpif->exit_latch);
     latch_destroy(&udpif->pause_latch);
     seq_destroy(udpif->reval_seq);
+    seq_destroy(udpif->sync_seq);
     seq_destroy(udpif->dump_seq);
     ovs_mutex_destroy(&udpif->n_flows_mutex);
     free(udpif);
@@ -580,16 +586,40 @@ udpif_set_threads(struct udpif *udpif, size_t n_handlers,
 void
 udpif_synchronize(struct udpif *udpif)
 {
-    /* This is stronger than necessary.  It would be sufficient to ensure
-     * (somehow) that each handler and revalidator thread had passed through
-     * its main loop once. */
-    size_t n_handlers = udpif->n_handlers;
-    size_t n_revalidators = udpif->n_revalidators;
+    uint64_t reval_seq = seq_read(udpif->reval_seq);
+    for (;;) {
+        uint64_t sync_seq = seq_read(udpif->sync_seq);
+        uint64_t sync;
+        atomic_read_relaxed(&udpif->sync, &sync);
+        if (sync >= reval_seq) {
+            break;
+        }
+        seq_wait(udpif->sync_seq, sync_seq);
+        poll_block();
+    }
+}
 
-    ovsrcu_quiesce_start();
-    udpif_stop_threads(udpif);
-    udpif_start_threads(udpif, n_handlers, n_revalidators);
-    ovsrcu_quiesce_end();
+void *
+udpif_get_barrier(struct udpif *udpif)
+{
+    uint64_t reval_seq = seq_read(udpif->reval_seq);
+    uint64_t sync;
+    atomic_read_relaxed(&udpif->sync, &sync);
+    return sync >= reval_seq ? NULL : xmemdup(&reval_seq, sizeof reval_seq);
+}
+
+bool
+udpif_pass_barrier(struct udpif *udpif, void *barrier_)
+{
+    uint64_t *barrier = barrier_;
+    uint64_t sync;
+    atomic_read_relaxed(&udpif->sync, &sync);
+    if (sync >= *barrier) {
+        free(barrier);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 /* Notifies 'udpif' that something changed which may render previous
@@ -818,9 +848,9 @@ udpif_revalidator(void *arg)
 
     revalidator->id = ovsthread_id_self();
     for (;;) {
-        if (leader) {
-            uint64_t reval_seq;
+        uint64_t reval_seq;
 
+        if (leader) {
             recirc_run(); /* Recirculation cleanup. */
 
             reval_seq = seq_read(udpif->reval_seq);
@@ -870,6 +900,9 @@ udpif_revalidator(void *arg)
         if (leader) {
             unsigned int flow_limit;
             long long int duration;
+
+            atomic_store_relaxed(&udpif->sync, reval_seq);
+            seq_change(udpif->sync_seq);
 
             atomic_read_relaxed(&udpif->flow_limit, &flow_limit);
 

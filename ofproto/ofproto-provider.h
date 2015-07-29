@@ -1755,6 +1755,9 @@ struct ofproto_class {
      * This function should be NULL if an implementation does not support it.
      */
     const char *(*get_datapath_version)(const struct ofproto *);
+
+    void *(*barrier)(struct ofproto *);
+    bool (*pass_barrier)(struct ofproto *, void *);
 };
 
 extern const struct ofproto_class ofproto_dpif_class;

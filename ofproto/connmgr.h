@@ -234,4 +234,6 @@ void ofmonitor_compose_refresh_updates(struct rule_collection *rules,
                                        struct ovs_list *msgs)
     OVS_REQUIRES(ofproto_mutex);
 
+void ofconn_barrier(struct ofconn *ofconn);
+
 #endif /* connmgr.h */
