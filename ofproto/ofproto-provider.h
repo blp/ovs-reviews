@@ -1861,6 +1861,9 @@ struct ofproto_class {
     /* Flushes the connection tracking tables. If 'zone' is not NULL,
      * only deletes connections in '*zone'. */
     void (*ct_flush)(const struct ofproto *, const uint16_t *zone);
+
+    void *(*barrier)(struct ofproto *);
+    bool (*pass_barrier)(struct ofproto *, void *);
 };
 
 extern const struct ofproto_class ofproto_dpif_class;
