@@ -25,7 +25,7 @@ m4_define([ADD_NAMESPACES],
 #
 # Execute 'command' in 'namespace'
 m4_define([NS_EXEC],
-    [ip netns exec $1 bash -c "$2"]
+    [ip netns exec $1 $2]
 )
 
 # NS_CHECK_EXEC([namespace], [command], other_params...)
