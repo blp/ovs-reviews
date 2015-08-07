@@ -133,25 +133,34 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
 #endif
 
 #define miniflow_set_map(MF, OFS)                                       \
-    if ((OFS) < FLOW_TNL_U64S) {                                        \
-        MINIFLOW_ASSERT(!(MF.maps.tnl_map & (UINT64_MAX << (OFS)))      \
+{                                                                       \
+    size_t ofs = (OFS);                                                 \
+                                                                        \
+    if (ofs < FLOW_TNL_U64S) {                                          \
+        MINIFLOW_ASSERT(!(MF.maps.tnl_map & (UINT64_MAX << ofs))        \
                         && !MF.maps.pkt_map);                           \
-        MF.maps.tnl_map |= UINT64_C(1) << (OFS);                        \
+        MF.maps.tnl_map |= UINT64_C(1) << ofs;                          \
     } else {                                                            \
-        MINIFLOW_ASSERT(!(MF.maps.pkt_map                               \
-                          & UINT64_MAX << ((OFS) - FLOW_TNL_U64S)));    \
-        MF.maps.pkt_map |= UINT64_C(1) << ((OFS) - FLOW_TNL_U64S);      \
-    }
+        ofs -= FLOW_TNL_U64S;                                           \
+        MINIFLOW_ASSERT(!(MF.maps.pkt_map & (UINT64_MAX << ofs)));      \
+        MF.maps.pkt_map |= UINT64_C(1) << ofs;                          \
+    }                                                                   \
+}
 
 #define miniflow_assert_in_map(MF, OFS)                                 \
-    if ((OFS) < FLOW_TNL_U64S) {                                        \
-        MINIFLOW_ASSERT(MF.maps.tnl_map & UINT64_C(1) << (OFS)          \
-                        && !(MF.maps.tnl_map & UINT64_MAX << ((OFS) + 1)) \
+{                                                                       \
+    size_t ofs = (OFS);                                                 \
+                                                                        \
+    if (ofs < FLOW_TNL_U64S) {                                          \
+        MINIFLOW_ASSERT(MF.maps.tnl_map & UINT64_C(1) << ofs            \
+                        && !(MF.maps.tnl_map & UINT64_MAX << (ofs + 1)) \
                         && !MF.maps.pkt_map);                           \
     } else {                                                            \
-        MINIFLOW_ASSERT(MF.maps.pkt_map & UINT64_C(1) << ((OFS) - FLOW_TNL_U64S) \
-                        && !(MF.maps.pkt_map & UINT64_MAX << ((OFS) - FLOW_TNL_U64S + 1))); \
-    }
+        ofs -= FLOW_TNL_U64S;                                           \
+        MINIFLOW_ASSERT(MF.maps.pkt_map & UINT64_C(1) << ofs            \
+                        && !(MF.maps.pkt_map & UINT64_MAX << (ofs + 1))); \
+    }                                                                   \
+}
 
 #define miniflow_push_uint64_(MF, OFS, VALUE)                           \
 {                                                                       \
