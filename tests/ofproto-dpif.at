@@ -4660,6 +4660,14 @@ AT_CHECK_UNQUOTED([ovs-appctl fdb/show br0 | sed 's/[[0-9]]\{1,\}$/?/' | sort],
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([ofproto-dpif - IPFIX sample action])
+OVS_VSWITCHD_START
+ADD_OF_PORTS([br0], 1)
+ovs-ofctl add-flow br0 'actions=sample(probability=32768, collector_set_id=1, obs_domain_id=2, obs_point_id=3)'
+ovs-appctl ofproto/trace br0 in_port=1
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
 AT_SETUP([ofproto-dpif - MAC table overflow fairness])
 OVS_VSWITCHD_START(
   [set bridge br0 fail-mode=standalone other-config:mac-table-size=10])
