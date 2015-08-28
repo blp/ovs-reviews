@@ -717,11 +717,13 @@ enum OVS_PACKED_ENUM mf_field_id {
      *                   initiate the connection.
      *   - Tracked (0x80): Connection tracking has occurred.
      *
+     *   xxx This makes ct_state read/write.
+     *
      * Type: u8.
      * Maskable: bitwise.
      * Formatting: conn state.
      * Prerequisites: none.
-     * Access: read-only.
+     * Access: read/write.
      * NXM: NXM_NX_CT_STATE(105) since v2.5.
      * OXM: none.
      */

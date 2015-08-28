@@ -3533,7 +3533,7 @@ execute_controller_action(struct xlate_ctx *ctx, int len,
 static void
 compose_recirculate_action__(struct xlate_ctx *ctx, struct ofpbuf *stack,
                              int action_offset, uint32_t ofpacts_len,
-                             struct ofpact *ofpacts)
+                             struct ofpact *ofpacts, uint8_t table_id)
 {
     struct recirc_metadata md;
     uint32_t id;
@@ -3543,7 +3543,7 @@ compose_recirculate_action__(struct xlate_ctx *ctx, struct ofpbuf *stack,
     ovs_assert(action_offset >= 0);
 
     struct recirc_state state = {
-        .table_id = 0,
+        .table_id = table_id,
         .ofproto = ctx->xbridge->ofproto,
         .metadata = md,
         .stack = stack,
@@ -3592,7 +3592,8 @@ compose_recirculate_action(struct xlate_ctx *ctx)
                                           use_masked);
 
     compose_recirculate_action__(ctx, &ctx->stack, ctx->recirc_action_offset,
-                                 ctx->action_set.size, ctx->action_set.data);
+                                 ctx->action_set.size, ctx->action_set.data,
+                                 0);
 
     /* Undo changes done by recirculation. */
     ctx->action_set.size = ctx->recirc_action_offset;
@@ -4197,14 +4198,15 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc)
 
     ct_offset = nl_msg_start_nested(ctx->odp_actions, OVS_ACTION_ATTR_CT);
     nl_msg_put_u32(ctx->odp_actions, OVS_CT_ATTR_FLAGS, flags);
-    nl_msg_put_u16(ctx->odp_actions, OVS_CT_ATTR_ZONE, ofc->zone);
+    nl_msg_put_u16(ctx->odp_actions, OVS_CT_ATTR_ZONE,
+                   mf_get_subfield(&ofc->src, &ctx->xin->flow));
     put_connhelper(ctx->odp_actions, ofc);
     nl_msg_end_nested(ctx->odp_actions, ct_offset);
 
     if (ofc->flags & NX_CT_F_RECIRC) {
         /* Use ct_* fields from datapath during recirculation upcall. */
         ctx->conntracked = true;
-        compose_recirculate_action__(ctx, NULL, 0, 0, NULL);
+        compose_recirculate_action__(ctx, NULL, 0, 0, NULL, ofc->next_table);
     }
 }
 

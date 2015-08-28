@@ -4460,11 +4460,17 @@ struct nx_action_conntrack {
     ovs_be16 subtype;           /* NXAST_CT. */
     ovs_be16 flags;             /* Zero or more NX_CT_F_* flags.
                                  * Unspecified flag bits must be zero. */
-    ovs_be16 zone;              /* Connection tracking context. */
+    /* xxx Hacking this to support registers. */
+    ovs_be16 ofs_nbits;         /* (ofs << 6) | (n_bits - 1). */
+
     ovs_be16 alg;               /* Well-known port number for the protocol.
                                  * 0 indicates no ALG is required. */
+
+    ovs_be32 src;               /* Zone register. */
+    uint8_t next_table;         /* Table to go to if recirc'ing. */
+    uint8_t pad[3];             /* Pad to 64 bits. */
 };
-OFP_ASSERT(sizeof(struct nx_action_conntrack) == 16);
+OFP_ASSERT(sizeof(struct nx_action_conntrack) == 24);
 
 static enum ofperr
 decode_NXAST_RAW_CT(const struct nx_action_conntrack *nac, struct ofpbuf *out)
@@ -4473,8 +4479,11 @@ decode_NXAST_RAW_CT(const struct nx_action_conntrack *nac, struct ofpbuf *out)
 
     conntrack = ofpact_put_CT(out);
     conntrack->flags = ntohs(nac->flags);
-    conntrack->zone = ntohs(nac->zone);
+    conntrack->src.field = mf_from_nxm_header(ntohl(nac->src));
+    conntrack->src.ofs = nxm_decode_ofs(nac->ofs_nbits);
+    conntrack->src.n_bits = nxm_decode_n_bits(nac->ofs_nbits);
     conntrack->alg = ntohs(nac->alg);
+    conntrack->next_table = nac->next_table;
 
     return 0;
 }
@@ -4487,8 +4496,11 @@ encode_CT(const struct ofpact_conntrack *conntrack,
 
     nac = put_NXAST_CT(out);
     nac->flags = htons(conntrack->flags);
-    nac->zone = htons(conntrack->zone);
+    nac->ofs_nbits = nxm_encode_ofs_nbits(conntrack->src.ofs,
+                                          conntrack->src.n_bits);
+    nac->src = htonl(mf_nxm_header(conntrack->src.field->id));
     nac->alg = htons(conntrack->alg);
+    nac->next_table = conntrack->next_table;
 }
 
 /* Parses 'arg' as the argument to a "ct" action, and appends such an
@@ -4511,8 +4523,11 @@ parse_CT(char *arg, struct ofpbuf *ofpacts,
             oc->flags |= NX_CT_F_COMMIT;
         } else if (!strcmp(key, "recirc")) {
             oc->flags |= NX_CT_F_RECIRC;
+#if 0
+        /* xxx Don't support writing zone field or table id. */
         } else if (!strcmp(key, "zone")) {
-            error = str_to_u16(value, "zone", &oc->zone);
+            mf_parse_subfield(&oc->src, value);
+#endif
         } else if (!strcmp(key, "alg")) {
             error = str_to_connhelper(value, &oc->alg);
         } else {
@@ -4542,8 +4557,13 @@ format_CT(const struct ofpact_conntrack *a, struct ds *s)
     ds_put_format(s, "ct(%s%s",
                   a->flags & NX_CT_F_COMMIT ? "commit," : "",
                   a->flags & NX_CT_F_RECIRC ? "recirc," : "");
+    if (a->flags & NX_CT_F_RECIRC) {
+        ds_put_format(s, "next_table=%d,", a->next_table);
+    }
     format_alg(a->alg, s);
-    ds_put_format(s, "zone=%"PRIu16")", a->zone);
+    ds_put_cstr(s, "zone_reg=");
+    mf_format_subfield(&a->src, s);
+    ds_put_cstr(s, ")");
 }
 
 /* Meter instruction. */
@@ -5794,7 +5814,8 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
             || (flow->ct_state & CS_INVALID && oc->flags & NX_CT_F_COMMIT)) {
             inconsistent_match(usable_protocols);
         }
-        return 0;
+
+        return mf_check_src(&oc->src, flow);
     }
 
     case OFPACT_CLEAR_ACTIONS:

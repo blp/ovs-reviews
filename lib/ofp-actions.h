@@ -490,8 +490,9 @@ enum nx_conntrack_flags {
 struct ofpact_conntrack {
     struct ofpact ofpact;
     uint16_t flags;
-    uint16_t zone;
+    struct mf_subfield src;
     uint16_t alg;
+    uint8_t next_table;
 };
 
 static inline size_t
