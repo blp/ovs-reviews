@@ -235,6 +235,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
 
         struct match match;
         if (!tun) {
+            int zone_id = simap_get(&ctx->ct_zones, binding->logical_port);
             /* Packets that arrive from a vif can belong to a VM or
              * to a container located inside that VM. Packets that
              * arrive from containers have a tag (vlan) associated with them.
@@ -251,11 +252,16 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
              * input port, MFF_LOG_DATAPATH to the logical datapath, and
              * resubmit into the logical ingress pipeline starting at table
              * 16. */
+
             match_init_catchall(&match);
             ofpbuf_clear(&ofpacts);
             match_set_in_port(&match, ofport);
             if (tag) {
                 match_set_dl_vlan(&match, htons(tag));
+            }
+
+            if (zone_id) {
+                put_load(zone_id, MFF_LOG_CT_ZONE, 0, 32, &ofpacts);
             }
 
             /* Set MFF_LOG_DATAPATH and MFF_LOG_INPORT. */
@@ -288,6 +294,10 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
             match_set_metadata(&match, htonll(binding->datapath->tunnel_key));
             match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0,
                           binding->tunnel_key);
+
+            if (zone_id) {
+                put_load(zone_id, MFF_LOG_CT_ZONE, 0, 32, &ofpacts);
+            }
 
             /* Resubmit to table 34. */
             put_resubmit(OFTABLE_DROP_LOOPBACK, &ofpacts);
@@ -396,6 +406,10 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
                 continue;
             }
 
+            int zone_id = simap_get(&ctx->ct_zones, port->logical_port);
+            if (zone_id) {
+                put_load(zone_id, MFF_LOG_CT_ZONE, 0, 32, &ofpacts);
+            }
             if (simap_contains(&lport_to_ofport, port->logical_port)) {
                 put_load(port->tunnel_key, MFF_LOG_OUTPORT, 0, 32, &ofpacts);
                 put_resubmit(OFTABLE_DROP_LOOPBACK, &ofpacts);
@@ -504,7 +518,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
     ofpbuf_clear(&ofpacts);
 #define MFF_LOG_REG(ID) put_load(0, ID, 0, 32, &ofpacts);
     MFF_LOG_REGS;
-#undef MFF_LOG_REGS
+ #undef MFF_LOG_REGS
     put_resubmit(OFTABLE_LOG_EGRESS_PIPELINE, &ofpacts);
     ofctrl_add_flow(flow_table, OFTABLE_DROP_LOOPBACK, 0, &match, &ofpacts);
 

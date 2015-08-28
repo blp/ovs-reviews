@@ -27,6 +27,7 @@
 #include "compiler.h"
 #include "daemon.h"
 #include "dirs.h"
+#include "dynamic-string.h"
 #include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
 #include "ovn/lib/ovn-sb-idl.h"
@@ -49,6 +50,7 @@
 VLOG_DEFINE_THIS_MODULE(main);
 
 static unixctl_cb_func ovn_controller_exit;
+static unixctl_cb_func ct_zone_list;
 
 #define DEFAULT_BRIDGE_NAME "br-int"
 
@@ -119,6 +121,7 @@ int
 main(int argc, char *argv[])
 {
     struct unixctl_server *unixctl;
+    struct controller_ctx ctx;
     bool exiting;
     int retval;
 
@@ -134,6 +137,7 @@ main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
     unixctl_command_register("exit", "", 0, 0, ovn_controller_exit, &exiting);
+    unixctl_command_register("ct-zone-list", "", 0, 0, ct_zone_list, &ctx);
 
     daemonize_complete();
 
@@ -162,15 +166,20 @@ main(int argc, char *argv[])
         ovsdb_idl_create(ovnsb_remote, &sbrec_idl_class, true, true));
     ovsdb_idl_get_initial_snapshot(ovnsb_idl_loop.idl);
 
+    /* Initialize connection tracking zones. */
+    simap_init(&ctx.ct_zones);
+    ctx.ct_zone_bitmap = bitmap_allocate(MAX_CT_ZONES);
+
+    /* We never use zone 0. */
+    bitmap_set1(ctx.ct_zone_bitmap, 0);
+
     /* Main loop. */
     exiting = false;
     while (!exiting) {
-        struct controller_ctx ctx = {
-            .ovs_idl = ovs_idl_loop.idl,
-            .ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop),
-            .ovnsb_idl = ovnsb_idl_loop.idl,
-            .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
-        };
+        ctx.ovs_idl = ovs_idl_loop.idl;
+        ctx.ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
+        ctx.ovnsb_idl = ovnsb_idl_loop.idl;
+        ctx.ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop);
 
         const struct ovsrec_bridge *br_int = get_br_int(ctx.ovs_idl);
         const char *chassis_id = get_chassis_id(ctx.ovs_idl);
@@ -213,12 +222,10 @@ main(int argc, char *argv[])
     /* It's time to exit.  Clean up the databases. */
     bool done = false;
     while (!done) {
-        struct controller_ctx ctx = {
-            .ovs_idl = ovs_idl_loop.idl,
-            .ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop),
-            .ovnsb_idl = ovnsb_idl_loop.idl,
-            .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
-        };
+        ctx.ovs_idl = ovs_idl_loop.idl;
+        ctx.ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
+        ctx.ovnsb_idl = ovnsb_idl_loop.idl;
+        ctx.ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop);
 
         const struct ovsrec_bridge *br_int = get_br_int(ctx.ovs_idl);
         const char *chassis_id = get_chassis_id(ctx.ovs_idl);
@@ -240,6 +247,9 @@ main(int argc, char *argv[])
     unixctl_server_destroy(unixctl);
     lflow_destroy();
     ofctrl_destroy();
+
+    simap_destroy(&ctx.ct_zones);
+    bitmap_free(ctx.ct_zone_bitmap);
 
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
@@ -340,4 +350,20 @@ ovn_controller_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
     *exiting = true;
 
     unixctl_command_reply(conn, NULL);
+}
+
+static void
+ct_zone_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
+             const char *argv[] OVS_UNUSED, void *aux)
+{
+    const struct controller_ctx *ctx = aux;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    struct simap_node *zone;
+
+    SIMAP_FOR_EACH(zone, &ctx->ct_zones) {
+        ds_put_format(&ds, "%s %d\n", zone->name, zone->data);
+    }
+
+    unixctl_command_reply(conn, ds_cstr(&ds));
+    ds_destroy(&ds);
 }

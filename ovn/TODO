@@ -80,3 +80,11 @@
    So far, both ovn-controller and ovn-controller-vtep only allow
    chassis to have one tunnel encapsulation entry.  We should extend
    the implementation to support multiple tunnel encapsulations.
+
+* ACL
+
+** Support FTP ALGs.
+
+** Support reject action.
+
+** Support log option.

@@ -287,10 +287,11 @@
       <code>inport</code> to <code>outport</code>; if they are equal, it treats
       the <code>output</code> as a no-op.  In the common case, where they are
       different, the packet enters the egress pipeline.  This transition to the
-      egress pipeline discards register data, e.g. <code>reg0</code>
-      ... <code>reg5</code>, to achieve uniform behavior regardless of whether
-      the egress pipeline is on a different hypervisor (because registers
-      aren't preserve across tunnel encapsulation).
+      egress pipeline discards register data, e.g. <code>reg0</code> ...
+      <code>reg4</code> and connection tracking state, to achieve
+      uniform behavior regardless of whether the egress pipeline is on a
+      different hypervisor (because registers aren't preserve across
+      tunnel encapsulation).
     </p>
 
     <p>
@@ -674,7 +675,7 @@
       </p>
 
       <ul>
-        <li><code>reg0</code>...<code>reg5</code></li>
+        <li><code>reg0</code>...<code>reg4</code></li>
         <li><code>inport</code> <code>outport</code></li>
         <li><code>eth.src</code> <code>eth.dst</code> <code>eth.type</code></li>
         <li><code>vlan.tci</code> <code>vlan.vid</code> <code>vlan.pcp</code> <code>vlan.present</code></li>
@@ -688,6 +689,12 @@
         <li><code>icmp4.type</code> <code>icmp4.code</code></li>
         <li><code>icmp6.type</code> <code>icmp6.code</code></li>
         <li><code>nd.target</code> <code>nd.sll</code> <code>nd.tll</code></li>
+        <li><code>ct_state</code> can take the following shortcuts:</li>
+        <li><code>   ct.new</code> New flow</li>
+        <li><code>   ct.est</code> Established flow</li>
+        <li><code>   ct.rel</code> Related flow</li>
+        <li><code>   ct.rpl</code> Reply flow</li>
+        <li><code>   ct.inv</code> Connection entry in a bad state</li>
       </ul>
 
     </column>
@@ -769,6 +776,26 @@
             pipeline.
           </p>
 	</dd>
+
+        <dt><code>ct_next;</code></dt>
+        <dd>
+          Apply connection tracking to the flow.  After a call to
+          <code>ct_next</code>, the <code>ct_state</code> field is
+          available to match.  As a side effect, IP fragments will be
+          reassembled for matching.  If a fragmented packet is output,
+          then it will be sent with any overlapping fragments squashed.
+          The connection tracking state is scoped by the logical port,
+          so overlapping addresses may be used.  To allow traffic
+          related to the matched flow, <code>ct_commit</code> must be
+          called.  After this action is used, the next logical datapath
+          table will be executed.
+        </dd>
+
+        <dt><code>ct_commit;</code></dt>
+        <dd>
+          Commit the flow to the connection tracking entry associated
+          with it by a previous call to <code>commit</code>.
+        </dd>
       </dl>
 
       <p>
@@ -783,8 +810,6 @@
         </dd>
 
         <dt><code>learn</code></dt>
-
-        <dt><code>conntrack</code></dt>
 
         <dt><code>dec_ttl { <var>action</var>, </code>...<code> } { <var>action</var>; </code>...<code>};</code></dt>
         <dd>

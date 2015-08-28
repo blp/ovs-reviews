@@ -119,4 +119,23 @@
         This behavior should be changed.
       </p>
     </p>
+
+    <h1>RUNTIME MANAGEMENT COMMANDS</h1>
+    <p>
+      <code>ovs-appctl</code> can send commands to a running
+      <code>ovn-controller</code> process.  The currently supported
+      commands are described below.
+      <dl>
+      <dt><code>exit</code></dt>
+      <dd>
+        Causes <code>ovn-controller</code> to gracefully terminate.
+      </dd>
+
+      <dt><code>ct-zone-list</code></dt>
+      <dd>
+        Lists each local logical port and its connection tracking zone.
+      </dd>
+      </dl>
+    </p>
+
 </manpage>

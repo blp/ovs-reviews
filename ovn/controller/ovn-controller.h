@@ -17,7 +17,11 @@
 #ifndef OVN_CONTROLLER_H
 #define OVN_CONTROLLER_H 1
 
+#include "simap.h"
 #include "ovn/lib/ovn-sb-idl.h"
+
+/* Linux supports a maximum of 64K zones, which seems like a fine default. */
+#define MAX_CT_ZONES 65535
 
 struct controller_ctx {
     struct ovsdb_idl *ovnsb_idl;
@@ -25,6 +29,9 @@ struct controller_ctx {
 
     struct ovsdb_idl *ovs_idl;
     struct ovsdb_idl_txn *ovs_idl_txn;
+
+    struct simap ct_zones;          /* Port to conntrack zone mappings. */
+    unsigned long *ct_zone_bitmap;  /* Bitmap of assigned zones. */
 };
 
 static inline const struct sbrec_chassis *

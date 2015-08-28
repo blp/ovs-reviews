@@ -60,6 +60,8 @@ static const char *default_db(void);
  * These must be listed in the order that the stages will be executed. */
 #define INGRESS_STAGES                         \
     INGRESS_STAGE(PORT_SEC, port_sec)          \
+    INGRESS_STAGE(PRE_ACL, pre_acl)            \
+    INGRESS_STAGE(ACL, acl)                    \
     INGRESS_STAGE(L2_LKUP, l2_lkup)
 
 enum ingress_stage {
@@ -72,8 +74,9 @@ enum ingress_stage {
 /* Egress pipeline stages.
  *
  * These must be listed in the order that the stages will be executed. */
-#define EGRESS_STAGES                         \
-    EGRESS_STAGE(ACL, acl)                    \
+#define EGRESS_STAGES                          \
+    EGRESS_STAGE(PRE_ACL, pre_acl)             \
+    EGRESS_STAGE(ACL, acl)                     \
     EGRESS_STAGE(PORT_SEC, port_sec)
 
 enum egress_stage {
@@ -723,6 +726,118 @@ lport_is_enabled(const struct nbrec_logical_port *lport)
     return !lport->enabled || *lport->enabled;
 }
 
+static bool
+has_stateful_acl(struct ovn_datapath *od)
+{
+    for (size_t i = 0; i < od->nb->n_acls; i++) {
+        struct nbrec_acl *acl = od->nb->acls[i];
+        if (!strcmp(acl->action, "allow-related")) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void
+build_acls(struct ovn_datapath *od, struct hmap *lflows)
+{
+    /* Ingress and Egress Pre-ACL Table (Priority 0): Packets are
+     * allowed by default. */
+    ovn_lflow_add(lflows, od, P_IN, S_IN_PRE_ACL, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, P_OUT, S_OUT_PRE_ACL, 0, "1", "next;");
+
+    /* Ingress and Egress ACL Table (Priority 0): Packets are allowed by
+     * default. */
+    ovn_lflow_add(lflows, od, P_IN, S_IN_ACL, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, P_OUT, S_OUT_ACL, 0, "1", "next;");
+
+    /* If there are any stateful ACL rules, we must send all IP packets
+     * through the conntrack action, which handles defragmentation, in
+     * order to match L4 headers. */
+    if (has_stateful_acl(od)) {
+        /* Ingress and Egress Pre-ACL Table (Priority 100).
+         *
+         * Regardless of whether the ACL is "from-lport" or "to-lport",
+         * we need rules in both the ingress and egress table, because
+         * the return traffic needs to be followed. */
+        ovn_lflow_add(lflows, od, P_IN, S_IN_PRE_ACL, 100,
+                      "ip", "ct_next;");
+        ovn_lflow_add(lflows, od, P_OUT, S_OUT_PRE_ACL, 100,
+                      "ip", "ct_next;");
+
+        /* Ingress and Egress ACL Table (Priority 65535).
+         *
+         * Always drop traffic that's in an invalid state.  This is
+         * enforced at a higher priority than ACLs can be defined. */
+        ovn_lflow_add(lflows, od, P_IN, S_IN_ACL, UINT16_MAX,
+                      "ct.inv", "drop;");
+        ovn_lflow_add(lflows, od, P_OUT, S_OUT_ACL, UINT16_MAX,
+                      "ct.inv", "drop;");
+
+        /* Ingress and Egress ACL Table (Priority 65535).
+         *
+         * Always allow traffic that is established to a committed
+         * conntrack entry.  This is enforced at a higher priority than
+         * ACLs can be defined. */
+        ovn_lflow_add(lflows, od, P_IN, S_IN_ACL, UINT16_MAX,
+                      "ct.est && !ct.rel && !ct.new && !ct.inv",
+                      "next;");
+        ovn_lflow_add(lflows, od, P_OUT, S_OUT_ACL, UINT16_MAX,
+                      "ct.est && !ct.rel && !ct.new && !ct.inv",
+                      "next;");
+
+        /* Ingress and Egress ACL Table (Priority 65535).
+         *
+         * Always allow traffic that is related to an existing conntrack
+         * entry.  This is enforced at a higher priority than ACLs can
+         * be defined.
+         *
+         * NOTE: This does not support related data sessions (eg,
+         * a dynamically negotiated FTP data channel), but will allow
+         * related traffic such as an ICMP Port Unreachable through
+         * that's generated from a non-listening UDP port.  */
+        ovn_lflow_add(lflows, od, P_IN, S_IN_ACL, UINT16_MAX,
+                      "!ct.est && ct.rel && !ct.new && !ct.inv",
+                      "next;");
+        ovn_lflow_add(lflows, od, P_OUT, S_OUT_ACL, UINT16_MAX,
+                      "!ct.est && ct.rel && !ct.new && !ct.inv",
+                      "next;");
+    }
+
+    /* Ingress or Egress ACL Table (Various priorities). */
+    for (size_t i = 0; i < od->nb->n_acls; i++) {
+        struct nbrec_acl *acl = od->nb->acls[i];
+        bool ingress = !strcmp(acl->direction, "from-lport") ? true :false;
+        enum ovn_pipeline pipeline = ingress ? P_IN : P_OUT;
+        uint8_t stage = ingress ? S_IN_ACL : S_OUT_ACL;
+
+        if (!strcmp(acl->action, "allow")) {
+            ovn_lflow_add(lflows, od, pipeline, stage, acl->priority,
+                          acl->match, "next;");
+        } else if (!strcmp(acl->action, "allow-related")) {
+            struct ds match = DS_EMPTY_INITIALIZER;
+
+            /* Commit the connection tracking entry, which allow all
+             * other traffic related to this entry to flow due to the
+             * 65535 priority flow defined earlier. */
+            ds_put_format(&match, "ct.new && %s", acl->match);
+            ovn_lflow_add(lflows, od, pipeline, stage, acl->priority,
+                          ds_cstr(&match), "ct_commit; next;");
+
+            ds_destroy(&match);
+        } else if (!strcmp(acl->action, "drop")) {
+            ovn_lflow_add(lflows, od, pipeline, stage, acl->priority,
+                          acl->match, "drop;");
+        } else if (!strcmp(acl->action, "reject")) {
+            /* xxx Need to support "reject". */
+            VLOG_INFO("reject is not a supported action");
+            ovn_lflow_add(lflows, od, pipeline, stage, acl->priority,
+                          acl->match, "drop;");
+        }
+    }
+}
+
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
  * constructing their contents based on the OVN_NB database. */
 static void
@@ -764,7 +879,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
         ds_destroy(&match);
     }
 
-    /* Ingress table 1: Destination lookup, broadcast and multicast handling
+    /* Ingress table 3: Destination lookup, broadcast and multicast handling
      * (priority 100). */
     HMAP_FOR_EACH (op, key_node, ports) {
         if (lport_is_enabled(op->nb)) {
@@ -776,7 +891,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
                       "outport = \""MC_FLOOD"\"; output;");
     }
 
-    /* Ingress table 1: Destination lookup, unicast handling (priority 50), */
+    /* Ingress table 3: Destination lookup, unicast handling (priority 50), */
     HMAP_FOR_EACH (op, key_node, ports) {
         for (size_t i = 0; i < op->nb->n_macs; i++) {
             uint8_t mac[ETH_ADDR_LEN];
@@ -807,7 +922,7 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
         }
     }
 
-    /* Ingress table 1: Destination lookup for unknown MACs (priority 0). */
+    /* Ingress table 3: Destination lookup for unknown MACs (priority 0). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         if (od->has_unknown) {
             ovn_lflow_add(&lflows, od, P_IN, S_IN_L2_LKUP, 0, "1",
@@ -815,31 +930,14 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
         }
     }
 
-    /* Egress table 0: ACLs (any priority). */
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        for (size_t i = 0; i < od->nb->n_acls; i++) {
-            const struct nbrec_acl *acl = od->nb->acls[i];
-            const char *action;
-
-            action = (!strcmp(acl->action, "allow") ||
-                      !strcmp(acl->action, "allow-related"))
-                ? "next;" : "drop;";
-            ovn_lflow_add(&lflows, od, P_OUT, S_OUT_ACL, acl->priority,
-                          acl->match, action);
-        }
-    }
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        ovn_lflow_add(&lflows, od, P_OUT, S_OUT_ACL, 0, "1", "next;");
-    }
-
-    /* Egress table 1: Egress port security multicast/broadcast (priority
+    /* Egress table 2: Egress port security multicast/broadcast (priority
      * 100). */
     HMAP_FOR_EACH (od, key_node, datapaths) {
         ovn_lflow_add(&lflows, od, P_OUT, S_OUT_PORT_SEC, 100, "eth.dst[40]",
                       "output;");
     }
 
-    /* Egress table 1: Egress port security (priority 50). */
+    /* Egress table 2: Egress port security (priority 50). */
     HMAP_FOR_EACH (op, key_node, ports) {
         struct ds match;
 
@@ -855,6 +953,12 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
                       lport_is_enabled(op->nb) ? "output;" : "drop;");
 
         ds_destroy(&match);
+    }
+
+    /* Build pre-ACL and ACL tables for both ingress and egress.
+     * Ingress tables 1 and 2.  Egress tables 0 and 1. */
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        build_acls(od, &lflows);
     }
 
     /* Push changes to the Logical_Flow table to database. */
