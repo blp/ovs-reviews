@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -2507,7 +2507,7 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
 
         /* XXX: initialize md in netdev implementation. */
         for (i = 0; i < cnt; i++) {
-            pkt_metadata_init(&packets[i]->md, port->port_no);
+            packets[i]->md.in_port.odp_port = port->port_no;
         }
         cycles_count_start(pmd);
         dp_netdev_input(pmd, packets, cnt);
@@ -3014,6 +3014,11 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
             return err;
         }
     }
+
+    struct ds s = DS_EMPTY_INITIALIZER;
+    ds_put_hex_dump(&s, &flow->tunnel, sizeof flow->tunnel, 0, false);
+    VLOG_INFO("%s", ds_cstr(&s));
+    ds_destroy(&s);
 
     if (OVS_UNLIKELY(!VLOG_DROP_DBG(&upcall_rl))) {
         struct ds ds = DS_EMPTY_INITIALIZER;

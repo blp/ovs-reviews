@@ -370,6 +370,7 @@ eth_from_hex(const char *hex, struct dp_packet **packetp)
 
         /* Convert odp_key to packet metadata. */
         odp_key_to_pkt_metadata(odp_key.data, odp_key.size, &packet->md);
+        packet->md.tunnel.flags |= FLOW_TNL_F_UDPIF;
         ofpbuf_uninit(&odp_key);
     } else if (*tail != '\0') {
         dp_packet_delete(packet);

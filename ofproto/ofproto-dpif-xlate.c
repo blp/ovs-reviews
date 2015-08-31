@@ -4954,6 +4954,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     struct ds local_trace;
     const struct mf_field *tf;
     atomic_read_relaxed(&trace_field, &tf);
+            VLOG_WARN("%s:%d", __FILE__, __LINE__);
     if (OVS_UNLIKELY(tf)) {
         int n_bits = MIN(tf->n_bits, 32);
         struct mf_subfield sf = { tf, 0, n_bits };
@@ -4961,7 +4962,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         mf_read_subfield(&sf, &xin->flow, &sv);
 
+        VLOG_WARN("%s:%d %lld", __FILE__, __LINE__, ntohll(sv.integer));
         if (sv.integer && !xin->trace && xin->packet) {
+            VLOG_WARN("%s:%d", __FILE__, __LINE__);
             ds_init(&local_trace);
             xin->trace = &local_trace;
 
@@ -5517,6 +5520,7 @@ ofproto_dpif_xlate_unixctl_set_trace_field(
         }
     }
     atomic_store(&trace_field, field);
+    unixctl_command_reply(conn, "OK");
 }
 
 void

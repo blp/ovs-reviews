@@ -444,7 +444,9 @@ for i in 0 1 2; do
 done
 ovn_populate_arp
 sleep 1
-as hv0 ovs-appctl netdev-dummy/receive vif01 'f00000000010f000000000011234'
+as hv0 ovs-appctl netdev-dummy/receive vif01 'f00000000010f000000000011234,tunnel(ttl=64,geneve({class=0xffff,type=1,len=4,0x80000000}))'
+as hv0 ovs-appctl dpif/dump-flows br-phys
+as hv0 ovs-appctl dpif/dump-flows br-int
 as hv1 ovs-ofctl dump-flows br-phys
 as hv1 ovs-ofctl dump-flows br-int
 sleep 1

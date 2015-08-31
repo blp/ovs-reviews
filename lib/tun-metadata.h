@@ -40,7 +40,7 @@ struct tun_table;
  *
  * The option data exists in two forms and is interpreted differently depending
  * on whether FLOW_TNL_F_UDPIF is set in struct flow_tnl flags:
- *
+ *v
  * When FLOW_TNL_F_UDPIF is set, the tunnel metadata is in "userspace datapath
  * format". This is typically used for fast-path packet processing to avoid
  * the cost of translating options and in situations where we need to maintain

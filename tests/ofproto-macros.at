@@ -125,6 +125,8 @@ ovn_attach() {
     arp_table="$arp_table $sandbox,$bridge,$ip,$mac"
     ovs-appctl netdev-dummy/ip4addr $bridge $ip/$masklen >/dev/null || return 1
     ovs-appctl ovs/route/add $ip/$masklen $bridge >/dev/null || return 1
+    ovs-ofctl add-geneve-map $bridge '{class=0xffff,type=1,len=4}->tun_metadata1' || return 1
+    ovs-appctl ofproto/set-trace-field tun_metadata1
     ovs-vsctl \
 	-- set Open_vSwitch . external-ids:system-id=$sandbox \
         -- set Open_vSwitch . external-ids:ovn-remote=unix:$ovs_base/ovn-sb/ovn-sb.sock \

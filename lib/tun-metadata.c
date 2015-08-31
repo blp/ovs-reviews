@@ -30,6 +30,9 @@
 #include "packets.h"
 #include "tun-metadata.h"
 
+#include "openvswitch/vlog.h"
+VLOG_DEFINE_THIS_MODULE(tun_metadata);
+
 struct tun_meta_entry {
     struct hmap_node node;      /* In struct tun_table's key_hmap. */
     uint32_t key;               /* (class << 16) | type. */
@@ -640,16 +643,19 @@ tun_metadata_from_geneve__(const struct tun_metadata *flow_metadata,
         return 0;
     }
 
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     while (opts_len > 0) {
         int len;
         struct tun_meta_entry *entry;
 
         if (opts_len < sizeof(*opt)) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             return EINVAL;
         }
 
         len = sizeof(*opt) + flow_opt->length * 4;
         if (len > opts_len) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             return EINVAL;
         }
 
@@ -657,15 +663,19 @@ tun_metadata_from_geneve__(const struct tun_metadata *flow_metadata,
                                   tun_meta_key(flow_opt->opt_class,
                                                flow_opt->type));
         if (entry) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             if (entry->loc.len == flow_opt->length * 4) {
                 memcpy_to_metadata(metadata, opt + 1, &entry->loc,
                                    entry - map->entries);
             } else {
+                VLOG_INFO("%s:%d", __FILE__, __LINE__);
                 return EINVAL;
             }
         } else if (flow_opt->type & GENEVE_CRIT_OPT_TYPE) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             return EINVAL;
         }
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
 
         opt = opt + len / sizeof(*opt);
         flow_opt = flow_opt + len / sizeof(*opt);

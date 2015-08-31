@@ -1279,6 +1279,7 @@ odp_tun_key_from_attr__(const struct nlattr *attr,
                                             OVS_TUNNEL_ATTR_MAX, type);
 
         if (len != expected_len && expected_len >= 0) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             return ODP_FIT_ERROR;
         }
 
@@ -1337,6 +1338,7 @@ odp_tun_key_from_attr__(const struct nlattr *attr,
         case OVS_TUNNEL_KEY_ATTR_GENEVE_OPTS:
             if (tun_metadata_from_geneve_nlattr(a, flow_attrs, flow_attr_len,
                                                 src_tun, udpif, tun)) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
                 return ODP_FIT_ERROR;
             }
             break;
@@ -1350,6 +1352,7 @@ odp_tun_key_from_attr__(const struct nlattr *attr,
     }
 
     if (!ttl) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return ODP_FIT_ERROR;
     }
     if (unknown) {
@@ -3594,6 +3597,7 @@ odp_key_to_pkt_metadata(const struct nlattr *key, size_t key_len,
             enum odp_key_fitness res;
 
             res = odp_tun_key_from_attr(nla, true, &md->tunnel);
+            VLOG_INFO("res=%d", res);
             if (res == ODP_FIT_ERROR) {
                 memset(&md->tunnel, 0, sizeof md->tunnel);
             } else if (res == ODP_FIT_PERFECT) {
