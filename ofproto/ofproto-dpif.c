@@ -5025,6 +5025,8 @@ ofproto_unixctl_init(void)
 
     unixctl_command_register("ofproto/tnl-push-pop", "[on]|[off]", 1, 1,
                              disable_tnl_push_pop, NULL);
+
+    xlate_init();
 }
 
 /* Returns true if 'table' is the table used for internal rules,

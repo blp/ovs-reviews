@@ -58,6 +58,7 @@
 #include "tnl-ports.h"
 #include "tunnel.h"
 #include "openvswitch/vlog.h"
+#include "unixctl.h"
 
 COVERAGE_DEFINE(xlate_actions);
 COVERAGE_DEFINE(xlate_actions_oversize);
@@ -315,6 +316,8 @@ struct xlate_ctx {
     struct flow *trace_last_flow;
     struct flow_wildcards *trace_wc;
 };
+
+static ATOMIC(const struct mf_field *) trace_field;
 
 static void xlate_action_set(struct xlate_ctx *ctx);
 
@@ -4947,6 +4950,30 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     struct flow trace_orig_flow;
     struct flow trace_last_flow;
     struct flow_wildcards trace_wc;
+
+    struct ds local_trace;
+    const struct mf_field *tf;
+    atomic_read_relaxed(&trace_field, &tf);
+    if (OVS_UNLIKELY(tf)) {
+        int n_bits = MIN(tf->n_bits, 32);
+        struct mf_subfield sf = { tf, 0, n_bits };
+        union mf_subvalue sv;
+
+        mf_read_subfield(&sf, &xin->flow, &sv);
+
+        if (sv.integer && !xin->trace && xin->packet) {
+            ds_init(&local_trace);
+            xin->trace = &local_trace;
+
+            xout->slow |= SLOW_TRACE;
+
+            sv.integer = htonll(ntohll(sv.integer) + 1);
+            mf_write_subfield_flow(&sf, &sv, flow);
+
+            const union mf_subvalue ones = { .integer = htonll(UINT32_MAX) };
+            mf_write_subfield_flow(&sf, &ones, &ctx.wc->masks);
+        }
+    }
     if (OVS_UNLIKELY(xin->trace)) {
         ctx.trace_orig_flow = &trace_orig_flow;
         ctx.trace_last_flow = &trace_last_flow;
@@ -5237,6 +5264,11 @@ exit:
                 slow &= ~bit;
             }
         }
+        if (xin->trace == &local_trace) {
+            VLOG_INFO("%s", ds_cstr(&local_trace));
+            ds_destroy(&local_trace);
+            xin->trace = NULL;
+        }
     }
     ofpbuf_uninit(&ctx.stack);
     ofpbuf_uninit(&ctx.action_set);
@@ -5467,4 +5499,30 @@ xlate_cache_delete(struct xlate_cache *xcache)
     xlate_cache_clear(xcache);
     ofpbuf_uninit(&xcache->entries);
     free(xcache);
+}
+
+static void
+ofproto_dpif_xlate_unixctl_set_trace_field(
+    struct unixctl_conn *conn, int argc OVS_UNUSED,
+    const char *argv[], void *aux OVS_UNUSED)
+{
+    const char *field_name = argv[1];
+
+    const struct mf_field *field = NULL;
+    if (strcmp(field_name, "none")) {
+        field = mf_from_name(field_name);
+        if (!field) {
+            unixctl_command_reply_error(conn, "unknown field");
+            return;
+        }
+    }
+    atomic_store(&trace_field, field);
+}
+
+void
+xlate_init(void)
+{
+    unixctl_command_register(
+        "ofproto/set-trace-field", "FIELD",
+        1, 1, ofproto_dpif_xlate_unixctl_set_trace_field, NULL);
 }

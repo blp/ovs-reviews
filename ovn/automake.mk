@@ -73,7 +73,8 @@ DISTCLEANFILES += ovn/ovn-architecture.7
 EXTRA_DIST += \
 	ovn/TODO \
 	ovn/CONTAINERS.OpenStack.md \
-	ovn/OVN-GW-HA.md
+	ovn/OVN-GW-HA.md \
+	ovn/ovn-trace
 
 include ovn/controller/automake.mk
 include ovn/controller-vtep/automake.mk

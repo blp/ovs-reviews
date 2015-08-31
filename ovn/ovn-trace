@@ -1,0 +1,40 @@
+#! /usr/bin/perl
+
+use warnings;
+use strict;
+
+my %logs;
+for my $log (glob("$ENV{'sim_base'}/*/*.log")) {
+    $logs{$log} = -s $log;
+}
+
+system("ovs-appctl netdev-dummy/receive $ARGV[0] '$ARGV[1],skb_mark(0x80000000)'");
+sleep 1;
+
+my %traces;
+
+sub add_trace {
+    my ($log, $trace) = @_;
+    if ($trace =~ /pkt_mark=(0x8[0-9a-fA-F]{7}),/) {
+	my ($pkt_mark) = $1;
+	$trace =~ s/.*\|//;
+	$traces{$pkt_mark} .= "\n---- $pkt_mark ---- $log ----\n$trace";
+    }
+}
+
+for my $log (keys (%logs)) {
+    open(LOG, '<', $log) or print STDERR "$log: open failed ($!)\n", next;
+    seek(LOG, $logs{$log}, 0);
+    my $line = '';
+    while (<LOG>) {
+	$line .= $_, next if !/\|/;
+	add_trace($log, $line);
+	$line = $_;
+    }
+    add_trace($log, $line);
+    close(LOG);
+}
+
+for my $pkt_mark (sort { oct($a) <=> oct($b) } keys(%traces)) {
+    print $traces{$pkt_mark};
+}
