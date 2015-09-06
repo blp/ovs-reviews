@@ -29,9 +29,6 @@ struct controller_ctx {
 
     struct ovsdb_idl *ovs_idl;
     struct ovsdb_idl_txn *ovs_idl_txn;
-
-    struct simap ct_zones;          /* Port to conntrack zone mappings. */
-    unsigned long *ct_zone_bitmap;  /* Bitmap of assigned zones. */
 };
 
 static inline const struct sbrec_chassis *

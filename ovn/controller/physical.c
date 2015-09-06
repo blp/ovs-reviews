@@ -134,7 +134,7 @@ put_stack(enum mf_field_id field, struct ofpact_stack *stack)
 void
 physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
              const struct ovsrec_bridge *br_int, const char *this_chassis_id,
-             struct hmap *flow_table)
+             const struct simap *ct_zones, struct hmap *flow_table)
 {
     struct simap lport_to_ofport = SIMAP_INITIALIZER(&lport_to_ofport);
     struct hmap tunnels = HMAP_INITIALIZER(&tunnels);
@@ -235,7 +235,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
 
         struct match match;
         if (!tun) {
-            int zone_id = simap_get(&ctx->ct_zones, binding->logical_port);
+            int zone_id = simap_get(ct_zones, binding->logical_port);
             /* Packets that arrive from a vif can belong to a VM or
              * to a container located inside that VM. Packets that
              * arrive from containers have a tag (vlan) associated with them.
@@ -406,7 +406,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
                 continue;
             }
 
-            int zone_id = simap_get(&ctx->ct_zones, port->logical_port);
+            int zone_id = simap_get(ct_zones, port->logical_port);
             if (zone_id) {
                 put_load(zone_id, MFF_LOG_CT_ZONE, 0, 32, &ofpacts);
             }

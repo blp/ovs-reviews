@@ -822,7 +822,7 @@ do_acl_list(struct ovs_cmdl_context *ctx)
 
     for (i = 0; i < lswitch->n_acls; i++) {
         const struct nbrec_acl *acl = acls[i];
-        printf("%10s %5ld (%s) %s%s\n", acl->direction, acl->priority,
+        printf("%10s %5"PRId64" (%s) %s%s\n", acl->direction, acl->priority,
                 acl->match, acl->action, acl->log ? " log" : "");
     }
 

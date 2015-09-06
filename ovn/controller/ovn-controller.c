@@ -121,7 +121,6 @@ int
 main(int argc, char *argv[])
 {
     struct unixctl_server *unixctl;
-    struct controller_ctx ctx;
     bool exiting;
     int retval;
 
@@ -137,7 +136,6 @@ main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
     unixctl_command_register("exit", "", 0, 0, ovn_controller_exit, &exiting);
-    unixctl_command_register("ct-zone-list", "", 0, 0, ct_zone_list, &ctx);
 
     daemonize_complete();
 
@@ -167,19 +165,21 @@ main(int argc, char *argv[])
     ovsdb_idl_get_initial_snapshot(ovnsb_idl_loop.idl);
 
     /* Initialize connection tracking zones. */
-    simap_init(&ctx.ct_zones);
-    ctx.ct_zone_bitmap = bitmap_allocate(MAX_CT_ZONES);
-
-    /* We never use zone 0. */
-    bitmap_set1(ctx.ct_zone_bitmap, 0);
+    struct simap ct_zones = SIMAP_INITIALIZER(&ct_zones);
+    unsigned long ct_zone_bitmap[BITMAP_N_LONGS(MAX_CT_ZONES)];
+    bitmap_set1(ct_zone_bitmap, 0); /* Zone 0 is reserved. */
+    unixctl_command_register("ct-zone-list", "", 0, 0,
+                             ct_zone_list, &ct_zones);
 
     /* Main loop. */
     exiting = false;
     while (!exiting) {
-        ctx.ovs_idl = ovs_idl_loop.idl;
-        ctx.ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
-        ctx.ovnsb_idl = ovnsb_idl_loop.idl;
-        ctx.ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop);
+        struct controller_ctx ctx = {
+            .ovs_idl = ovs_idl_loop.idl,
+            .ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop),
+            .ovnsb_idl = ovnsb_idl_loop.idl,
+            .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
+        };
 
         const struct ovsrec_bridge *br_int = get_br_int(ctx.ovs_idl);
         const char *chassis_id = get_chassis_id(ctx.ovs_idl);
@@ -187,17 +187,17 @@ main(int argc, char *argv[])
         if (chassis_id) {
             chassis_run(&ctx, chassis_id);
             encaps_run(&ctx, br_int, chassis_id);
-            binding_run(&ctx, br_int, chassis_id);
+            binding_run(&ctx, br_int, chassis_id, &ct_zones, ct_zone_bitmap);
         }
 
         if (br_int) {
             enum mf_field_id mff_ovn_geneve = ofctrl_run(br_int);
 
             struct hmap flow_table = HMAP_INITIALIZER(&flow_table);
-            lflow_run(&ctx, &flow_table);
+            lflow_run(&ctx, &flow_table, &ct_zones);
             if (chassis_id) {
                 physical_run(&ctx, mff_ovn_geneve,
-                             br_int, chassis_id, &flow_table);
+                             br_int, chassis_id, &ct_zones, &flow_table);
             }
             ofctrl_put(&flow_table);
             hmap_destroy(&flow_table);
@@ -222,10 +222,12 @@ main(int argc, char *argv[])
     /* It's time to exit.  Clean up the databases. */
     bool done = false;
     while (!done) {
-        ctx.ovs_idl = ovs_idl_loop.idl;
-        ctx.ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
-        ctx.ovnsb_idl = ovnsb_idl_loop.idl;
-        ctx.ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop);
+        struct controller_ctx ctx = {
+            .ovs_idl = ovs_idl_loop.idl,
+            .ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop),
+            .ovnsb_idl = ovnsb_idl_loop.idl,
+            .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
+        };
 
         const struct ovsrec_bridge *br_int = get_br_int(ctx.ovs_idl);
         const char *chassis_id = get_chassis_id(ctx.ovs_idl);
@@ -248,8 +250,7 @@ main(int argc, char *argv[])
     lflow_destroy();
     ofctrl_destroy();
 
-    simap_destroy(&ctx.ct_zones);
-    bitmap_free(ctx.ct_zone_bitmap);
+    simap_destroy(&ct_zones);
 
     ovsdb_idl_loop_destroy(&ovs_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
@@ -354,13 +355,13 @@ ovn_controller_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 ct_zone_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
-             const char *argv[] OVS_UNUSED, void *aux)
+             const char *argv[] OVS_UNUSED, void *ct_zones_)
 {
-    const struct controller_ctx *ctx = aux;
+    struct simap *ct_zones = ct_zones_;
     struct ds ds = DS_EMPTY_INITIALIZER;
     struct simap_node *zone;
 
-    SIMAP_FOR_EACH(zone, &ctx->ct_zones) {
+    SIMAP_FOR_EACH(zone, ct_zones) {
         ds_put_format(&ds, "%s %d\n", zone->name, zone->data);
     }
 

@@ -254,7 +254,8 @@ lflow_init(void)
 /* Translates logical flows in the Logical_Flow table in the OVN_SB database
  * into OpenFlow flows.  See ovn-architecture(7) for more information. */
 void
-lflow_run(struct controller_ctx *ctx, struct hmap *flow_table)
+lflow_run(struct controller_ctx *ctx, struct hmap *flow_table,
+          const struct simap *ct_zones)
 {
     struct hmap flows = HMAP_INITIALIZER(&flows);
     uint32_t conj_id_ofs = 1;
@@ -293,7 +294,7 @@ lflow_run(struct controller_ctx *ctx, struct hmap *flow_table)
 
         ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
         error = actions_parse_string(lflow->actions, &symtab, &ldp->ports,
-                                     &ctx->ct_zones, next_phys_table,
+                                     ct_zones, next_phys_table,
                                      output_phys_table, &ofpacts, &prereqs);
         if (error) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);

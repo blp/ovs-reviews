@@ -36,6 +36,7 @@
 
 struct controller_ctx;
 struct hmap;
+struct simap;
 struct uuid;
 
 /* OpenFlow table numbers.
@@ -70,7 +71,8 @@ struct uuid;
     MFF_LOG_REG(MFF_REG4)
 
 void lflow_init(void);
-void lflow_run(struct controller_ctx *, struct hmap *flow_table);
+void lflow_run(struct controller_ctx *, struct hmap *flow_table,
+               const struct simap *ct_zones);
 void lflow_destroy(void);
 
 #endif /* ovn/lflow.h */
