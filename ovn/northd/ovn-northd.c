@@ -821,7 +821,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
             /* Commit the connection tracking entry, which allow all
              * other traffic related to this entry to flow due to the
              * 65535 priority flow defined earlier. */
-            ds_put_format(&match, "ct.new && %s", acl->match);
+            ds_put_format(&match, "ct.new && (%s)", acl->match);
             ovn_lflow_add(lflows, od, pipeline, stage, acl->priority,
                           ds_cstr(&match), "ct_commit; next;");
 
