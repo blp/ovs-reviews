@@ -87,16 +87,21 @@ struct iface {
     ofp_port_t ofp_port;        /* OpenFlow port number. */
     uint64_t change_seq;
 
-    /* These members are valid only within bridge_reconfigure(). */
-    const char *type;           /* Usually same as cfg->type. */
-    const struct ovsrec_interface *cfg;
+    /* References back to OVSDB.
+     *
+     * 'type' and 'cfg' are only valid within bridge_reconfigure(). */
+    struct uuid uuid;           /* UUID of Interface record in database. */
+    const struct ovsrec_interface *cfg; /* Interface record in database. */
+    const char *type;           /* Usually the same as cfg->type. */
 };
 
 struct mirror {
-    struct uuid uuid;           /* UUID of this "mirror" record in database. */
     struct hmap_node hmap_node; /* In struct bridge's "mirrors" hmap. */
     struct bridge *bridge;
     char *name;
+
+    /* Reference back to OVSDB. */
+    struct uuid uuid;           /* UUID of Mirror record in database. */
 };
 
 struct port {
@@ -104,7 +109,9 @@ struct port {
     struct bridge *bridge;
     char *name;
 
-    const struct ovsrec_port *cfg;
+    /* References back to OVSDB. */
+    struct uuid uuid;           /* UUID of Port record in database. */
+    const struct ovsrec_port *cfg; /* Only valid in bridge_reconfigure(). */
 
     /* An ordinary bridge port has 1 interface.
      * A bridge port for bonding has at least 2 interfaces. */
@@ -117,7 +124,10 @@ struct bridge {
     char *type;                 /* Datapath type. */
     struct eth_addr ea;         /* Bridge Ethernet Address. */
     struct eth_addr default_ea; /* Default MAC. */
-    const struct ovsrec_bridge *cfg;
+
+    /* References back to OVSDB. */
+    struct uuid uuid;                /* UUID of Bridge record in database. */
+    const struct ovsrec_bridge *cfg; /* Only valid in bridge_reconfigure(). */
 
     /* OpenFlow switch processing. */
     struct ofproto *ofproto;    /* OpenFlow switch. */
@@ -278,7 +288,6 @@ static void port_configure(struct port *);
 static struct lacp_settings *port_configure_lacp(struct port *,
                                                  struct lacp_settings *);
 static void port_configure_bond(struct port *, struct bond_settings *);
-static bool port_is_synthetic(const struct port *);
 
 static void reconfigure_system_stats(const struct ovsrec_open_vswitch *);
 static void run_system_stats(void);
@@ -308,11 +317,14 @@ static void iface_set_ofport(const struct ovsrec_interface *, ofp_port_t ofport)
 static void iface_clear_db_record(const struct ovsrec_interface *if_cfg, char *errp);
 static void iface_configure_qos(struct iface *, const struct ovsrec_qos *);
 static void iface_configure_cfm(struct iface *);
-static void iface_refresh_cfm_stats(struct iface *);
-static void iface_refresh_stats(struct iface *);
-static void iface_refresh_netdev_status(struct iface *);
-static void iface_refresh_ofproto_status(struct iface *);
-static bool iface_is_synthetic(const struct iface *);
+static void iface_refresh_cfm_stats(struct iface *,
+                                    const struct ovsrec_interface *);
+static void iface_refresh_stats(struct iface *,
+                                const struct ovsrec_interface *);
+static void iface_refresh_netdev_status(struct iface *,
+                                        const struct ovsrec_interface *);
+static void iface_refresh_ofproto_status(struct iface *,
+                                         const struct ovsrec_interface *);
 static ofp_port_t iface_get_requested_ofp_port(
     const struct ovsrec_interface *);
 static ofp_port_t iface_pick_ofport(const struct ovsrec_interface *);
@@ -690,6 +702,20 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
         bridge_configure_aa(br);
     }
     free(managers);
+
+    HMAP_FOR_EACH (br, node, &all_bridges) {
+        struct port *port;
+
+        HMAP_FOR_EACH (port, hmap_node, &br->ports) {
+            port->cfg = NULL;
+
+            struct iface *iface;
+            LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
+                iface->cfg = NULL;
+            }
+        }
+        br->cfg = NULL;
+    }
 
     /* The ofproto-dpif provider does some final reconfiguration in its
      * ->type_run() function.  We have to call it before notifying the database
@@ -1705,11 +1731,13 @@ add_del_bridges(const struct ovsrec_open_vswitch *cfg)
     }
 
     /* Get rid of deleted bridges or those whose types have changed.
-     * Update 'cfg' of bridges that still exist. */
+     * Update 'cfg' and 'uuid' of bridges that still exist. */
     HMAP_FOR_EACH_SAFE (br, next, node, &all_bridges) {
         br->cfg = shash_find_data(&new_br, br->name);
-        if (!br->cfg || strcmp(br->type, ofproto_normalize_type(
+        if (br->cfg && !strcmp(br->type, ofproto_normalize_type(
                                    br->cfg->datapath_type))) {
+            br->uuid = br->cfg->header_.uuid;
+        } else {
             bridge_destroy(br);
         }
     }
@@ -1835,12 +1863,13 @@ iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
     iface->netdev = netdev;
     iface->type = iface_get_type(iface_cfg, br->cfg);
     iface->cfg = iface_cfg;
+    iface->uuid = iface_cfg->header_.uuid;
     hmap_insert(&br->ifaces, &iface->ofp_port_node,
                 hash_ofp_port(ofp_port));
 
     /* Populate initial status in database. */
-    iface_refresh_stats(iface);
-    iface_refresh_netdev_status(iface);
+    iface_refresh_stats(iface, iface->cfg);
+    iface_refresh_netdev_status(iface, iface->cfg);
 
     /* Add bond fake iface if necessary. */
     if (port_is_bond_fake_iface(port)) {
@@ -2150,7 +2179,8 @@ dpid_from_hash(const void *data, size_t n)
 }
 
 static void
-iface_refresh_netdev_status(struct iface *iface)
+iface_refresh_netdev_status(struct iface *iface,
+                            const struct ovsrec_interface *cfg)
 {
     struct smap smap;
 
@@ -2160,10 +2190,6 @@ iface_refresh_netdev_status(struct iface *iface)
     struct eth_addr mac;
     int64_t bps, mtu_64, ifindex64, link_resets;
     int mtu, error;
-
-    if (iface_is_synthetic(iface)) {
-        return;
-    }
 
     if (iface->change_seq == netdev_get_change_seq(iface->netdev)
         && !status_txn_try_again) {
@@ -2175,9 +2201,9 @@ iface_refresh_netdev_status(struct iface *iface)
     smap_init(&smap);
 
     if (!netdev_get_status(iface->netdev, &smap)) {
-        ovsrec_interface_set_status(iface->cfg, &smap);
+        ovsrec_interface_set_status(cfg, &smap);
     } else {
-        ovsrec_interface_set_status(iface->cfg, NULL);
+        ovsrec_interface_set_status(cfg, NULL);
     }
 
     smap_destroy(&smap);
@@ -2186,35 +2212,35 @@ iface_refresh_netdev_status(struct iface *iface)
     if (!error) {
         const char *state = flags & NETDEV_UP ? "up" : "down";
 
-        ovsrec_interface_set_admin_state(iface->cfg, state);
+        ovsrec_interface_set_admin_state(cfg, state);
     } else {
-        ovsrec_interface_set_admin_state(iface->cfg, NULL);
+        ovsrec_interface_set_admin_state(cfg, NULL);
     }
 
     link_state = netdev_get_carrier(iface->netdev) ? "up" : "down";
-    ovsrec_interface_set_link_state(iface->cfg, link_state);
+    ovsrec_interface_set_link_state(cfg, link_state);
 
     link_resets = netdev_get_carrier_resets(iface->netdev);
-    ovsrec_interface_set_link_resets(iface->cfg, &link_resets, 1);
+    ovsrec_interface_set_link_resets(cfg, &link_resets, 1);
 
     error = netdev_get_features(iface->netdev, &current, NULL, NULL, NULL);
     bps = !error ? netdev_features_to_bps(current, 0) : 0;
     if (bps) {
-        ovsrec_interface_set_duplex(iface->cfg,
+        ovsrec_interface_set_duplex(cfg,
                                     netdev_features_is_full_duplex(current)
                                     ? "full" : "half");
-        ovsrec_interface_set_link_speed(iface->cfg, &bps, 1);
+        ovsrec_interface_set_link_speed(cfg, &bps, 1);
     } else {
-        ovsrec_interface_set_duplex(iface->cfg, NULL);
-        ovsrec_interface_set_link_speed(iface->cfg, NULL, 0);
+        ovsrec_interface_set_duplex(cfg, NULL);
+        ovsrec_interface_set_link_speed(cfg, NULL, 0);
     }
 
     error = netdev_get_mtu(iface->netdev, &mtu);
     if (!error) {
         mtu_64 = mtu;
-        ovsrec_interface_set_mtu(iface->cfg, &mtu_64, 1);
+        ovsrec_interface_set_mtu(cfg, &mtu_64, 1);
     } else {
-        ovsrec_interface_set_mtu(iface->cfg, NULL, 0);
+        ovsrec_interface_set_mtu(cfg, NULL, 0);
     }
 
     error = netdev_get_etheraddr(iface->netdev, &mac);
@@ -2222,9 +2248,9 @@ iface_refresh_netdev_status(struct iface *iface)
         char mac_string[32];
 
         sprintf(mac_string, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
-        ovsrec_interface_set_mac_in_use(iface->cfg, mac_string);
+        ovsrec_interface_set_mac_in_use(cfg, mac_string);
     } else {
-        ovsrec_interface_set_mac_in_use(iface->cfg, NULL);
+        ovsrec_interface_set_mac_in_use(cfg, NULL);
     }
 
     /* The netdev may return a negative number (such as -EOPNOTSUPP)
@@ -2233,31 +2259,28 @@ iface_refresh_netdev_status(struct iface *iface)
     if (ifindex64 < 0) {
         ifindex64 = 0;
     }
-    ovsrec_interface_set_ifindex(iface->cfg, &ifindex64, 1);
+    ovsrec_interface_set_ifindex(cfg, &ifindex64, 1);
 }
 
 static void
-iface_refresh_ofproto_status(struct iface *iface)
+iface_refresh_ofproto_status(struct iface *iface,
+                             const struct ovsrec_interface *cfg)
 {
     int current;
-
-    if (iface_is_synthetic(iface)) {
-        return;
-    }
 
     current = ofproto_port_is_lacp_current(iface->port->bridge->ofproto,
                                            iface->ofp_port);
     if (current >= 0) {
         bool bl = current;
-        ovsrec_interface_set_lacp_current(iface->cfg, &bl, 1);
+        ovsrec_interface_set_lacp_current(cfg, &bl, 1);
     } else {
-        ovsrec_interface_set_lacp_current(iface->cfg, NULL, 0);
+        ovsrec_interface_set_lacp_current(cfg, NULL, 0);
     }
 
     if (ofproto_port_cfm_status_changed(iface->port->bridge->ofproto,
                                         iface->ofp_port)
         || status_txn_try_again) {
-        iface_refresh_cfm_stats(iface);
+        iface_refresh_cfm_stats(iface, cfg);
     }
 
     if (ofproto_port_bfd_status_changed(iface->port->bridge->ofproto,
@@ -2268,7 +2291,7 @@ iface_refresh_ofproto_status(struct iface *iface)
         smap_init(&smap);
         ofproto_port_get_bfd_status(iface->port->bridge->ofproto,
                                     iface->ofp_port, &smap);
-        ovsrec_interface_set_bfd_status(iface->cfg, &smap);
+        ovsrec_interface_set_bfd_status(cfg, &smap);
         smap_destroy(&smap);
     }
 }
@@ -2276,9 +2299,9 @@ iface_refresh_ofproto_status(struct iface *iface)
 /* Writes 'iface''s CFM statistics to the database. 'iface' must not be
  * synthetic. */
 static void
-iface_refresh_cfm_stats(struct iface *iface)
+iface_refresh_cfm_stats(struct iface *iface, const
+                        struct ovsrec_interface *cfg)
 {
-    const struct ovsrec_interface *cfg = iface->cfg;
     struct cfm_status status;
     int error;
 
@@ -2332,7 +2355,7 @@ iface_refresh_cfm_stats(struct iface *iface)
 }
 
 static void
-iface_refresh_stats(struct iface *iface)
+iface_refresh_stats(struct iface *iface, const struct ovsrec_interface *cfg)
 {
 #define IFACE_STATS                             \
     IFACE_STAT(rx_packets,      "rx_packets")   \
@@ -2357,10 +2380,6 @@ iface_refresh_stats(struct iface *iface)
 
     struct netdev_stats stats;
 
-    if (iface_is_synthetic(iface)) {
-        return;
-    }
-
     /* Intentionally ignore return value, since errors will set 'stats' to
      * all-1s, and we will deal with that correctly below. */
     netdev_get_stats(iface->netdev, &stats);
@@ -2377,12 +2396,12 @@ iface_refresh_stats(struct iface *iface)
 #undef IFACE_STAT
     ovs_assert(n <= N_IFACE_STATS);
 
-    ovsrec_interface_set_statistics(iface->cfg, keys, values, n);
+    ovsrec_interface_set_statistics(cfg, keys, values, n);
 #undef IFACE_STATS
 }
 
 static void
-br_refresh_datapath_info(struct bridge *br)
+br_refresh_datapath_info(struct bridge *br, const struct ovsrec_bridge *cfg)
 {
     const char *version;
 
@@ -2390,12 +2409,11 @@ br_refresh_datapath_info(struct bridge *br)
                ? br->ofproto->ofproto_class->get_datapath_version(br->ofproto)
                : NULL);
 
-    ovsrec_bridge_set_datapath_version(br->cfg,
-                                       version ? version : "<unknown>");
+    ovsrec_bridge_set_datapath_version(cfg, version ? version : "<unknown>");
 }
 
 static void
-br_refresh_stp_status(struct bridge *br)
+br_refresh_stp_status(struct bridge *br, const struct ovsrec_bridge *cfg)
 {
     struct smap smap = SMAP_INITIALIZER(&smap);
     struct ofproto *ofproto = br->ofproto;
@@ -2406,7 +2424,7 @@ br_refresh_stp_status(struct bridge *br)
     }
 
     if (!status.enabled) {
-        ovsrec_bridge_set_status(br->cfg, NULL);
+        ovsrec_bridge_set_status(cfg, NULL);
         return;
     }
 
@@ -2416,25 +2434,21 @@ br_refresh_stp_status(struct bridge *br)
                     STP_ID_ARGS(status.designated_root));
     smap_add_format(&smap, "stp_root_path_cost", "%d", status.root_path_cost);
 
-    ovsrec_bridge_set_status(br->cfg, &smap);
+    ovsrec_bridge_set_status(cfg, &smap);
     smap_destroy(&smap);
 }
 
 static void
-port_refresh_stp_status(struct port *port)
+port_refresh_stp_status(struct port *port, const struct ovsrec_port *cfg)
 {
     struct ofproto *ofproto = port->bridge->ofproto;
     struct iface *iface;
     struct ofproto_port_stp_status status;
     struct smap smap;
 
-    if (port_is_synthetic(port)) {
-        return;
-    }
-
     /* STP doesn't currently support bonds. */
     if (!list_is_singleton(&port->ifaces)) {
-        ovsrec_port_set_status(port->cfg, NULL);
+        ovsrec_port_set_status(cfg, NULL);
         return;
     }
 
@@ -2444,7 +2458,7 @@ port_refresh_stp_status(struct port *port)
     }
 
     if (!status.enabled) {
-        ovsrec_port_set_status(port->cfg, NULL);
+        ovsrec_port_set_status(cfg, NULL);
         return;
     }
 
@@ -2454,7 +2468,7 @@ port_refresh_stp_status(struct port *port)
     smap_add(&smap, "stp_state", stp_state_name(status.state));
     smap_add_format(&smap, "stp_sec_in_state", "%u", status.sec_in_state);
     smap_add(&smap, "stp_role", stp_role_name(status.role));
-    ovsrec_port_set_status(port->cfg, &smap);
+    ovsrec_port_set_status(cfg, &smap);
     smap_destroy(&smap);
 }
 
@@ -2466,8 +2480,10 @@ port_refresh_stp_stats(struct port *port)
     struct ofproto_port_stp_stats stats;
     const char *keys[3];
     int64_t int_values[3];
+    const struct ovsrec_port *cfg;
 
-    if (port_is_synthetic(port)) {
+    cfg = ovsrec_port_get_for_uuid(idl, &port->uuid);
+    if (!cfg) {
         return;
     }
 
@@ -2482,7 +2498,7 @@ port_refresh_stp_stats(struct port *port)
     }
 
     if (!stats.enabled) {
-        ovsrec_port_set_statistics(port->cfg, NULL, NULL, 0);
+        ovsrec_port_set_statistics(cfg, NULL, NULL, 0);
         return;
     }
 
@@ -2494,12 +2510,12 @@ port_refresh_stp_stats(struct port *port)
     keys[2] = "stp_error_count";
     int_values[2] = stats.error_count;
 
-    ovsrec_port_set_statistics(port->cfg, keys, int_values,
+    ovsrec_port_set_statistics(cfg, keys, int_values,
                                ARRAY_SIZE(int_values));
 }
 
 static void
-br_refresh_rstp_status(struct bridge *br)
+br_refresh_rstp_status(struct bridge *br, const struct ovsrec_bridge *cfg)
 {
     struct smap smap = SMAP_INITIALIZER(&smap);
     struct ofproto *ofproto = br->ofproto;
@@ -2509,7 +2525,7 @@ br_refresh_rstp_status(struct bridge *br)
         return;
     }
     if (!status.enabled) {
-        ovsrec_bridge_set_rstp_status(br->cfg, NULL);
+        ovsrec_bridge_set_rstp_status(cfg, NULL);
         return;
     }
     smap_add_format(&smap, "rstp_bridge_id", RSTP_ID_FMT,
@@ -2524,12 +2540,12 @@ br_refresh_rstp_status(struct bridge *br)
                     status.designated_port_id);
     smap_add_format(&smap, "rstp_bridge_port_id", RSTP_PORT_ID_FMT,
                     status.bridge_port_id);
-    ovsrec_bridge_set_rstp_status(br->cfg, &smap);
+    ovsrec_bridge_set_rstp_status(cfg, &smap);
     smap_destroy(&smap);
 }
 
 static void
-port_refresh_rstp_status(struct port *port)
+port_refresh_rstp_status(struct port *port, const struct ovsrec_port *cfg)
 {
     struct ofproto *ofproto = port->bridge->ofproto;
     struct iface *iface;
@@ -2538,13 +2554,9 @@ port_refresh_rstp_status(struct port *port)
     int64_t int_values[4];
     struct smap smap;
 
-    if (port_is_synthetic(port)) {
-        return;
-    }
-
     /* RSTP doesn't currently support bonds. */
     if (!list_is_singleton(&port->ifaces)) {
-        ovsrec_port_set_rstp_status(port->cfg, NULL);
+        ovsrec_port_set_rstp_status(cfg, NULL);
         return;
     }
 
@@ -2554,8 +2566,8 @@ port_refresh_rstp_status(struct port *port)
     }
 
     if (!status.enabled) {
-        ovsrec_port_set_rstp_status(port->cfg, NULL);
-        ovsrec_port_set_rstp_statistics(port->cfg, NULL, NULL, 0);
+        ovsrec_port_set_rstp_status(cfg, NULL);
+        ovsrec_port_set_rstp_statistics(cfg, NULL, NULL, 0);
         return;
     }
     /* Set Status column. */
@@ -2574,7 +2586,7 @@ port_refresh_rstp_status(struct port *port)
     smap_add_format(&smap, "rstp_designated_path_cost", "%"PRIu32,
                     status.designated_path_cost);
 
-    ovsrec_port_set_rstp_status(port->cfg, &smap);
+    ovsrec_port_set_rstp_status(cfg, &smap);
     smap_destroy(&smap);
 
     /* Set Statistics column. */
@@ -2586,12 +2598,13 @@ port_refresh_rstp_status(struct port *port)
     int_values[2] = status.uptime;
     keys[3] = "rstp_error_count";
     int_values[3] = status.error_count;
-    ovsrec_port_set_rstp_statistics(port->cfg, keys, int_values,
+    ovsrec_port_set_rstp_statistics(cfg, keys, int_values,
             ARRAY_SIZE(int_values));
 }
 
 static void
-port_refresh_bond_status(struct port *port, bool force_update)
+port_refresh_bond_status(struct port *port, bool force_update,
+                         const struct ovsrec_port *cfg)
 {
     struct eth_addr mac;
 
@@ -2605,7 +2618,7 @@ port_refresh_bond_status(struct port *port, bool force_update)
 
         ds_init(&mac_s);
         ds_put_format(&mac_s, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
-        ovsrec_port_set_bond_active_slave(port->cfg, ds_cstr(&mac_s));
+        ovsrec_port_set_bond_active_slave(cfg, ds_cstr(&mac_s));
         ds_destroy(&mac_s);
     }
 }
@@ -2737,7 +2750,15 @@ run_stats_update(void)
                     struct iface *iface;
 
                     LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
-                        iface_refresh_stats(iface);
+                        const struct ovsrec_interface *iface_cfg;
+
+                        iface_cfg = ovsrec_interface_get_for_uuid(
+                            idl, &iface->uuid);
+                        if (!iface_cfg) {
+                            continue;
+                        }
+
+                        iface_refresh_stats(iface, iface_cfg);
                     }
                     port_refresh_stp_stats(port);
                 }
@@ -2785,20 +2806,42 @@ run_status_update(void)
             connectivity_seqno = seq;
             status_txn = ovsdb_idl_txn_create(idl);
             HMAP_FOR_EACH (br, node, &all_bridges) {
+                const struct ovsrec_bridge *br_cfg;
                 struct port *port;
 
-                br_refresh_stp_status(br);
-                br_refresh_rstp_status(br);
-                br_refresh_datapath_info(br);
+                br_cfg = ovsrec_bridge_get_for_uuid(idl, &br->uuid);
+                if (!br_cfg) {
+                    continue;
+                }
+
+                br_refresh_stp_status(br, br_cfg);
+                br_refresh_rstp_status(br, br_cfg);
+                br_refresh_datapath_info(br, br_cfg);
                 HMAP_FOR_EACH (port, hmap_node, &br->ports) {
+                    const struct ovsrec_port *port_cfg;
                     struct iface *iface;
 
-                    port_refresh_stp_status(port);
-                    port_refresh_rstp_status(port);
-                    port_refresh_bond_status(port, status_txn_try_again);
+                    port_cfg = ovsrec_port_get_for_uuid(idl, &port->uuid);
+                    if (!port_cfg) {
+                        continue;
+                    }
+
+                    port_refresh_stp_status(port, port_cfg);
+                    port_refresh_rstp_status(port, port_cfg);
+                    port_refresh_bond_status(port, status_txn_try_again,
+                                             port_cfg);
+
                     LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
-                        iface_refresh_netdev_status(iface);
-                        iface_refresh_ofproto_status(iface);
+                        const struct ovsrec_interface *iface_cfg;
+
+                        iface_cfg = ovsrec_interface_get_for_uuid(
+                            idl, &iface->uuid);
+                        if (!iface_cfg) {
+                            continue;
+                        }
+
+                        iface_refresh_netdev_status(iface, iface_cfg);
+                        iface_refresh_ofproto_status(iface, iface_cfg);
                     }
                 }
             }
@@ -3174,6 +3217,7 @@ bridge_create(const struct ovsrec_bridge *br_cfg)
     br->name = xstrdup(br_cfg->name);
     br->type = xstrdup(ofproto_normalize_type(br_cfg->datapath_type));
     br->cfg = br_cfg;
+    br->uuid = br_cfg->header_.uuid;
 
     /* Derive the default Ethernet address from the bridge's UUID.  This should
      * be unique and it will be stable between ovs-vswitchd runs.  */
@@ -3352,6 +3396,7 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
         if (!port->cfg) {
             port_destroy(port);
         } else {
+            port->uuid = port->cfg->header_.uuid;
             port_del_ifaces(port);
         }
     }
@@ -3368,6 +3413,7 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
 
             if (iface) {
                 iface->cfg = cfg;
+                iface->uuid = iface->cfg->header_.uuid;
                 iface->type = type;
             } else if (!strcmp(type, "null")) {
                 VLOG_WARN_ONCE("%s: The null interface type is deprecated and"
@@ -3978,6 +4024,7 @@ port_create(struct bridge *br, const struct ovsrec_port *cfg)
     port->bridge = br;
     port->name = xstrdup(cfg->name);
     port->cfg = cfg;
+    port->uuid = cfg->header_.uuid;
     list_init(&port->ifaces);
 
     hmap_insert(&br->ports, &port->hmap_node, hash_string(port->name, 0));
@@ -4211,14 +4258,6 @@ port_configure_bond(struct port *port, struct bond_settings *s)
         /* OVSDB did not store the last active interface */
         s->active_slave_mac = eth_addr_zero;
     }
-}
-
-/* Returns true if 'port' is synthetic, that is, if we constructed it locally
- * instead of obtaining it from the database. */
-static bool
-port_is_synthetic(const struct port *port)
-{
-    return ovsdb_idl_row_is_synthetic(&port->cfg->header_);
 }
 
 /* Interface functions. */
@@ -4548,14 +4587,6 @@ iface_configure_cfm(struct iface *iface)
     s.opup = !opstate_str || !strcasecmp("up", opstate_str);
 
     ofproto_port_set_cfm(iface->port->bridge->ofproto, iface->ofp_port, &s);
-}
-
-/* Returns true if 'iface' is synthetic, that is, if we constructed it locally
- * instead of obtaining it from the database. */
-static bool
-iface_is_synthetic(const struct iface *iface)
-{
-    return ovsdb_idl_row_is_synthetic(&iface->cfg->header_);
 }
 
 static ofp_port_t
