@@ -97,7 +97,6 @@ struct mirror {
     struct hmap_node hmap_node; /* In struct bridge's "mirrors" hmap. */
     struct bridge *bridge;
     char *name;
-    const struct ovsrec_mirror *cfg;
 };
 
 struct port {
@@ -288,7 +287,7 @@ static void bridge_configure_mirrors(struct bridge *);
 static struct mirror *mirror_create(struct bridge *,
                                     const struct ovsrec_mirror *);
 static void mirror_destroy(struct mirror *);
-static bool mirror_configure(struct mirror *);
+static bool mirror_configure(struct mirror *, const struct ovsrec_mirror *);
 static void mirror_refresh_stats(struct mirror *);
 
 static void iface_configure_lacp(struct iface *, struct lacp_slave_settings *);
@@ -4623,8 +4622,7 @@ bridge_configure_mirrors(struct bridge *br)
         if (!m) {
             m = mirror_create(br, cfg);
         }
-        m->cfg = cfg;
-        if (!mirror_configure(m)) {
+        if (!mirror_configure(m, cfg)) {
             mirror_destroy(m);
         }
     }
@@ -4690,9 +4688,8 @@ mirror_collect_ports(struct mirror *m,
 }
 
 static bool
-mirror_configure(struct mirror *m)
+mirror_configure(struct mirror *m, const struct ovsrec_mirror *cfg)
 {
-    const struct ovsrec_mirror *cfg = m->cfg;
     struct ofproto_mirror_settings s;
 
     /* Set name. */
@@ -5044,14 +5041,20 @@ add_vlan_splinter_ports(struct bridge *br,
 static void
 mirror_refresh_stats(struct mirror *m)
 {
+    const struct ovsrec_mirror *cfg;
     struct ofproto *ofproto = m->bridge->ofproto;
     uint64_t tx_packets, tx_bytes;
     const char *keys[2];
     int64_t values[2];
     size_t stat_cnt = 0;
 
+    cfg = ovsrec_mirror_get_for_uuid(idl, &m->uuid);
+    if (!cfg) {
+        return;
+    }
+
     if (ofproto_mirror_get_stats(ofproto, m, &tx_packets, &tx_bytes)) {
-        ovsrec_mirror_set_statistics(m->cfg, NULL, NULL, 0);
+        ovsrec_mirror_set_statistics(cfg, NULL, NULL, 0);
         return;
     }
 
@@ -5066,7 +5069,7 @@ mirror_refresh_stats(struct mirror *m)
         stat_cnt++;
     }
 
-    ovsrec_mirror_set_statistics(m->cfg, keys, values, stat_cnt);
+    ovsrec_mirror_set_statistics(cfg, keys, values, stat_cnt);
 }
 
 /*
