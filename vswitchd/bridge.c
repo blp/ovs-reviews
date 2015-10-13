@@ -91,7 +91,6 @@ struct iface {
      *
      * 'type' and 'cfg' are only valid within bridge_reconfigure(). */
     struct uuid uuid;           /* UUID of Interface record in database. */
-    const struct ovsrec_interface *cfg; /* Interface record in database. */
     const char *type;           /* Usually the same as cfg->type. */
 };
 
@@ -334,11 +333,14 @@ static struct iface *iface_from_ofp_port(const struct bridge *,
                                          ofp_port_t ofp_port);
 static void iface_set_mac(const struct bridge *, const struct ovsrec_bridge *,
                           const struct port *, const struct ovsrec_port *,
-                          struct iface *);
+                          struct iface *, const struct ovsrec_interface *);
 static void iface_set_ofport(const struct ovsrec_interface *, ofp_port_t ofport);
 static void iface_clear_db_record(const struct ovsrec_interface *if_cfg, char *errp);
-static void iface_configure_qos(struct iface *, const struct ovsrec_qos *);
-static void iface_configure_cfm(struct iface *);
+static void iface_configure_qos(struct iface *,
+                                const struct ovsrec_interface *,
+                                const struct ovsrec_qos *);
+static void iface_configure_cfm(struct iface *,
+                                const struct ovsrec_interface *);
 static void iface_refresh_cfm_stats(struct iface *,
                                     const struct ovsrec_interface *);
 static void iface_refresh_stats(struct iface *,
@@ -709,16 +711,20 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 
             struct iface *iface;
             LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
-                iface_set_ofport(iface->cfg, iface->ofp_port);
+                const struct ovsrec_interface *iface_cfg
+                    = ovsrec_interface_get_for_uuid(idl, &iface->uuid);
+                ovs_assert(iface_cfg);
+
+                iface_set_ofport(iface_cfg, iface->ofp_port);
                 /* Clear eventual previous errors */
-                ovsrec_interface_set_error(iface->cfg, NULL);
-                iface_configure_cfm(iface);
-                iface_configure_qos(iface, port_cfg->qos);
-                iface_set_mac(br, br_cfg, port, port_cfg, iface);
+                ovsrec_interface_set_error(iface_cfg, NULL);
+                iface_configure_cfm(iface, iface_cfg);
+                iface_configure_qos(iface, iface_cfg, port_cfg->qos);
+                iface_set_mac(br, br_cfg, port, port_cfg, iface, iface_cfg);
                 ofproto_port_set_bfd(br->ofproto, iface->ofp_port,
-                                     &iface->cfg->bfd);
+                                     &iface_cfg->bfd);
                 ofproto_port_set_lldp(br->ofproto, iface->ofp_port,
-                                      &iface->cfg->lldp);
+                                      &iface_cfg->lldp);
             }
         }
         bridge_configure_mirrors(br, br_cfg);
@@ -735,17 +741,6 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
         bridge_configure_aa(br, br_cfg);
     }
     free(managers);
-
-    HMAP_FOR_EACH (br, node, &all_bridges) {
-        struct port *port;
-
-        HMAP_FOR_EACH (port, hmap_node, &br->ports) {
-            struct iface *iface;
-            LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
-                iface->cfg = NULL;
-            }
-        }
-    }
 
     /* The ofproto-dpif provider does some final reconfiguration in its
      * ->type_run() function.  We have to call it before notifying the database
@@ -841,8 +836,12 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
             goto delete;
         }
 
+        const struct ovsrec_interface *iface_cfg
+            = ovsrec_interface_get_for_uuid(idl, &iface->uuid);
+        ovs_assert(iface_cfg);
+
         if (strcmp(ofproto_port.type, iface->type)
-            || netdev_set_config(iface->netdev, &iface->cfg->options, NULL)) {
+            || netdev_set_config(iface->netdev, &iface_cfg->options, NULL)) {
             /* The interface is the wrong type or can't be configured.
              * Delete it. */
             goto delete;
@@ -852,7 +851,7 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
          * already the correct port, then we might want to temporarily delete
          * this interface, so we can add it back again with the new OpenFlow
          * port number. */
-        requested_ofp_port = iface_get_requested_ofp_port(iface->cfg);
+        requested_ofp_port = iface_get_requested_ofp_port(iface_cfg);
         if (iface->ofp_port != OFPP_LOCAL &&
             requested_ofp_port != OFPP_NONE &&
             requested_ofp_port != iface->ofp_port) {
@@ -877,7 +876,10 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
              * like 'iface', then that's a configuration inconsistency that we
              * can't resolve.  We might as well let it keep its current port
              * number. */
-            victim_request = iface_get_requested_ofp_port(victim->cfg);
+            const struct ovsrec_interface *victim_cfg
+                = ovsrec_interface_get_for_uuid(idl, &victim->uuid);
+            ovs_assert(victim_cfg);
+            victim_request = iface_get_requested_ofp_port(victim_cfg);
             if (victim_request != requested_ofp_port) {
                 del = add_ofp_port(victim->ofp_port, del, &n, &allocated);
                 iface_destroy(victim);
@@ -1922,14 +1924,13 @@ iface_create(struct bridge *br,
     iface->ofp_port = ofp_port;
     iface->netdev = netdev;
     iface->type = iface_get_type(iface_cfg, br_cfg);
-    iface->cfg = iface_cfg;
     iface->uuid = iface_cfg->header_.uuid;
     hmap_insert(&br->ifaces, &iface->ofp_port_node,
                 hash_ofp_port(ofp_port));
 
     /* Populate initial status in database. */
-    iface_refresh_stats(iface, iface->cfg);
-    iface_refresh_netdev_status(iface, iface->cfg);
+    iface_refresh_stats(iface, iface_cfg);
+    iface_refresh_netdev_status(iface, iface_cfg);
 
     /* Add bond fake iface if necessary. */
     if (port_is_bond_fake_iface(port, port_cfg)) {
@@ -3494,8 +3495,7 @@ bridge_del_ports(struct bridge *br, const struct ovsrec_bridge *br_cfg,
             const char *type = iface_get_type(cfg, br_cfg);
 
             if (iface) {
-                iface->cfg = cfg;
-                iface->uuid = iface->cfg->header_.uuid;
+                iface->uuid = cfg->header_.uuid;
                 iface->type = type;
             } else if (!strcmp(type, "null")) {
                 VLOG_WARN_ONCE("%s: The null interface type is deprecated and"
@@ -4251,12 +4251,16 @@ port_configure_lacp(struct port *port, const struct ovsrec_port *port_cfg,
 static void
 iface_configure_lacp(struct iface *iface, struct lacp_slave_settings *s)
 {
+    const struct ovsrec_interface *iface_cfg
+        = ovsrec_interface_get_for_uuid(idl, &iface->uuid);
+    ovs_assert(iface_cfg);
+
     int priority, portid, key;
 
-    portid = smap_get_int(&iface->cfg->other_config, "lacp-port-id", 0);
-    priority = smap_get_int(&iface->cfg->other_config, "lacp-port-priority",
+    portid = smap_get_int(&iface_cfg->other_config, "lacp-port-id", 0);
+    priority = smap_get_int(&iface_cfg->other_config, "lacp-port-priority",
                             0);
-    key = smap_get_int(&iface->cfg->other_config, "lacp-aggregation-key", 0);
+    key = smap_get_int(&iface_cfg->other_config, "lacp-aggregation-key", 0);
 
     if (portid <= 0 || portid > UINT16_MAX) {
         portid = ofp_to_u16(iface->ofp_port);
@@ -4471,7 +4475,7 @@ iface_from_ofp_port(const struct bridge *br, ofp_port_t ofp_port)
 static void
 iface_set_mac(const struct bridge *br, const struct ovsrec_bridge *br_cfg,
               const struct port *port, const struct ovsrec_port *port_cfg,
-              struct iface *iface)
+              struct iface *iface, const struct ovsrec_interface *iface_cfg)
 {
     struct eth_addr ea, *mac = NULL;
     struct iface *hw_addr_iface;
@@ -4480,7 +4484,7 @@ iface_set_mac(const struct bridge *br, const struct ovsrec_bridge *br_cfg,
         return;
     }
 
-    if (iface->cfg->mac && eth_addr_from_string(iface->cfg->mac, &ea)) {
+    if (iface_cfg->mac && eth_addr_from_string(iface_cfg->mac, &ea)) {
         mac = &ea;
     } else if (port_cfg->fake_bridge) {
         /* Fake bridge and no MAC set in the configuration. Pick a local one. */
@@ -4553,7 +4557,9 @@ queue_ids_include(const struct ovsdb_datum *queues, int64_t target)
 }
 
 static void
-iface_configure_qos(struct iface *iface, const struct ovsrec_qos *qos)
+iface_configure_qos(struct iface *iface,
+                    const struct ovsrec_interface *iface_cfg,
+                    const struct ovsrec_qos *qos)
 {
     struct ofpbuf queues_buf;
 
@@ -4622,22 +4628,22 @@ iface_configure_qos(struct iface *iface, const struct ovsrec_qos *qos)
     }
 
     netdev_set_policing(iface->netdev,
-                        MIN(UINT32_MAX, iface->cfg->ingress_policing_rate),
-                        MIN(UINT32_MAX, iface->cfg->ingress_policing_burst));
+                        MIN(UINT32_MAX, iface_cfg->ingress_policing_rate),
+                        MIN(UINT32_MAX, iface_cfg->ingress_policing_burst));
 
     ofpbuf_uninit(&queues_buf);
 }
 
 static void
-iface_configure_cfm(struct iface *iface)
+iface_configure_cfm(struct iface *iface,
+                    const struct ovsrec_interface *iface_cfg)
 {
-    const struct ovsrec_interface *cfg = iface->cfg;
     const char *opstate_str;
     const char *cfm_ccm_vlan;
     struct cfm_settings s;
     struct smap netdev_args;
 
-    if (!cfg->n_cfm_mpid) {
+    if (!iface_cfg->n_cfm_mpid) {
         ofproto_port_clear_cfm(iface->port->bridge->ofproto, iface->ofp_port);
         return;
     }
@@ -4653,10 +4659,10 @@ iface_configure_cfm(struct iface *iface)
     }
     smap_destroy(&netdev_args);
 
-    s.mpid = *cfg->cfm_mpid;
-    s.interval = smap_get_int(&iface->cfg->other_config, "cfm_interval", 0);
-    cfm_ccm_vlan = smap_get(&iface->cfg->other_config, "cfm_ccm_vlan");
-    s.ccm_pcp = smap_get_int(&iface->cfg->other_config, "cfm_ccm_pcp", 0);
+    s.mpid = *iface_cfg->cfm_mpid;
+    s.interval = smap_get_int(&iface_cfg->other_config, "cfm_interval", 0);
+    cfm_ccm_vlan = smap_get(&iface_cfg->other_config, "cfm_ccm_vlan");
+    s.ccm_pcp = smap_get_int(&iface_cfg->other_config, "cfm_ccm_pcp", 0);
 
     if (s.interval <= 0) {
         s.interval = 1000;
@@ -4673,11 +4679,11 @@ iface_configure_cfm(struct iface *iface)
         }
     }
 
-    s.extended = smap_get_bool(&iface->cfg->other_config, "cfm_extended",
+    s.extended = smap_get_bool(&iface_cfg->other_config, "cfm_extended",
                                false);
-    s.demand = smap_get_bool(&iface->cfg->other_config, "cfm_demand", false);
+    s.demand = smap_get_bool(&iface_cfg->other_config, "cfm_demand", false);
 
-    opstate_str = smap_get(&iface->cfg->other_config, "cfm_opstate");
+    opstate_str = smap_get(&iface_cfg->other_config, "cfm_opstate");
     s.opup = !opstate_str || !strcasecmp("up", opstate_str);
 
     ofproto_port_set_cfm(iface->port->bridge->ofproto, iface->ofp_port, &s);
