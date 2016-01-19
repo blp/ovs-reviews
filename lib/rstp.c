@@ -245,10 +245,7 @@ rstp_init(void)
 
 /* Creates and returns a new RSTP instance that initially has no ports. */
 struct rstp *
-rstp_create(const char *name, rstp_identifier bridge_address,
-            void (*send_bpdu)(struct dp_packet *bpdu, void *port_aux,
-                              void *rstp_aux),
-            void *aux)
+rstp_create(const char *name, rstp_identifier bridge_address)
     OVS_EXCLUDED(rstp_mutex)
 {
     struct rstp *rstp;
@@ -278,8 +275,6 @@ rstp_create(const char *name, rstp_identifier bridge_address,
     rstp_set_bridge_times__(rstp, RSTP_DEFAULT_BRIDGE_FORWARD_DELAY,
                             RSTP_BRIDGE_HELLO_TIME,
                             RSTP_DEFAULT_BRIDGE_MAX_AGE, 0);
-    rstp->send_bpdu = send_bpdu;
-    rstp->aux = aux;
     rstp->changes = false;
     rstp->begin = true;
     rstp->old_root_aux = NULL;
@@ -460,8 +455,6 @@ reinitialize_rstp__(struct rstp *rstp)
                             RSTP_BRIDGE_HELLO_TIME,
                             RSTP_DEFAULT_BRIDGE_MAX_AGE, 0);
 
-    rstp->send_bpdu = temp.send_bpdu;
-    rstp->aux = temp.aux;
     rstp->node = temp.node;
     rstp->changes = false;
     rstp->begin = true;
@@ -1190,6 +1183,21 @@ rstp_port_ref(const struct rstp_port *rp_)
     return rp;
 }
 
+/* Removes any packets that reference 'aux' from 'rstp''s txq. */
+static void
+rstp_remove_txq(struct rstp *rstp, void *aux)
+{
+    struct rstp_bpdu *bpdu, *next;
+
+    LIST_FOR_EACH_SAFE (bpdu, next, list_node, &rstp->bpdu_txq) {
+        if (bpdu->aux == aux) {
+            list_remove(&bpdu->list_node);
+            dp_packet_uninit(&bpdu->packet);
+            free(bpdu);
+        }
+    }
+}
+
 /* Frees RSTP struct.  This can be caller by any thread. */
 void
 rstp_port_unref(struct rstp_port *rp)
@@ -1201,6 +1209,9 @@ rstp_port_unref(struct rstp_port *rp)
         ovs_mutex_lock(&rstp_mutex);
         rstp = rp->rstp;
         rstp_port_set_state__(rp, RSTP_DISABLED);
+        if (rp->aux) {
+            rstp_remove_txq(rstp, rp->aux);
+        }
         hmap_remove(&rstp->ports, &rp->node);
         VLOG_DBG("%s: removed port "RSTP_PORT_ID_FMT"", rstp->name,
                  rp->port_id);
@@ -1443,6 +1454,9 @@ rstp_port_set(struct rstp_port *port, uint16_t port_num, int priority,
     OVS_EXCLUDED(rstp_mutex)
 {
     ovs_mutex_lock(&rstp_mutex);
+    if (port->aux && aux != port->aux) {
+        rstp_remove_txq(port->rstp, port->aux);
+    }
     port->aux = aux;
     rstp_port_set_priority__(port, priority);
     rstp_port_set_port_number__(port, port_num);

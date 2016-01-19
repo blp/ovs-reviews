@@ -2222,8 +2222,7 @@ set_rstp(struct ofproto *ofproto_, const struct ofproto_rstp_settings *s)
 
     if (s) {
         if (!ofproto->rstp) {
-            ofproto->rstp = rstp_create(ofproto_->name, s->address,
-                                        rstp_send_bpdu_cb, ofproto);
+            ofproto->rstp = rstp_create(ofproto_->name, s->address);
             ofproto->rstp_last_tick = time_msec();
         }
         rstp_set_bridge_address(ofproto->rstp, s->address);

@@ -73,21 +73,18 @@ new_test_case(void)
     return tc;
 }
 
-/* This callback is called with rstp_mutex held. */
 static void
-send_bpdu(struct dp_packet *pkt, void *port_, void *b_)
-    OVS_REQUIRES(rstp_mutex)
+send_bpdu(struct bridge *b, struct rstp_bpdu *bpdu)
 {
-    struct bridge *b = b_;
     struct lan *lan;
-    const struct rstp_port *port = port_;
-    uint16_t port_no = port->port_number;
+    const struct rstp_port *port = bpdu->aux;
+    uint16_t port_no = rstp_port_get_number(port);
 
     assert(port_no < b->n_ports);
     lan = b->ports[port_no];
     if (lan) {
-        const void *data = dp_packet_l3(pkt);
-        size_t size = (char *) dp_packet_tail(pkt) - (char *) data;
+        const void *data = dp_packet_l3(&bpdu->packet);
+        size_t size = (char *) dp_packet_tail(&bpdu->packet) - (char *) data;
         int i;
 
         for (i = 0; i < lan->n_conns; i++) {
@@ -104,7 +101,6 @@ send_bpdu(struct dp_packet *pkt, void *port_, void *b_)
             }
         }
     }
-    dp_packet_delete(pkt);
 }
 
 static struct bridge *
@@ -118,7 +114,7 @@ new_bridge(struct test_case *tc, int id)
     b->tc = tc;
     b->id = id;
     snprintf(name, sizeof name, "rstp%x", id);
-    b->rstp = rstp_create(name, id, send_bpdu, b);
+    b->rstp = rstp_create(name, id);
     for (i = 1; i < MAX_PORTS; i++) {
         p = rstp_add_port(b->rstp);
         rstp_port_set_aux(p, p);
@@ -688,6 +684,21 @@ test_rstp_main(int argc, char *argv[])
         if (get_token()) {
             printf("failing because of errors\n");
             err("trailing garbage on line");
+        }
+
+        for (i = 0; i < tc->n_bridges; i++) {
+            struct bridge *b = tc->bridges[i];
+            struct rstp *rstp = b->rstp;
+            struct ovs_list bpdu_txq;
+
+            rstp_get_bpdu_txq(rstp, &bpdu_txq);
+            struct rstp_bpdu *bpdu, *next;
+            LIST_FOR_EACH_SAFE (bpdu, next, list_node, &bpdu_txq) {
+                list_remove(&bpdu->list_node);
+                send_bpdu(b, bpdu);
+                dp_packet_uninit(&bpdu->packet);
+                free(bpdu);
+            }
         }
     }
     free(token);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2015 M3S, Srl - Italy
+ * Copyright (c) 2011-2016 M3S, Srl - Italy
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -867,8 +867,7 @@ struct rstp {
     struct ovs_refcount ref_cnt;
 
     /* Interface to client. */
-    void (*send_bpdu)(struct dp_packet *bpdu, void *port_aux, void *rstp_aux);
-    void *aux;
+    struct ovs_list bpdu_txq;   /* Contains queued "struct rstp_bpdus". */
 
     bool root_changed;
     void *old_root_aux;

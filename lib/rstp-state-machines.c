@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2015 M3S, Srl - Italy
+ * Copyright (c) 2011-2016 M3S, Srl - Italy
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -686,19 +686,20 @@ bridge_detection_sm(struct rstp_port *p)
 
 /* [17.26 - Port Transmit state machine] */
 static void
-rstp_send_bpdu(struct rstp_port *p, const void *bpdu, size_t bpdu_size)
+rstp_send_bpdu(struct rstp_port *p, const void *bpdu_data, size_t bpdu_size)
     OVS_REQUIRES(rstp_mutex)
 {
     struct eth_header *eth;
     struct llc_header *llc;
-    struct dp_packet *pkt;
+    struct rstp_bpdu *bpdu = xmalloc(sizeof *bpdu);
+    struct dp_packet *pkt = &bpdu->packet;
 
     /* Skeleton. */
-    pkt = dp_packet_new(ETH_HEADER_LEN + LLC_HEADER_LEN + bpdu_size);
+    dp_packet_init(pkt, ETH_HEADER_LEN + LLC_HEADER_LEN + bpdu_size);
     eth = dp_packet_put_zeros(pkt, sizeof *eth);
     llc = dp_packet_put_zeros(pkt, sizeof *llc);
     dp_packet_reset_offsets(pkt);
-    dp_packet_set_l3(pkt, dp_packet_put(pkt, bpdu, bpdu_size));
+    dp_packet_set_l3(pkt, dp_packet_put(pkt, bpdu_data, bpdu_size));
 
     /* 802.2 header. */
     eth->eth_dst = eth_addr_stp;
@@ -709,7 +710,9 @@ rstp_send_bpdu(struct rstp_port *p, const void *bpdu, size_t bpdu_size)
     llc->llc_dsap = STP_LLC_DSAP;
     llc->llc_ssap = STP_LLC_SSAP;
     llc->llc_cntl = STP_LLC_CNTL;
-    p->rstp->send_bpdu(pkt, p->aux, p->rstp->aux);
+
+    bpdu->aux = p->aux;
+    list_push_back(&p->rstp->bpdu_txq, &bpdu->list_node);
 }
 
 static void

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2015 M3S, Srl - Italy
+ * Copyright (c) 2011-2016 M3S, Srl - Italy
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "compiler.h"
+#include "dp-packet.h"
+#include "include/openvswitch/list.h"
 #include "util.h"
 
 /* Thread Safety: Callers passing in RSTP and RSTP port object
@@ -140,10 +142,7 @@ static inline bool rstp_should_manage_bpdu(enum rstp_state state);
 void rstp_init(void)
     OVS_EXCLUDED(rstp_mutex);
 
-struct rstp * rstp_create(const char *, rstp_identifier bridge_id,
-                          void (*send_bpdu)(struct dp_packet *, void *port_aux,
-                                            void *rstp_aux),
-                          void *aux)
+struct rstp * rstp_create(const char *, rstp_identifier bridge_id)
     OVS_EXCLUDED(rstp_mutex);
 
 struct rstp *rstp_ref(struct rstp *)
@@ -244,6 +243,14 @@ void rstp_port_get_status(const struct rstp_port *, uint16_t *id,
 void * rstp_get_port_aux__(struct rstp *rstp, uint16_t port_number)
     OVS_REQUIRES(rstp_mutex);
 
+/* RSTP BPDUs. */
+struct rstp_bpdu {
+    struct ovs_list list_node;
+    struct dp_packet packet;
+    void *aux;                  /* Port identifier. */
+};
+
+void rstp_get_bpdu_txq(struct rstp *, struct ovs_list *bpdus);
 
 /* Internal API for rstp-state-machines.c */
 
