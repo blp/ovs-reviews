@@ -224,7 +224,7 @@ enum rstp_bpdu_flag {
 
 /* Rapid Spanning Tree BPDU [9.3.3] */
 OVS_PACKED(
-struct rstp_bpdu {
+struct rstp_bpdu_header {
     ovs_be16 protocol_identifier;
     uint8_t protocol_version_identifier;
     uint8_t bpdu_type;
@@ -262,7 +262,7 @@ struct rstp_port {
     struct rstp *rstp OVS_GUARDED_BY(rstp_mutex);
     struct hmap_node node OVS_GUARDED_BY(rstp_mutex); /* In rstp->ports. */
     void *aux OVS_GUARDED_BY(rstp_mutex);
-    struct rstp_bpdu received_bpdu_buffer OVS_GUARDED_BY(rstp_mutex);
+    struct rstp_bpdu_header received_bpdu_buffer OVS_GUARDED_BY(rstp_mutex);
     /*************************************************************************
      * MAC status parameters
      ************************************************************************/

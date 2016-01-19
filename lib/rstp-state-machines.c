@@ -112,7 +112,7 @@ process_received_bpdu__(struct rstp_port *p, const void *bpdu_,
     OVS_REQUIRES(rstp_mutex)
 {
     struct rstp *rstp = p->rstp;
-    struct rstp_bpdu *bpdu = (struct rstp_bpdu *)bpdu_;
+    struct rstp_bpdu_header *bpdu = (struct rstp_bpdu_header *) bpdu_;
 
     if (!p->port_enabled) {
         return;
@@ -138,7 +138,7 @@ process_received_bpdu__(struct rstp_port *p, const void *bpdu_,
         p->rcvd_bpdu = true;
         p->rx_rstp_bpdu_cnt++;
 
-        memcpy(&p->received_bpdu_buffer, bpdu, sizeof(struct rstp_bpdu));
+        p->received_bpdu_buffer = *bpdu;
 
         rstp->changes = true;
         move_rstp__(rstp);
@@ -155,7 +155,7 @@ validate_received_bpdu(struct rstp_port *p, const void *bpdu, size_t bpdu_size)
     OVS_REQUIRES(rstp_mutex)
 {
     /* Validation of received BPDU, see [9.3.4]. */
-    const struct rstp_bpdu *temp;
+    const struct rstp_bpdu_header *temp;
 
     temp = bpdu;
     if (bpdu_size < TOPOLOGY_CHANGE_NOTIFICATION_BPDU_SIZE ||
@@ -836,7 +836,7 @@ static void
 tx_config(struct rstp_port *p)
     OVS_REQUIRES(rstp_mutex)
 {
-    struct rstp_bpdu bpdu;
+    struct rstp_bpdu_header bpdu;
 
     bpdu.protocol_identifier = htons(0);
     bpdu.protocol_version_identifier = 0;
@@ -858,7 +858,7 @@ tx_config(struct rstp_port *p)
     if (p->tc_ack != 0) {
         bpdu.flags |= BPDU_FLAG_TOPCHANGEACK;
     }
-    rstp_send_bpdu(p, &bpdu, sizeof(struct rstp_bpdu));
+    rstp_send_bpdu(p, &bpdu, sizeof(struct rstp_bpdu_header));
 }
 
 /* [17.21.20] */
@@ -866,7 +866,7 @@ static void
 tx_rstp(struct rstp_port *p)
     OVS_REQUIRES(rstp_mutex)
 {
-    struct rstp_bpdu bpdu;
+    struct rstp_bpdu_header bpdu;
 
     bpdu.protocol_identifier = htons(0);
     bpdu.protocol_version_identifier = 2;
@@ -916,7 +916,7 @@ tx_rstp(struct rstp_port *p)
         bpdu.flags |= BPDU_FLAG_FORWARDING;
     }
     bpdu.version1_length = 0;
-    rstp_send_bpdu(p, &bpdu, sizeof(struct rstp_bpdu));
+    rstp_send_bpdu(p, &bpdu, sizeof(struct rstp_bpdu_header));
 }
 
 /* [17.21.21] */
@@ -924,14 +924,14 @@ static void
 tx_tcn(struct rstp_port *p)
     OVS_REQUIRES(rstp_mutex)
 {
-    struct rstp_bpdu bpdu;
+    struct rstp_bpdu_header bpdu;
 
-    memset(&bpdu, 0, sizeof(struct rstp_bpdu));
+    memset(&bpdu, 0, sizeof(struct rstp_bpdu_header));
 
     bpdu.protocol_identifier = htons(0);
     bpdu.protocol_version_identifier = 0;
     bpdu.bpdu_type = TOPOLOGY_CHANGE_NOTIFICATION_BPDU;
-    rstp_send_bpdu(p, &bpdu, sizeof(struct rstp_bpdu));
+    rstp_send_bpdu(p, &bpdu, sizeof(struct rstp_bpdu_header));
 }
 
 static int
