@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -245,6 +245,103 @@ struct nx_packet_in {
     /* uint8_t data[0]; */         /* Ethernet frame. */
 };
 OFP_ASSERT(sizeof(struct nx_packet_in) == 24);
+
+/* NXT_CLOSURE.
+ *
+ * A closure serializes the state of a packet's trip through Open vSwitch flow
+ * tables.  This permits an OpenFlow controller to interpose on a packet midway
+ * through processing in Open vSwitch.
+ *
+ * Closures fit into packet processing this way:
+ *
+ * 1. A packet ingresses into Open vSwitch, which runs it through the OpenFlow
+ *    tables.
+ *
+ * 2. An OpenFlow flow executes a NXAST_PAUSE action.  Open vSwitch serializes
+ *    the packet processing state into a closure and sends it (as an
+ *    NXT_CLOSURE) to the OpenFlow controller.
+ *
+ * 3. The controller receives the NXT_CLOSURE and processes it.  The controller
+ *    can interpret and, if desired, modify some of the contents of the
+ *    closure, such as the packet and the metadata being processed.
+ *
+ * 4. The controller sends the NXT_CLOSURE back to the switch, using an
+ *    NXT_RESUME message.  Packet processing resumes where it left off.
+ *
+ * The controller might change the pipeline configuration concurrently with
+ * steps 2 through 4.  For example, it might add or remove OpenFlow flows.  If
+ * that happens, then the packet will experience a mix of processing from the
+ * two configurations, that is, the initial processing (before NXAST_PAUSE)
+ * uses the initial flow table, and the later processing (after NXT_RESUME)
+ * uses the later flow table.
+ *
+ * External side effects (e.g. "output") of OpenFlow actions processed before
+ * NXAST_PAUSE is encountered might be executed during step 2 or step 4, and
+ * the details may vary among Open vSwitch features and versions.  Thus, a
+ * controller that wants to make sure that side effects are executed must pass
+ * the closure back to the switch, that is, must not skip step 4.
+ *
+ * Closures may be "stateful" or "stateless", that is, they may or may not
+ * refer to buffered state maintained in Open vSwitch.  This means that a
+ * controller should not attempt to resume a given closure more than once
+ * (because the switch might have discarded the buffered state after the first
+ * use).  For the same reason, closures might become "stale" if the controller
+ * takes too long to resume them (because the switch might have discarded old
+ * buffered state).  Taken together with the previous note, this means that a
+ * controller should resume each closure exactly once (and promptly).
+ *
+ * NXT_CLOSURE is something like OFPT_PACKET_IN (if OFPT_PACKET_IN were
+ * extensible then it would make sense to implement NXT_CLOSURE as an
+ * extension).  The important difference is the extra information that captures
+ * the state of the pipeline.  Without this information, the controller can
+ * (with careful design, and help from the flow cookie) determine where the
+ * packet is in the pipeline, but in the general case it can't determine what
+ * nested "resubmit"s that may be in progress, or what data is on the stack
+ * maintained by NXAST_STACK_PUSH and NXAST_STACK_POP actions, what is in the
+ * OpenFlow action set, etc.
+ *
+ * Closures are expensive because they require a round trip between the switch
+ * and the controller.  Thus, they should not be used to implement processing
+ * that needs to happen at "line rate".
+ *
+ * Closures are serialized as type-level-value properties in the format
+ * commonly used in OpenFlow 1.4 and later.  Some properties, with 'type'
+ * values less than 0x8000, are meant to be interpreted by the controller, and
+ * are documented here.  Other properties, with 'type' values of 0x8000 or
+ * greater, are private to the switch, may change unpredictably from one
+ * version of Open vSwitch to another, and are not documented here.
+ *
+ * An NXT_CLOSURE is tied to a given Open vSwitch process and bridge, so that
+ * restarting Open vSwitch or deleting and recreating a bridge will cause the
+ * corresponding NXT_RESUME to be rejected.
+ *
+ * In the current implementation, Open vSwitch forks the packet processing
+ * pipeline across patch ports.  Suppose, for example, that the pipeline for
+ * br0 outputs to a patch port whose peer belongs to br1, and that the pipeline
+ * for br1 executes a "pause" action.  This "pause" only pauses processing
+ * within br1, and processing in br0 continues and possibly completes with
+ * visible side effects, such as outputting to ports, before br1's controller
+ * receives or processes the closure.  This implementation maintains the
+ * independence of separate bridges and, since processing in br1 cannot affect
+ * the behavior of br0 anyway, should not cause visible behavioral changes.
+ */
+
+enum nx_closure_prop_type {
+    /* Public properties. */
+    NXCPT_PACKET,               /* Raw packet data. */
+    NXCPT_METADATA,             /* NXM or OXM for metadata fields. */
+
+    /* Private properties.  These are subject to change and not architectural.
+     * Do not depend on them. */
+    NXCPT_BRIDGE = 0x8000,
+    NXCPT_STACK,
+    NXCPT_MIRRORS,
+    NXCPT_CONNTRACKED,
+    NXCPT_TABLE_ID,
+    NXCPT_COOKIE,
+    NXCPT_ACTIONS,
+    NXCPT_ACTION_SET,
+};
 
 /* Configures the "role" of the sending controller.  The default role is:
  *

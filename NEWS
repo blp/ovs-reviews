@@ -5,6 +5,10 @@ Post-v2.5.0
    - OpenFlow:
      * OpenFlow 1.1+ OFPT_QUEUE_GET_CONFIG_REQUEST now supports OFPP_ANY.
      * OpenFlow 1.4+ OFPMP_QUEUE_DESC is now supported.
+     * New extension message NXT_SET_ASYNC_CONFIG2 to allow OpenFlow 1.4-like
+       control over asynchronous messages in earlier versions of OpenFlow.
+     * New "closure" extension to pause and resume flow table traversal.
+       See NXAST_PAUSE, NXT_CLOSURE, and NXT_RESUME for more information.
    - ovs-ofctl:
      * queue-get-config command now allows a queue ID to be specified.
 

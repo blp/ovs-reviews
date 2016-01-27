@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -295,6 +295,9 @@ enum ofp_raw_action_type {
     /* NX1.0+(36): struct nx_action_nat, ... */
     NXAST_RAW_NAT,
 
+    /* NX1.0+(37): struct nx_action_pause, ... */
+    NXAST_RAW_PAUSE,
+
 /* ## ------------------ ## */
 /* ## Debugging actions. ## */
 /* ## ------------------ ## */
@@ -373,6 +376,7 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_OUTPUT:
     case OFPACT_GROUP:
     case OFPACT_CONTROLLER:
+    case OFPACT_PAUSE:
     case OFPACT_ENQUEUE:
     case OFPACT_OUTPUT_REG:
     case OFPACT_BUNDLE:
@@ -734,6 +738,67 @@ format_CONTROLLER(const struct ofpact_controller *a, struct ds *s)
         }
         ds_chomp(s, ',');
         ds_put_char(s, ')');
+    }
+}
+
+/* Action structure for NXAST_PAUSE. */
+struct nx_action_pause {
+    ovs_be16 type;                  /* OFPAT_VENDOR. */
+    ovs_be16 len;                   /* Length is 16. */
+    ovs_be32 vendor;                /* NX_VENDOR_ID. */
+    ovs_be16 subtype;               /* NXAST_CONTROLLER. */
+    ovs_be16 controller_id;         /* Controller ID to send packet-in. */
+    uint8_t zero[4];                /* Must be zero. */
+};
+OFP_ASSERT(sizeof(struct nx_action_pause) == 16);
+
+static enum ofperr
+decode_NXAST_RAW_PAUSE(const struct nx_action_pause *nap,
+                       enum ofp_version ofp_version OVS_UNUSED,
+                       struct ofpbuf *out)
+{
+    struct ofpact_pause *pause = ofpact_put_PAUSE(out);
+    pause->controller_id = ntohs(nap->controller_id);
+    return 0;
+}
+
+static void
+encode_PAUSE(const struct ofpact_pause *pause,
+             enum ofp_version ofp_version OVS_UNUSED, struct ofpbuf *out)
+{
+    struct nx_action_pause *nap = put_NXAST_PAUSE(out);
+    nap->controller_id = htons(pause->controller_id);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_PAUSE(char *arg, struct ofpbuf *ofpacts,
+            enum ofputil_protocol *usable_protocols OVS_UNUSED)
+{
+    struct ofpact_pause *pause = ofpact_put_PAUSE(ofpacts);
+    char *name, *value;
+
+    while (ofputil_parse_key_value(&arg, &name, &value)) {
+        if (!strcmp(name, "controller_id")) {
+            char *error = str_to_u16(value, "controller_id",
+                                     &pause->controller_id);
+            if (error) {
+                return error;
+            }
+        } else {
+            return xasprintf("unknown key \"%s\" parsing controller "
+                             "action", name);
+        }
+    }
+
+    return NULL;
+}
+
+static void
+format_PAUSE(const struct ofpact_pause *pause, struct ds *s)
+{
+    ds_put_cstr(s, "pause");
+    if (pause->controller_id) {
+        ds_put_format(s, "(controller_id=%"PRIu16")", pause->controller_id);
     }
 }
 
@@ -5725,6 +5790,7 @@ ofpact_is_set_or_move_action(const struct ofpact *a)
     case OFPACT_CT:
     case OFPACT_NAT:
     case OFPACT_CONTROLLER:
+    case OFPACT_PAUSE:
     case OFPACT_DEC_MPLS_TTL:
     case OFPACT_DEC_TTL:
     case OFPACT_ENQUEUE:
@@ -5798,6 +5864,7 @@ ofpact_is_allowed_in_actions_set(const struct ofpact *a)
      * in the action set is undefined. */
     case OFPACT_BUNDLE:
     case OFPACT_CONTROLLER:
+    case OFPACT_PAUSE:
     case OFPACT_CT:
     case OFPACT_NAT:
     case OFPACT_ENQUEUE:
@@ -5989,6 +6056,7 @@ ovs_instruction_type_from_ofpact_type(enum ofpact_type type)
     case OFPACT_OUTPUT:
     case OFPACT_GROUP:
     case OFPACT_CONTROLLER:
+    case OFPACT_PAUSE:
     case OFPACT_ENQUEUE:
     case OFPACT_OUTPUT_REG:
     case OFPACT_BUNDLE:
@@ -6405,6 +6473,9 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
                                         max_ports);
 
     case OFPACT_CONTROLLER:
+        return 0;
+
+    case OFPACT_PAUSE:
         return 0;
 
     case OFPACT_ENQUEUE:
@@ -7095,6 +7166,7 @@ ofpact_outputs_to_port(const struct ofpact *ofpact, ofp_port_t port)
         return port == OFPP_CONTROLLER;
 
     case OFPACT_OUTPUT_REG:
+    case OFPACT_PAUSE:
     case OFPACT_BUNDLE:
     case OFPACT_SET_VLAN_VID:
     case OFPACT_SET_VLAN_PCP:

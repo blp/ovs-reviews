@@ -2653,6 +2653,7 @@ OFPT_SET_ASYNC (OF1.3) (xid=0x0):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 
  slave:
        PACKET_IN: no_match action invalid_ttl
@@ -2661,6 +2662,7 @@ OFPT_SET_ASYNC (OF1.3) (xid=0x0):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 ])
 AT_CLEANUP
 
@@ -2863,6 +2865,7 @@ NXT_SET_ASYNC_CONFIG (xid=0x0):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 
  slave:
        PACKET_IN: no_match action invalid_ttl
@@ -2871,6 +2874,7 @@ NXT_SET_ASYNC_CONFIG (xid=0x0):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 ])
 AT_CLEANUP
 
@@ -2890,6 +2894,7 @@ OFPT_SET_ASYNC (OF1.4) (xid=0x2):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 
  slave:
        PACKET_IN: no_match invalid_ttl
@@ -2898,6 +2903,7 @@ OFPT_SET_ASYNC (OF1.4) (xid=0x2):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 ])
 AT_CLEANUP
 

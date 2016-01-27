@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@
     OFPACT(OUTPUT,          ofpact_output,      ofpact, "output")       \
     OFPACT(GROUP,           ofpact_group,       ofpact, "group")        \
     OFPACT(CONTROLLER,      ofpact_controller,  ofpact, "controller")   \
+    OFPACT(PAUSE,           ofpact_pause,       ofpact, "pause")        \
     OFPACT(ENQUEUE,         ofpact_enqueue,     ofpact, "enqueue")      \
     OFPACT(OUTPUT_REG,      ofpact_output_reg,  ofpact, "output_reg")   \
     OFPACT(BUNDLE,          ofpact_bundle,      slaves, "bundle")       \
@@ -729,6 +730,12 @@ struct ofpact_conjunction {
     uint8_t clause;
     uint8_t n_clauses;
     uint32_t id;
+};
+
+/* OFPACT_PAUSE. */
+struct ofpact_pause {
+    struct ofpact ofpact;
+    uint16_t controller_id;     /* Controller ID to send closure. */
 };
 
 /* OFPACT_MULTIPATH.

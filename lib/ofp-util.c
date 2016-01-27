@@ -3658,6 +3658,342 @@ ofputil_packet_in_reason_from_string(const char *s,
     return false;
 }
 
+void
+ofputil_closure_destroy(struct ofputil_closure *closure)
+{
+    if (closure) {
+        free(closure->packet);
+    }
+}
+
+void
+ofputil_closure_private_destroy(struct ofputil_closure_private *closure)
+{
+    if (closure) {
+        ofputil_closure_destroy(&closure->public);
+        free(closure->stack);
+        free(closure->actions);
+        free(closure->action_set);
+    }
+}
+
+static void
+ofputil_put_closure(const struct ofputil_closure *closure,
+                    enum ofputil_protocol protocol, struct ofpbuf *msg)
+{
+    enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
+
+    ofpprop_put(msg, NXCPT_PACKET, closure->packet, closure->packet_len);
+
+    size_t start = ofpprop_start(msg, NXCPT_METADATA);
+    oxm_put_raw(msg, &closure->metadata, version);
+    ofpprop_end(msg, start);
+}
+
+static void
+put_actions_property(struct ofpbuf *msg, uint64_t prop_type,
+                     enum ofp_version version,
+                     const struct ofpact *actions, size_t actions_len)
+{
+    if (actions_len) {
+        size_t start = ofpprop_start(msg, prop_type);
+        ofpbuf_padto(msg, ROUND_UP(msg->size, 8));
+        ofpacts_put_openflow_actions(actions, actions_len, msg, version);
+        ofpprop_end(msg, start);
+    }
+}
+
+static void
+ofputil_put_closure_private(const struct ofputil_closure_private *closure,
+                            enum ofputil_protocol protocol, struct ofpbuf *msg)
+{
+    enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
+
+    ofputil_put_closure(&closure->public, protocol, msg);
+
+    ofpprop_put_uuid(msg, NXCPT_BRIDGE, &closure->bridge);
+
+    for (size_t i = 0; i < closure->n_stack; i++) {
+        const union mf_subvalue *s = &closure->stack[i];
+        size_t ofs;
+        for (ofs = 0; ofs < sizeof *s; ofs++) {
+            if (s->u8[ofs]) {
+                break;
+            }
+        }
+
+        ofpprop_put(msg, NXCPT_STACK, &s->u8[ofs], sizeof *s - ofs);
+    }
+
+    if (closure->mirrors) {
+        ofpprop_put_u32(msg, NXCPT_MIRRORS, closure->mirrors);
+    }
+
+    if (closure->conntracked) {
+        ofpprop_put_flag(msg, NXCPT_CONNTRACKED);
+    }
+
+    if (closure->actions_len) {
+        const struct ofpact *const end = ofpact_end(closure->actions,
+                                                    closure->actions_len);
+        const struct ofpact_unroll_xlate *unroll = NULL;
+        uint8_t table_id = 0;
+        ovs_be64 cookie = 0;
+
+        const struct ofpact *a;
+        for (a = closure->actions; ; a = ofpact_next(a)) {
+            if (a == end || a->type == OFPACT_UNROLL_XLATE) {
+                if (unroll) {
+                    if (table_id != unroll->rule_table_id) {
+                        ofpprop_put_u8(msg, NXCPT_TABLE_ID,
+                                       unroll->rule_table_id);
+                        table_id = unroll->rule_table_id;
+                    }
+                    if (cookie != unroll->rule_cookie) {
+                        ofpprop_put_be64(msg, NXCPT_COOKIE,
+                                         unroll->rule_cookie);
+                        cookie = unroll->rule_cookie;
+                    }
+                }
+
+                const struct ofpact *start
+                    = unroll ? ofpact_next(&unroll->ofpact) : closure->actions;
+                put_actions_property(msg, NXCPT_ACTIONS, version,
+                                     start, (a - start) * sizeof *a);
+
+                if (a == end) {
+                    break;
+                }
+                unroll = ofpact_get_UNROLL_XLATE(a);
+            }
+        }
+    }
+
+    if (closure->action_set_len) {
+        size_t start = ofpprop_start(msg, NXCPT_ACTION_SET);
+        ofpbuf_padto(msg, ROUND_UP(msg->size, 8));
+        ofpacts_put_openflow_actions(closure->action_set,
+                                     closure->action_set_len, msg, version);
+        ofpprop_end(msg, start);
+    }
+}
+
+struct ofpbuf *
+ofputil_encode_resume(const struct ofputil_closure *closure,
+                      const struct ofpbuf *private_properties,
+                      enum ofputil_protocol protocol)
+{
+    enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
+    size_t extra = (closure->packet_len
+                    + NXM_TYPICAL_LEN   /* flow_metadata */
+                    + private_properties->size);
+    struct ofpbuf *msg = ofpraw_alloc_xid(OFPRAW_NXT_RESUME, version,
+                                          0, extra);
+    ofputil_put_closure(closure, protocol, msg);
+    ofpbuf_put(msg, private_properties->data, private_properties->size);
+    ofpmsg_update_length(msg);
+    return msg;
+}
+
+struct ofpbuf *
+ofputil_encode_closure_private(const struct ofputil_closure_private *closure,
+                               enum ofputil_protocol protocol)
+{
+    enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
+    size_t extra = (closure->public.packet_len
+                    + NXM_TYPICAL_LEN   /* flow_metadata */
+                    + closure->n_stack * 16
+                    + closure->actions_len
+                    + closure->action_set_len
+                    + 256);     /* fudge factor */
+    struct ofpbuf *msg = ofpraw_alloc_xid(OFPRAW_NXT_CLOSURE, version,
+                                          0, extra);
+    ofputil_put_closure_private(closure, protocol, msg);
+    ofpmsg_update_length(msg);
+    return msg;
+}
+
+static enum ofperr
+parse_subvalue_prop(const struct ofpbuf *property, union mf_subvalue *sv)
+{
+    unsigned int len = ofpbuf_msgsize(property);
+    if (len > sizeof *sv) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "NXCPT_STACK property has bad length %u",
+                     len);
+        return OFPERR_OFPBPC_BAD_LEN;
+    }
+    memset(sv, 0, sizeof *sv);
+    memcpy(&sv->u8[sizeof *sv - len], property->msg, len);
+    return 0;
+}
+
+enum ofperr
+ofputil_decode_closure(const struct ofp_header *oh,
+                       struct ofputil_closure *closure,
+                       struct ofpbuf *private_properties)
+{
+    memset(closure, 0, sizeof *closure);
+
+    struct ofpbuf properties;
+    ofpbuf_use_const(&properties, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&properties);
+
+    while (properties.size > 0) {
+        struct ofpbuf payload;
+        uint64_t type;
+
+        enum ofperr error = ofpprop_pull(&properties, &payload, &type);
+        if (error) {
+            return error;
+        }
+
+        if (type >= 0x8000) {
+            if (private_properties) {
+                ofpbuf_put(private_properties, payload.data, payload.size);
+                ofpbuf_padto(private_properties,
+                             ROUND_UP(private_properties->size, 8));
+            }
+            continue;
+        }
+
+        switch (type) {
+        case NXCPT_PACKET:
+            free(closure->packet);
+            closure->packet_len = ofpbuf_msgsize(&payload);
+            closure->packet = xmemdup(payload.msg, closure->packet_len);
+            break;
+
+        case NXCPT_METADATA:
+            error = oxm_decode_match(payload.msg, ofpbuf_msgsize(&payload),
+                                     &closure->metadata);
+            break;
+
+        default:
+            error = OFPPROP_UNKNOWN(false, "closure", type);
+            break;
+        }
+        if (error) {
+            ofputil_closure_destroy(closure);
+            return error;
+        }
+    }
+
+    return 0;
+}
+
+static enum ofperr
+parse_actions_property(struct ofpbuf *property, enum ofp_version version,
+                       struct ofpbuf *ofpacts)
+{
+    if (!ofpbuf_try_pull(property, ROUND_UP(ofpbuf_headersize(property), 8))) {
+        VLOG_WARN_RL(&bad_ofmsg_rl,
+                     "actions property has bad length %"PRIuSIZE,
+                     property->size);
+        return OFPERR_OFPBPC_BAD_LEN;
+    }
+
+    return ofpacts_pull_openflow_actions(property, property->size,
+                                         version, ofpacts);
+}
+
+enum ofperr
+ofputil_decode_closure_private(const struct ofp_header *oh, bool loose,
+                               struct ofputil_closure_private *closure)
+{
+    memset(closure, 0, sizeof *closure);
+    enum ofperr error = ofputil_decode_closure(oh, &closure->public, NULL);
+    if (error) {
+        return error;
+    }
+
+    struct ofpbuf properties;
+    ofpbuf_use_const(&properties, oh, ntohs(oh->length));
+    ofpraw_pull_assert(&properties);
+
+    struct ofpbuf actions, action_set;
+    ofpbuf_init(&actions, 0);
+    ofpbuf_init(&action_set, 0);
+
+    uint8_t table_id = 0;
+    ovs_be64 cookie = 0;
+
+    size_t allocated_stack = 0;
+
+    while (properties.size > 0) {
+        struct ofpbuf payload;
+        uint64_t type;
+
+        error = ofpprop_pull(&properties, &payload, &type);
+        ovs_assert(!error);
+
+        if (type < 0x8000) {
+            continue;
+        }
+
+        switch (type) {
+        case NXCPT_BRIDGE:
+            error = ofpprop_parse_uuid(&payload, &closure->bridge);
+            break;
+
+        case NXCPT_STACK:
+            if (closure->n_stack >= allocated_stack) {
+                closure->stack = x2nrealloc(closure->stack, &allocated_stack,
+                                           sizeof *closure->stack);
+            }
+            error = parse_subvalue_prop(&payload,
+                                        &closure->stack[closure->n_stack++]);
+            break;
+
+        case NXCPT_MIRRORS:
+            error = ofpprop_parse_u32(&payload, &closure->mirrors);
+            break;
+
+        case NXCPT_CONNTRACKED:
+            closure->conntracked = true;
+            break;
+
+        case NXCPT_TABLE_ID:
+            error = ofpprop_parse_u8(&payload, &table_id);
+            break;
+
+        case NXCPT_COOKIE:
+            error = ofpprop_parse_be64(&payload, &cookie);
+            break;
+
+        case NXCPT_ACTIONS: {
+            struct ofpact_unroll_xlate *unroll
+                = ofpact_put_UNROLL_XLATE(&actions);
+            unroll->rule_table_id = table_id;
+            unroll->rule_cookie = cookie;
+            error = parse_actions_property(&payload, oh->version, &actions);
+            break;
+        }
+
+        case NXCPT_ACTION_SET:
+            error = parse_actions_property(&payload, oh->version, &action_set);
+            break;
+
+        default:
+            error = OFPPROP_UNKNOWN(loose, "closure", type);
+            break;
+        }
+        if (error) {
+            break;
+        }
+    }
+
+    closure->actions_len = actions.size;
+    closure->actions = ofpbuf_steal_data(&actions);
+    closure->action_set_len = action_set.size;
+    closure->action_set = ofpbuf_steal_data(&action_set);
+
+    if (error) {
+        ofputil_closure_private_destroy(closure);
+    }
+
+    return 0;
+}
+
 /* Converts an OFPT_PACKET_OUT in 'opo' into an abstract ofputil_packet_out in
  * 'po'.
  *
@@ -9238,6 +9574,8 @@ ofputil_is_bundlable(enum ofptype type)
     case OFPTYPE_REQUESTFORWARD:
     case OFPTYPE_NXT_TLV_TABLE_REQUEST:
     case OFPTYPE_NXT_TLV_TABLE_REPLY:
+    case OFPTYPE_NXT_CLOSURE:
+    case OFPTYPE_NXT_RESUME:
         break;
     }
 
@@ -9468,6 +9806,7 @@ ofputil_async_msg_type_to_string(enum ofputil_async_msg_type type)
     case OAM_ROLE_STATUS:    return "ROLE_STATUS";
     case OAM_TABLE_STATUS:   return "TABLE_STATUS";
     case OAM_REQUESTFORWARD: return "REQUESTFORWARD";
+    case OAM_CLOSURE:        return "CLOSURE";
 
     case OAM_N_TYPES:
     default:
@@ -9493,6 +9832,8 @@ static const struct ofp14_async_prop async_props[] = {
     AP_PAIR( 6, OAM_ROLE_STATUS,    (1 << OFPCRR_N_REASONS) - 1, 0),
     AP_PAIR( 8, OAM_TABLE_STATUS,   OFPTR_BITS, 0),
     AP_PAIR(10, OAM_REQUESTFORWARD, (1 << OFPRFR_N_REASONS) - 1, 0),
+
+    AP_PAIR(OFPPROP_EXP(NX_VENDOR_ID, 0), OAM_CLOSURE, 1, 0),
 };
 
 #define FOR_EACH_ASYNC_PROP(VAR)                                \

@@ -152,6 +152,66 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
 }
 
 static void
+ofp_print_closure(struct ds *string, const struct ofp_header *oh)
+{
+    struct ofputil_closure_private closure;
+    struct ofputil_closure *public = &closure.public;
+    enum ofperr error;
+
+    error = ofputil_decode_closure_private(oh, true, &closure);
+    if (error) {
+        ofp_print_error(string, error);
+        return;
+    }
+
+    ds_put_char(string, '\n');
+
+    ds_put_cstr(string, " packet=");
+    char *packet = ofp_packet_to_string(public->packet, public->packet_len);
+    ds_put_cstr(string, packet);
+    free(packet);
+
+    ds_put_cstr(string, " metadata=");
+    match_format(&public->metadata, string, OFP_DEFAULT_PRIORITY);
+    ds_put_char(string, '\n');
+
+    ds_put_format(string, " bridge="UUID_FMT"\n",
+                  UUID_ARGS(&closure.bridge));
+
+    if (closure.n_stack) {
+        ds_put_cstr(string, " stack=");
+        for (size_t i = 0; i < closure.n_stack; i++) {
+            if (i) {
+                ds_put_char(string, ' ');
+            }
+            mf_subvalue_format(&closure.stack[i], string);
+        }
+    }
+
+    if (closure.mirrors) {
+        ds_put_format(string, " mirrors=0x%"PRIx32"\n", closure.mirrors);
+    }
+
+    if (closure.conntracked) {
+        ds_put_cstr(string, " conntracked=true\n");
+    }
+
+    if (closure.actions_len) {
+        ds_put_cstr(string, " actions=");
+        ofpacts_format(closure.actions, closure.actions_len, string);
+        ds_put_char(string, '\n');
+    }
+
+    if (closure.action_set_len) {
+        ds_put_cstr(string, " action_set=");
+        ofpacts_format(closure.action_set, closure.action_set_len, string);
+        ds_put_char(string, '\n');
+    }
+
+    ofputil_closure_private_destroy(&closure);
+}
+
+static void
 ofp_print_packet_out(struct ds *string, const struct ofp_header *oh,
                      int verbosity)
 {
@@ -2058,6 +2118,10 @@ ofp_async_config_reason_to_string(uint32_t reason,
     case OAM_REQUESTFORWARD:
         return ofp_requestforward_reason_to_string(reason, reasonbuf, bufsize);
 
+    case OAM_CLOSURE:
+        /* There's only one "reason". */
+        return "enable";
+
     case OAM_N_TYPES:
     default:
         return "Unknown asynchronous configuration message type";
@@ -3353,6 +3417,10 @@ ofp_to_string__(const struct ofp_header *oh, enum ofpraw raw,
         ofp_print_tlv_table_reply(string, msg);
         break;
 
+    case OFPTYPE_NXT_CLOSURE:
+    case OFPTYPE_NXT_RESUME:
+        ofp_print_closure(string, msg);
+        break;
     }
 }
 

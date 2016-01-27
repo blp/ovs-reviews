@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1304,6 +1304,9 @@ struct ofproto_class {
                               const struct flow *flow,
                               const struct ofpact *ofpacts,
                               size_t ofpacts_len);
+
+    enum ofperr (*nxt_resume)(struct ofproto *ofproto,
+                              struct ofputil_closure_private *closure);
 
 /* ## ------------------------- ## */
 /* ## OFPP_NORMAL configuration ## */

@@ -3806,9 +3806,11 @@
           controller: either the packet ``misses'' in the flow table, that is,
           there is no matching flow, or a flow table action says to send the
           packet to the controller.  Open vSwitch limits the rate of each kind
-          of packet separately at the configured rate.  Therefore, the actual
-          rate that packets are sent to the controller can be up to twice the
-          configured rate, when packets are sent for both reasons.
+          of packet separately at the configured rate.  In addition, Open
+          vSwitch has an OpenFlow extension called ``closures'' that are
+          rate-limited the same way.  Therefore, the actual rate that packets
+          are sent to the controller can be up to three times the configured
+          rate, when packets and closures are sent for all three reasons.
         </p>
 
         <p>
@@ -3849,11 +3851,12 @@
             These values report the effects of rate limiting.  Their values are
             relative to establishment of the most recent OpenFlow connection,
             or since rate limiting was enabled, whichever happened more
-            recently.  Each consists of two values, one with <code>TYPE</code>
-            replaced by <code>miss</code> for rate limiting flow table misses,
-            and the other with <code>TYPE</code> replaced by
+            recently.  Each consists of three values, one with
+            <code>TYPE</code> replaced by <code>miss</code> for rate limiting
+            flow table misses, one with <code>TYPE</code> replaced by
             <code>action</code> for rate limiting packets sent by OpenFlow
-            actions.
+            actions, and a third with <code>TYPE</code> replaced by
+            <code>closure</code> for rate limiting closures.
           </p>
 
           <p>

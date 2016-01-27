@@ -3414,6 +3414,27 @@ exit:
     return error;
 }
 
+static enum ofperr
+handle_nxt_resume(struct ofconn *ofconn, const struct ofp_header *oh)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    struct ofputil_closure_private closure;
+    enum ofperr error;
+
+    error = ofputil_decode_closure_private(oh, false, &closure);
+    if (error) {
+        return error;
+    }
+
+    error = (ofproto->ofproto_class->nxt_resume
+             ? ofproto->ofproto_class->nxt_resume(ofproto, &closure)
+             : OFPERR_NXR_NOT_SUPPORTED);
+
+    ofputil_closure_private_destroy(&closure);
+
+    return error;
+}
+
 static void
 update_port_config(struct ofconn *ofconn, struct ofport *port,
                    enum ofputil_port_config config,
@@ -7217,6 +7238,9 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_GET_ASYNC_REQUEST:
         return handle_nxt_get_async_request(ofconn, oh);
 
+    case OFPTYPE_NXT_RESUME:
+        return handle_nxt_resume(ofconn, oh);
+
         /* Statistics requests. */
     case OFPTYPE_DESC_STATS_REQUEST:
         return handle_desc_stats_request(ofconn, oh);
@@ -7311,6 +7335,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_ROLE_STATUS:
     case OFPTYPE_REQUESTFORWARD:
     case OFPTYPE_NXT_TLV_TABLE_REPLY:
+    case OFPTYPE_NXT_CLOSURE:
     default:
         if (ofpmsg_is_stat_request(oh)) {
             return OFPERR_OFPBRC_BAD_STAT;

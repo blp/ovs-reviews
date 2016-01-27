@@ -1505,7 +1505,7 @@ network device that has the same name as the bridge.
 Outputs the packet on the port from which it was received.
 .
 .IP \fBcontroller(\fIkey\fB=\fIvalue\fR...\fB)
-Sends the packet to the OpenFlow controller as a ``packet in''
+Sends the packet and its metadata to the OpenFlow controller as a ``packet in''
 message.  The supported key-value pairs are:
 .RS
 .IP "\fBmax_len=\fInbytes\fR"
@@ -1534,6 +1534,23 @@ or later).
 .IQ \fBcontroller\fR[\fB:\fInbytes\fR]
 Shorthand for \fBcontroller()\fR or
 \fBcontroller(max_len=\fInbytes\fB)\fR, respectively.
+.
+.IP \fBpause\fR
+.IQ "\fBpause(controller_id=\fIcontroller-id\fB)\fR"
+Sends the packet, its metadata, and a serialized version of the state
+of OpenFlow packet processing, called a \fIclosure\fR, to controller
+\fIcontroller-id\fR (default 0).  The controller that receives the
+\fBNXT_CLOSURE\fR closure message can examine and modify the packet
+and its metadata and send it back to the switch with an
+\fBNXT_RESUME\fR message to resume its traversal of the flow tables.
+.
+.IP
+The state preserved by \fBpause\fR includes the packet and its
+metadata, the ``call stack'' from \fBresubmit\fR actions, the state of
+traversal of multiple OpenFlow logical switches via patch ports, the
+stack used by \fBpush\fR and \fBpop\fR actions, the action set from
+\fBwrite_actions\fR instructions, and the state of Open vSwitch
+mirroring and connection tracking.
 .
 .IP \fBenqueue(\fIport\fB,\fIqueue\fB)\fR
 Enqueues the packet on the specified \fIqueue\fR within port

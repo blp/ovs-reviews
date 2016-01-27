@@ -66,6 +66,9 @@ struct ofproto_async_msg {
             struct ofputil_packet_in up;
             int max_len;                /* From action, or -1 if none. */
         } pin;
+
+        /* OAM_CLOSURE. */
+        struct ofputil_closure_private closure;
     };
 };
 void ofproto_async_msg_free(struct ofproto_async_msg *);

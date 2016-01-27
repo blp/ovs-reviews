@@ -294,6 +294,7 @@ struct xlate_ctx {
                                  * executed after recirculation, or -1. */
     int last_unroll_offset;     /* Offset in 'action_set' to the latest unroll
                                  * action, or -1. */
+    const struct ofpact_pause *pause;
 
     /* True if a packet was but is no longer MPLS (due to an MPLS pop action).
      * This is a trigger for recirculation in cases where translating an action
@@ -3628,6 +3629,35 @@ execute_controller_action(struct xlate_ctx *ctx, int len,
 }
 
 static void
+emit_closure(struct xlate_ctx *ctx, const struct recirc_state *state)
+{
+    struct ofproto_async_msg *am = xmalloc(sizeof *am);
+    *am = (struct ofproto_async_msg) {
+        .controller_id = ctx->pause->controller_id,
+        .oam = OAM_CLOSURE,
+        .closure = {
+            .public = {
+                .packet = xmemdup(dp_packet_data(ctx->xin->packet),
+                                  dp_packet_size(ctx->xin->packet)),
+                .packet_len = dp_packet_size(ctx->xin->packet),
+            },
+            .bridge = *ofproto_dpif_get_uuid(ctx->xbridge->ofproto),
+            .stack = xmemdup(state->stack,
+                             state->n_stack * sizeof *state->stack),
+            .n_stack = state->n_stack,
+            .mirrors = state->mirrors,
+            .conntracked = state->conntracked,
+            .actions = xmemdup(state->ofpacts, state->ofpacts_len),
+            .actions_len = state->ofpacts_len,
+            .action_set = xmemdup(state->action_set, state->action_set_len),
+            .action_set_len = state->action_set_len,
+        }
+    };
+    flow_get_metadata(&ctx->xin->flow, &am->closure.public.metadata);
+    ofproto_dpif_send_async_msg(ctx->xbridge->ofproto, am);
+}
+
+static void
 compose_recirculate_action__(struct xlate_ctx *ctx, uint8_t table)
 {
     struct recirc_metadata md;
@@ -3652,20 +3682,26 @@ compose_recirculate_action__(struct xlate_ctx *ctx, uint8_t table)
         .action_set_len = ctx->recirc_action_offset,
     };
 
-    /* Allocate a unique recirc id for the given metadata state in the
-     * flow.  An existing id, with a new reference to the corresponding
-     * recirculation context, will be returned if possible.
-     * The life-cycle of this recirc id is managed by associating it
-     * with the udpif key ('ukey') created for each new datapath flow. */
-    id = recirc_alloc_id_ctx(&state);
-    if (!id) {
-        XLATE_REPORT_ERROR(ctx, "Failed to allocate recirculation id");
-        ctx->error = XLATE_NO_RECIRCULATION_CONTEXT;
-        return;
-    }
-    recirc_refs_add(&ctx->xout->recircs, id);
+    if (ctx->pause) {
+        if (ctx->xin->packet) {
+            emit_closure(ctx, &state);
+        }
+    } else {
+        /* Allocate a unique recirc id for the given metadata state in the
+         * flow.  An existing id, with a new reference to the corresponding
+         * recirculation context, will be returned if possible.
+         * The life-cycle of this recirc id is managed by associating it
+         * with the udpif key ('ukey') created for each new datapath flow. */
+        id = recirc_alloc_id_ctx(&state);
+        if (!id) {
+            XLATE_REPORT_ERROR(ctx, "Failed to allocate recirculation id");
+            ctx->error = XLATE_NO_RECIRCULATION_CONTEXT;
+            return;
+        }
+        recirc_refs_add(&ctx->xout->recircs, id);
 
-    nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_RECIRC, id);
+        nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_RECIRC, id);
+    }
 
     /* Undo changes done by recirculation. */
     ctx->action_set.size = ctx->recirc_action_offset;
@@ -4178,6 +4214,7 @@ recirc_unroll_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         case OFPACT_GROUP:
         case OFPACT_OUTPUT:
         case OFPACT_CONTROLLER:
+        case OFPACT_PAUSE:
         case OFPACT_DEC_MPLS_TTL:
         case OFPACT_DEC_TTL:
             /* These actions may generate asynchronous messages, which include
@@ -4746,6 +4783,13 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             break;
         }
 
+        case OFPACT_PAUSE:
+            ctx->pause = ofpact_get_PAUSE(a);
+            ctx->xout->slow |= SLOW_CONTROLLER;
+            ctx_trigger_recirculation(ctx);
+            a = ofpact_next(a);
+            break;
+
         case OFPACT_EXIT:
             ctx->exit = true;
             break;
@@ -5132,6 +5176,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         .recirc_action_offset = -1,
         .last_unroll_offset = -1,
+        .pause = NULL,
 
         .was_mpls = false,
         .conntracked = false,
@@ -5432,6 +5477,67 @@ exit:
         }
     }
     return ctx.error;
+}
+
+enum ofperr
+xlate_closure(struct ofproto_dpif *ofproto,
+              const struct ofputil_closure_private *closure,
+              struct ofpbuf *odp_actions,
+              enum slow_path_reason *slow)
+{
+    struct dp_packet packet;
+    dp_packet_use_const(&packet, closure->public.packet,
+                        closure->public.packet_len);
+
+    struct flow flow;
+    flow_extract(&packet, &flow);
+
+    struct xlate_in xin;
+    xlate_in_init(&xin, ofproto, &flow, 0, NULL, flow.tcp_flags, &packet,
+                  NULL, odp_actions);
+
+    struct ofpact_note noop;
+    ofpact_init_NOTE(&noop);
+    noop.length = 0;
+
+    bool any_actions = closure->actions_len > 0;
+    struct recirc_state recirc = {
+        .table_id = 0,     /* Not the table where NXAST_PAUSE was executed. */
+        .ofproto_uuid = closure->bridge,
+        .stack = closure->stack,
+        .n_stack = closure->n_stack,
+        .mirrors = closure->mirrors,
+        .conntracked = closure->conntracked,
+
+        /* When there are no actions, xlate_actions() will search the flow
+         * table.  We don't want it to do that (we want it to resume), so
+         * supply a no-op action if there aren't any.
+         *
+         * (We can't necessarily avoid translating actions entirely if there
+         * aren't any actions, because there might be some finishing-up to do
+         * at the end of the pipeline, and we don't check for those
+         * conditions.)) */
+        .ofpacts = any_actions ? closure->actions : &noop.ofpact,
+        .ofpacts_len = any_actions ? closure->actions_len : sizeof noop,
+
+        .action_set = closure->action_set,
+        .action_set_len = closure->action_set_len,
+    };
+    recirc_metadata_from_flow(&recirc.metadata,
+                              &closure->public.metadata.flow);
+    xin.recirc = &recirc;
+
+    struct xlate_out xout;
+    enum xlate_error error = xlate_actions(&xin, &xout);
+    *slow = xout.slow;
+    xlate_out_uninit(&xout);
+
+    /* xlate_actions() can generate a number of errors, but only
+     * XLATE_BRIDGE_NOT_FOUND really stands out to me as one that we should be
+     * sure to report over OpenFlow.  The others could come up in packet-outs
+     * or regular flow translation and I don't think that it's going to be too
+     * useful to report them to the controller. */
+    return error == XLATE_BRIDGE_NOT_FOUND ? OFPERR_NXR_STALE : 0;
 }
 
 /* Sends 'packet' out 'ofport'.

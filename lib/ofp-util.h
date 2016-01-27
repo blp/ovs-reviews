@@ -31,6 +31,7 @@
 #include "openflow/nicira-ext.h"
 #include "openvswitch/types.h"
 #include "type-props.h"
+#include "uuid.h"
 
 struct ofpbuf;
 union ofp_action;
@@ -458,6 +459,56 @@ const char *ofputil_packet_in_reason_to_string(enum ofp_packet_in_reason,
                                                size_t bufsize);
 bool ofputil_packet_in_reason_from_string(const char *,
                                           enum ofp_packet_in_reason *);
+
+/* Abstract NXT_CLOSURE. */
+struct ofputil_closure {
+    /* NXCPT_PACKET. */
+    void *packet;
+    size_t packet_len;
+
+    /* NXCPT_METADATA. */
+    struct match metadata;
+};
+void ofputil_closure_destroy(struct ofputil_closure *);
+
+enum ofperr ofputil_decode_closure(const struct ofp_header *,
+                                   struct ofputil_closure *,
+                                   struct ofpbuf *private_properties);
+struct ofpbuf *ofputil_encode_resume(const struct ofputil_closure *,
+                                     const struct ofpbuf *private_properties,
+                                     enum ofputil_protocol);
+
+struct ofputil_closure_private {
+    struct ofputil_closure public;
+
+    /* NXCPT_BRIDGE. */
+    struct uuid bridge;
+
+    /* NXCPT_STACK. */
+    union mf_subvalue *stack;
+    size_t n_stack;
+
+    /* NXCPT_MIRRORS. */
+    uint32_t mirrors;
+
+    /* NXCPT_CONNTRACKED. */
+    bool conntracked;
+
+    /* NXCPT_ACTIONS. */
+    struct ofpact *actions;
+    size_t actions_len;
+
+    /* NXCPT_ACTION_SET. */
+    struct ofpact *action_set;
+    size_t action_set_len;
+};
+void ofputil_closure_private_destroy(struct ofputil_closure_private *);
+
+enum ofperr ofputil_decode_closure_private(const struct ofp_header *,
+                                           bool loose,
+                                           struct ofputil_closure_private *);
+struct ofpbuf *ofputil_encode_closure_private(
+    const struct ofputil_closure_private *, enum ofputil_protocol);
 
 /* Abstract packet-out message.
  *
@@ -1310,8 +1361,9 @@ enum ofputil_async_msg_type {
     OAM_TABLE_STATUS,           /* OFPT_TABLE_STATUS. */
     OAM_REQUESTFORWARD,         /* OFPT_REQUESTFORWARD. */
 
-    /* Extension asynchronous messages (none yet--coming soon!). */
-#define OAM_EXTENSIONS 0        /* Bitmap of all extensions. */
+    /* Extension asynchronous messages. */
+    OAM_CLOSURE,                /* NXT_CLOSURE. */
+#define OAM_EXTENSIONS (1u << OAM_CLOSURE) /* Bitmap of all extensions. */
 
     OAM_N_TYPES
 };

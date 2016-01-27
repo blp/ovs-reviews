@@ -3848,6 +3848,7 @@ OFPT_GET_ASYNC_REPLY (OF1.3):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 
  slave:
        PACKET_IN: (off)
@@ -3856,6 +3857,7 @@ OFPT_GET_ASYNC_REPLY (OF1.3):
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
+         CLOSURE: (off)
 OFPT_BARRIER_REPLY (OF1.3):
 ])
 

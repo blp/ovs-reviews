@@ -47,6 +47,13 @@
 VLOG_DEFINE_THIS_MODULE(connmgr);
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
+enum ofconn_scheduler {
+    SCHED_ACTION,               /* Packet-ins due to actions. */
+    SCHED_MISS,                 /* Packet-ins due to flow table misses. */
+    SCHED_CLOSURE,              /* Closures. */
+    N_SCHEDULERS
+};
+
 /* An OpenFlow connection.
  *
  *
@@ -78,7 +85,6 @@ struct ofconn {
 
     /* OFPT_PACKET_IN related data. */
     struct rconn_packet_counter *packet_in_counter; /* # queued on 'rconn'. */
-#define N_SCHEDULERS 2
     struct pinsched *schedulers[N_SCHEDULERS];
     struct pktbuf *pktbuf;         /* OpenFlow packet buffers. */
     int miss_send_len;             /* Bytes to send of buffered packets. */
@@ -500,7 +506,10 @@ connmgr_get_controller_info(struct connmgr *mgr, struct shash *info)
 
             for (i = 0; i < N_SCHEDULERS; i++) {
                 if (ofconn->schedulers[i]) {
-                    const char *name = i ? "miss" : "action";
+                    const char *name
+                        = (i == SCHED_ACTION ? "action"
+                           : i == SCHED_MISS ? "miss"
+                           : "closure");
                     struct pinsched_stats stats;
 
                     pinsched_get_stats(ofconn->schedulers[i], &stats);
@@ -1661,24 +1670,44 @@ connmgr_send_async_msg(struct connmgr *mgr,
     LIST_FOR_EACH (ofconn, node, &mgr->all_conns) {
         enum ofputil_protocol protocol = ofconn_get_protocol(ofconn);
         if (protocol == OFPUTIL_P_NONE || !rconn_is_connected(ofconn->rconn)
-            || ofconn->controller_id != am->controller_id
-            || !ofconn_receives_async_msg(ofconn, am->oam,
-                                          am->pin.up.reason)) {
+            || ofconn->controller_id != am->controller_id) {
             continue;
         }
 
-        struct ofpbuf *msg = ofputil_encode_packet_in(
-            &am->pin.up, protocol, ofconn->packet_in_format,
-            am->pin.max_len >= 0 ? am->pin.max_len : ofconn->miss_send_len,
-            ofconn->pktbuf);
+        struct ofpbuf *msg;
+        enum ofconn_scheduler sched;
+        ofp_port_t port;
+        if (am->oam == OAM_PACKET_IN) {
+            if (!ofconn_receives_async_msg(ofconn, am->oam,
+                                           am->pin.up.reason)) {
+                continue;
+            }
+
+            uint16_t max_len = (am->pin.max_len >= 0
+                                ? am->pin.max_len
+                                : ofconn->miss_send_len);
+            msg = ofputil_encode_packet_in(&am->pin.up, protocol,
+                                           ofconn->packet_in_format,
+                                           max_len, ofconn->pktbuf);
+            sched = ((am->pin.up.reason == OFPR_NO_MATCH ||
+                      am->pin.up.reason == OFPR_EXPLICIT_MISS ||
+                      am->pin.up.reason == OFPR_IMPLICIT_MISS)
+                     ? SCHED_MISS : SCHED_ACTION);
+            port = am->pin.up.flow_metadata.flow.in_port.ofp_port;
+        } else if (am->oam == OAM_CLOSURE) {
+            if (!ofconn_receives_async_msg(ofconn, am->oam, 0)) {
+                continue;
+            }
+
+            msg = ofputil_encode_closure_private(&am->closure, protocol);
+            sched = SCHED_CLOSURE;
+            port = 0; /* XXX */
+        } else {
+            OVS_NOT_REACHED();
+        }
 
         struct ovs_list txq;
-        bool is_miss = (am->pin.up.reason == OFPR_NO_MATCH ||
-                        am->pin.up.reason == OFPR_EXPLICIT_MISS ||
-                        am->pin.up.reason == OFPR_IMPLICIT_MISS);
-        pinsched_send(ofconn->schedulers[is_miss],
-                      am->pin.up.flow_metadata.flow.in_port.ofp_port,
-                      msg, &txq);
+        pinsched_send(ofconn->schedulers[sched], port, msg, &txq);
         do_send_packet_ins(ofconn, &txq);
     }
 }
@@ -2247,6 +2276,10 @@ ofmonitor_wait(struct connmgr *mgr)
 void
 ofproto_async_msg_free(struct ofproto_async_msg *am)
 {
-    free(CONST_CAST(void *, am->pin.up.packet));
+    if (am->oam == OAM_PACKET_IN) {
+        free(CONST_CAST(void *, am->pin.up.packet));
+    } else if (am->oam == OAM_CLOSURE) {
+        ofputil_closure_private_destroy(&am->closure);
+    }
     free(am);
 }
