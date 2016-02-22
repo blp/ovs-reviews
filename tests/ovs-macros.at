@@ -153,3 +153,13 @@ on_exit () {
     mv cleanup.tmp cleanup
 }
 ])
+
+dnl Autoconf 2.64 introduced AS_VAR_APPEND, so introduce a compat version
+dnl for Autoconf 2.63.
+m4_ifndef([AS_VAR_APPEND],
+  [m4_divert_text([PREPARE_TESTS],
+    [as_var_append () {
+       eval $1=\$$1\$2
+     }
+])
+   m4_define([AS_VAR_APPEND], [as_var_append $1 $2])])
