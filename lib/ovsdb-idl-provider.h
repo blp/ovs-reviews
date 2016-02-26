@@ -1,4 +1,5 @@
 /* Copyright (c) 2009, 2010, 2011, 2012 Nicira, Inc.
+ * Copyright (C) 2016 Hewlett Packard Enterprise Development LP
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +22,7 @@
 #include "ovsdb-idl.h"
 #include "ovsdb-types.h"
 #include "shash.h"
+#include "sset.h"
 #include "uuid.h"
 
 struct ovsdb_idl_row {
@@ -41,6 +43,9 @@ struct ovsdb_idl_row {
     unsigned int change_seqno[OVSDB_IDL_CHANGE_MAX];
     struct ovs_list track_node; /* Rows modified/added/deleted by IDL */
     unsigned long int *updated; /* Bitmap of columns updated by IDL */
+
+    size_t n_fetch_reqs;        /* Number of columns with fetches pending. */
+
 };
 
 struct ovsdb_idl_column {
@@ -70,6 +75,11 @@ struct ovsdb_idl_table {
     struct ovsdb_idl *idl;   /* Containing idl. */
     unsigned int change_seqno[OVSDB_IDL_CHANGE_MAX];
     struct ovs_list track_list; /* Tracked rows (ovsdb_idl_row.track_node). */
+    bool has_pending_fetch;     /* Indicates if the table has a pending fetch
+                                 * operation */
+    struct sset outstanding_col_fetch_reqs; /* Columns with pending fetches. */
+    size_t n_on_demand_columns; /* Number of columns in the table configured
+                                 * in OVSDB_IDL_ON_DEMAND mode. */
 };
 
 struct ovsdb_idl_class {
