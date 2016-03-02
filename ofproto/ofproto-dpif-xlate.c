@@ -33,6 +33,7 @@
 #include "coverage.h"
 #include "dp-packet.h"
 #include "dpif.h"
+#include "dummy.h"
 #include "dynamic-string.h"
 #include "in-band.h"
 #include "lacp.h"
@@ -5266,6 +5267,14 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         ctx.base_flow.vlan_tci = 0;
     }
 
+    const struct mf_field *tf = dummy_get_trace_field();
+    struct ds local_trace;
+    if (OVS_UNLIKELY(tf) && !xin->trace && mf_is_set(tf, flow)) {
+        ds_init(&local_trace);
+        xin->trace = &local_trace;
+        ctx.xout->slow |= SLOW_TRACE;
+    }
+
     if (OVS_UNLIKELY(xin->trace)) {
         ctx.trace_orig_flow = xmemdup(&xin->flow, sizeof xin->flow);
         ctx.trace_last_flow = xmemdup(&xin->flow, sizeof xin->flow);
@@ -5283,6 +5292,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     ofpbuf_reserve(ctx.odp_actions, NL_A_U32_SIZE);
     if (xin->wc) {
         xlate_wc_init(&ctx);
+        if (OVS_UNLIKELY(tf)) {
+            mf_mask_field(tf, &ctx.wc->masks);
+        }
     }
 
     COVERAGE_INC(xlate_actions);

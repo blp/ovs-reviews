@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,27 @@
 #include <config.h>
 #include "dummy.h"
 #include <string.h>
+#include "unixctl.h"
 #include "util.h"
+
+ATOMIC(const struct mf_field *) dummy_trace_field;
+
+static void
+dummy_unixctl_set_trace_field(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                              const char *argv[], void *aux OVS_UNUSED)
+{
+    const char *field_name = argv[1];
+
+    const struct mf_field *field = NULL;
+    if (strcmp(field_name, "none")) {
+        field = mf_from_name(field_name);
+        if (!field) {
+            unixctl_command_reply_error(conn, "unknown field");
+            return;
+        }
+    }
+    atomic_store(&dummy_trace_field, field);
+}
 
 /* Enables support for "dummy" network devices and dpifs, which are useful for
  * testing.  A client program might call this function if it is designed
@@ -42,10 +62,12 @@ dummy_enable(const char *arg)
         ovs_fatal(0, "%s: unknown dummy level", arg);
     }
 
+    unixctl_command_register("dummy/set-trace-field", "FIELD",
+                             1, 1, dummy_unixctl_set_trace_field, NULL);
+
     netdev_dummy_register(level);
     dpif_dummy_register(level);
     timeval_dummy_register();
     vlandev_dummy_enable();
     ofpact_dummy_enable();
 }
-

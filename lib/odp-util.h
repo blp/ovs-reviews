@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,8 @@ struct pkt_metadata;
     SPR(SLOW_CONTROLLER, "controller",                                  \
         "Sends \"packet-in\" messages to the OpenFlow controller")      \
     SPR(SLOW_ACTION,     "action",                                      \
-        "Uses action(s) not supported by datapath")
+        "Uses action(s) not supported by datapath")                     \
+    SPR(SLOW_TRACE,      "trace",      "Triggers tracing")
 
 /* Indexes for slow-path reasons.  Client code uses "enum slow_path_reason"
  * values instead of these, these are just a way to construct those. */

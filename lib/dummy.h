@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@
 #define DUMMY_H 1
 
 #include <stdbool.h>
+#include "meta-flow.h"
+#include "ovs-atomic.h"
 
 /* Degree of dummy support.
  *
@@ -39,5 +41,14 @@ void netdev_dummy_register(enum dummy_level);
 void timeval_dummy_register(void);
 void vlandev_dummy_enable(void);
 void ofpact_dummy_enable(void);
+
+extern ATOMIC(const struct mf_field *) dummy_trace_field;
+static inline const struct mf_field *
+dummy_get_trace_field(void)
+{
+    const struct mf_field *dtf;
+    atomic_read_relaxed(&dummy_trace_field, &dtf);
+    return dtf;
+}
 
 #endif /* dummy.h */
