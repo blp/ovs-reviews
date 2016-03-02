@@ -337,7 +337,13 @@ struct xlate_ctx {
     bool action_set_has_group;  /* Action set contains OFPACT_GROUP? */
     struct ofpbuf action_set;   /* Action set. */
 
-    enum xlate_error error;     /* Translation failed. */
+    /* Nonzero if an error has been encountered during translation. */
+    enum xlate_error error;
+
+    /* Tracing state, used when xin->trace != NULL, e.g. for "ovs-appctl
+     * ofproto/trace". */
+    struct flow *trace_orig_flow;
+    struct flow *trace_last_flow;
 };
 
 const char *xlate_strerror(enum xlate_error error)
@@ -576,14 +582,17 @@ static void xlate_xport_copy(struct xbridge *, struct xbundle *,
                              struct xport *);
 static void xlate_xcfg_free(struct xlate_cfg *);
 
-static inline void
+static void
 xlate_report(struct xlate_ctx *ctx, const char *format, ...)
 {
-    if (OVS_UNLIKELY(ctx->xin->report_hook)) {
+    struct ds *trace = ctx->xin->trace;
+    if (OVS_UNLIKELY(trace)) {
         va_list args;
 
         va_start(args, format);
-        ctx->xin->report_hook(ctx->xin, ctx->recurse, format, args);
+        ds_put_char_multiple(trace, '\t', ctx->recurse);
+        ds_put_format_valist(trace, format, args);
+        ds_put_char(trace, '\n');
         va_end(args);
     }
 }
@@ -592,7 +601,7 @@ static struct vlog_rate_limit error_report_rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
 #define XLATE_REPORT_ERROR(CTX, ...)                    \
     do {                                                \
-        if (OVS_UNLIKELY((CTX)->xin->report_hook)) {    \
+        if (OVS_UNLIKELY((CTX)->xin->trace)) {          \
             xlate_report(CTX, __VA_ARGS__);             \
         } else {                                        \
             VLOG_ERR_RL(&error_report_rl, __VA_ARGS__); \
@@ -603,7 +612,7 @@ static inline void
 xlate_report_actions(struct xlate_ctx *ctx, const char *title,
                      const struct ofpact *ofpacts, size_t ofpacts_len)
 {
-    if (OVS_UNLIKELY(ctx->xin->report_hook)) {
+    if (OVS_UNLIKELY(ctx->xin->trace)) {
         struct ds s = DS_EMPTY_INITIALIZER;
         ofpacts_format(ofpacts, ofpacts_len, &s);
         xlate_report(ctx, "%s: %s", title, ds_cstr(&s));
@@ -3267,6 +3276,112 @@ xlate_resubmit_resource_check(struct xlate_ctx *ctx)
 }
 
 static void
+trace_format_rule(struct ds *trace, int level, const struct rule_dpif *rule)
+{
+
+    ds_put_char_multiple(trace, '\t', level);
+    if (!rule) {
+        ds_put_cstr(trace, "No match\n");
+        return;
+    }
+
+    ovs_be64 cookie = rule_dpif_get_flow_cookie(rule);
+    ds_put_format(trace, "Rule: table=%"PRIu8" cookie=%#"PRIx64" ",
+                  rule ? rule_dpif_get_table(rule) : 0, ntohll(cookie));
+    cls_rule_format(rule_dpif_get_cls_rule(rule), trace);
+    ds_put_char(trace, '\n');
+
+    const struct rule_actions *actions = rule_dpif_get_actions(rule);
+
+    ds_put_char_multiple(trace, '\t', level);
+    ds_put_cstr(trace, "OpenFlow actions=");
+    ofpacts_format(actions->ofpacts, actions->ofpacts_len, trace);
+    ds_put_char(trace, '\n');
+}
+
+static void
+trace_format_flow(struct xlate_ctx *ctx, int level, const char *title)
+{
+    struct ds *trace = ctx->xin->trace;
+
+    ds_put_char_multiple(trace, '\t', level);
+    ds_put_format(trace, "%s: ", title);
+    /* Do not report unchanged flows for resubmits. */
+    if ((level > 0 && flow_equal(&ctx->xin->flow, ctx->trace_last_flow))
+        || (level == 0
+            && flow_equal(&ctx->xin->flow, ctx->trace_orig_flow))) {
+        ds_put_cstr(trace, "unchanged");
+    } else {
+        flow_format(trace, &ctx->xin->flow);
+        *ctx->trace_last_flow = ctx->xin->flow;
+    }
+    ds_put_char(trace, '\n');
+}
+
+static void
+trace_format_regs(struct xlate_ctx *ctx, int level, const char *title)
+{
+    struct ds *trace = ctx->xin->trace;
+    size_t i;
+
+    ds_put_char_multiple(trace, '\t', level);
+    ds_put_format(trace, "%s:", title);
+    for (i = 0; i < FLOW_N_REGS; i++) {
+        ds_put_format(trace, " reg%"PRIuSIZE"=0x%"PRIx32,
+                      i, ctx->trace_last_flow->regs[i]);
+    }
+    ds_put_char(trace, '\n');
+}
+
+static void
+trace_format_odp(struct xlate_ctx *ctx, int level, const char *title)
+{
+    struct ds *trace = ctx->xin->trace;
+    struct ofpbuf *odp_actions = ctx->odp_actions;
+
+    ds_put_char_multiple(trace, '\t', level);
+    ds_put_format(trace, "%s: ", title);
+    format_odp_actions(trace, odp_actions->data, odp_actions->size);
+    ds_put_char(trace, '\n');
+}
+
+static void
+trace_format_megaflow(struct xlate_ctx *ctx, int level, const char *title)
+{
+    struct ds *trace = ctx->xin->trace;
+    struct match match;
+
+    ds_put_char_multiple(trace, '\t', level);
+    ds_put_format(trace, "%s: ", title);
+    match_init(&match, ctx->trace_orig_flow, ctx->wc);
+    match_format(&match, trace, OFP_DEFAULT_PRIORITY);
+    ds_put_char(trace, '\n');
+}
+
+static void
+trace_resubmit(struct xlate_ctx *ctx, struct rule_dpif *rule, int recurse)
+{
+    if (!recurse) {
+        const char *s;
+
+        s = rule_dpif_get_trace_explanation(ctx->xin->ofproto, rule);
+        if (s) {
+            xlate_report(ctx, "%s", s);
+        }
+    }
+
+    struct ds *trace = ctx->xin->trace;
+    ds_put_char(trace, '\n');
+    if (recurse) {
+        trace_format_flow(ctx, recurse, "Resubmitted flow");
+        trace_format_regs(ctx, recurse, "Resubmitted regs");
+        trace_format_odp(ctx, recurse, "Resubmitted  odp");
+        trace_format_megaflow(ctx, recurse, "Resubmitted megaflow");
+    }
+    trace_format_rule(trace, recurse, rule);
+}
+
+static void
 xlate_table_action(struct xlate_ctx *ctx, ofp_port_t in_port, uint8_t table_id,
                    bool may_packet_in, bool honor_table_miss)
 {
@@ -3283,8 +3398,8 @@ xlate_table_action(struct xlate_ctx *ctx, ofp_port_t in_port, uint8_t table_id,
                                            &ctx->table_id, in_port,
                                            may_packet_in, honor_table_miss);
 
-        if (OVS_UNLIKELY(ctx->xin->resubmit_hook)) {
-            ctx->xin->resubmit_hook(ctx->xin, rule, ctx->recurse + 1);
+        if (OVS_UNLIKELY(ctx->xin->trace)) {
+            trace_resubmit(ctx, rule, ctx->recurse + 1);
         }
 
         if (rule) {
@@ -4830,8 +4945,7 @@ xlate_in_init(struct xlate_in *xin, struct ofproto_dpif *ofproto,
     xin->ofpacts = NULL;
     xin->ofpacts_len = 0;
     xin->tcp_flags = tcp_flags;
-    xin->resubmit_hook = NULL;
-    xin->report_hook = NULL;
+    xin->trace = NULL;
     xin->resubmit_stats = NULL;
     xin->recurse = 0;
     xin->resubmits = 0;
@@ -5075,7 +5189,12 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
     struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
     struct xbridge *xbridge = xbridge_lookup(xcfg, xin->ofproto);
-    if (!xbridge) {
+    if (OVS_UNLIKELY(!xbridge)) {
+        if (xin->trace) {
+            ds_put_format(xin->trace,
+                          "Translation bridge not found for ofproto %s\n",
+                          ofproto_dpif_get_name(xin->ofproto));
+        }
         return XLATE_BRIDGE_NOT_FOUND;
     }
 
@@ -5145,6 +5264,20 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
                                   flow->in_port.ofp_port,
                                   flow->vlan_tci)) {
         ctx.base_flow.vlan_tci = 0;
+    }
+
+    if (OVS_UNLIKELY(xin->trace)) {
+        ctx.trace_orig_flow = xmemdup(&xin->flow, sizeof xin->flow);
+        ctx.trace_last_flow = xmemdup(&xin->flow, sizeof xin->flow);
+        if (!xin->wc) {
+            xin->wc = ctx.wc;
+        }
+
+        ds_put_format(xin->trace, "Bridge: %s\n",
+                      ofproto_dpif_get_name(xin->ofproto));
+        ds_put_cstr(xin->trace, "Flow: ");
+        flow_format(xin->trace, flow);
+        ds_put_char(xin->trace, '\n');
     }
 
     ofpbuf_reserve(ctx.odp_actions, NL_A_U32_SIZE);
@@ -5254,8 +5387,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             rule_dpif_ref(ctx.rule);
         }
 
-        if (OVS_UNLIKELY(ctx.xin->resubmit_hook)) {
-            ctx.xin->resubmit_hook(ctx.xin, ctx.rule, 0);
+        if (OVS_UNLIKELY(ctx.xin->trace)) {
+            trace_resubmit(&ctx, ctx.rule, 0);
         }
     }
 
@@ -5396,6 +5529,42 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     }
 
 exit:
+    if (OVS_UNLIKELY(xin->trace)) {
+        ds_put_char(xin->trace, '\n');
+        trace_format_flow(&ctx, 0, "Final flow");
+        trace_format_megaflow(&ctx, 0, "Megaflow");
+
+        ds_put_cstr(xin->trace, "Datapath actions: ");
+        format_odp_actions(xin->trace, ctx.odp_actions->data,
+                           ctx.odp_actions->size);
+
+        if (xout->slow) {
+            enum slow_path_reason slow;
+
+            ds_put_cstr(xin->trace, "\nThis flow is handled by the userspace "
+                        "slow path because it:");
+
+            slow = xout->slow;
+            while (slow) {
+                enum slow_path_reason bit = rightmost_1bit(slow);
+
+                ds_put_format(xin->trace, "\n\t- %s.",
+                              slow_path_reason_to_explanation(bit));
+
+                slow &= ~bit;
+            }
+        }
+
+        if (ctx.error) {
+            ds_put_format(xin->trace,
+                          "\nTranslation failed (%s), packet is dropped.\n",
+                          xlate_strerror(ctx.error));
+        }
+
+        free(ctx.trace_orig_flow);
+        free(ctx.trace_last_flow);
+    }
+
     ofpbuf_uninit(&ctx.stack);
     ofpbuf_uninit(&ctx.action_set);
     ofpbuf_uninit(&ctx.frozen_actions);
