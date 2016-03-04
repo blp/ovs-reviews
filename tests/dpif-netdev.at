@@ -59,8 +59,8 @@ AT_CHECK([ovs-ofctl add-flow br0 action=normal])
 AT_CHECK([ovs-ofctl add-flow br1 action=normal])
 ovs-appctl time/stop
 ovs-appctl time/warp 5000
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(7),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p8 'in_port(8),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.3,dst=10.0.0.4,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p8 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.3,nw_dst=10.0.0.4,icmp_type=8,icmp_code=0'])
 ovs-appctl time/warp 100
 sleep 1  # wait for forwarders process packets
 
@@ -82,7 +82,7 @@ OVS_VSWITCHD_START(
 AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 
 AT_CHECK([grep -A 1 'miss upcall' ovs-vswitchd.log | tail -n 1], [0], [dnl
@@ -95,7 +95,7 @@ recirc_id=0,ip,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:09,dl_dst=
 # Now, the same again without megaflows.
 AT_CHECK([ovs-appctl upcall/disable-megaflows], [0], [megaflows disabled
 ])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 
 AT_CHECK([grep -A 1 'miss upcall' ovs-vswitchd.log | tail -n 1], [0], [dnl
@@ -119,7 +119,7 @@ AT_CHECK([ovs-appctl upcall/disable-ufid], [0], [Datapath dumping tersely using 
 AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,in_port(1),dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 
 AT_CHECK([grep -A 1 'miss upcall' ovs-vswitchd.log | tail -n 1], [0], [dnl
@@ -134,7 +134,7 @@ AT_CHECK([ovs-appctl upcall/disable-megaflows], [0], [megaflows disabled
 ])
 AT_CHECK([ovs-appctl upcall/disable-ufid], [0], [Datapath dumping tersely using UFID disabled
 ], [])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,in_port(1),dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 
 AT_CHECK([grep -A 1 'miss upcall' ovs-vswitchd.log | tail -n 1], [0], [dnl

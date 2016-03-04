@@ -28,6 +28,7 @@
 #include "netdev-provider.h"
 #include "netdev-vport.h"
 #include "odp-util.h"
+#include "ofp-parse.h"
 #include "ofp-print.h"
 #include "ofpbuf.h"
 #include "ovs-atomic.h"
@@ -1272,44 +1273,45 @@ pkt_list_delete(struct ovs_list *l)
     }
 }
 
-static struct dp_packet *
-eth_from_packet_or_flow(const char *s)
+/* Converts 's' to an Ethernet packet and metadata in '*packetp'.  The caller
+ * must free '*packetp'.  On success, returns NULL.  On failure, returns an
+ * error message and stores NULL in '*packetp'.
+ *
+ * Aligns the L3 header of '*packetp' on a 32-bit boundary. */
+static char * OVS_WARN_UNUSED_RESULT
+packet_from_string(const char *s, struct dp_packet **packetp)
 {
-    enum odp_key_fitness fitness;
-    struct dp_packet *packet;
-    struct ofpbuf odp_key;
+    struct dp_packet *packet = NULL;
+
+    /* Parse an initial hex substring as packet data. */
+    size_t n_bytes;
+    dp_packet_put_hex(NULL, s, &n_bytes);
+    if (n_bytes >= ETH_HEADER_LEN) {
+        packet = dp_packet_new_with_headroom(n_bytes, 2);
+        s = dp_packet_put_hex(packet, s, NULL);
+        s += strspn(s, " \t\r\n");
+        if (*s == '\0') {
+            *packetp = packet;
+            return NULL;
+        }
+    }
+
     struct flow flow;
-    int error;
-
-    if (!eth_from_hex(s, &packet)) {
-        return packet;
-    }
-
-    /* Convert string to datapath key.
-     *
-     * It would actually be nicer to parse an OpenFlow-like flow key here, but
-     * the code for that currently calls exit() on parse error.  We have to
-     * settle for parsing a datapath key for now.
-     */
-    ofpbuf_init(&odp_key, 0);
-    error = odp_flow_from_string(s, NULL, &odp_key, NULL);
+    char *error = parse_ofp_exact_flow(&flow, NULL, s, NULL);
     if (error) {
-        ofpbuf_uninit(&odp_key);
-        return NULL;
+        dp_packet_delete(packet);
+        *packetp = NULL;
+        return error;
     }
 
-    /* Convert odp_key to flow. */
-    fitness = odp_flow_key_to_flow(odp_key.data, odp_key.size, &flow);
-    if (fitness == ODP_FIT_ERROR) {
-        ofpbuf_uninit(&odp_key);
-        return NULL;
+    if (!packet) {
+        packet = dp_packet_new(128);
+        flow_compose(packet, &flow);
     }
+    pkt_metadata_from_flow(&packet->md, &flow);
 
-    packet = dp_packet_new(0);
-    flow_compose(packet, &flow);
-
-    ofpbuf_uninit(&odp_key);
-    return packet;
+    *packetp = packet;
+    return NULL;
 }
 
 static void
@@ -1367,9 +1369,10 @@ netdev_dummy_receive(struct unixctl_conn *conn,
     for (i = 2; i < argc; i++) {
         struct dp_packet *packet;
 
-        packet = eth_from_packet_or_flow(argv[i]);
-        if (!packet) {
-            unixctl_command_reply_error(conn, "bad packet syntax");
+        char *error = packet_from_string(argv[i], &packet);
+        if (error) {
+            unixctl_command_reply_error(conn, error);
+            free(error);
             goto exit;
         }
 

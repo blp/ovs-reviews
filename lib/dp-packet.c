@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -327,14 +327,14 @@ dp_packet_put(struct dp_packet *b, const void *p, size_t size)
 }
 
 /* Parses as many pairs of hex digits as possible (possibly separated by
- * spaces) from the beginning of 's', appending bytes for their values to 'b'.
- * Returns the first character of 's' that is not the first of a pair of hex
- * digits.  If 'n' is nonnull, stores the number of bytes added to 'b' in
- * '*n'. */
+ * spaces) from the beginning of 's'.  If 'b' is nonnull, appends bytes for
+ * their values to 'b'.  Returns the first character of 's' that is not the
+ * first of a pair of hex digits.  If 'n' is nonnull, stores the number of
+ * parsed bytes in '*n'. */
 char *
-dp_packet_put_hex(struct dp_packet *b, const char *s, size_t *n)
+dp_packet_put_hex(struct dp_packet *b, const char *s, size_t *np)
 {
-    size_t initial_size = dp_packet_size(b);
+    size_t n = 0;
     for (;;) {
         uint8_t byte;
         bool ok;
@@ -342,14 +342,17 @@ dp_packet_put_hex(struct dp_packet *b, const char *s, size_t *n)
         s += strspn(s, " \t\r\n");
         byte = hexits_value(s, 2, &ok);
         if (!ok) {
-            if (n) {
-                *n = dp_packet_size(b) - initial_size;
+            if (np) {
+                *np = n;
             }
             return CONST_CAST(char *, s);
         }
 
-        dp_packet_put(b, &byte, 1);
+        if (b) {
+            dp_packet_put(b, &byte, 1);
+        }
         s += 2;
+        n++;
     }
 }
 

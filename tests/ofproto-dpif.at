@@ -32,14 +32,14 @@ ovs-appctl time/warp 100
 ovs-appctl netdev-dummy/set-admin-state p2 down
 ovs-appctl time/stop
 ovs-appctl time/warp 100
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(7),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(7),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.3,dst=10.0.0.4,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.3,nw_dst=10.0.0.4,nw_ttl=64,icmp_type=8,icmp_code=0'])
 ovs-appctl time/warp 100
 ovs-appctl netdev-dummy/set-admin-state p2 up
 ovs-appctl netdev-dummy/set-admin-state p1 down
 ovs-appctl time/warp 100
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(7),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0d),eth_type(0x0800),ipv4(src=10.0.0.5,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(7),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0e),eth_type(0x0800),ipv4(src=10.0.0.6,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0d,nw_src=10.0.0.5,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0e,nw_src=10.0.0.6,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 ovs-appctl time/warp 200 100
 sleep 1
 AT_CHECK([grep 'in_port=[[348]]' ovs-vswitchd.log | filter_flow_install | strip_xout], [0], [dnl
@@ -82,7 +82,7 @@ ovs-appctl time/warp 100
 (
 for i in `seq 0 100 |xargs printf '%02x\n'`;
     do
-    pkt="in_port(7),eth(src=50:54:00:00:00:$i,dst=50:54:00:00:01:00),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)"
+    pkt="icmp,eth_src=50:54:00:00:00:$i,eth_dst=50:54:00:00:01:00,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0"
     AT_CHECK([ovs-appctl netdev-dummy/receive p7 $pkt])
     done
 )
@@ -132,7 +132,7 @@ ovs-appctl bond/show > bond.txt
 (
 for i in `seq 0 255` ;
     do
-    pkt="in_port(7),eth(src=50:54:00:00:00:05,dst=50:54:00:00:01:00),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=$i),tcp_flags(ack)"
+    pkt="tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:01:00,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,tcp_src=8,tcp_dst=$i,tcp_flags=ack"
     AT_CHECK([ovs-appctl netdev-dummy/receive p7 $pkt])
     done
 )
@@ -189,7 +189,7 @@ table=0 priority=2 in_port=5 dl_vlan=1 actions=drop
 AT_CHECK([ovs-ofctl add-flows br-int flows.txt])
 
 # Sends a packet to trigger recirculation.
-AT_CHECK([ovs-appctl netdev-dummy/receive p5 "in_port(5),eth(src=50:54:00:00:00:05,dst=50:54:00:00:01:00),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1)"])
+AT_CHECK([ovs-appctl netdev-dummy/receive p5 "dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:01:00,ip,nw_src=10.0.0.2,nw_dst=10.0.0.1"])
 
 # Collects flow stats.
 AT_CHECK([ovs-appctl revalidator/purge], [0])
@@ -471,7 +471,7 @@ AT_CHECK([ovs-ofctl -O OpenFlow12 add-flow br0 'ip actions=write_actions(group:1
 (
 for i in `seq 0 2`;
     do
-    pkt="in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:01:00),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)"
+    pkt="icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:01:00,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0"
     AT_CHECK([ovs-appctl netdev-dummy/receive p1 $pkt])
     done
 )
@@ -492,7 +492,7 @@ AT_CHECK([ovs-ofctl -O OpenFlow12 add-flow br0 'ip actions=write_actions(group:1
 (
 for i in `seq 0 2`;
     do
-    pkt="in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:01:00),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)"
+    pkt="icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:01:00,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0"
     AT_CHECK([ovs-appctl netdev-dummy/receive p1 $pkt])
     done
 )
@@ -899,7 +899,7 @@ AT_CAPTURE_FILE([ofctl_monitor.log])
 AT_CHECK([ovs-ofctl -P nxt_packet_in monitor br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(syn)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(syn)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -935,7 +935,7 @@ AT_CHECK([ovs-ofctl monitor -OOpenFlow13 -P standard br0 65534 --detach --no-chd
 
 dnl Test that missed packets are droped
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(ack,syn)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(ack,syn)'
 done
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
@@ -962,7 +962,7 @@ AT_CHECK([ovs-ofctl -OOpenFlow12 add-flow br0 'table=0 actions=goto_table(1)'])
 AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(urg|rst)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(urg|rst)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -998,7 +998,7 @@ AT_CHECK([ovs-ofctl -OOpenFlow12 add-flow br0 'table=0 actions=resubmit(1,1)'])
 AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -1028,7 +1028,7 @@ dnl Miss table 0, Hit table 1
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -1048,7 +1048,7 @@ dnl Hit table 0, Miss all other tables, sent to controller
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -1091,7 +1091,7 @@ dnl Hit table 0, Miss table 1, Hit table 2
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1111,7 +1111,7 @@ dnl Hit table 1, Miss all other tables, sent to controller
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -1155,7 +1155,7 @@ dnl Hit table 0, Miss table 1, Dropped
 AT_CHECK([ovs-ofctl monitor br0 65534 -P standard --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
 
@@ -1166,7 +1166,7 @@ dnl Hit table 1, Dropped
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
@@ -1196,7 +1196,7 @@ AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 
 
 dnl Test that missed packets are droped
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
@@ -1226,7 +1226,7 @@ AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 
 
 dnl Test that missed packets are droped
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
@@ -1257,7 +1257,7 @@ AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 
 
 dnl Test that missed packets are droped
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
 
@@ -1301,7 +1301,7 @@ dnl Flow miss.
 AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=9),tcp_flags(0x010)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=9,tcp_flags(0x010)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1321,7 +1321,7 @@ dnl Singleton controller action.
 AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags(0x002)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1341,7 +1341,7 @@ dnl Modified controller action.
 AT_CHECK([ovs-ofctl monitor -P standard br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=30:33:33:33:33:33,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x001)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=30:33:33:33:33:33,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags(0x001)'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1361,7 +1361,7 @@ dnl Modified VLAN controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:41,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=40:44:44:44:44:41,dl_dst=50:54:00:00:00:07,ip,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1381,7 +1381,7 @@ dnl Checksum TCP.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=20:22:22:22:22:22,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=11),tcp_flags(0x001)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=20:22:22:22:22:22,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=11,tcp_flags=0x001'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 18])
 ovs-appctl -t ovs-ofctl exit
@@ -1457,7 +1457,7 @@ dnl Modified ARP controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=80:88:88:88:88:88,dst=ff:ff:ff:ff:ff:ff),eth_type(0x0806),arp(sip=192.168.0.1,tip=192.168.0.2,op=1,sha=50:54:00:00:00:05,tha=00:00:00:00:00:00)'
+    ovs-appctl netdev-dummy/receive p1 'arp,dl_src=80:88:88:88:88:88,dl_dst=ff:ff:ff:ff:ff:ff,arp_spa=192.168.0.1,arp_tpa=192.168.0.2,arp_op=1,arp_sha=50:54:00:00:00:05,arp_tha=00:00:00:00:00:00'
 done
 
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 18])
@@ -1606,7 +1606,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:42,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=17,tos=0,ttl=64,frag=no),udp(src=7777,dst=80)'
+    ovs-appctl netdev-dummy/receive p1 'udp,dl_src=40:44:44:44:44:42,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,udp_src=7777,udp_dst=80'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1626,7 +1626,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=41:44:44:44:44:42,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=41:44:44:44:44:42,dl_dst=50:54:00:00:00:07,ip,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1648,7 +1648,7 @@ AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofc
 dnl in_port(1),eth(src=00:01:02:03:04:05,dst=10:11:12:13:14:15),eth_type(0x8847),mpls(label=100,tc=3,ttl=64,bos=1)
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:43,dst=50:54:00:00:00:07),eth_type(0x8847),mpls(label=11,tc=3,ttl=64,bos=1)'
+    ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=40:44:44:44:44:43,dl_dst=50:54:00:00:00:07,mpls_label=11,mpls_tc=3,mpls_bos=1,mpls_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1668,7 +1668,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:44,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=99,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'ip,dl_src=40:44:44:44:44:44,dl_dst=50:54:00:00:00:07,dl_vlan=99,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1688,7 +1688,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:45,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=40:44:44:44:44:45,dl_dst=50:54:00:00:00:07,ip,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1708,7 +1708,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:46,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=40:44:44:44:44:46,dl_dst=50:54:00:00:00:07,ip,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1728,7 +1728,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:47,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=40:44:44:44:44:47,dl_dst=50:54:00:00:00:07,ip,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1750,7 +1750,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:49,dst=50:54:00:00:00:07),eth_type(0x8847),mpls(label=10,tc=3,ttl=64,bos=1)'
+    ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=40:44:44:44:44:49,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=3,mpls_bos=1,mpls_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -1772,7 +1772,7 @@ dnl Modified MPLS controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:44:48,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=16,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=40:44:44:44:44:48,dl_dst=50:54:00:00:00:07,ip,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_proto=16,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1792,7 +1792,7 @@ dnl Modified MPLS actions.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:55:55:55:55:55,dst=50:54:00:00:00:07),eth_type(0x8847),mpls(label=100,tc=7,ttl=64,bos=1)'
+    ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=50:55:55:55:55:55,dl_dst=50:54:00:00:00:07,mpls_label=100,mpls_tc=7,mpls_bos=1,mpls_ttl=64'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1812,7 +1812,7 @@ dnl Modified MPLS ipv6 controller action.
 AT_CHECK([ovs-ofctl monitor br0 65534 -P nxt_packet_in --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=70:77:77:77:77:77,dst=50:54:00:00:00:07),eth_type(0x86dd),ipv6(src=::1,dst=::2,label=0,proto=10,tclass=0x70,hlimit=128,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'ipv6,dl_src=70:77:77:77:77:77,dl_dst=50:54:00:00:00:07,ipv6_src=::1,ipv6_dst=::2,ipv6_label=0,nw_proto=10,nw_tos=0x70,nw_ttl=128'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -1840,7 +1840,7 @@ for i in 1 2 3; do
     ovs-appctl netdev-dummy/receive p1 '50 54 00 00 00 07 60 66 66 66 66 66 88 47 00 01 41 20 45 00 00 2c 00 00 00 00 40 06 3b 78 c0 a8 00 01 c0 a8 00 02 00 50 00 00 00 00 00 2a 00 00 00 2a 50 00 27 10 77 44 00 00 48 4f 47 45'
 done
 #for i in 2 3; do
-#    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=60:66:66:66:66:66,dst=50:54:00:00:00:07),eth_type(0x8847),mpls(label=10,tc=3,ttl=100,bos=1)'
+#    ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=60:66:66:66:66:66,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=3,mpls_bos=1,mpls_ttl=64'
 #done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -2703,7 +2703,7 @@ dnl Singleton controller action.
 AT_CHECK([ovs-ofctl monitor -P standard --protocols=OpenFlow10 br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags=0x002'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -2743,7 +2743,7 @@ dnl Singleton controller action.
 AT_CHECK([ovs-ofctl monitor -P standard --protocols=OpenFlow13 br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags=0x002'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -2796,7 +2796,7 @@ ovs-appctl -t ovs-ofctl ofctl/send 041c00200000000200000000000000010000000000000
 
 ovs-appctl time/warp 500 100
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags=0x002'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -2858,7 +2858,7 @@ dnl Singleton controller action.
 AT_CHECK([ovs-ofctl monitor -P standard --protocols=OpenFlow14 br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags=0x002'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -2905,7 +2905,7 @@ dnl Singleton controller action.
 AT_CHECK([ovs-ofctl monitor -P standard --protocols=OpenFlow13 br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags=0x002'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -2973,7 +2973,7 @@ dnl Singleton controller action.
 AT_CHECK([ovs-ofctl monitor -P standard --protocols=OpenFlow14 br0 65534 --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3 ; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=10:11:11:11:11:11,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=8,dst=10),tcp_flags(0x002)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=10:11:11:11:11:11,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=8,tcp_dst=10,tcp_flags=0x002'
 done
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
 ovs-appctl -t ovs-ofctl exit
@@ -3031,7 +3031,7 @@ ovs-ofctl add-flow br0 'in_port=1,arp actions=load:2->OXM_OF_ARP_OP[[]],2,load:0
 
 # Input some packets that should follow the arp modification slow-path.
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=80:88:88:88:88:88,dst=ff:ff:ff:ff:ff:ff),eth_type(0x0806),arp(sip=192.168.0.1,tip=192.168.0.2,op=1,sha=50:54:00:00:00:05,tha=00:00:00:00:00:00)'
+    ovs-appctl netdev-dummy/receive p1 'arp,dl_src=80:88:88:88:88:88,dl_dst=ff:ff:ff:ff:ff:ff,arp_spa=192.168.0.1,arp_tpa=192.168.0.2,arp_op=1,arp_sha=50:54:00:00:00:05,arp_tha=00:00:00:00:00:00'
 done
 AT_CHECK([ovs-appctl time/warp 5000], [0], [ignore])
 
@@ -3203,7 +3203,7 @@ dnl In this test, we push an MPLS tag to an ethernet packet.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:00:00,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:00:00,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3236,7 +3236,7 @@ dnl copied exactly, except for the BOS bit.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:00:01,dst=50:54:00:00:00:07),eth_type(0x8847),mpls(label=10,tc=0,ttl=64,bos=1)'
+    ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=40:44:44:44:00:01,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_bos=1,mpls_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3271,7 +3271,7 @@ dnl of the input packet.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:00:02,dst=50:54:00:00:00:07),eth_type(0x8847),mpls(label=10,tc=0,ttl=64,bos=1)'
+    ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=40:44:44:44:00:02,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_bos=1,mpls_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
@@ -3329,7 +3329,7 @@ dnl both of these in the final flow
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:50,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:50,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3366,7 +3366,7 @@ dnl before we push the MPLS and VLAN tags.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:51,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=88,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:51,dl_dst=50:54:00:00:00:07,dl_vlan=88,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3400,7 +3400,7 @@ dnl both of these in the final flow
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:52,dst=52:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:52,dl_dst=52:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3437,7 +3437,7 @@ dnl before we push the MPLS and VLAN tags.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:53,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=88,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:53,dl_dst=50:54:00:00:00:07,dl_vlan=88,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3471,7 +3471,7 @@ dnl actions are reordered, so we see both of these in the final flow.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:54,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:54,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3508,7 +3508,7 @@ dnl before we push the MPLS and VLAN tags.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:55,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=88,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:55,dl_dst=50:54:00:00:00:07,dl_vlan=88,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
@@ -3542,7 +3542,7 @@ dnl actions are reordered, so we see both of these in the final flow.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:56,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:56,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3579,7 +3579,7 @@ dnl before we push the MPLS and VLAN tags.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 -m 65534 -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:57,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=88,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:57,dl_dst=50:54:00:00:00:07,dl_vlan=88,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3613,7 +3613,7 @@ dnl before we push the MPLS and VLAN tags.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:58,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=88,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:58,dl_dst=50:54:00:00:00:07,dl_vlan=88,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
@@ -3647,7 +3647,7 @@ dnl before we push MPLS and VLAN tags.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=40:44:44:44:54:59,dst=50:54:00:00:00:07),eth_type(0x8100),vlan(vid=88,pcp=7),encap(eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no))'
+    ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=40:44:44:44:54:59,dl_dst=50:54:00:00:00:07,dl_vlan=88,vlan_pcp=7,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64'
 done
 OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 ovs-appctl -t ovs-ofctl exit
@@ -3754,10 +3754,10 @@ priority=50 tcp ip_frag=later           actions=output:6
 ])
 AT_CHECK([ovs-ofctl replace-flows br0 flows.txt])
 
-base_flow="in_port(90),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=128"
-no_flow="$base_flow,frag=no),tcp(src=12345,dst=80)"
-first_flow="$base_flow,frag=first),tcp(src=12345,dst=80)"
-later_flow="$base_flow,frag=later)"
+base_flow="tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=128"
+no_flow="$base_flow,tcp_src=12345,tcp_dst=80"
+first_flow="$base_flow,ip_frag=first,tcp_src=12345,tcp_dst=80"
+later_flow="$base_flow,ip_frag=later"
 
 AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 
@@ -4310,7 +4310,7 @@ m4_define([CHECK_CONTINUATION], [dnl
     actions0='$4'
     actions1='$5'
     $6
-    flow="in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=128,frag=no),icmp(type=8,code=0)"
+    flow="icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=128,icmp_type=8,icmp_code=0"
     n_packets=0
     n_resumes=0
     while true; do
@@ -4702,7 +4702,7 @@ OVS_VSWITCHD_START([dnl
     set Open_vSwitch . other_config:max-idle=10000 \
     -- add-port br0 p1 -- set Interface p1 type=dummy])
 
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'])
 ovs-appctl revalidator/wait
 AT_CHECK([ovs-appctl dpif/dump-flows -m br0 | sed 's/, packets.*$//' > dp_flows1.txt])
 
@@ -4723,7 +4723,7 @@ Datapath actions: drop
 dnl Now, try again without megaflows:
 ovs-appctl upcall/disable-megaflows
 
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'])
 ovs-appctl revalidator/wait
 AT_CHECK([ovs-appctl dpif/dump-flows -m br0 | sed 's/, packets.*$//' > dp_flows2.txt])
 
@@ -5021,14 +5021,14 @@ m4_define([CHECK_SFLOW_SAMPLING_PACKET],
   dnl because packets from different ports can be handled by separate
   dnl threads, put some sleeps
 
-  ovs-appctl netdev-dummy/receive p1 'in_port(2),eth(src=50:54:00:00:00:05,dst=FF:FF:FF:FF:FF:FF),eth_type(0x0806),arp(sip=192.168.0.2,tip=192.168.0.1,op=1,sha=50:54:00:00:00:05,tha=00:00:00:00:00:00)'
+  ovs-appctl netdev-dummy/receive p1 'arp,dl_src=50:54:00:00:00:05,dl_dst=FF:FF:FF:FF:FF:FF,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=1,arp_sha=50:54:00:00:00:05,arp_tha=00:00:00:00:00:00'
   sleep 1
-  ovs-appctl netdev-dummy/receive p2 'in_port(1),eth(src=50:54:00:00:00:07,dst=FF:FF:FF:FF:FF:FF),eth_type(0x0806),arp(sip=192.168.0.1,tip=192.168.0.2,op=1,sha=50:54:00:00:00:07,tha=00:00:00:00:00:00)'
+  ovs-appctl netdev-dummy/receive p2 'arp,dl_src=50:54:00:00:00:07,dl_dst=FF:FF:FF:FF:FF:FF,arp_spa=192.168.0.1,arp_tpa=192.168.0.2,arp_op=1,arp_sha=50:54:00:00:00:07,arp_tha=00:00:00:00:00:00'
   sleep 1
-  ovs-appctl netdev-dummy/receive p1 'in_port(2),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'
+  ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'
   sleep 1
-  ovs-appctl netdev-dummy/receive p2 'in_port(1),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=0,code=0)'
-  ovs-appctl netdev-dummy/receive p2 'in_port(1),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x86dd),ipv6(src=fe80::1,dst=fe80::2,label=0,proto=10,tclass=0x70,hlimit=128,frag=no)'
+  ovs-appctl netdev-dummy/receive p2 'icmp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64,icmp_type=0,icmp_code=0'
+  ovs-appctl netdev-dummy/receive p2 'ipv6,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,ipv6_src=fe80::1,ipv6_dst=fe80::2,ipv6_label=0,nw_proto=10,nw_tos=0x70,nw_ttl=128'
 
   dnl sleep long enough to get more than one counter sample
   dnl from each datasource so we can check sequence numbers
@@ -5403,7 +5403,7 @@ ovs-vsctl \
      header=128 sampling=1 polling=0
 
 dnl introduce a packet that will be flooded to the tunnel
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(4),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.10.10.2,dst=10.10.10.1,proto=1,tos=1,ttl=128,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.10.10.2,nw_dst=10.10.10.1,ip_ecn=1,nw_ttl=128,icmp_type=8,icmp_code=0'])
 
 dnl sleep long enough to get the sFlow datagram flushed out (may be delayed for up to 1 second)
 for i in `seq 1 30`; do
@@ -5488,7 +5488,7 @@ AT_CHECK([ovs-appctl netdev-dummy/ip4addr br0 1.1.2.88/24], [0], [OK
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
 
 dnl Prime ARP Cache for 1.1.2.92
-AT_CHECK([ovs-appctl netdev-dummy/receive br0 'recirc_id(0),in_port(100),eth(src=f8:bc:12:44:34:b6,dst=ff:ff:ff:ff:ff:ff),eth_type(0x0806),arp(sip=1.1.2.92,tip=1.1.2.88,op=1,sha=f8:bc:12:44:34:b6,tha=00:00:00:00:00:00)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive br0 'arp,dl_src=f8:bc:12:44:34:b6,dl_dst=ff:ff:ff:ff:ff:ff,arp_spa=1.1.2.92,arp_tpa=1.1.2.88,arp_op=1,arp_sha=f8:bc:12:44:34:b6,arp_tha=00:00:00:00:00:00'])
 
 dnl configure sflow on int-br only
 ovs-vsctl \
@@ -5501,7 +5501,7 @@ dnl for this port so the sFlow output will just report that it went to
 dnl 1 output (out_format=2, out_ifindex=1)
 AT_CHECK([ovs-ofctl add-flow int-br "actions=4"])
 
-AT_CHECK([ovs-appctl netdev-dummy/receive vm1 'in_port(3),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=192.168.1.1,dst=192.168.2.2,proto=1,tos=0,ttl=128,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive vm1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:0a,nw_src=192.168.1.1,nw_dst=192.168.2.2,nw_ttl=128,icmp_type=8,icmp_code=0'])
 
 dnl sleep long enough to get the sFlow datagram flushed out (may be delayed for up to 1 second)
 for i in `seq 1 30`; do
@@ -5569,8 +5569,8 @@ ovs-vsctl \
    --id=@sf create sflow targets=\"127.0.0.1:$SFLOW_PORT\" \
      header=128 sampling=1 polling=0
 
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x8847),mpls(label=11,tc=3,ttl=64,bos=1)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,mpls_label=11,mpls_tc=3,mpls_bos=1,mpls_ttl=64'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'ip,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a'])
 
 dnl sleep long enough to get the sFlow datagram flushed out (may be delayed for up to 1 second)
 for i in `seq 1 30`; do
@@ -5662,9 +5662,9 @@ m4_define([CHECK_NETFLOW_EXPIRATION],
        engine_id=1 engine_type=2 active_timeout=30 add-id-to-interface=false
 
   for delay in 1000 30000; do
-      ovs-appctl netdev-dummy/receive p1 'in_port(2),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'
+      ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'
       sleep 1  # ensure the order in which these two packets are processed
-      ovs-appctl netdev-dummy/receive p2 'in_port(1),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=0,code=0)'
+      ovs-appctl netdev-dummy/receive p2 'icmp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64,icmp_type=0,icmp_code=0'
 
       ovs-appctl time/warp $delay
   done
@@ -5713,8 +5713,8 @@ m4_define([CHECK_NETFLOW_ACTIVE_EXPIRATION],
   while test $n -le 60; do
       n=`expr $n + 1`
 
-      ovs-appctl netdev-dummy/receive p1 'in_port(2),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=6,tos=0,ttl=64,frag=no),tcp(src=1234,dst=80)'
-      ovs-appctl netdev-dummy/receive p2 'in_port(1),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=6,tos=0,ttl=64,frag=no),tcp(src=80,dst=1234)'
+      ovs-appctl netdev-dummy/receive p1 'tcp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,tcp_src=1234,tcp_dst=80'
+      ovs-appctl netdev-dummy/receive p2 'tcp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64,tcp_src=80,tcp_dst=1234'
 
       ovs-appctl time/warp 1000
   done
@@ -5789,7 +5789,7 @@ AT_CHECK([ovs-vsctl -- set bridge br0 ipfix=@fix -- \
 
 dnl Send some packets that should be sampled
 for i in `seq 1 3`; do
-    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800)'])
+    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'ip,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a'])
 done
 AT_CHECK([ovs-appctl dpctl/dump-flows | sed 's/.*\(packets:\)/\1/' | sed 's/used:[[0-9]].[[0-9]]*s/used:0.001s/'], [0], [dnl
 flow-dump from non-dpdk interfaces:
@@ -5802,7 +5802,7 @@ AT_CHECK([ovs-appctl revalidator/purge])
 
 dnl Send some more packets, to ensure that these are not sampled.
 for i in `seq 1 3`; do
-    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800)'])
+    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'ip,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a'])
 done
 AT_CHECK([ovs-appctl dpctl/dump-flows | sed 's/.*\(packets:\)/\1/' | sed 's/used:[[0-9]].[[0-9]]*s/used:0.001s/'], [0], [dnl
 flow-dump from non-dpdk interfaces:
@@ -5820,7 +5820,7 @@ AT_CHECK([ovs-ofctl add-flow br0 "icmp,actions=NORMAL"])
 ovs-appctl time/stop
 
 for i in `seq 1 10`; do
-    ovs-appctl netdev-dummy/receive br0 'in_port(0),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive br0 'tcp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64'
 done
 
 AT_CHECK([ovs-appctl time/warp 1000], [0], [ignore])
@@ -5841,7 +5841,7 @@ AT_CHECK([ovs-ofctl add-flow br0 "icmp,actions=NORMAL"])
 ovs-appctl time/stop
 
 for i in `seq 1 10`; do
-    ovs-appctl netdev-dummy/receive br0 'in_port(0),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=6,tos=0,ttl=64,frag=no)'
+    ovs-appctl netdev-dummy/receive br0 'tcp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64'
 done
 
 ovs-appctl time/warp 100
@@ -5908,7 +5908,7 @@ get_ages duration3 hard3 idle3
 # then warp forward a few more times because idle times are only updated
 # occasionally.
 ovs-appctl time/warp 10000
-ovs-appctl netdev-dummy/receive br0 'in_port(0),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=6,tos=0,ttl=64,frag=no),tcp(src=80,dst=1234)'
+ovs-appctl netdev-dummy/receive br0 'tcp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64,tcp_src=80,tcp_dst=1234'
 ovs-appctl time/warp 3000 1000
 sleep 1
 get_ages duration4 hard4 idle4
@@ -6018,9 +6018,9 @@ OVS_VSWITCHD_START([add-br br1 -- \
 add_of_ports br0 1 2
 add_of_ports br1 3
 
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p2 'in_port(2),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=0,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p3 'in_port(3),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p2 'icmp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64,icmp_type=0,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p3 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 ovs-appctl revalidator/wait
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
 recirc_id(0),in_port(1),eth_type(0x0800),ipv4(frag=no), packets:0, bytes:0, used:never, actions:drop
@@ -6050,7 +6050,7 @@ OVS_VSWITCHD_START([add-br br1 -- \
                     set Open_vSwitch . other_config:max-idle=10000])
 add_of_ports br0 1 2
 
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'])
 ovs-appctl revalidator/wait
 AT_CHECK([ovs-appctl dpif/dump-flows -m br0], [0], [stdout])
 
@@ -6154,14 +6154,14 @@ AT_CHECK([ovs-ofctl add-flow br0 actions=LOCAL,output:1,output:2])
 AT_CHECK([ovs-ofctl add-flow br1 actions=LOCAL,output:1,output:3])
 
 for i in $(seq 1 10); do
-    ovs-appctl netdev-dummy/receive br0 'in_port(100),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'
+    ovs-appctl netdev-dummy/receive br0 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'
     if [[ $i -eq 1 ]]; then
         sleep 1
     fi
 done
 
 for i in $(seq 1 5); do
-    ovs-appctl netdev-dummy/receive br1 'in_port(101),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x0800),ipv4(src=192.168.0.2,dst=192.168.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'
+    ovs-appctl netdev-dummy/receive br1 'icmp,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'
     if [[ $i -eq 1 ]]; then
         sleep 1
     fi
@@ -6229,7 +6229,7 @@ AT_CHECK([ovs-ofctl add-flow br0 "ip actions=push:OXM_OF_IN_PORT[[0..31]],output
 # Try to pop from empty stack, and push and leave data to stack.
 AT_CHECK([ovs-ofctl add-flow br1 "ip actions=pop:OXM_OF_IPV4_DST[[0..31]],push:NXM_NX_REG1[[0..31]],LOCAL"])
 
-ovs-appctl netdev-dummy/receive br0 'in_port(100),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'
+ovs-appctl netdev-dummy/receive br0 'icmp,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_ttl=64,icmp_type=8,icmp_code=0'
 
 AT_CHECK([ovs-appctl time/warp 500], [0],
 [warped
@@ -6288,9 +6288,9 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,nw_frag=no, actions: <del>
@@ -6306,8 +6306,8 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1,dl_src=50:54:00:00:00:09 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,nw_frag=no, actions: <del>
@@ -6325,8 +6325,8 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1,icmp,nw_src=10.0.0.4 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,icmp,in_port=1,vlan_tci=0x0000,nw_src=10.0.0.4,nw_frag=no, actions: <del>
@@ -6344,8 +6344,8 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1,ipv6,ipv6_src=2001:db8:3c4d:1:2:3:4:5 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:07,dst=50:54:00:00:00:05),eth_type(0x86dd),ipv6(src=2001:db8:3c4d:1:2:3:4:5,dst=fe80::2,label=0,proto=10,tclass=0x70,hlimit=128,frag=no)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x86dd),ipv6(src=2001:db8:3c4d:5:4:3:2:1,dst=2001:db8:3c4d:1:2:3:4:1,label=0,proto=99,tclass=0x70,hlimit=64,frag=no)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'ipv6,dl_src=50:54:00:00:00:07,dl_dst=50:54:00:00:00:05,ipv6_src=2001:db8:3c4d:1:2:3:4:5,ipv6_dst=fe80::2,ipv6_label=0,nw_proto=10,nw_tos=0x70,nw_ttl=128'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'ipv6,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,ipv6_src=2001:db8:3c4d:5:4:3:2:1,ipv6_dst=2001:db8:3c4d:1:2:3:4:1,ipv6_label=0,nw_proto=99,nw_tos=0x70,nw_ttl=64'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ipv6,in_port=1,vlan_tci=0x0000,ipv6_src=2001:db8:3c4d:1:2:3:4:5,nw_frag=no, actions: <del>
@@ -6362,9 +6362,9 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1,icmp,icmp_type=8 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,icmp,in_port=1,vlan_tci=0x0000,nw_frag=no,icmp_type=0x8/0xff, actions: <del>
@@ -6377,8 +6377,8 @@ OVS_VSWITCHD_START
 AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 add_of_ports br0 1 2
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_frag=no, actions: <del>
@@ -6396,8 +6396,8 @@ table=0 dl_src=50:54:00:00:00:09 actions=push_mpls:0x8847,2
 table=0 dl_src=50:54:00:00:00:0b actions=pop_mpls:0x0800,2
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x8847),mpls(label=11,tc=3,ttl=64,bos=1)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0a),eth_type(0x8847),mpls(label=11,tc=3,ttl=64,bos=1)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,mpls_label=11,mpls_tc=3,mpls_bos=1,mpls_ttl=64'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'mpls,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0a,mpls_label=11,mpls_tc=3,mpls_bos=1,mpls_ttl=64'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout_keep_actions], [0], [dnl
 recirc_id=0,mpls,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,mpls_label=11,mpls_tc=3,mpls_ttl=64,mpls_bos=1, actions:push_mpls(label=11,tc=3,ttl=64,bos=0,eth_type=0x8847),2
@@ -6424,8 +6424,8 @@ m4_define([CHECK_MEGAFLOW_NETFLOW],
        engine_id=1 engine_type=2 active_timeout=30 add-id-to-interface=false
 
   AT_CHECK([ovs-ofctl add-flow br0 action=normal])
-  AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-  AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+  AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+  AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
   sleep 1
   AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,icmp,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0,nw_frag=no,icmp_type=0x8/0xff,icmp_code=0x0/0xff, actions: <del>
@@ -6453,8 +6453,8 @@ AT_CHECK([ovs-appctl netdev-dummy/set-admin-state up], 0, [OK
 AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_frag=no, actions: <del>
@@ -6474,8 +6474,8 @@ AT_CHECK([ovs-appctl netdev-dummy/set-admin-state up], 0, [OK
 AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 
 AT_CHECK([ovs-ofctl add-flow br0 action=normal])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_frag=no, actions: <del>
@@ -6512,8 +6512,8 @@ AT_CHECK([ovs-ofctl add-flow br0 action=normal])
 AT_CHECK([ovs-ofctl add-flow br1 action=normal])
 ovs-appctl time/stop
 ovs-appctl time/warp 5000
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p7 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p7 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=7,vlan_tci=0x0000/0x1fff,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_frag=no, actions: <del>
@@ -6531,8 +6531,8 @@ table=0 in_port=1,ip actions=resubmit(90)
 table=0 in_port=90,dl_src=50:54:00:00:00:09 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,nw_frag=no, actions: <del>
@@ -6550,9 +6550,8 @@ table=0 in_port=1,ip actions=resubmit(,1)
 table=1 dl_src=50:54:00:00:00:09 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=
-1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,nw_frag=no, actions: <del>
@@ -6570,8 +6569,8 @@ table=0 in_port=1,ip actions=goto_table(1)
 table=1 dl_src=50:54:00:00:00:09 actions=output(2)
 ])
 AT_CHECK([ovs-ofctl -O OpenFlow12 add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,nw_frag=no, actions: <del>
@@ -6594,9 +6593,9 @@ AT_DATA([flows.txt], [dnl
 in_port=1 actions=output:2
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,nw_frag=no, actions: <del>
@@ -6617,8 +6616,8 @@ AT_DATA([flows.txt], [dnl
 in_port=1 actions=output:2
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x8100),vlan(vid=11,pcp=7),encap(eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0))'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,dl_vlan=11,vlan_pcp=7,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,dl_vlan=11,nw_frag=no, actions: <del>
@@ -6637,8 +6636,8 @@ table=0 in_port=90 ip,actions=move:NXM_NX_REG0[[]]->NXM_NX_REG1[[]],resubmit(91)
 table=0 in_port=91 reg0=0x0a000002,actions=output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,nw_src=10.0.0.2,nw_frag=no, actions: <del>
@@ -6655,8 +6654,8 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1 ip,actions=push:NXM_OF_IP_SRC[[]],output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,nw_src=10.0.0.2,nw_frag=no, actions: <del>
@@ -6679,8 +6678,8 @@ ovs-appctl time/stop
 # can keep a megaflow from being installed.  The revalidations are done by
 # the second iteration, allowing the flows to be installed.
 for i in 1 2; do
-    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
     ovs-appctl time/warp 100
 done
 sleep 1
@@ -6710,12 +6709,12 @@ in_port=3,actions=output(4)
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
 dnl ECN bits are always copied out, but don't use 0x3 (CE), since that
 dnl will cause the packet to be dropped.
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0xfd,ttl=128,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0xfc,ip_ecn=1,nw_ttl=128,icmp_type=8,icmp_code=0'])
 sleep 1
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0x1,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p3 'in_port(3),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0xfd,ttl=128,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,ip_ecn=0x1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p3 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_tos=0xfc,ip_ecn=1,nw_ttl=128,,icmp_type=8,icmp_code=0'])
 sleep 1
-AT_CHECK([ovs-appctl netdev-dummy/receive p3 'in_port(3),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0x1,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p3 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,ip_ecn=0x1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,ip,in_port=1,vlan_tci=0x0000,nw_ecn=1,nw_frag=no, actions: <del>
@@ -6734,8 +6733,8 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1,icmp,nw_src=10.0.0.4 actions=dec_ttl,output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 AT_CHECK([filter_flow_install < ovs-vswitchd.log | strip_xout], [0], [dnl
 recirc_id=0,icmp,in_port=1,vlan_tci=0x0000,nw_src=10.0.0.4,nw_ttl=64,nw_frag=no, actions: <del>
@@ -6752,8 +6751,8 @@ AT_DATA([flows.txt], [dnl
 table=0 in_port=1 actions=mod_dl_dst(50:54:00:00:00:0a),output(2)
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
 sleep 1
 dnl The first packet is essentially a no-op, as the new destination MAC is the
 dnl same as the original.  The second entry actually updates the destination
@@ -6780,8 +6779,8 @@ AT_CHECK([ovs-appctl upcall/disable-ufid], [0], [Datapath dumping tersely using 
 AT_CHECK([ovs-appctl vlog/set dpif_netdev:dbg], [0], [], [])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
 for i in 1 2 3 4; do
-    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
-    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:0b,dst=50:54:00:00:00:0c),eth_type(0x0800),ipv4(src=10.0.0.4,dst=10.0.0.3,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
+    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
+    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'icmp,dl_src=50:54:00:00:00:0b,dl_dst=50:54:00:00:00:0c,nw_src=10.0.0.4,nw_dst=10.0.0.3,nw_ttl=64,icmp_type=8,icmp_code=0'])
     if [[ $i -eq 1 ]]; then
         sleep 1
     fi
@@ -7143,7 +7142,7 @@ AT_CAPTURE_FILE([ofctl_monitor.log])
 AT_CHECK([ovs-ofctl monitor br0 65534 invalid_ttl -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
@@ -7194,7 +7193,7 @@ AT_CAPTURE_FILE([ofctl_monitor.log])
 AT_CHECK([ovs-ofctl monitor br0 65534 invalid_ttl -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 6])
@@ -7284,7 +7283,7 @@ AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
 AT_CHECK([ovs-ofctl del-flows br0])
 AT_CHECK([ovs-ofctl add-flow br0 "vlan_tci=0x000a/0x0fff,action=output:local"])
 
-AT_CHECK([ovs-appctl netdev-dummy/receive p0 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x8100),vlan(vid=10,pcp=0),encap(eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0))'])
+AT_CHECK([ovs-appctl netdev-dummy/receive p0 'icmp,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,dl_vlan=10,vlan_pcp=0,nw_src=10.0.0.2,nw_dst=10.0.0.1,nw_ttl=64,icmp_type=8,icmp_code=0'])
 
 OVS_WAIT_UNTIL([grep flow_add: ovs-vswitchd.log])
 AT_CHECK([grep 'in_port=[[1]]' ovs-vswitchd.log | filter_flow_install | strip_xout], [0], [dnl
@@ -7307,7 +7306,7 @@ ovs-appctl vlog/set PATTERN:ANY:'%c|%p|%m'
 ovs-appctl time/stop
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
@@ -7320,7 +7319,7 @@ ovs-appctl time/warp 500
 ovs-appctl time/warp 500
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
@@ -7348,7 +7347,7 @@ ovs-appctl time/stop
 
 # Check that a correct datapath flow is created.
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
@@ -7364,7 +7363,7 @@ ovs-appctl time/warp 500
 ovs-appctl time/warp 500
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
@@ -7379,7 +7378,7 @@ ovs-appctl time/warp 500
 ovs-appctl time/warp 500
 
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x1234)'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,eth_type(0x1234)'
 done
 
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
@@ -7388,7 +7387,7 @@ recirc_id(0),in_port(1),eth_type(0x1234), packets:8, bytes:480, used:0.0s, actio
 
 # Check that VLAN packets will not hit the same datapath megaflow.
 for i in 1 2 3; do
-    ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x8100),vlan(vid=99,pcp=7),encap(eth_type(0x1234))'
+    ovs-appctl netdev-dummy/receive p1 'dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,dl_vlan=99,vlan_pcp=7,eth_type(0x1234)'
 done
 
 AT_CHECK([ovs-appctl dpif/dump-flows br0 | strip_ufid | strip_used | sort], [0], [dnl
