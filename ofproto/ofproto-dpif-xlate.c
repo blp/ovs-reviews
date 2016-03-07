@@ -5269,17 +5269,10 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
     const struct mf_field *tf = dummy_get_trace_field();
     struct ds local_trace;
-    if (OVS_UNLIKELY(tf)) {
-        VLOG_WARN("%s:%d", __FILE__, __LINE__);
-        if (!xin->trace) {
-            VLOG_WARN("%s:%d", __FILE__, __LINE__);
-            if (mf_is_set(tf, flow)) {
-                VLOG_WARN("%s:%d", __FILE__, __LINE__);
-                ds_init(&local_trace);
-                xin->trace = &local_trace;
-                ctx.xout->slow |= SLOW_TRACE;
-            }
-        }
+    if (OVS_UNLIKELY(tf) && !xin->trace && mf_is_set(tf, flow)) {
+        ds_init(&local_trace);
+        xin->trace = &local_trace;
+        ctx.xout->slow |= SLOW_TRACE;
     }
 
     if (OVS_UNLIKELY(xin->trace)) {
@@ -5582,11 +5575,6 @@ exit:
 
         free(ctx.trace_orig_flow);
         free(ctx.trace_last_flow);
-
-        if (xin->trace == &local_trace) {
-            VLOG_INFO("%s", ds_cstr(xin->trace));
-            ds_destroy(&local_trace);
-        }
     }
 
     ofpbuf_uninit(&ctx.stack);
