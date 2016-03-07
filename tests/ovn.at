@@ -612,7 +612,7 @@ test_packet() {
     local inport=$1 packet=$2$3$4; shift; shift; shift; shift
     hv=`vif_to_hv $inport`
     vif=vif$inport
-    as $hv ovs-appctl netdev-dummy/receive $vif "$packet,tun_metadata0(1)"
+    as $hv ovs-appctl netdev-dummy/receive $vif "$packet,tun_dst(1.2.3.4),tun_metadata0(1)"
     for outport; do
         echo $packet | trim_zeros >> $outport.expected
     done
