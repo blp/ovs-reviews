@@ -137,15 +137,18 @@ for i in `seq 0 255` ;
     done
 )
 ovs-appctl time/warp 300 100
+AT_CAPTURE_FILE([br0_flows.txt])
 AT_CHECK([ovs-appctl dpif/dump-flows br0 |grep tcp > br0_flows.txt])
+AT_CAPTURE_FILE([br1_flows.txt])
 AT_CHECK([ovs-appctl dpif/dump-flows br1 |grep tcp > br1_flows.txt])
 # Make sure there is resonable distribution to all three ports.
 # We don't want to make this check precise, in case hash function changes.
-AT_CHECK([test `grep in_port.4 br1_flows.txt |wc -l` -gt 24])
-AT_CHECK([test `grep in_port.5 br1_flows.txt |wc -l` -gt 24])
-AT_CHECK([test `grep in_port.6 br1_flows.txt |wc -l` -gt 24])
-
-OVS_VSWITCHD_STOP()
+n4=`grep -c in_port.4 br1_flows.txt`
+n5=`grep -c in_port.5 br1_flows.txt`
+n6=`grep -c in_port.6 br1_flows.txt`
+echo "Distribution: $n4 to port 4, $n5 to port 5, $n6 to port 6."
+AT_CHECK([test $n4 -gt 24 && test $n5 -gt 24 && test $n6 -gt 24])
+OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 # Makes sure recirculation does not change the way packet is handled.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  * Copyright (c) 2013 Simon Horman
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -233,15 +233,16 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
 
     switch (type) {
     case OVS_KEY_ATTR_PRIORITY:
-        md->skb_priority = nl_attr_get_u32(a);
+        pkt_metadata_set_skb_priority(md, nl_attr_get_u32(a));
         break;
 
     case OVS_KEY_ATTR_TUNNEL:
-        odp_set_tunnel_action(a, &md->tunnel);
+        pkt_metadata_init_tunnel(md);
+        odp_set_tunnel_action(a, &md->tunnel_);
         break;
 
     case OVS_KEY_ATTR_SKB_MARK:
-        md->pkt_mark = nl_attr_get_u32(a);
+        pkt_metadata_set_pkt_mark(md, nl_attr_get_u32(a));
         break;
 
     case OVS_KEY_ATTR_ETHERNET:
@@ -321,11 +322,11 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
         break;
 
     case OVS_KEY_ATTR_DP_HASH:
-        md->dp_hash = nl_attr_get_u32(a);
+        pkt_metadata_set_dp_hash(md, nl_attr_get_u32(a));
         break;
 
     case OVS_KEY_ATTR_RECIRC_ID:
-        md->recirc_id = nl_attr_get_u32(a);
+        pkt_metadata_set_recirc_id(md, nl_attr_get_u32(a));
         break;
 
     case OVS_KEY_ATTR_UNSPEC:
@@ -356,13 +357,15 @@ odp_execute_masked_set_action(struct dp_packet *packet,
 
     switch (type) {
     case OVS_KEY_ATTR_PRIORITY:
-        md->skb_priority = nl_attr_get_u32(a)
-            | (md->skb_priority & ~*get_mask(a, uint32_t));
+        pkt_metadata_set_skb_priority(md, (nl_attr_get_u32(a)
+                                           | (pkt_metadata_get_skb_priority(md)
+                                              & ~*get_mask(a, uint32_t))));
         break;
 
     case OVS_KEY_ATTR_SKB_MARK:
-        md->pkt_mark = nl_attr_get_u32(a)
-            | (md->pkt_mark & ~*get_mask(a, uint32_t));
+        pkt_metadata_set_pkt_mark(md, (nl_attr_get_u32(a)
+                                       | (pkt_metadata_get_pkt_mark(md)
+                                          & ~*get_mask(a, uint32_t))));
         break;
 
     case OVS_KEY_ATTR_ETHERNET:
@@ -415,13 +418,15 @@ odp_execute_masked_set_action(struct dp_packet *packet,
         break;
 
     case OVS_KEY_ATTR_DP_HASH:
-        md->dp_hash = nl_attr_get_u32(a)
-            | (md->dp_hash & ~*get_mask(a, uint32_t));
+        pkt_metadata_set_dp_hash(md, (nl_attr_get_u32(a)
+                                      | (pkt_metadata_get_dp_hash(md)
+                                         & ~*get_mask(a, uint32_t))));
         break;
 
     case OVS_KEY_ATTR_RECIRC_ID:
-        md->recirc_id = nl_attr_get_u32(a)
-            | (md->recirc_id & ~*get_mask(a, uint32_t));
+        pkt_metadata_set_recirc_id(md, (nl_attr_get_u32(a)
+                                        | (pkt_metadata_get_recirc_id(md)
+                                           & ~*get_mask(a, uint32_t))));
         break;
 
     case OVS_KEY_ATTR_TUNNEL:    /* Masked data not supported for tunnel. */
@@ -552,14 +557,14 @@ odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
              * and the current use case (bonding) does not require a strict
              * match to work properly. */
             if (hash_act->hash_alg == OVS_HASH_ALG_L4) {
-                struct flow flow;
-                uint32_t hash;
-
                 for (i = 0; i < cnt; i++) {
+                    struct flow flow;
+                    uint32_t hash;
+
                     flow_extract(packets[i], &flow);
                     hash = flow_hash_5tuple(&flow, hash_act->hash_basis);
 
-                    packets[i]->md.dp_hash = hash;
+                    pkt_metadata_set_dp_hash(&packets[i]->md, hash);
                 }
             } else {
                 /* Assert on unknown hash algorithm.  */

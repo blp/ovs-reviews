@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -485,47 +485,49 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     uint8_t nw_frag, nw_tos, nw_ttl, nw_proto;
 
     /* Metadata. */
-    if (flow_tnl_dst_is_set(&md->tunnel)) {
-        miniflow_push_words(mf, tunnel, &md->tunnel,
+    if (pkt_metadata_has_tunnel_dst(md)) {
+        miniflow_push_words(mf, tunnel, &md->tunnel_,
                             offsetof(struct flow_tnl, metadata) /
                             sizeof(uint64_t));
 
-        if (!(md->tunnel.flags & FLOW_TNL_F_UDPIF)) {
-            if (md->tunnel.metadata.present.map) {
-                miniflow_push_words(mf, tunnel.metadata, &md->tunnel.metadata,
-                                    sizeof md->tunnel.metadata /
+        if (!(md->tunnel_.flags & FLOW_TNL_F_UDPIF)) {
+            if (md->tunnel_.metadata.present.map) {
+                miniflow_push_words(mf, tunnel.metadata, &md->tunnel_.metadata,
+                                    sizeof md->tunnel_.metadata /
                                     sizeof(uint64_t));
             }
         } else {
-            if (md->tunnel.metadata.present.len) {
+            if (md->tunnel_.metadata.present.len) {
                 miniflow_push_words(mf, tunnel.metadata.present,
-                                    &md->tunnel.metadata.present, 1);
+                                    &md->tunnel_.metadata.present, 1);
                 miniflow_push_words(mf, tunnel.metadata.opts.gnv,
-                                    md->tunnel.metadata.opts.gnv,
-                                    DIV_ROUND_UP(md->tunnel.metadata.present.len,
+                                    md->tunnel_.metadata.opts.gnv,
+                                    DIV_ROUND_UP(md->tunnel_.metadata.present.len,
                                                  sizeof(uint64_t)));
             }
         }
     }
-    if (md->skb_priority || md->pkt_mark) {
-        miniflow_push_uint32(mf, skb_priority, md->skb_priority);
-        miniflow_push_uint32(mf, pkt_mark, md->pkt_mark);
+    if (md->md_mask & (PM_SKB_PRIORITY | PM_PKT_MARK)) {
+        miniflow_push_uint32(mf, skb_priority,
+                             pkt_metadata_get_skb_priority(md));
+        miniflow_push_uint32(mf, pkt_mark, pkt_metadata_get_pkt_mark(md));
     }
-    miniflow_push_uint32(mf, dp_hash, md->dp_hash);
+    miniflow_push_uint32(mf, dp_hash, pkt_metadata_get_dp_hash(md));
     miniflow_push_uint32(mf, in_port, odp_to_u32(md->in_port.odp_port));
-    if (md->recirc_id || md->ct_state) {
-        miniflow_push_uint32(mf, recirc_id, md->recirc_id);
-        miniflow_push_uint16(mf, ct_state, md->ct_state);
-        miniflow_push_uint16(mf, ct_zone, md->ct_zone);
+    if (md->md_mask & (PM_RECIRC_ID | PM_CT)) {
+        miniflow_push_uint32(mf, recirc_id, pkt_metadata_get_recirc_id(md));
+        miniflow_push_uint16(mf, ct_state, pkt_metadata_get_ct_state(md));
+        miniflow_push_uint16(mf, ct_zone, pkt_metadata_get_ct_zone(md));
     }
 
-    if (md->ct_state) {
-        miniflow_push_uint32(mf, ct_mark, md->ct_mark);
+    if (pkt_metadata_get_ct_state(md)) {
+        miniflow_push_uint32(mf, ct_mark, pkt_metadata_get_ct_mark(md));
         miniflow_pad_to_64(mf, ct_mark);
 
-        if (!ovs_u128_is_zero(&md->ct_label)) {
-            miniflow_push_words(mf, ct_label, &md->ct_label,
-                                sizeof md->ct_label / sizeof(uint64_t));
+        ovs_u128 ct_label = pkt_metadata_get_ct_label(md);
+        if (!ovs_u128_is_zero(&ct_label)) {
+            miniflow_push_words(mf, ct_label, &ct_label,
+                                sizeof ct_label / sizeof(uint64_t));
         }
     }
 

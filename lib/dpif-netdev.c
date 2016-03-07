@@ -3854,7 +3854,8 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
             }
 
             for (i = 0; i < cnt; i++) {
-                packets[i]->md.recirc_id = nl_attr_get_u32(a);
+                pkt_metadata_set_recirc_id(&packets[i]->md,
+                                           nl_attr_get_u32(a));
             }
 
             (*depth)++;

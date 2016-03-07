@@ -1109,13 +1109,13 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
         struct pkt_metadata *md = &packet->md;
         bool dst_set;
 
-        dst_set = flow_tnl_dst_is_set(&md->tunnel);
+        dst_set = pkt_metadata_has_tunnel_dst(md);
         if (dst_set) {
             /* The Linux kernel datapath throws away the tunnel information
              * that we supply as metadata.  We have to use a "set" action to
              * supply it. */
             ofpbuf_use_stub(&execute_actions, stub, sizeof stub);
-            odp_put_tunnel_action(&md->tunnel, &execute_actions);
+            odp_put_tunnel_action(&md->tunnel_, &execute_actions);
             ofpbuf_put(&execute_actions, action, NLA_ALIGN(action->nla_len));
 
             execute.actions = execute_actions.data;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2013, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -103,8 +103,10 @@ typedef union {
 /* MSVC2015 doesn't support designated initializers when compiling C++,
  * and doesn't support ternary operators with non-designated initializers.
  * So we use these static definitions rather than using initializer macros. */
+static const ovs_u128 OVS_U128_ZERO = { { 0, 0, 0, 0 } };
 static const ovs_u128 OVS_U128_MAX = { { UINT32_MAX, UINT32_MAX,
                                          UINT32_MAX, UINT32_MAX } };
+static const ovs_be128 OVS_BE128_ZERO = { { 0, 0, 0, 0 } };
 static const ovs_be128 OVS_BE128_MAX OVS_UNUSED = { { OVS_BE32_MAX, OVS_BE32_MAX,
                                            OVS_BE32_MAX, OVS_BE32_MAX } };
 

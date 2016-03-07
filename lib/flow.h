@@ -986,16 +986,32 @@ flow_union_with_miniflow(struct flow *dst, const struct miniflow *src)
 static inline void
 pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
 {
-    md->recirc_id = flow->recirc_id;
-    md->dp_hash = flow->dp_hash;
-    flow_tnl_copy__(&md->tunnel, &flow->tunnel);
-    md->skb_priority = flow->skb_priority;
-    md->pkt_mark = flow->pkt_mark;
-    md->in_port = flow->in_port;
-    md->ct_state = flow->ct_state;
-    md->ct_zone = flow->ct_zone;
-    md->ct_mark = flow->ct_mark;
-    md->ct_label = flow->ct_label;
+    pkt_metadata_init(md, flow->in_port.odp_port);
+    if (flow->recirc_id) {
+        pkt_metadata_set_recirc_id(md, flow->recirc_id);
+    }
+    if (flow->dp_hash) {
+        pkt_metadata_set_dp_hash(md, flow->dp_hash);
+    }
+    if (flow->skb_priority) {
+        pkt_metadata_set_skb_priority(md, flow->skb_priority);
+    }
+    if (flow->pkt_mark) {
+        pkt_metadata_set_pkt_mark(md, flow->pkt_mark);
+    }
+    if (flow->ct_state || flow->ct_zone || flow->ct_mark
+        || !ovs_u128_is_zero(&flow->ct_label)) {
+        pkt_metadata_init_ct(md);
+        md->ct_state = flow->ct_state;
+        md->ct_zone = flow->ct_zone;
+        md->ct_mark = flow->ct_mark;
+        md->ct_label = flow->ct_label;
+    }
+
+    if (flow_tnl_dst_is_set(&flow->tunnel)) {
+        md->md_mask |= PM_TUNNEL;
+        flow_tnl_copy__(&md->tunnel_, &flow->tunnel);
+    }
 }
 
 static inline bool is_ip_any(const struct flow *flow)

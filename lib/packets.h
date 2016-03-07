@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -131,21 +131,32 @@ union flow_in_port {
     ofp_port_t ofp_port;
 };
 
+enum {
+    PM_RECIRC_ID    = 1 << 0,
+    PM_DP_HASH      = 1 << 1,
+    PM_SKB_PRIORITY = 1 << 2,
+    PM_PKT_MARK     = 1 << 3,
+    PM_CT           = 1 << 4,
+    PM_TUNNEL       = 1 << 5,
+};
+
 /* Datapath packet metadata */
 struct pkt_metadata {
-    uint32_t recirc_id;         /* Recirculation id carried with the
+    union flow_in_port in_port; /* Input port.  Always available.*/
+
+    uint32_t md_mask;
+    uint32_t recirc_id_;        /* Recirculation id carried with the
                                    recirculating packets. 0 for packets
                                    received from the wire. */
-    uint32_t dp_hash;           /* hash value computed by the recirculation
+    uint32_t dp_hash_;          /* hash value computed by the recirculation
                                    action. */
-    uint32_t skb_priority;      /* Packet priority for QoS. */
-    uint32_t pkt_mark;          /* Packet mark. */
+    uint32_t skb_priority_;     /* Packet priority for QoS. */
+    uint32_t pkt_mark_;         /* Packet mark. */
     uint16_t ct_state;          /* Connection state. */
     uint16_t ct_zone;           /* Connection zone. */
     uint32_t ct_mark;           /* Connection mark. */
     ovs_u128 ct_label;          /* Connection label. */
-    union flow_in_port in_port; /* Input port. */
-    struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. Note that
+    struct flow_tnl tunnel_;     /* Encapsulating tunnel parameters. Note that
                                  * if 'ip_dst' == 0, the rest of the fields may
                                  * be uninitialized. */
 };
@@ -153,14 +164,114 @@ struct pkt_metadata {
 static inline void
 pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
 {
-    /* It can be expensive to zero out all of the tunnel metadata. However,
-     * we can just zero out ip_dst and the rest of the data will never be
-     * looked at. */
-    memset(md, 0, offsetof(struct pkt_metadata, in_port));
-    md->tunnel.ip_dst = 0;
-    md->tunnel.ipv6_dst = in6addr_any;
-
     md->in_port.odp_port = port;
+    md->md_mask = 0;
+}
+
+#define PKT_METADATA_SIMPLE_ACCESSORS(NAME, TYPE, BIT)              \
+    static inline bool                                              \
+    pkt_metadata_has_##NAME(const struct pkt_metadata *md)          \
+    {                                                               \
+        return (md->md_mask & (BIT)) != 0;                          \
+    }                                                               \
+    static inline TYPE                                              \
+    pkt_metadata_get_##NAME(const struct pkt_metadata *md)          \
+    {                                                               \
+        return pkt_metadata_has_##NAME(md) ? md->NAME##_ : 0;       \
+    }                                                               \
+    static inline void                                              \
+    pkt_metadata_set_##NAME(struct pkt_metadata *md, TYPE value)    \
+    {                                                               \
+        (void) (&md->NAME##_ == &value);                            \
+        md->md_mask |= BIT;                                         \
+        md->NAME##_ = value;                                        \
+    }
+PKT_METADATA_SIMPLE_ACCESSORS(recirc_id, uint32_t, PM_RECIRC_ID);
+PKT_METADATA_SIMPLE_ACCESSORS(dp_hash, uint32_t, PM_DP_HASH);
+PKT_METADATA_SIMPLE_ACCESSORS(skb_priority, uint32_t, PM_SKB_PRIORITY);
+PKT_METADATA_SIMPLE_ACCESSORS(pkt_mark, uint32_t, PM_PKT_MARK);
+
+static inline bool
+pkt_metadata_has_ct(const struct pkt_metadata *md)
+{
+    return (md->md_mask & PM_CT) != 0;
+}
+
+static inline uint16_t
+pkt_metadata_get_ct_state(const struct pkt_metadata *md)
+{
+    return pkt_metadata_has_ct(md) ? md->ct_state : 0;
+}
+static inline uint16_t
+pkt_metadata_get_ct_zone(const struct pkt_metadata *md)
+{
+    return pkt_metadata_has_ct(md) ? md->ct_zone : 0;
+}
+static inline uint32_t
+pkt_metadata_get_ct_mark(const struct pkt_metadata *md)
+{
+    return pkt_metadata_has_ct(md) ? md->ct_mark : 0;
+}
+static inline ovs_u128
+pkt_metadata_get_ct_label(const struct pkt_metadata *md)
+{
+    return pkt_metadata_has_ct(md) ? md->ct_label : OVS_U128_ZERO;
+}
+
+static inline void
+pkt_metadata_init_ct(struct pkt_metadata *md)
+{
+    if (!pkt_metadata_has_ct(md)) {
+        md->md_mask |= PM_CT;
+        md->ct_state = md->ct_zone = md->ct_mark = 0;
+        md->ct_label = OVS_U128_ZERO;
+    }
+}
+static inline void
+pkt_metadata_set_ct_state(struct pkt_metadata *md, uint16_t ct_state)
+{
+    pkt_metadata_init_ct(md);
+    md->ct_state = ct_state;
+}
+static inline void
+pkt_metadata_set_ct_zone(struct pkt_metadata *md, uint16_t ct_zone)
+{
+    pkt_metadata_init_ct(md);
+    md->ct_zone = ct_zone;
+}
+static inline void
+pkt_metadata_set_ct_mark(struct pkt_metadata *md, uint32_t ct_mark)
+{
+    pkt_metadata_init_ct(md);
+    md->ct_mark = ct_mark;
+}
+static inline void
+pkt_metadata_set_ct_label(struct pkt_metadata *md, ovs_u128 ct_label)
+{
+    pkt_metadata_init_ct(md);
+    md->ct_label = ct_label;
+}
+
+static inline bool
+pkt_metadata_has_tunnel(const struct pkt_metadata *md)
+{
+    return md->md_mask & PM_TUNNEL;
+}
+static inline bool
+pkt_metadata_has_tunnel_dst(const struct pkt_metadata *md)
+{
+    return pkt_metadata_has_tunnel(md) && flow_tnl_dst_is_set(&md->tunnel_);
+}
+static inline void
+pkt_metadata_init_tunnel(struct pkt_metadata *md)
+{
+    if (!pkt_metadata_has_tunnel(md)) {
+        /* Zero up through the tunnel metadata options. The length and table
+         * are before this and as long as they are empty, the options won't be
+         * looked at. */
+        md->md_mask |= PM_TUNNEL;
+        memset(&md->tunnel_, 0, offsetof(struct flow_tnl, metadata.opts));
+    }
 }
 
 /* This function prefetches the cachelines touched by pkt_metadata_init()
@@ -168,7 +279,7 @@ pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
 static inline void
 pkt_metadata_prefetch_init(struct pkt_metadata *md)
 {
-    ovs_prefetch_range(md, offsetof(struct pkt_metadata, tunnel.ip_src));
+    ovs_prefetch_range(md, offsetof(struct pkt_metadata, recirc_id_));
 }
 
 bool dpid_from_string(const char *s, uint64_t *dpidp);

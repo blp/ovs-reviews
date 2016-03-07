@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1182,25 +1182,23 @@ parse_gre_header(struct dp_packet *packet,
 }
 
 static void
-pkt_metadata_init_tnl(struct pkt_metadata *md)
+pkt_metadata_clear_tnl(struct pkt_metadata *md)
 {
-    /* Zero up through the tunnel metadata options. The length and table
-     * are before this and as long as they are empty, the options won't
-     * be looked at. */
-    memset(md, 0, offsetof(struct pkt_metadata, tunnel.metadata.opts));
+    md->md_mask = 0;
+    pkt_metadata_init_tunnel(md);
 }
 
 static int
 netdev_gre_pop_header(struct dp_packet *packet)
 {
     struct pkt_metadata *md = &packet->md;
-    struct flow_tnl *tnl = &md->tunnel;
+    struct flow_tnl *tnl = &md->tunnel_;
     int hlen = sizeof(struct eth_header) + 4;
 
     hlen += is_header_ipv6(dp_packet_data(packet)) ?
             IPV6_HEADER_LEN : IP_HEADER_LEN;
 
-    pkt_metadata_init_tnl(md);
+    pkt_metadata_clear_tnl(md);
     if (hlen > dp_packet_size(packet)) {
         return EINVAL;
     }
@@ -1291,11 +1289,11 @@ static int
 netdev_vxlan_pop_header(struct dp_packet *packet)
 {
     struct pkt_metadata *md = &packet->md;
-    struct flow_tnl *tnl = &md->tunnel;
+    struct flow_tnl *tnl = &md->tunnel_;
     struct vxlanhdr *vxh;
     unsigned int hlen;
 
-    pkt_metadata_init_tnl(md);
+    pkt_metadata_clear_tnl(md);
     if (VXLAN_HLEN > dp_packet_l4_size(packet)) {
         return EINVAL;
     }
@@ -1349,11 +1347,11 @@ static int
 netdev_geneve_pop_header(struct dp_packet *packet)
 {
     struct pkt_metadata *md = &packet->md;
-    struct flow_tnl *tnl = &md->tunnel;
+    struct flow_tnl *tnl = &md->tunnel_;
     struct genevehdr *gnh;
     unsigned int hlen, opts_len, ulen;
 
-    pkt_metadata_init_tnl(md);
+    pkt_metadata_clear_tnl(md);
     if (GENEVE_BASE_HLEN > dp_packet_l4_size(packet)) {
         VLOG_WARN_RL(&err_rl, "geneve packet too small: min header=%u packet size=%"PRIuSIZE"\n",
                      (unsigned int)GENEVE_BASE_HLEN, dp_packet_l4_size(packet));

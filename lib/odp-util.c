@@ -4448,17 +4448,20 @@ odp_flow_key_from_mask(const struct odp_flow_key_parms *parms,
 void
 odp_key_from_pkt_metadata(struct ofpbuf *buf, const struct pkt_metadata *md)
 {
-    nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY, md->skb_priority);
+    nl_msg_put_u32(buf, OVS_KEY_ATTR_PRIORITY,
+                   pkt_metadata_get_skb_priority(md));
 
-    if (flow_tnl_dst_is_set(&md->tunnel)) {
-        tun_key_to_attr(buf, &md->tunnel, &md->tunnel, NULL);
+    if (pkt_metadata_has_tunnel_dst(md)) {
+        tun_key_to_attr(buf, &md->tunnel_, &md->tunnel_, NULL);
     }
 
-    nl_msg_put_u32(buf, OVS_KEY_ATTR_SKB_MARK, md->pkt_mark);
+    nl_msg_put_u32(buf, OVS_KEY_ATTR_SKB_MARK, pkt_metadata_get_pkt_mark(md));
 
-    if (md->ct_state) {
-        nl_msg_put_u32(buf, OVS_KEY_ATTR_CT_STATE,
-                       ovs_to_odp_ct_state(md->ct_state));
+    if (pkt_metadata_has_ct(md)) {
+        if (md->ct_state) {
+            nl_msg_put_u32(buf, OVS_KEY_ATTR_CT_STATE,
+                           ovs_to_odp_ct_state(md->ct_state));
+        }
         if (md->ct_zone) {
             nl_msg_put_u16(buf, OVS_KEY_ATTR_CT_ZONE, md->ct_zone);
         }
@@ -4503,46 +4506,48 @@ odp_key_to_pkt_metadata(const struct nlattr *key, size_t key_len,
 
         switch (type) {
         case OVS_KEY_ATTR_RECIRC_ID:
-            md->recirc_id = nl_attr_get_u32(nla);
+            pkt_metadata_set_recirc_id(md, nl_attr_get_u32(nla));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_RECIRC_ID);
             break;
         case OVS_KEY_ATTR_DP_HASH:
-            md->dp_hash = nl_attr_get_u32(nla);
+            pkt_metadata_set_dp_hash(md, nl_attr_get_u32(nla));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_DP_HASH);
             break;
         case OVS_KEY_ATTR_PRIORITY:
-            md->skb_priority = nl_attr_get_u32(nla);
+            pkt_metadata_set_skb_priority(md, nl_attr_get_u32(nla));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_PRIORITY);
             break;
         case OVS_KEY_ATTR_SKB_MARK:
-            md->pkt_mark = nl_attr_get_u32(nla);
+            pkt_metadata_set_pkt_mark(md, nl_attr_get_u32(nla));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_SKB_MARK);
             break;
         case OVS_KEY_ATTR_CT_STATE:
-            md->ct_state = odp_to_ovs_ct_state(nl_attr_get_u32(nla));
+            pkt_metadata_set_ct_state(
+                md, odp_to_ovs_ct_state(nl_attr_get_u32(nla)));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_STATE);
             break;
         case OVS_KEY_ATTR_CT_ZONE:
-            md->ct_zone = nl_attr_get_u16(nla);
+            pkt_metadata_set_ct_zone(md, nl_attr_get_u16(nla));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_ZONE);
             break;
         case OVS_KEY_ATTR_CT_MARK:
-            md->ct_mark = nl_attr_get_u32(nla);
+            pkt_metadata_set_ct_mark(md, nl_attr_get_u32(nla));
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_MARK);
             break;
         case OVS_KEY_ATTR_CT_LABELS: {
             const ovs_u128 *cl = nl_attr_get(nla);
 
-            md->ct_label = *cl;
+            pkt_metadata_set_ct_label(md, *cl);
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_LABELS);
             break;
         }
         case OVS_KEY_ATTR_TUNNEL: {
             enum odp_key_fitness res;
 
-            res = odp_tun_key_from_attr(nla, true, &md->tunnel);
+            pkt_metadata_init_tunnel(md);
+            res = odp_tun_key_from_attr(nla, true, &md->tunnel_);
             if (res == ODP_FIT_ERROR) {
-                memset(&md->tunnel, 0, sizeof md->tunnel);
+                md->md_mask &= ~PM_TUNNEL;
             } else if (res == ODP_FIT_PERFECT) {
                 wanted_attrs &= ~(1u << OVS_KEY_ATTR_TUNNEL);
             }
