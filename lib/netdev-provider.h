@@ -720,9 +720,9 @@ struct netdev_class {
      * ownership of the packets to the caller, stores the number of received
      * packets into '*cnt', and returns 0.
      *
-     * The implementation does not necessarily initialize any non-data members
-     * of 'pkts'.  That is, the caller must initialize layer pointers and
-     * metadata itself, if desired, e.g. with pkt_metadata_init() and
+     * The implementation must initialize the returned packets' metadata, that
+     * is, the 'md' member of each dp_packet.  It need not initialize the layer
+     * pointers; the caller must initialize these itself, if desired, e.g. with
      * miniflow_extract().
      *
      * Implementations should allocate buffers with DP_NETDEV_HEADROOM bytes of

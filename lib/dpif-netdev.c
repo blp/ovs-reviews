@@ -3417,15 +3417,12 @@ dp_netdev_queue_batches(struct dp_packet *pkt,
  *
  * The function returns the number of packets that needs to be processed in the
  * 'packets' array (they have been moved to the beginning of the vector).
- *
- * If 'md_is_valid' is false, the metadata in 'packets' is not valid and must be
- * initialized by this function using 'port_no'.
  */
 static inline size_t
 emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
                size_t cnt, struct netdev_flow_key *keys,
                struct packet_batch batches[], size_t *n_batches,
-               bool md_is_valid, odp_port_t port_no)
+               odp_port_t port_no)
 {
     struct emc_cache *flow_cache = &pmd->flow_cache;
     struct netdev_flow_key *key = &keys[0];
@@ -3447,8 +3444,8 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet **packets,
             pkt_metadata_prefetch_init(&packets[i+1]->md);
         }
 
-        if (!md_is_valid) {
-            pkt_metadata_init(&packet->md, port_no);
+        if (port_no) {
+            packet->md.in_port.odp_port = port_no;
         }
         miniflow_extract(packet, &key->mf);
         key->len = 0; /* Not computed yet. */
@@ -3615,14 +3612,13 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
 
 /* Packets enter the datapath from a port (or from recirculation) here.
  *
- * For performance reasons a caller may choose not to initialize the metadata
- * in 'packets': in this case 'mdinit' is false and this function needs to
- * initialize it using 'port_no'.  If the metadata in 'packets' is already
- * valid, 'md_is_valid' must be true and 'port_no' will be ignored. */
+ * If 'port_no' is nonzero, this function initializes the input port metadata
+ * field of each packet to 'port_no'; otherwise the existing input ports are
+ * left in place. */
 static void
 dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
                   struct dp_packet **packets, int cnt,
-                  bool md_is_valid, odp_port_t port_no)
+                  odp_port_t port_no)
 {
 #if !defined(__CHECKER__) && !defined(_WIN32)
     const size_t PKT_ARRAY_SIZE = cnt;
@@ -3637,7 +3633,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
 
     n_batches = 0;
     newcnt = emc_processing(pmd, packets, cnt, keys, batches, &n_batches,
-                            md_is_valid, port_no);
+                            port_no);
     if (OVS_UNLIKELY(newcnt)) {
         fast_path_processing(pmd, packets, newcnt, keys, batches, &n_batches);
     }
@@ -3656,14 +3652,14 @@ dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
                 struct dp_packet **packets, int cnt,
                 odp_port_t port_no)
 {
-     dp_netdev_input__(pmd, packets, cnt, false, port_no);
+     dp_netdev_input__(pmd, packets, cnt, port_no);
 }
 
 static void
 dp_netdev_recirculate(struct dp_netdev_pmd_thread *pmd,
                       struct dp_packet **packets, int cnt)
 {
-     dp_netdev_input__(pmd, packets, cnt, true, 0);
+     dp_netdev_input__(pmd, packets, cnt, 0);
 }
 
 struct dp_netdev_execute_aux {

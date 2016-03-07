@@ -1146,6 +1146,14 @@ netdev_dpdk_vhost_update_rx_counters(struct netdev_stats *stats,
     }
 }
 
+static void
+init_metadata(struct dp_packet **packets, int n)
+{
+    for (int i = 0; i < n; i++) {
+        pkt_metadata_init(packets[i], 0);
+    }
+}
+
 /*
  * The receive path for the vhost port is the TX path out from guest.
  */
@@ -1180,7 +1188,9 @@ netdev_dpdk_vhost_rxq_recv(struct netdev_rxq *rxq_,
     netdev_dpdk_vhost_update_rx_counters(&vhost_dev->stats, packets, nb_rx);
     rte_spinlock_unlock(&vhost_dev->stats_lock);
 
+    init_metadata(packets, nb_rx);
     *c = (int) nb_rx;
+
     return 0;
 }
 
@@ -1209,6 +1219,7 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet **packets,
         return EAGAIN;
     }
 
+    init_metadata(packets, nb_rx);
     *c = nb_rx;
 
     return 0;

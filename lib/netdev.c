@@ -645,9 +645,10 @@ netdev_rxq_close(struct netdev_rxq *rx)
  * into the array, transferring ownership of the packets to the caller, stores
  * the number of received packets into '*cnt', and returns 0.
  *
- * The implementation does not necessarily initialize any non-data members of
- * 'pkts'.  That is, the caller must initialize layer pointers and metadata
- * itself, if desired, e.g. with pkt_metadata_init() and miniflow_extract().
+ * The implementation initializes the returned packets' metadata, that is, the
+ * 'md' member of each dp_packet.  It need not initialize the layer pointers;
+ * the caller must initialize these itself, if desired, e.g. with
+ * miniflow_extract().
  *
  * Returns EAGAIN immediately if no packet is ready to be received or another
  * positive errno value if an error was encountered. */
