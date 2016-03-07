@@ -39,9 +39,6 @@
 #include "random.h"
 #include "unaligned.h"
 
-#include "openvswitch/vlog.h"
-VLOG_DEFINE_THIS_MODULE(flow);
-
 COVERAGE_DEFINE(flow_extract);
 COVERAGE_DEFINE(miniflow_malloc);
 
@@ -488,24 +485,19 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     uint8_t nw_frag, nw_tos, nw_ttl, nw_proto;
 
     /* Metadata. */
-    if (pkt_metadata_has_tunnel(md)) {
-        VLOG_WARN("%s:%d", __FILE__, __LINE__);
+    if (pkt_metadata_has_tunnel_dst(md)) {
         miniflow_push_words(mf, tunnel, &md->tunnel_,
                             offsetof(struct flow_tnl, metadata) /
                             sizeof(uint64_t));
 
         if (!(md->tunnel_.flags & FLOW_TNL_F_UDPIF)) {
-        VLOG_WARN("%s:%d", __FILE__, __LINE__);
             if (md->tunnel_.metadata.present.map) {
-        VLOG_WARN("%s:%d", __FILE__, __LINE__);
                 miniflow_push_words(mf, tunnel.metadata, &md->tunnel_.metadata,
                                     sizeof md->tunnel_.metadata /
                                     sizeof(uint64_t));
             }
         } else {
-        VLOG_WARN("%s:%d", __FILE__, __LINE__);
             if (md->tunnel_.metadata.present.len) {
-        VLOG_WARN("%s:%d", __FILE__, __LINE__);
                 miniflow_push_words(mf, tunnel.metadata.present,
                                     &md->tunnel_.metadata.present, 1);
                 miniflow_push_words(mf, tunnel.metadata.opts.gnv,

@@ -89,12 +89,10 @@ struct in6_addr flow_tnl_src(const struct flow_tnl *tnl);
 static inline size_t
 flow_tnl_size(const struct flow_tnl *src)
 {
-#if 0
     if (!flow_tnl_dst_is_set(src)) {
         /* Covers ip_dst and ipv6_dst only. */
         return offsetof(struct flow_tnl, ip_src);
     }
-#endif
     if (src->flags & FLOW_TNL_F_UDPIF) {
         /* Datapath format, cover all options we have. */
         return offsetof(struct flow_tnl, metadata.opts)
@@ -114,7 +112,7 @@ flow_tnl_size(const struct flow_tnl *src)
 static inline void
 flow_tnl_copy__(struct flow_tnl *dst, const struct flow_tnl *src)
 {
-    *dst = *src;
+    memcpy(dst, src, flow_tnl_size(src));
 }
 
 static inline bool

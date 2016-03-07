@@ -1008,7 +1008,10 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
         md->ct_label = flow->ct_label;
     }
 
-    flow_tnl_copy__(&md->tunnel_, &flow->tunnel);
+    if (flow_tnl_dst_is_set(&flow->tunnel)) {
+        md->md_mask |= PM_TUNNEL;
+        flow_tnl_copy__(&md->tunnel_, &flow->tunnel);
+    }
 }
 
 static inline bool is_ip_any(const struct flow *flow)
