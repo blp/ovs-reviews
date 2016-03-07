@@ -37,6 +37,7 @@ dummy_unixctl_set_trace_field(struct unixctl_conn *conn, int argc OVS_UNUSED,
         }
     }
     atomic_store(&dummy_trace_field, field);
+    unixctl_command_reply(conn, NULL);
 }
 
 /* Enables support for "dummy" network devices and dpifs, which are useful for

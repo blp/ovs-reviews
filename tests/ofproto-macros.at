@@ -210,6 +210,10 @@ ovn_attach() {
         -- add-br br-int \
         -- set bridge br-int fail-mode=secure other-config:disable-in-band=true \
         || return 1
+    ovs-ofctl \
+        add-tlv-map $bridge '{class=0xffff,type=0,len=4}->tun_metadata0' \
+	|| return 1
+    ovs-appctl dummy/set-trace-field tun_metadata0 || return 1
     start_daemon ovn-controller || return 1
 }
 
