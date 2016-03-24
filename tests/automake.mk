@@ -352,6 +352,15 @@ endif
 tests_ovstest_LDADD = lib/libopenvswitch.la ovn/lib/libovn.la
 dist_check_SCRIPTS = tests/flowgen.pl
 
+noinst_PROGRAMS += tests/test-raft
+tests_test_raft_SOURCES = \
+	tests/deque.c \
+	tests/deque.h \
+	tests/model-checker.c \
+	tests/model-checker.h \
+	tests/test-raft.c
+tests_test_raft_LDADD = lib/libopenvswitch.la
+
 noinst_PROGRAMS += tests/test-strtok_r
 tests_test_strtok_r_SOURCES = tests/test-strtok_r.c
 
