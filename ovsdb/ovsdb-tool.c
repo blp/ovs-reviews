@@ -206,7 +206,7 @@ do_create(struct ovs_cmdl_context *ctx)
     /* Create database file. */
     check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_LOG_CREATE,
                                      -1, &log));
-    check_ovsdb_error(ovsdb_log_write(log, json));
+    check_ovsdb_error(ovsdb_log_write_json(log, json));
     check_ovsdb_error(ovsdb_log_commit(log));
     ovsdb_log_close(log);
 
@@ -513,7 +513,7 @@ do_show_log(struct ovs_cmdl_context *ctx)
     for (i = 0; ; i++) {
         struct json *json;
 
-        check_ovsdb_error(ovsdb_log_read(log, &json));
+        check_ovsdb_error(ovsdb_log_read_json(log, &json));
         if (!json) {
             break;
         }

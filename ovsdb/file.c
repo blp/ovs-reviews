@@ -134,7 +134,7 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
         goto error;
     }
 
-    error = ovsdb_log_read(log, &json);
+    error = ovsdb_log_read_json(log, &json);
     if (error) {
         goto error;
     } else if (!json) {
@@ -211,7 +211,7 @@ ovsdb_file_open__(const char *file_name,
      * size, but it's just not that important. */
     off_t snapshot_size = 0;
     unsigned int n_transactions = 0;
-    while ((error = ovsdb_log_read(log, &json)) == NULL && json) {
+    while ((error = ovsdb_log_read_json(log, &json)) == NULL && json) {
         struct ovsdb_txn *txn;
 
         error = ovsdb_file_txn_from_json(db, json, alternate_schema != NULL,
@@ -447,7 +447,7 @@ ovsdb_file_save_copy__(const char *file_name, int locking,
 
     /* Write schema. */
     json = ovsdb_schema_to_json(db->schema);
-    error = ovsdb_log_write(log, json);
+    error = ovsdb_log_write_json(log, json);
     json_destroy(json);
     if (error) {
         goto exit;
@@ -789,7 +789,7 @@ ovsdb_file_txn_commit(struct json *json, const char *comment,
     }
     json_object_put(json, "_date", json_integer_create(time_wall_msec()));
 
-    error = ovsdb_log_write(log, json);
+    error = ovsdb_log_write_json(log, json);
     json_destroy(json);
     if (error) {
         return ovsdb_wrap_error(error, "writing transaction failed");

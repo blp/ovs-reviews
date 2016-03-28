@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,11 +34,15 @@ struct ovsdb_error *ovsdb_log_open(const char *name, enum ovsdb_log_open_mode,
     OVS_WARN_UNUSED_RESULT;
 void ovsdb_log_close(struct ovsdb_log *);
 
-struct ovsdb_error *ovsdb_log_read(struct ovsdb_log *, struct json **)
+struct ovsdb_error *ovsdb_log_read(struct ovsdb_log *, char **)
+    OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *ovsdb_log_read_json(struct ovsdb_log *, struct json **)
     OVS_WARN_UNUSED_RESULT;
 void ovsdb_log_unread(struct ovsdb_log *);
 
-struct ovsdb_error *ovsdb_log_write(struct ovsdb_log *, struct json *)
+struct ovsdb_error *ovsdb_log_write(struct ovsdb_log *, char *)
+    OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *ovsdb_log_write_json(struct ovsdb_log *, struct json *)
     OVS_WARN_UNUSED_RESULT;
 struct ovsdb_error *ovsdb_log_commit(struct ovsdb_log *)
     OVS_WARN_UNUSED_RESULT;

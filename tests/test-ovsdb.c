@@ -300,7 +300,7 @@ do_log_io(struct ovs_cmdl_context *ctx)
         if (!strcmp(command, "read")) {
             struct json *json;
 
-            error = ovsdb_log_read(log, &json);
+            error = ovsdb_log_read_json(log, &json);
             if (!error) {
                 printf("%s: read: ", name);
                 if (json) {
@@ -312,7 +312,7 @@ do_log_io(struct ovs_cmdl_context *ctx)
             }
         } else if (!strncmp(command, "write:", 6)) {
             struct json *json = parse_json(command + 6);
-            error = ovsdb_log_write(log, json);
+            error = ovsdb_log_write_json(log, json);
             json_destroy(json);
         } else if (!strcmp(command, "commit")) {
             error = ovsdb_log_commit(log);

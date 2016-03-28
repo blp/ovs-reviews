@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -196,50 +196,12 @@ parse_header(char *header, unsigned long int *length,
     return true;
 }
 
-static struct ovsdb_error *
-parse_body(struct ovsdb_log *file, off_t offset, unsigned long int length,
-           uint8_t sha1[SHA1_DIGEST_SIZE], struct json **jsonp)
-{
-    struct json_parser *parser;
-    struct sha1_ctx ctx;
-
-    sha1_init(&ctx);
-    parser = json_parser_create(JSPF_TRAILER);
-
-    while (length > 0) {
-        char input[BUFSIZ];
-        int chunk;
-
-        chunk = MIN(length, sizeof input);
-        if (fread(input, 1, chunk, file->stream) != chunk) {
-            json_parser_abort(parser);
-            return ovsdb_io_error(ferror(file->stream) ? errno : EOF,
-                                  "%s: error reading %lu bytes "
-                                  "starting at offset %lld", file->name,
-                                  length, (long long int) offset);
-        }
-        sha1_update(&ctx, input, chunk);
-        json_parser_feed(parser, input, chunk);
-        length -= chunk;
-    }
-
-    sha1_final(&ctx, sha1);
-    *jsonp = json_parser_finish(parser);
-    return NULL;
-}
-
 struct ovsdb_error *
-ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
+ovsdb_log_read(struct ovsdb_log *file, char **datap)
 {
-    uint8_t expected_sha1[SHA1_DIGEST_SIZE];
-    uint8_t actual_sha1[SHA1_DIGEST_SIZE];
     struct ovsdb_error *error;
-    off_t data_offset;
-    unsigned long data_length;
-    struct json *json;
-    char header[128];
 
-    *jsonp = json = NULL;
+    *datap = NULL;
 
     if (file->read_error) {
         return ovsdb_error_clone(file->read_error);
@@ -247,6 +209,7 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         return OVSDB_BUG("reading file in write mode");
     }
 
+    char header[128];
     if (!fgets(header, sizeof header, file->stream)) {
         if (feof(file->stream)) {
             error = NULL;
@@ -256,6 +219,8 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         goto error;
     }
 
+    uint8_t expected_sha1[SHA1_DIGEST_SIZE];
+    unsigned long data_length;
     if (!parse_header(header, &data_length, expected_sha1)) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: parse error at offset "
                                    "%lld in header line \"%.*s\"",
@@ -264,12 +229,19 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         goto error;
     }
 
-    data_offset = file->offset + strlen(header);
-    error = parse_body(file, data_offset, data_length, actual_sha1, &json);
-    if (error) {
+    off_t data_offset = file->offset + strlen(header);
+    *datap = xmalloc(data_length + 1);
+    if (fread(*datap, 1, data_length, file->stream) != data_length) {
+        error = ovsdb_io_error(ferror(file->stream) ? errno : EOF,
+                               "%s: error reading %lu bytes "
+                               "starting at offset %lld", file->name,
+                               data_length, (long long int) data_offset);
         goto error;
     }
+    *datap[data_length] = '\0';
 
+    uint8_t actual_sha1[SHA1_DIGEST_SIZE];
+    sha1_bytes(*datap, data_length, actual_sha1);
     if (memcmp(expected_sha1, actual_sha1, SHA1_DIGEST_SIZE)) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
                                    "offset %lld have SHA-1 hash "SHA1_FMT" "
@@ -281,24 +253,47 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         goto error;
     }
 
-    if (json->type == JSON_STRING) {
-        error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
-                                   "offset %lld are not valid JSON (%s)",
-                                   file->name, data_length,
-                                   (long long int) data_offset,
-                                   json->u.string);
-        goto error;
-    }
-
     file->prev_offset = file->offset;
     file->offset = data_offset + data_length;
-    *jsonp = json;
     return NULL;
 
 error:
     file->read_error = ovsdb_error_clone(error);
-    json_destroy(json);
+    free(*datap);
+    *datap = NULL;
     return error;
+}
+
+struct ovsdb_error *
+ovsdb_log_read_json(struct ovsdb_log *file, struct json **jsonp)
+{
+    char *data;
+    struct ovsdb_error *error;
+
+    error = ovsdb_log_read(file, &data);
+    if (error) {
+        *jsonp = NULL;
+        return error;
+    }
+
+    *jsonp = json_from_string(data);
+    if ((*jsonp)->type == JSON_STRING) {
+        error = ovsdb_syntax_error(NULL, NULL, "%s: log data with header at "
+                                   "offset %lld is not valid JSON (%s)",
+                                   file->name, file->prev_offset,
+                                   (*jsonp)->u.string);
+        file->read_error = ovsdb_error_clone(error);
+        ovsdb_log_unread(file);
+
+        free(data);
+        json_destroy(*jsonp);
+        *jsonp = NULL;
+
+        return error;
+    }
+
+    free(data);
+    return NULL;
 }
 
 /* Causes the log record read by the previous call to ovsdb_log_read() to be
@@ -317,16 +312,12 @@ ovsdb_log_unread(struct ovsdb_log *file)
     file->offset = file->prev_offset;
 }
 
-struct ovsdb_error *
-ovsdb_log_write(struct ovsdb_log *file, struct json *json)
+static struct ovsdb_error *
+ovsdb_log_write__(struct ovsdb_log *file, char *data, size_t length)
 {
     uint8_t sha1[SHA1_DIGEST_SIZE];
     struct ovsdb_error *error;
-    char *json_string;
     char header[128];
-    size_t length;
-
-    json_string = NULL;
 
     if (file->mode == OVSDB_LOG_READ || file->write_error) {
         file->mode = OVSDB_LOG_WRITE;
@@ -343,25 +334,14 @@ ovsdb_log_write(struct ovsdb_log *file, struct json *json)
         }
     }
 
-    if (json->type != JSON_OBJECT && json->type != JSON_ARRAY) {
-        error = OVSDB_BUG("bad JSON type");
-        goto error;
-    }
-
-    /* Compose content.  Add a new-line (replacing the null terminator) to make
-     * the file easier to read, even though it has no semantic value.  */
-    json_string = json_to_string(json, 0);
-    length = strlen(json_string) + 1;
-    json_string[length - 1] = '\n';
-
     /* Compose header. */
-    sha1_bytes(json_string, length, sha1);
+    sha1_bytes(data, length, sha1);
     snprintf(header, sizeof header, "%s%"PRIuSIZE" "SHA1_FMT"\n",
              magic, length, SHA1_ARGS(sha1));
 
     /* Write. */
     if (fwrite(header, strlen(header), 1, file->stream) != 1
-        || fwrite(json_string, length, 1, file->stream) != 1
+        || fwrite(data, length, 1, file->stream) != 1
         || fflush(file->stream))
     {
         error = ovsdb_io_error(errno, "%s: write failed", file->name);
@@ -374,11 +354,34 @@ ovsdb_log_write(struct ovsdb_log *file, struct json *json)
     }
 
     file->offset += strlen(header) + length;
-    free(json_string);
     return NULL;
 
 error:
     file->write_error = true;
+    return error;
+}
+
+struct ovsdb_error *
+ovsdb_log_write(struct ovsdb_log *file, char *data)
+{
+    return ovsdb_log_write__(file, data, strlen(data));
+}
+
+struct ovsdb_error *
+ovsdb_log_write_json(struct ovsdb_log *file, struct json *json)
+{
+    if (json->type != JSON_OBJECT && json->type != JSON_ARRAY) {
+        return OVSDB_BUG("bad JSON type");
+    }
+
+    /* Compose content.  Add a new-line (replacing the null terminator) to make
+     * the file easier to read, even though it has no semantic value.  */
+    char *json_string = json_to_string(json, 0);
+    size_t length = strlen(json_string) + 1;
+    json_string[length - 1] = '\n';
+
+    struct ovsdb_error *error = ovsdb_log_write__(file, json_string, length);
+
     free(json_string);
     return error;
 }
