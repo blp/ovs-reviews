@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2014 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,7 +77,7 @@ ovsdb_atom_init_default(union ovsdb_atom *atom, enum ovsdb_atomic_type type)
         break;
 
     case OVSDB_TYPE_UUID:
-        uuid_zero(&atom->uuid);
+        atom->uuid = UUID_ZERO;
         break;
 
     case OVSDB_N_TYPES:
@@ -1897,9 +1897,7 @@ ovsdb_symbol_table_insert(struct ovsdb_symbol_table *symtab,
 
     symbol = ovsdb_symbol_table_get(symtab, name);
     if (!symbol) {
-        struct uuid uuid;
-
-        uuid_generate(&uuid);
+        struct uuid uuid = uuid_generate();
         symbol = ovsdb_symbol_table_put(symtab, name, &uuid, false);
     }
     return symbol;

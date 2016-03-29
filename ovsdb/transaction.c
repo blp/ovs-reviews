@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -756,7 +756,7 @@ update_version(struct ovsdb_txn *txn OVS_UNUSED, struct ovsdb_txn_row *txn_row)
     if (txn_row->old && txn_row->new
         && !bitmap_is_all_zeros(txn_row->changed, n_columns)) {
         bitmap_set1(txn_row->changed, OVSDB_COL_VERSION);
-        uuid_generate(ovsdb_row_get_version_rw(txn_row->new));
+        *ovsdb_row_get_version_rw(txn_row->new) = uuid_generate();
     }
 
     return NULL;
@@ -948,7 +948,7 @@ ovsdb_txn_row_insert(struct ovsdb_txn *txn, struct ovsdb_row *row)
     uint32_t hash = ovsdb_row_hash(row);
     struct ovsdb_table *table = row->table;
 
-    uuid_generate(ovsdb_row_get_version_rw(row));
+    *ovsdb_row_get_version_rw(row) = uuid_generate();
 
     ovsdb_txn_row_create(txn, table, NULL, row);
     hmap_insert(&table->rows, &row->hmap_node, hash);

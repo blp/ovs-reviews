@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -305,7 +305,7 @@ ovsdb_execute_insert(struct ovsdb_execution *x, struct ovsdb_parser *parser,
         row_uuid = symbol->uuid;
         symbol->created = true;
     } else {
-        uuid_generate(&row_uuid);
+        row_uuid = uuid_generate();
     }
 
     if (!error) {

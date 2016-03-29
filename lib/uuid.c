@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2011, 2013 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2010, 2011, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,8 +78,8 @@ uuid_init(void)
  * [*] It is not actually important that the initial value of the counter be
  *     random.  AES-128 in counter mode is secure either way.
  */
-void
-uuid_generate(struct uuid *uuid)
+struct uuid
+uuid_generate(void)
 {
     static struct ovs_mutex mutex = OVS_MUTEX_INITIALIZER;
     uint64_t copy[2];
@@ -96,9 +96,10 @@ uuid_generate(struct uuid *uuid)
     ovs_mutex_unlock(&mutex);
 
     /* AES output is exactly 16 bytes, so we encrypt directly into 'uuid'. */
-    aes128_encrypt(&key, copy, uuid);
-
-    uuid_set_bits_v4(uuid);
+    struct uuid uuid;
+    aes128_encrypt(&key, copy, &uuid);
+    uuid_set_bits_v4(&uuid);
+    return uuid;
 }
 
 void
@@ -109,13 +110,6 @@ uuid_set_bits_v4(struct uuid *uuid)
     uuid->parts[2] |=  0x80000000;
     uuid->parts[1] &= ~0x0000f000;
     uuid->parts[1] |=  0x00004000;
-}
-
-/* Sets 'uuid' to all-zero-bits. */
-void
-uuid_zero(struct uuid *uuid)
-{
-    uuid->parts[0] = uuid->parts[1] = uuid->parts[2] = uuid->parts[3] = 0;
 }
 
 /* Returns true if 'uuid' is all zero, otherwise false. */
@@ -155,7 +149,7 @@ uuid_from_string(struct uuid *uuid, const char *s)
     if (!uuid_from_string_prefix(uuid, s)) {
         return false;
     } else if (s[UUID_LEN] != '\0') {
-        uuid_zero(uuid);
+        *uuid = UUID_ZERO;
         return false;
     } else {
         return true;
@@ -207,7 +201,7 @@ uuid_from_string_prefix(struct uuid *uuid, const char *s)
     return true;
 
 error:
-    uuid_zero(uuid);
+    *uuid = UUID_ZERO;
     return false;
 }
 

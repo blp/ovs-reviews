@@ -1120,7 +1120,7 @@ do_query(struct ovs_cmdl_context *ctx)
     cbdata.counts = xmalloc(cbdata.n_rows * sizeof *cbdata.counts);
     for (i = 0; i < cbdata.n_rows; i++) {
         struct ovsdb_row *row = ovsdb_row_create(table);
-        uuid_generate(ovsdb_row_get_uuid_rw(row));
+        *ovsdb_row_get_uuid_rw(row) = uuid_generate();
         check_ovsdb_error(ovsdb_row_from_json(row, json->u.array.elems[i],
                                               NULL, NULL));
         if (ovsdb_table_get_row(table, ovsdb_row_get_uuid(row))) {
@@ -1225,7 +1225,7 @@ do_query_distinct(struct ovs_cmdl_context *ctx)
 
         /* Parse row. */
         row = ovsdb_row_create(table);
-        uuid_generate(ovsdb_row_get_uuid_rw(row));
+        *ovsdb_row_get_uuid_rw(row) = uuid_generate();
         check_ovsdb_error(ovsdb_row_from_json(row, json->u.array.elems[i],
                                               NULL, NULL));
 
@@ -1467,21 +1467,18 @@ do_transact_abort(struct ovs_cmdl_context *ctx OVS_UNUSED)
     do_transact_txn = NULL;
 }
 
-static void
-uuid_from_integer(int integer, struct uuid *uuid)
+static struct uuid
+uuid_from_integer(int integer)
 {
-    uuid_zero(uuid);
-    uuid->parts[3] = integer;
+    return (struct uuid) { .parts[3] = integer };
 }
 
 static const struct ovsdb_row *
 do_transact_find_row(const char *uuid_string)
 {
-    const struct ovsdb_row *row;
-    struct uuid uuid;
-
-    uuid_from_integer(atoi(uuid_string), &uuid);
-    row = ovsdb_table_get_row(do_transact_table, &uuid);
+    struct uuid uuid = uuid_from_integer(atoi(uuid_string));
+    const struct ovsdb_row *row
+        = ovsdb_table_get_row(do_transact_table, &uuid);
     if (!row) {
         ovs_fatal(0, "table does not contain row with UUID "UUID_FMT,
                   UUID_ARGS(&uuid));
@@ -1523,14 +1520,11 @@ do_transact_set_i_j(struct ovsdb_row *row,
 static void
 do_transact_insert(struct ovs_cmdl_context *ctx)
 {
-    struct ovsdb_row *row;
-    struct uuid *uuid;
-
-    row = ovsdb_row_create(do_transact_table);
+    struct ovsdb_row *row = ovsdb_row_create(do_transact_table);
 
     /* Set UUID. */
-    uuid = ovsdb_row_get_uuid_rw(row);
-    uuid_from_integer(atoi(ctx->argv[1]), uuid);
+    struct uuid *uuid = ovsdb_row_get_uuid_rw(row);
+    *uuid =  uuid_from_integer(atoi(ctx->argv[1]));
     if (ovsdb_table_get_row(do_transact_table, uuid)) {
         ovs_fatal(0, "table already contains row with UUID "UUID_FMT,
                   UUID_ARGS(uuid));

@@ -1,4 +1,4 @@
-# Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+# Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -378,7 +378,7 @@ class BaseType(object):
         else:
             pattern = {IntegerType: '%s = 0;',
                        RealType: '%s = 0.0;',
-                       UuidType: 'uuid_zero(&%s);',
+                       UuidType: '%s = UUID_ZERO;',
                        BooleanType: '%s = false;',
                        StringType: '%s = NULL;'}[self.type]
             return pattern % var

@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2010, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,9 @@ struct uuid {
     uint32_t parts[4];
 };
 BUILD_ASSERT_DECL(sizeof(struct uuid) == UUID_OCTET);
+
+/* An initializer or expression for an all-zero UUID. */
+#define UUID_ZERO ((struct uuid) { .parts = { 0, 0, 0, 0 } })
 
 /* Formats a UUID as a string, in the conventional format.
  *
@@ -72,8 +75,7 @@ uuid_equals(const struct uuid *a, const struct uuid *b)
 }
 
 void uuid_init(void);
-void uuid_generate(struct uuid *);
-void uuid_zero(struct uuid *);
+struct uuid uuid_generate(void);
 bool uuid_is_zero(const struct uuid *);
 int uuid_compare_3way(const struct uuid *, const struct uuid *);
 bool uuid_from_string(struct uuid *, const char *);

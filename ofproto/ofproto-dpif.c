@@ -1316,7 +1316,7 @@ construct(struct ofproto *ofproto_)
         return error;
     }
 
-    uuid_generate(&ofproto->uuid);
+    ofproto->uuid = uuid_generate();
     atomic_init(&ofproto->tables_version, CLS_MIN_VERSION);
     ofproto->netflow = NULL;
     ofproto->sflow = NULL;

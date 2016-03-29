@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2014 Nicira, Inc.
+ * Copyright (c) 2009, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ test_uuid_main(int argc, char *argv[])
     struct uuid uuid;
 
     if (argc == 1) {
-        uuid_generate(&uuid);
+        uuid = uuid_generate();
     } else if (argc == 2) {
         if (!uuid_from_string(&uuid, argv[1])) {
             ovs_fatal(0, "\"%s\" is not a valid UUID", argv[1]);

@@ -2306,7 +2306,7 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
                 insert = xmalloc(sizeof *insert);
                 insert->dummy = row->uuid;
                 insert->op_index = operations->u.array.n - 1;
-                uuid_zero(&insert->real);
+                insert->real = UUID_ZERO;
                 hmap_insert(&txn->inserted_rows, &insert->hmap_node,
                             uuid_hash(&insert->dummy));
             }
@@ -2759,7 +2759,7 @@ ovsdb_idl_txn_insert(struct ovsdb_idl_txn *txn,
         ovs_assert(!ovsdb_idl_txn_get_row(txn, uuid));
         row->uuid = *uuid;
     } else {
-        uuid_generate(&row->uuid);
+        row->uuid = uuid_generate();
     }
 
     row->table = ovsdb_idl_table_from_class(txn->idl, class);
