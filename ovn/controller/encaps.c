@@ -1,4 +1,4 @@
-/* Copyright (c) 2015 Nicira, Inc.
+/* Copyright (c) 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -165,10 +165,10 @@ tunnel_add(struct tunnel_ctx *tc, const char *new_chassis_id,
     iface = ovsrec_interface_insert(tc->ovs_txn);
     ovsrec_interface_set_name(iface, port_name);
     ovsrec_interface_set_type(iface, encap->type);
-    smap_add(&options, "remote_ip", encap->ip);
-    smap_add(&options, "key", "flow");
+    const struct smap options = SMAP_CONST2(&options,
+                                            "remote_ip", encap->ip,
+                                            "key", "flow");
     ovsrec_interface_set_options(iface, &options);
-    smap_destroy(&options);
 
     port = ovsrec_port_insert(tc->ovs_txn);
     ovsrec_port_set_name(port, port_name);
