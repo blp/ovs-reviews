@@ -47,17 +47,19 @@ struct smap_node {
         BUILD_ASSERT_TYPE(NEXT, struct smap_node *),        \
         BUILD_ASSERT_TYPE(SMAP, struct smap *))
 
-/* Initializer for an immutable struct smap 'SMAP' that contains a single
- * 'KEY'-'VALUE' pair, e.g.
+/* Initializer for an immutable struct smap 'SMAP' that contains one or two
+ * key-value pairs, e.g.
  *
- *     const struct smap smap = SMAP1_CONST1(&smap, "key", "value");
+ *     const struct smap smap1 = SMAP_CONST1(&smap, "key", "value");
+ *     const struct smap smap2 = SMAP_CONST2(&smap, "key1", "value1",
+ *                                           "key2", "value2");
  *
  * An smap initialized this way must not be modified or destroyed.
  *
- * The 'KEY' argument is evaluated multiple times.
+ * The 'K1' and 'K2' arguments are evaluated multiple times.
  */
-#define SMAP_CONST1(SMAP, KEY, VALUE) (const struct smap) { \
-            HMAP_CONST(&(SMAP)->map, 1, SMAP_NODE(KEY, VALUE, NULL)) \
+#define SMAP_CONST1(SMAP, K, V) (const struct smap) { \
+            HMAP_CONST(&(SMAP)->map, 1, SMAP_NODE(K, V, NULL)) \
         }
 #define SMAP_CONST2(SMAP, K1, V1, K2, V2) (const struct smap) {     \
             HMAP_CONST(&(SMAP)->map, 2,                             \

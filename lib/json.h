@@ -37,6 +37,7 @@ extern "C" {
 #endif
 
 struct ds;
+struct uuid;
 
 /* Type of a JSON value. */
 enum json_type {
@@ -77,6 +78,7 @@ struct json *json_string_create(const char *);
 struct json *json_string_create_nocopy(char *);
 struct json *json_integer_create(long long int);
 struct json *json_real_create(double);
+struct json *json_uuid_create(const struct uuid *);
 
 struct json *json_array_create_empty(void);
 void json_array_add(struct json *, struct json *element);

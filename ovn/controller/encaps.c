@@ -149,7 +149,6 @@ tunnel_add(struct tunnel_ctx *tc, const char *new_chassis_id,
     }
 
     /* No such port, so add one. */
-    struct smap options = SMAP_INITIALIZER(&options);
     struct ovsrec_port *port, **ports;
     struct ovsrec_interface *iface;
     char *port_name;

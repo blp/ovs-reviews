@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "shash.h"
 #include "unicode.h"
 #include "util.h"
+#include "uuid.h"
 
 /* The type of a JSON token. */
 enum json_token_type {
@@ -270,6 +271,12 @@ json_real_create(double real)
     struct json *json = json_create(JSON_REAL);
     json->u.real = real;
     return json;
+}
+
+struct json *
+json_uuid_create(const struct uuid *uuid)
+{
+    return json_string_create_nocopy(xasprintf(UUID_FMT, UUID_ARGS(uuid)));
 }
 
 void

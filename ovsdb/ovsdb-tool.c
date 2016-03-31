@@ -35,6 +35,7 @@
 #include "ovsdb.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
+#include "raft.h"
 #include "socket-util.h"
 #include "table.h"
 #include "timeval.h"
@@ -211,6 +212,30 @@ do_create(struct ovs_cmdl_context *ctx)
     ovsdb_log_close(log);
 
     json_destroy(json);
+}
+
+static void
+do_create_cluster(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argv[1];
+    const char *address = ctx->argv[2];
+    const char *schema_file_name = ctx->argv[3];
+
+    /* Read schema from file and convert to JSON. */
+    struct ovsdb_schema *schema;
+    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
+    struct json *schema_json = ovsdb_schema_to_json(schema);
+    ovsdb_schema_destroy(schema);
+
+    /* Generate snapshot and convert to string. */
+    struct json *data_json = json_object_create();
+    struct json *snapshot_json = json_array_create_2(schema_json, data_json);
+    char *snapshot_string = json_to_string(snapshot_json, 0);
+    json_destroy(snapshot_json);
+
+    /* Create database file. */
+    check_ovsdb_error(raft_create(db_file_name, address, snapshot_string));
+    free(snapshot_string);
 }
 
 static void
@@ -574,6 +599,7 @@ do_list_commands(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
 static const struct ovs_cmdl_command all_commands[] = {
     { "create", "[db [schema]]", 0, 2, do_create },
+    { "create-cluster", "db address db schema", 3, 3, do_create_cluster },
     { "compact", "[db [dst]]", 0, 2, do_compact },
     { "convert", "[db [schema [dst]]]", 0, 3, do_convert },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion },

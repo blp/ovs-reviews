@@ -2048,8 +2048,7 @@ where_uuid_equals(const struct uuid *uuid)
                 json_string_create("=="),
                 json_array_create_2(
                     json_string_create("uuid"),
-                    json_string_create_nocopy(
-                        xasprintf(UUID_FMT, UUID_ARGS(uuid))))));
+                    json_uuid_create(uuid))));
 }
 
 static char *
