@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include "hmap.h"
 #include "json.h"
 #include "openvswitch/list.h"
 #include "openvswitch/vlog.h"
@@ -64,9 +65,9 @@ enum raft_server_phase {
 };
 
 struct raft_server {
-    struct ovs_list list;
+    struct hmap_node hmap_node; /* Hashed based on 'sid'. */
 
-    struct uuid sid;
+    struct uuid sid;            /* Randomly generater server ID. */
     char *address;              /* "(tcp|ssl):1.2.3.4:5678" */
 
     /* Volatile state on candidates.  Reinitialized at start of election. */
@@ -98,10 +99,12 @@ struct raft {
 /* Persistent derived state.
  *
  * This must be updated on stable storage before responding to RPCs, but it can
- * be derived from the snapshot and the log. */
+ * be derived from the header, snapshot, and log in 'storage'. */
 
-    struct uuid cid;            /* Cluster ID. */
-    struct ovs_list servers;    /* Contains "struct raft_server"s. */
+    struct uuid cid;            /* Cluster ID (immutable for the cluster). */
+    struct uuid sid;            /* Server ID (immutable for the server). */
+
+    struct hmap servers;        /* Contains "struct raft_server"s. */
     struct raft_server *me;     /* This server (points into 'servers'). */
 
 /* Persistent state on all servers.
@@ -132,12 +135,12 @@ struct raft {
      *
      * XXX where's the snapshot itself? */
     uint64_t prev_term;               /* Term for index 'log_start - 1'. */
-    struct ovs_list prev_servers;     /* Contains "struct raft_server"s. */
+    struct hmap prev_servers;         /* Contains "struct raft_server"s. */
 
 /* Volatile state. */
 
     /* On leaders. */
-    struct ovs_list add_servers; /* Contains "struct raft_server"s to add. */
+    struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
     struct raft_server *remove_server; /* Server being removed. */
 
     /* On all servers. */
@@ -326,31 +329,49 @@ union raft_rpc {
     struct raft_snapshot_reply snapshot_reply;
 };
 
-#if 0
 static struct raft_server *
-raft_server_from_list_node(const struct ovs_list *list)
+raft_find_server__(struct hmap *servers, const struct uuid *uuid)
 {
-    return CONTAINER_OF(list, struct raft_server, list);
+    struct raft_server *s;
+    HMAP_FOR_EACH_IN_BUCKET (s, hmap_node, uuid_hash(uuid), servers) {
+        if (uuid_equals(uuid, &s->sid)) {
+            return s;
+        }
+    }
+    return NULL;
 }
-#endif
+
+static struct raft_server *
+raft_find_server(struct raft *raft, const struct uuid *uuid)
+{
+    return raft_find_server__(&raft->servers, uuid);
+}
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_parse_address(const char *address,
-                   const char **classp, struct sockaddr_storage *ss)
+                   const char **classp, struct sockaddr_storage *ssp)
 {
+    const char *class;
     if (!strncmp(address, "ssl:", 4)) {
-        *classp = "ssl";
+        class = "ssl";
     } else if (!strncmp(address, "tcp:", 4)) {
-        *classp = "tcp";
+        class = "tcp";
     } else {
         return ovsdb_error(NULL, "%s: expected \"tcp\" or \"ssl\" address",
                            address);
     }
 
-    if (!inet_parse_active(address + 4, RAFT_PORT, ss)) {
+    struct sockaddr_storage ss;
+    if (!inet_parse_active(address + 4, RAFT_PORT, &ss)) {
         return ovsdb_error(NULL, "%s: syntax error in address", address);
     }
 
+    if (classp) {
+        *classp = class;
+    }
+    if (ssp) {
+        *ssp = ss;
+    }
     return NULL;
 }
 
@@ -377,9 +398,7 @@ raft_create(const char *file_name, const char *local_address,
     /* Parse and verify validity of the local address.
      *
      * XXX Test that the local machine can bind the local address. */
-    struct sockaddr_storage ss;
-    const char *class;
-    struct ovsdb_error *error = raft_parse_address(local_address, &class, &ss);
+    struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
     if (error) {
         return error;
     }
@@ -448,6 +467,121 @@ raft_add_entry(struct raft *raft,
     entry->term = term;
     entry->data = data;
     return entry;
+}
+
+static uint64_t
+parse_integer(struct ovsdb_parser *p, const char *name)
+{
+    const struct json *json = ovsdb_parser_member(p, name, OP_INTEGER);
+    return json ? json_integer(json) : 0;
+}
+
+static bool
+parse_uuid__(struct ovsdb_parser *p, const char *name, bool optional,
+             struct uuid *uuid)
+{
+    enum ovsdb_parser_types types = OP_STRING | (optional ? OP_OPTIONAL : 0);
+    const struct json *json = ovsdb_parser_member(p, name, types);
+    if (json) {
+        if (uuid_from_string(uuid, json_string(json))) {
+            return true;
+        }
+        ovsdb_parser_raise_error(p, "%s is not a valid UUID", name);
+    }
+    *uuid = UUID_ZERO;
+    return false;
+}
+
+static struct uuid
+parse_required_uuid(struct ovsdb_parser *p, const char *name)
+{
+    struct uuid uuid;
+    parse_uuid__(p, name, false, &uuid);
+    return uuid;
+}
+
+static bool
+parse_optional_uuid(struct ovsdb_parser *p, const char *name,
+                    struct uuid *uuid)
+{
+    return parse_uuid__(p, name, true, uuid);
+}
+
+static void
+raft_server_destroy(struct raft_server *s)
+{
+    if (s) {
+        free(s->address);
+        free(s);
+    }
+}
+
+static void
+destroy_servers(struct hmap *servers)
+{
+    struct raft_server *s, *next;
+    HMAP_FOR_EACH_SAFE (s, next, hmap_node, servers) {
+        hmap_remove(servers, &s->hmap_node);
+        raft_server_destroy(s);
+    }
+    hmap_destroy(servers);
+}
+
+static struct raft_server *
+raft_server_clone(const struct raft_server *src)
+{
+    struct raft_server *dst = xmemdup(src, sizeof *src);
+    dst->address = xstrdup(dst->address);
+    return dst;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+parse_servers(const struct json *json, struct hmap *servers)
+{
+    if (shash_is_empty(json_object(json))) {
+        return ovsdb_syntax_error(json, NULL, "must have at least one server");
+    }
+
+    /* Parse new servers. */
+    struct hmap new_servers = HMAP_INITIALIZER(&new_servers);
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, json_object(json)) {
+        /* Parse server UUID. */
+        struct uuid sid;
+        if (!uuid_from_string(&sid, node->name)) {
+            destroy_servers(&new_servers);
+            return ovsdb_syntax_error(json, NULL, "%s is a not a UUID",
+                                      node->name);
+        }
+
+        /* Parse server address. */
+        const struct json *address_json = node->data;
+        if (address_json->type != JSON_STRING) {
+            destroy_servers(&new_servers);
+            return ovsdb_syntax_error(json, NULL, "%s value is not string",
+                                      node->name);
+        }
+        const char *address = json_string(address_json);
+        struct ovsdb_error *error = raft_parse_address(address, NULL, NULL);
+        if (error) {
+            destroy_servers(&new_servers);
+            return error;
+        }
+
+        struct raft_server *s = xzalloc(sizeof *s);
+        s->sid = sid;
+        s->address = xstrdup(address);
+        hmap_insert(&new_servers, &s->hmap_node, uuid_hash(&s->sid));
+    }
+
+    /* XXX at this point we possibly should migrate old servers' data to the
+     * new servesr. */
+
+    /* Swap old and new servers, then destroy old ones. */
+    hmap_swap(servers, &new_servers);
+    destroy_servers(&new_servers);
+
+    return NULL;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -534,9 +668,9 @@ struct ovsdb_error *
 raft_open(const char *file_name, struct raft **raftp)
 {
     struct raft *raft = xzalloc(sizeof *raft);
-    ovs_list_init(&raft->servers);
-    ovs_list_init(&raft->prev_servers);
-    ovs_list_init(&raft->add_servers);
+    hmap_init(&raft->servers);
+    hmap_init(&raft->prev_servers);
+    hmap_init(&raft->add_servers);
 
     struct ovsdb_error *error;
     error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
@@ -553,8 +687,8 @@ raft_open(const char *file_name, struct raft **raftp)
     }
     struct ovsdb_parser p;
     ovsdb_parser_init(&p, header, "raft header");
-    raft->cid = parse_uuid(&p, "cluster_id");
-    struct uuid sid = parse_uuid(&p, "server_id");
+    raft->cid = parse_required_uuid(&p, "cluster_id");
+    raft->sid = parse_required_uuid(&p, "server_id");
     error = ovsdb_parser_finish(&p);
     json_destroy(header);
     if (error) {
@@ -604,52 +738,63 @@ raft_open(const char *file_name, struct raft **raftp)
         error = NULL;
     }
 
+    /* If none of the log entries populated the servers, then they're the same
+     * as 'raft->prev_servers', so copy them. */
+    if (hmap_is_empty(&raft->servers)) {
+        struct raft_server *s;
+        HMAP_FOR_EACH (s, hmap_node, &raft->prev_servers) {
+            struct raft_server *s2 = raft_server_clone(s);
+            hmap_insert(&raft->servers, &s2->hmap_node, uuid_hash(&s2->sid));
+        }
+    }
+
+    /* Find our own server.
+     *
+     * XXX It seems that this could fail if the server is restarted during the
+     * process of removing it but before removal is committed, what to do about
+     * that? */
+    raft->me = raft_find_server(raft, &raft->sid);
+    if (!raft->me) {
+        error = ovsdb_error(NULL, "server does not belong to cluster");
+        goto error;
+    }
+
+    return NULL;
+
 error:
     raft_close(raft);
     *raftp = NULL;
     return error;
 }
 
-#if 0
 void
-raft_init(struct raft *raft, const struct raft_ops *ops,
-          struct ovs_list *servers,
-          uint64_t current_term, struct uuid voted_for,
-          struct raft_entry *log, uint64_t log_start, uint64_t log_end,
-          struct ovs_list *prev_servers,
-          uint64_t prev_term)
+raft_close(struct raft *raft)
 {
-    ovs_assert(!ovs_list_is_empty(servers));
-    ovs_assert(!ovs_list_is_empty(prev_servers));
-    *raft = (struct raft) {
-        .ops = ops,
+    if (!raft) {
+        return;
+    }
 
-        .servers = *servers,
-        .me = raft_server_from_list_node(ovs_list_front(servers)),
+    /* XXX if we're leader then invoke the leadership transfer procedure? */
 
-        .current_term = current_term,
-        .voted_for = voted_for,
+    ovsdb_log_close(raft->storage);
 
-        .log = log,
-        .log_start = log_start,
-        .log_end = log_end,
-        .allocated_log = log_end - log_start,
+    destroy_servers(&raft->servers);
 
-        .prev_term = prev_term,
-        .prev_servers = *prev_servers,
+    for (uint64_t index = raft->log_start; index < raft->log_end; index++) {
+        struct raft_entry *e = &raft->log[index - raft->log_start];
+        free(e->data);
+    }
+    free(raft->log);
 
-        .role = RAFT_FOLLOWER,
-        .commit_index = log_start - 1,
-        .last_applied = log_start - 1,
-        .leader = NULL,
-    };
+    destroy_servers(&raft->prev_servers);
 
-    ovs_list_moved(&raft->servers, servers);
-    ovs_list_moved(&raft->prev_servers, prev_servers);
-    ovs_list_init(&raft->add_servers);
-    //raft->ops->reconnect(raft);
+    destroy_servers(&raft->add_servers);
+    raft_server_destroy(raft->remove_server);
+
+    free(raft);
 }
 
+#if 0
 static void
 raft_send_server_reply(struct raft *raft,
                        const struct uuid *sid, const struct uuid *xid,
@@ -699,7 +844,7 @@ raft_become_follower(struct raft *raft)
      * new configuration.  Our AppendEntries processing will properly update
      * the server configuration later, if necessary. */
     struct raft_server *s;
-    LIST_FOR_EACH (s, list, &raft->add_servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
         raft_send_server_reply(raft, &s->sid, &s->reply_xid,
                                RAFT_SERVER_LOST_LEADERSHIP);
     }
@@ -743,7 +888,7 @@ static void
 raft_send_heartbeats(struct raft *raft)
 {
     struct raft_server *s;
-    LIST_FOR_EACH (s, list, &raft->servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s != raft->me) {
             /* XXX should also retransmit unacknowledged append requests */
             raft_send_append_request(raft, s, 0);
@@ -767,7 +912,7 @@ raft_become_leader(struct raft *raft)
     raft->leader = raft->me;
 
     struct raft_server *s;
-    LIST_FOR_EACH (s, list, &raft->servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         raft_server_init_leader(raft, s);
     }
 
@@ -1055,24 +1200,6 @@ raft_handle_append_request(struct raft *raft,
 }
 
 static struct raft_server *
-raft_find_server__(struct ovs_list *server_list, const struct uuid *uuid)
-{
-    struct raft_server *s;
-    LIST_FOR_EACH (s, list, server_list) {
-        if (uuid_equals(uuid, &s->sid)) {
-            return s;
-        }
-    }
-    return NULL;
-}
-
-static struct raft_server *
-raft_find_server(struct raft *raft, const struct uuid *uuid)
-{
-    return raft_find_server__(&raft->servers, uuid);
-}
-
-static struct raft_server *
 raft_find_peer(struct raft *raft, const struct uuid *uuid)
 {
     struct raft_server *s = raft_find_server(raft, uuid);
@@ -1227,7 +1354,7 @@ raft_handle_vote_reply(struct raft *raft,
 
     s->voted = true;
     if (rpy->vote_granted
-        && ++raft->n_votes > ovs_list_size(&raft->servers) / 2) {
+        && ++raft->n_votes > hmap_count(&raft->servers) / 2) {
         raft_become_leader(raft);
     }
 }
@@ -1259,7 +1386,7 @@ raft_run_reconfigure(struct raft *raft)
 
     /* If we were waiting for a configuration change to commit, it's done. */
     struct raft_server *s;
-    LIST_FOR_EACH (s, list, &raft->servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s->phase == RAFT_PHASE_COMMITTING) {
             raft_send_server_reply(raft, &s->reply_sid, &s->reply_xid,
                                    RAFT_SERVER_OK);
@@ -1275,11 +1402,11 @@ raft_run_reconfigure(struct raft *raft)
     }
 
     /* If a new server is caught up, add it to the configuration.  */
-    LIST_FOR_EACH (s, list, &raft->add_servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
         if (s->phase == RAFT_PHASE_CAUGHT_UP) {
             /* Move 's' from 'raft->add_servers' to 'raft->servers'. */
-            ovs_list_remove(&s->list);
-            ovs_list_push_back(&raft->servers, &s->list);
+            hmap_remove(&raft->add_servers, &s->hmap_node);
+            hmap_insert(&raft->servers, &s->hmap_node, uuid_hash(&s->uuid));
 
             /* Mark 's' as waiting for commit. */
             s->phase = RAFT_PHASE_COMMITTING;
@@ -1291,9 +1418,9 @@ raft_run_reconfigure(struct raft *raft)
     }
 
     /* Remove a server, if one is scheduled for removal. */
-    LIST_FOR_EACH (s, list, &raft->servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s->phase == RAFT_PHASE_REMOVE) {
-            ovs_list_remove(&s->list);
+            hmap_remove(&raft->servers, &s->hmap_node);
             raft->remove_server = s;
 
             /* XXX add log entry */
@@ -1340,7 +1467,7 @@ raft_handle_add_server_request__(struct raft *raft,
 
     /* Add server to 'add_servers'. */
     s = xzalloc(sizeof *s);
-    ovs_list_push_back(&raft->add_servers, &s->list);
+    hmap_insert(&raft->add_servers, &s->hmap_node);
     raft_server_init_leader(raft, s);
     s->sid = rq->sid;
     s->address = xstrdup(rq->address);
@@ -1396,7 +1523,7 @@ raft_handle_remove_server_request__(struct raft *raft,
     if (target) {
         raft_send_server_reply(raft, &target->reply_sid, &target->reply_xid,
                                RAFT_SERVER_CANCELED);
-        ovs_list_remove(&target->list);
+        hmap_remove(&raft->add_servers, &target->hmap_node);
         raft_server_destroy(target);
         return RAFT_SERVER_OK;
     }
@@ -1422,7 +1549,7 @@ raft_handle_remove_server_request__(struct raft *raft,
      * 'add_servers') since those could fail. */
     struct raft_server *s;
     int n = 0;
-    LIST_FOR_EACH (s, list, &raft->servers) {
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s != target && s->phase != RAFT_PHASE_REMOVE) {
             n++;
         }
@@ -1431,13 +1558,10 @@ raft_handle_remove_server_request__(struct raft *raft,
         return RAFT_SERVER_EMPTY;
     }
 
-    /* Mark the server for removal.  To allow removals to occur in the order
-     * they are requested, move the server to the end of the list. */
+    /* Mark the server for removal. */
     s->phase = RAFT_PHASE_REMOVE;
     s->reply_sid = rq->common.sid;
     s->reply_xid = rq->common.xid;
-    ovs_list_remove(&s->list);
-    ovs_list_push_back(&raft->servers, &s->list);
 
     raft_run_reconfigure(raft);
     return -1;
