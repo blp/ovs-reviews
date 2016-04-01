@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -125,7 +125,7 @@ void jsonrpc_session_enable_reconnect(struct jsonrpc_session *);
 void jsonrpc_session_force_reconnect(struct jsonrpc_session *);
 
 void jsonrpc_session_set_max_backoff(struct jsonrpc_session *,
-                                     int max_backofF);
+                                     int max_backoff);
 void jsonrpc_session_set_probe_interval(struct jsonrpc_session *,
                                         int probe_interval);
 void jsonrpc_session_set_dscp(struct jsonrpc_session *,
