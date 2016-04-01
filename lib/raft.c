@@ -136,6 +136,7 @@ struct raft {
      * XXX where's the snapshot itself? */
     uint64_t prev_term;               /* Term for index 'log_start - 1'. */
     struct hmap prev_servers;         /* Contains "struct raft_server"s. */
+    char *snapshot;
 
 /* Volatile state. */
 
@@ -427,12 +428,13 @@ raft_create(const char *file_name, const char *local_address,
     struct json *prev_servers = json_object_create();
     json_object_put(prev_servers, xasprintf(UUID_FMT, UUID_ARGS(&sid)),
                     json_string_create(local_address));
-    struct json *prev = json_object_create();
-    json_object_put(prev, "prev_term", json_integer_create(0));
-    json_object_put(prev, "prev_index", json_integer_create(0));
-    json_object_put(prev, "prev_servers", prev_servers);
-    struct json *snapshot = json_array_create_2(prev,
-                                                json_string_create(data));
+    struct json *snapshot = json_object_create();
+    json_object_put(snapshot, "prev_term", json_integer_create(0));
+    json_object_put(snapshot, "prev_index", json_integer_create(0));
+    json_object_put(snapshot, "prev_servers", prev_servers);
+    if (data) {
+        json_object_put_string(snapshot, "data", data);
+    }
     error = ovsdb_log_write_json(storage, snapshot);
     json_destroy(snapshot);
     if (error) {
@@ -706,10 +708,16 @@ raft_open(const char *file_name, struct raft **raftp)
     raft->log_start = raft->log_end = parse_integer(&p, "prev_index") + 1;
     const struct json *prev_servers_json = ovsdb_parser_member(
         &p, "prev_servers", OP_OBJECT);
+    const struct json *data = ovsdb_parser_member(
+        &p, "data", OP_STRING | OP_OPTIONAL);
     error = ovsdb_parser_finish(&p);
     if (error) {
         json_destroy(snapshot);
         goto error;
+    }
+
+    if (data) {
+        raft->snapshot = xstrdup(json_string(data));
     }
 
     error = parse_servers(prev_servers_json, &raft->prev_servers);
@@ -759,6 +767,7 @@ raft_open(const char *file_name, struct raft **raftp)
         goto error;
     }
 
+    *raftp = raft;
     return NULL;
 
 error:
@@ -787,6 +796,7 @@ raft_close(struct raft *raft)
     free(raft->log);
 
     destroy_servers(&raft->prev_servers);
+    free(raft->snapshot);
 
     destroy_servers(&raft->add_servers);
     raft_server_destroy(raft->remove_server);

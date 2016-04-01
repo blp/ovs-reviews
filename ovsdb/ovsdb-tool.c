@@ -236,6 +236,10 @@ do_create_cluster(struct ovs_cmdl_context *ctx)
     /* Create database file. */
     check_ovsdb_error(raft_create(db_file_name, address, snapshot_string));
     free(snapshot_string);
+
+    struct raft *raft;
+    check_ovsdb_error(raft_open(db_file_name, &raft));
+    raft_close(raft);
 }
 
 static void
