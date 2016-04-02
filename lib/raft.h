@@ -87,7 +87,7 @@ int raft_join(const char *file_name, const char *local_address,
 
 void raft_close(struct raft *);
 
-bool raft_run(struct raft *);
+void raft_run(struct raft *);
 void raft_wait(struct raft *);
 
 uint64_t raft_add_log_entry(struct raft *, const void *data);

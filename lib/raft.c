@@ -23,12 +23,15 @@
 
 #include "hmap.h"
 #include "json.h"
+#include "openvswitch/dynamic-string.h"
 #include "openvswitch/list.h"
 #include "openvswitch/vlog.h"
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "ovsdb/log.h"
 #include "socket-util.h"
+#include "stream.h"
+#include "timeval.h"
 #include "util.h"
 #include "uuid.h"
 
@@ -69,6 +72,7 @@ struct raft_server {
 
     struct uuid sid;            /* Randomly generater server ID. */
     char *address;              /* "(tcp|ssl):1.2.3.4:5678" */
+    struct jsonrpc_session *conn;
 
     /* Volatile state on candidates.  Reinitialized at start of election. */
     bool voted;              /* Has this server already voted? */
@@ -140,15 +144,19 @@ struct raft {
 
 /* Volatile state. */
 
-    /* On leaders. */
-    struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
-    struct raft_server *remove_server; /* Server being removed. */
-
-    /* On all servers. */
     enum raft_role role;        /* Current role. */
     uint64_t commit_index;      /* Max log index known to be committed. */
     uint64_t last_applied;      /* Max log index applied to state machine. */
     struct raft_server *leader; /* XXX Is this useful? */
+
+    /* Network connections. */
+    struct pstream *listener;
+    long long int listen_backoff;
+    struct hmap raft_conns;
+
+    /* Leaders only.  Reinitialized after becoming leader. */
+    struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
+    struct raft_server *remove_server; /* Server being removed. */
 
     /* Candidates only.  Reinitialized at start of election. */
     int n_votes;                /* Number of votes for me. */
@@ -374,6 +382,25 @@ raft_parse_address(const char *address,
         *ssp = ss;
     }
     return NULL;
+}
+
+static char *
+raft_make_address_passive(const char *address_)
+{
+    char *address = xstrdup(address_);
+    char *p = address;
+    char *host = inet_parse_token(&p);
+    char *port = inet_parse_token(&p);
+
+    struct ds paddr = DS_EMPTY_INITIALIZER;
+    ds_put_format(&paddr, "p%.3s:%s:", address, port);
+    if (strchr(host, ':')) {
+        ds_put_format(&paddr, "[%s]", host);
+    } else {
+        ds_put_cstr(&paddr, host);
+    }
+    free(address);
+    return ds_steal_cstr(&paddr);
 }
 
 /* Creates a new Raft cluster and initializes it to consist of a single server,
@@ -673,6 +700,7 @@ raft_open(const char *file_name, struct raft **raftp)
     hmap_init(&raft->servers);
     hmap_init(&raft->prev_servers);
     hmap_init(&raft->add_servers);
+    raft->listen_backoff = LLONG_MIN;
 
     struct ovsdb_error *error;
     error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
@@ -802,6 +830,44 @@ raft_close(struct raft *raft)
     raft_server_destroy(raft->remove_server);
 
     free(raft);
+}
+
+void
+raft_run(struct raft *raft)
+{
+    if (!raft->listener && time_msec() >= raft->listen_backoff) {
+        char *paddr = raft_make_address_passive(raft->me->address);
+        int error = pstream_open(paddr, &raft->listener, DSCP_DEFAULT);
+        if (error) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_WARN_RL(&rl, "%s: listen failed (%s)",
+                         paddr, ovs_strerror(error));
+            raft->listen_backoff = time_msec() + 1000;
+        }
+        free(paddr);
+    }
+
+    if (raft->listener) {
+        int error = pstream_accept(raft->listener, &stream);
+        if (!error) {
+            struct jsonrpc_session *js;
+            js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
+                                                 DSCP_DEFAULT);
+            ovs_list_push_back(&raft->new_conns, ...);
+        } else if (error != EAGAIN) {
+            VLOG_WARN_RL(&rl, "%s: accept failed: %s",
+                         pstream_get_name(raft->listener),
+                         ovs_strerror(error));
+        }
+    }
+
+    struct raft_server *s;
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
+        if (!s->session && s != raft->me
+            && uuid_compare_3way(&raft->sid, &s->sid) < 0) {
+            s->session = jsonrpc_session_open(s->address, true);
+        }
+    }
 }
 
 #if 0
