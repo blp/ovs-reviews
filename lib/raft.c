@@ -72,7 +72,7 @@ struct raft_server {
 
     struct uuid sid;            /* Randomly generater server ID. */
     char *address;              /* "(tcp|ssl):1.2.3.4:5678" */
-    struct jsonrpc_session *conn;
+    struct jsonrpc_session *conn; /* Connection to this server. */
 
     /* Volatile state on candidates.  Reinitialized at start of election. */
     bool voted;              /* Has this server already voted? */
@@ -135,12 +135,10 @@ struct raft {
      *
      * This is the state of the cluster as of the last discarded log entry,
      * that is, at log index 'log_start - 1' (called prevIndex in Figure 5.1).
-     * Only committed log entries can be included in a snapshot.
-     *
-     * XXX where's the snapshot itself? */
+     * Only committed log entries can be included in a snapshot. */
     uint64_t prev_term;               /* Term for index 'log_start - 1'. */
     struct hmap prev_servers;         /* Contains "struct raft_server"s. */
-    char *snapshot;
+    char *snapshot;                   /* Data of snapshot, or NULL if none. */
 
 /* Volatile state. */
 
