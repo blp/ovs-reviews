@@ -23,6 +23,7 @@
 
 #include "hmap.h"
 #include "json.h"
+#include "jsonrpc.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/list.h"
 #include "openvswitch/vlog.h"
@@ -150,7 +151,7 @@ struct raft {
     /* Network connections. */
     struct pstream *listener;
     long long int listen_backoff;
-    struct hmap raft_conns;
+    struct ovs_list conns;
 
     /* Leaders only.  Reinitialized after becoming leader. */
     struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
@@ -846,13 +847,15 @@ raft_run(struct raft *raft)
     }
 
     if (raft->listener) {
+        struct stream *stream;
         int error = pstream_accept(raft->listener, &stream);
         if (!error) {
             struct jsonrpc_session *js;
             js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
                                                  DSCP_DEFAULT);
-            ovs_list_push_back(&raft->new_conns, ...);
+            /* XXX add to list of connections */
         } else if (error != EAGAIN) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
                          pstream_get_name(raft->listener),
                          ovs_strerror(error));
@@ -861,11 +864,100 @@ raft_run(struct raft *raft)
 
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        if (!s->session && s != raft->me
-            && uuid_compare_3way(&raft->sid, &s->sid) < 0) {
-            s->session = jsonrpc_session_open(s->address, true);
+        if (!s->conn && s != raft->me) {
+            s->conn = jsonrpc_session_open(s->address, true);
         }
+        jsonrpc_session_run(s->conn);
     }
+}
+
+static char *
+format_u64(uint64_t x)
+{
+    return xasprintf("%"PRIu64, x);
+}
+
+static const char *
+raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
+                               struct json *args)
+{
+    json_object_put_uint(args, "term", rq->term);
+    if (!uuid_is_zero(&rq->leader_sid)) {
+        json_object_put_format(args, "leader",
+                               UUID_FMT, UUID_ARGS(&rq->leader_sid));
+    }
+    json_object_put_uint(args, "prev_log_index", rq->prev_log_index);
+    json_object_put_uint(args, "prev_log_term", rq->prev_log_term);
+    json_object_put_uint(args, "leader_commit", rq->leader_commit);
+
+    struct json **entries = xmalloc(rq->n_entries * sizeof *entries);
+    for (size_t i = 0; i < rq->n_entries; i++) {
+        const struct raft_entry *src = &rq->entries[i];
+        struct json *dst = json_object_create();
+        json_object_put_uint(dst, "term", src->term);
+        if (src->type == RAFT_DATA) {
+            json_object_put_string(dst, "data", src->data);
+        } else {
+            /* XXX what if json_from_string() reports an error? */
+            json_object_put(dst, "servers", json_from_string(src->data));
+        }
+        entries[i] = dst;
+    }
+    json_object_put(args, "log", json_array_create(entries, rq->n_entries));
+
+    return "append_request";
+}
+
+static struct jsonrpc_msg *
+raft_rpc_to_jsonrpc(const struct raft *raft,
+                    const union raft_rpc *rpc)
+{
+    struct json *args = json_object_create();
+    json_object_put_format(args, "cluster", UUID_FMT, UUID_ARGS(&raft->cid));
+    json_object_put_format(args, "from", UUID_FMT, UUID_ARGS(&raft->sid));
+    json_object_put_format(args, "to", UUID_FMT, UUID_ARGS(&rpc->common.sid));
+
+    const char *method;
+    switch (rpc->common.type) {
+    case RAFT_RPC_APPEND_REQUEST:
+        method = raft_append_request_to_jsonrpc(&rpc->append_request,
+                                                args);
+        break;
+    case RAFT_RPC_APPEND_REPLY:
+        method = raft_append_reply_to_jsonrpc(&rpc->append_reply, args);
+        break;
+    case RAFT_RPC_VOTE_REQUEST:
+        method = raft_vote_request_to_jsonrpc(&rpc->vote_request, args);
+        break;
+    case RAFT_RPC_VOTE_REPLY:
+        method = raft_vote_reply_to_jsonrpc(&rpc->vote_reply, args);
+        break;
+    case RAFT_RPC_ADD_SERVER_REQUEST:
+        method = raft_add_server_request_to_jsonrpc(&rpc->server_request,
+                                                    args);
+        break;
+    case RAFT_RPC_ADD_SERVER_REPLY:
+        method = raft_add_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        break;
+    case RAFT_RPC_REMOVE_SERVER_REQUEST:
+        method = raft_remove_server_request_to_jsonrpc(&rpc->server_request,
+                                                       args);
+        break;
+    case RAFT_RPC_REMOVE_SERVER_REPLY:
+        method = raft_remove_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        break;
+    case RAFT_RPC_SNAPSHOT_REQUEST:
+        method = raft_snapshot_request_to_jsonrpc(&rpc->snapshot_request,
+                                                  args);
+        break;
+    case RAFT_RPC_SNAPSHOT_REPLY:
+        method = raft_snapshot_reply_to_jsonrpc(&rpc->snapshot_reply, args);
+        break;
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    return jsonrpc_create_notify(method, json_array_create_1(args));
 }
 
 #if 0
