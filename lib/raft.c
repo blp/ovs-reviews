@@ -202,7 +202,7 @@ struct raft_append_request {
      *
      * A heartbeat append_request has no terms. */
     struct raft_entry *entries;
-    int n_entries;
+    unsigned int n_entries;
 };
 
 struct raft_append_reply {
@@ -215,7 +215,7 @@ struct raft_append_reply {
     /* Copied from request. */
     uint64_t prev_log_index;   /* Log entry just before new ones. */
     uint64_t prev_log_term;    /* Term of prev_log_index entry. */
-    int n_entries;
+    unsigned int n_entries;
 
     /* Result. */
     bool success;
@@ -224,7 +224,6 @@ struct raft_append_reply {
 struct raft_vote_request {
     struct raft_rpc_common common;
     uint64_t term;           /* Candidate's term. */
-    int candidate_id;        /* Candidate ID, 0 <= candidate_id < n_servers. */
     uint64_t last_log_index; /* Index of candidate's last log entry. */
     uint64_t last_log_term;  /* Term of candidate's last log entry. */
 };
@@ -232,6 +231,8 @@ struct raft_vote_request {
 struct raft_vote_reply {
     struct raft_rpc_common common;
     uint64_t term;          /* Current term, for candidate to update itself. */
+
+    /* XXX is there any value in sending a reply with vote_granted==false? */
     bool vote_granted;      /* True means candidate received vote. */
 };
 
@@ -241,54 +242,86 @@ struct raft_server_request {
     char *address;              /* For adding server only. */
 };
 
+#define RAFT_SERVER_STATUS_LIST                                         \
+    /* The operation could not be initiated because this server is not  \
+     * the current leader.  Only the leader can add or remove           \
+     * servers. */                                                      \
+    RSS(RAFT_SERVER_NOT_LEADER, "not-leader")                           \
+                                                                        \
+    /* The operation could not be initiated because there was nothing   \
+     * to do.  For adding a new server, this means that the server is   \
+     * already part of the cluster, and for removing a server, the      \
+     * server to be removed was not part of the cluster. */             \
+    RSS(RAFT_SERVER_NO_OP, "no-op")                                     \
+                                                                        \
+    /* The operation could not be initiated because an identical        \
+     * operation was already in progress. */                            \
+    RSS(RAFT_SERVER_IN_PROGRESS, "in-progress")                         \
+                                                                        \
+    /* Adding a server failed because of a timeout.  This could mean    \
+     * that the server was entirely unreachable, or that it became      \
+     * unreachable partway through populating it with an initial copy   \
+     * of the log.  In the latter case, retrying the operation should   \
+     * resume where it left off. */                                     \
+    RSS(RAFT_SERVER_TIMEOUT, "timeout")                                 \
+                                                                        \
+    /* The operation was initiated but it later failed because this     \
+     * server lost cluster leadership.  The operation may be retried    \
+     * against the new cluster leader.  For adding a server, if the log \
+     * was already partially copied to the new server, retrying the     \
+     * operation should resume where it left off. */                    \
+    RSS(RAFT_SERVER_LOST_LEADERSHIP, "lost-leadership")                 \
+                                                                        \
+    /* Adding a server was canceled by submission of an operation to    \
+     * remove the same server, or removing a server was canceled by     \
+     * submission of an operation to add the same server. */            \
+    RSS(RAFT_SERVER_CANCELED, "canceled")                               \
+                                                                        \
+    /* Adding or removing a server could not be initiated because the   \
+     * operation to remove or add the server, respectively, has been    \
+     * logged but not committed.  The new operation may be retried once \
+     * the former operation commits. */                                 \
+    RSS(RAFT_SERVER_COMMITTING, "committing")                           \
+                                                                        \
+    /* Removing a server could not be initiated because, taken together \
+     * with any other scheduled server removals, the cluster would be   \
+     * empty.  (This calculation ignores scheduled or uncommitted add   \
+     * server operations because of the possibility that they could     \
+     * fail.)  */                                                       \
+    RSS(RAFT_SERVER_EMPTY, "empty")                                     \
+                                                                        \
+    /* Success. */                                                      \
+    RSS(RAFT_SERVER_OK, "success")
+
 enum raft_server_status {
-    /* The operation could not be initiated because this server is not the
-     * current leader.  Only the leader can add or remove servers. */
-    RAFT_SERVER_NOT_LEADER,
-
-    /* The operation could not be initiated because there was nothing to do.
-     * For adding a new server, this means that the server is already part of
-     * the cluster, and for removing a server, the server to be removed was not
-     * part of the cluster. */
-    RAFT_SERVER_NO_OP,
-
-    /* The operation could not be initiated because an identical operation was
-     * already in progress. */
-    RAFT_SERVER_IN_PROGRESS,
-
-    /* Adding a server failed because of a timeout.  This could mean that the
-     * server was entirely unreachable, or that it became unreachable partway
-     * through populating it with an initial copy of the log.  In the latter
-     * case, retrying the operation should resume where it left off. */
-    RAFT_SERVER_TIMEOUT,
-
-    /* The operation was initiated but it later failed because this server lost
-     * cluster leadership.  The operation may be retried against the new
-     * cluster leader.  For adding a server, if the log was already partially
-     * copied to the new server, retrying the operation should resume where it
-     * left off. */
-    RAFT_SERVER_LOST_LEADERSHIP,
-
-    /* Adding a server was canceled by submission of an operation to remove the
-     * same server, or removing a server was canceled by submission of an
-     * operation to add the same server. */
-    RAFT_SERVER_CANCELED,
-
-    /* Adding or removing a server could not be initiated because the operation
-     * to remove or add the server, respectively, has been logged but not
-     * committed.  The new operation may be retried once the former operation
-     * commits. */
-    RAFT_SERVER_COMMITTING,
-
-    /* Removing a server could not be initiated because, taken together with
-     * any other scheduled server removals, the cluster would be empty.  (This
-     * calculation ignores scheduled or uncommitted add server operations
-     * because of the possibility that they could fail.)  */
-    RAFT_SERVER_EMPTY,
-
-    /* Success. */
-    RAFT_SERVER_OK,
+#define RSS(ENUM, NAME) ENUM,
+    RAFT_SERVER_STATUS_LIST
+#undef RSS
 };
+
+static const char *
+raft_server_status_to_string(enum raft_server_status status)
+{
+    switch (status) {
+#define RSS(ENUM, NAME) case ENUM: return NAME;
+    RAFT_SERVER_STATUS_LIST
+#undef RSS
+    }
+    return "<unknown>";
+}
+
+static bool
+raft_server_status_from_string(const char *s, enum raft_server_status *status)
+{
+#define RSS(ENUM, NAME)                         \
+    if (!strcmp(s, NAME)) {                     \
+        *status = ENUM;                         \
+        return true;                            \
+    }
+    RAFT_SERVER_STATUS_LIST
+#undef RSS
+    return false;
+}
 
 struct raft_server_reply {
     struct raft_rpc_common common;
@@ -908,6 +941,62 @@ raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
     return "append_request";
 }
 
+static const char *
+raft_append_reply_to_jsonrpc(const struct raft_append_reply *rpy,
+                             struct json *args)
+{
+    json_object_put_uint(args, "term", rpy->term);
+    json_object_put_uint(args, "log_end", rpy->log_end);
+    json_object_put_uint(args, "prev_log_index", rpy->prev_log_index);
+    json_object_put_uint(args, "prev_log_term", rpy->prev_log_term);
+    json_object_put_uint(args, "n_entries", rpy->n_entries);
+    json_object_put(args, "success", json_boolean_create(rpy->success));
+    return "append_reply";
+}
+
+static const char *
+raft_vote_request_to_jsonrpc(const struct raft_vote_request *rq,
+                             struct json *args)
+{
+    json_object_put_uint(args, "term", rq->term);
+    json_object_put_uint(args, "last_log_index", rq->last_log_index);
+    json_object_put_uint(args, "last_log_term", rq->last_log_term);
+    return "vote_request";
+}
+
+static const char *
+raft_vote_reply_to_jsonrpc(const struct raft_vote_reply *rpy,
+                           struct json *args)
+{
+    json_object_put_uint(args, "term", rpy->term);
+    json_object_put(args, "vote_granted",
+                    json_boolean_create(rpy->vote_granted));
+    return "vote_reply";
+}
+
+static void
+raft_server_request_to_jsonrpc(const struct raft_server_request *rq,
+                               struct json *args)
+{
+    json_object_put_format(args, "server_id", UUID_FMT, UUID_ARGS(&rq->sid));
+    if (rq->address) {
+        json_object_put_string(args, "address", rq->address);
+    }
+}
+
+static void
+raft_server_reply_to_jsonrpc(const struct raft_server_reply *rpy,
+                             struct json *args)
+{
+    json_object_put_string(args, "status",
+                           raft_server_status_to_string(rpy->status));
+    if (rpy->leader_address) {
+        json_object_put_string(args, "leader_address", rpy->leader_address);
+        json_object_put_format(args, "leader", UUID_FMT,
+                               UUID_ARGS(&rpy->leader_sid));
+    }
+}
+
 static struct jsonrpc_msg *
 raft_rpc_to_jsonrpc(const struct raft *raft,
                     const union raft_rpc *rpc)
@@ -933,18 +1022,20 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
         method = raft_vote_reply_to_jsonrpc(&rpc->vote_reply, args);
         break;
     case RAFT_RPC_ADD_SERVER_REQUEST:
-        method = raft_add_server_request_to_jsonrpc(&rpc->server_request,
-                                                    args);
+        raft_server_request_to_jsonrpc(&rpc->server_request, args);
+        method = "add_server_request";
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
-        method = raft_add_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        raft_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        method = "add_server_reply";
         break;
     case RAFT_RPC_REMOVE_SERVER_REQUEST:
-        method = raft_remove_server_request_to_jsonrpc(&rpc->server_request,
-                                                       args);
+        raft_server_request_to_jsonrpc(&rpc->server_request, args);
+        method = "remove_server_request";
         break;
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        method = raft_remove_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        raft_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        method = "remove_server_reply";
         break;
     case RAFT_RPC_SNAPSHOT_REQUEST:
         method = raft_snapshot_request_to_jsonrpc(&rpc->snapshot_request,
@@ -1024,7 +1115,8 @@ raft_become_follower(struct raft *raft)
 }
 
 static void
-raft_send_append_request(struct raft *raft, struct raft_server *peer, int n)
+raft_send_append_request(struct raft *raft,
+                         struct raft_server *peer, unsigned int n)
 {
     ovs_assert(raft->leader == raft->me);
 
@@ -1113,7 +1205,8 @@ raft_receive_term__(struct raft *raft, uint64_t term)
 static bool
 raft_handle_append_entries(struct raft *raft,
                            uint64_t prev_log_index, uint64_t prev_log_term,
-                           const struct raft_entry *entries, int n_entries)
+                           const struct raft_entry *entries,
+                           unsigned int n_entries)
 {
     if (prev_log_index >= raft->log_end
         || (raft->log[prev_log_index - raft->log_start].term
@@ -1128,7 +1221,7 @@ raft_handle_append_entries(struct raft *raft,
     /* Figure 3.1: "If an existing entry conflicts with a new one (same
      * index but different terms), delete the existing entry and all that
      * follow it." */
-    int i;
+    unsigned int i;
     for (i = 0; i < n_entries; i++) {
         uint64_t log_index = (prev_log_index + 1) + i;
         if (log_index >= raft->log_end) {
