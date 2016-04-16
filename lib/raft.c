@@ -585,14 +585,33 @@ parse_boolean(struct ovsdb_parser *p, const char *name)
     return json && json_boolean(json);
 }
 
+static const char *
+parse_string__(struct ovsdb_parser *p, const char *name, bool optional)
+{
+    enum ovsdb_parser_types types = OP_STRING | (optional ? OP_OPTIONAL : 0);
+    const struct json *json = ovsdb_parser_member(p, name, types);
+    return json ? json_string(json) : NULL;
+}
+
+static const char  *
+parse_required_string(struct ovsdb_parser *p, const char *name)
+{
+    return parse_string__(p, name, false);
+}
+
+static const char  *
+parse_optional_string(struct ovsdb_parser *p, const char *name)
+{
+    return parse_string__(p, name, true);
+}
+
 static bool
 parse_uuid__(struct ovsdb_parser *p, const char *name, bool optional,
              struct uuid *uuid)
 {
-    enum ovsdb_parser_types types = OP_STRING | (optional ? OP_OPTIONAL : 0);
-    const struct json *json = ovsdb_parser_member(p, name, types);
-    if (json) {
-        if (uuid_from_string(uuid, json_string(json))) {
+    const char *s = parse_string__(p, name, optional);
+    if (s) {
+        if (uuid_from_string(uuid, s)) {
             return true;
         }
         ovsdb_parser_raise_error(p, "%s is not a valid UUID", name);
@@ -1141,6 +1160,14 @@ raft_server_reply_to_jsonrpc(const struct raft_server_reply *rpy,
         json_object_put_format(args, "leader", UUID_FMT,
                                UUID_ARGS(&rpy->leader_sid));
     }
+}
+
+static void
+raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
+                               struct raft_server_reply *rpy)
+{
+    
+
 }
 
 static void
