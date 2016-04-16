@@ -193,9 +193,9 @@ raft_rpc_type_to_string(enum raft_rpc_type status)
 {
     switch (status) {
 #define RAFT_RPC(ENUM, NAME) case ENUM: return NAME;
-    RAFT_RPC_TYPES
+        RAFT_RPC_TYPES
 #undef RAFT_RPC
-    }
+            }
     return "<unknown>";
 }
 
@@ -209,7 +209,7 @@ raft_rpc_type_from_string(const char *s, enum raft_rpc_type *status)
     }
     RAFT_RPC_TYPES
 #undef RAFT_RPC
-    return false;
+        return false;
 }
 
 struct raft_rpc_common {
@@ -334,9 +334,9 @@ raft_server_status_to_string(enum raft_server_status status)
 {
     switch (status) {
 #define RSS(ENUM, NAME) case ENUM: return NAME;
-    RAFT_SERVER_STATUS_LIST
+        RAFT_SERVER_STATUS_LIST
 #undef RSS
-    }
+            }
     return "<unknown>";
 }
 
@@ -350,7 +350,7 @@ raft_server_status_from_string(const char *s, enum raft_server_status *status)
     }
     RAFT_SERVER_STATUS_LIST
 #undef RSS
-    return false;
+        return false;
 }
 
 struct raft_server_reply {
@@ -579,6 +579,13 @@ parse_uint(struct ovsdb_parser *p, const char *name)
 }
 
 static bool
+parse_boolean(struct ovsdb_parser *p, const char *name)
+{
+    const struct json *json = ovsdb_parser_member(p, name, OP_BOOLEAN);
+    return json && json_boolean(json);
+}
+
+static bool
 parse_uuid__(struct ovsdb_parser *p, const char *name, bool optional,
              struct uuid *uuid)
 {
@@ -619,7 +626,7 @@ raft_server_destroy(struct raft_server *s)
 }
 
 static void
-destroy_servers(struct hmap *servers)
+raft_servers_destroy(struct hmap *servers)
 {
     struct raft_server *s, *next;
     HMAP_FOR_EACH_SAFE (s, next, hmap_node, servers) {
@@ -651,7 +658,7 @@ parse_servers(const struct json *json, struct hmap *servers)
         /* Parse server UUID. */
         struct uuid sid;
         if (!uuid_from_string(&sid, node->name)) {
-            destroy_servers(&new_servers);
+            raft_servers_destroy(&new_servers);
             return ovsdb_syntax_error(json, NULL, "%s is a not a UUID",
                                       node->name);
         }
@@ -659,14 +666,14 @@ parse_servers(const struct json *json, struct hmap *servers)
         /* Parse server address. */
         const struct json *address_json = node->data;
         if (address_json->type != JSON_STRING) {
-            destroy_servers(&new_servers);
+            raft_servers_destroy(&new_servers);
             return ovsdb_syntax_error(json, NULL, "%s value is not string",
                                       node->name);
         }
         const char *address = json_string(address_json);
         struct ovsdb_error *error = raft_parse_address(address, NULL, NULL);
         if (error) {
-            destroy_servers(&new_servers);
+            raft_servers_destroy(&new_servers);
             return error;
         }
 
@@ -681,7 +688,7 @@ parse_servers(const struct json *json, struct hmap *servers)
 
     /* Swap old and new servers, then destroy old ones. */
     hmap_swap(servers, &new_servers);
-    destroy_servers(&new_servers);
+    raft_servers_destroy(&new_servers);
 
     return NULL;
 }
@@ -888,7 +895,7 @@ raft_close(struct raft *raft)
 
     ovsdb_log_close(raft->storage);
 
-    destroy_servers(&raft->servers);
+    raft_servers_destroy(&raft->servers);
 
     for (uint64_t index = raft->log_start; index < raft->log_end; index++) {
         struct raft_entry *e = &raft->log[index - raft->log_start];
@@ -896,10 +903,10 @@ raft_close(struct raft *raft)
     }
     free(raft->log);
 
-    destroy_servers(&raft->prev_servers);
+    raft_servers_destroy(&raft->prev_servers);
     free(raft->snapshot);
 
-    destroy_servers(&raft->add_servers);
+    raft_servers_destroy(&raft->add_servers);
     raft_server_destroy(raft->remove_server);
 
     free(raft);
@@ -945,7 +952,9 @@ raft_run(struct raft *raft)
     }
 }
 
-/* raft_rpc_to_jsonrpc(). */
+/* raft_rpc_to/from_jsonrpc(). */
+
+static struct vlog_rate_limit rpc_rl = VLOG_RATE_LIMIT_INIT(5, 5);
 
 static void
 raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
@@ -976,6 +985,69 @@ raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
     json_object_put(args, "log", json_array_create(entries, rq->n_entries));
 }
 
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_entry_parse(struct json *json, struct raft_entry *e)
+{
+    memset(e, 0, sizeof *e);
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "raft log entry");
+    e->term = parse_uint(&p, "term");
+    const struct json *servers_json = ovsdb_parser_member(
+        &p, "servers", OP_STRING | OP_OPTIONAL);
+    if (servers_json) {
+        struct hmap servers = HMAP_INITIALIZER(&servers);
+        struct ovsdb_error *error = parse_servers(servers_json, &servers);
+        if (error) {
+            return error;
+        }
+        raft_servers_destroy(&servers);
+
+        e->type = RAFT_SERVERS;
+        e->data = json_to_string(servers_json, 0);
+    } else {
+        const struct json *data = ovsdb_parser_member(&p, "data", OP_STRING);
+        if (data) {
+            e->type = RAFT_DATA;
+            e->data = xstrdup(json_string(data));
+        }
+    }
+
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        free(e->data);
+    }
+    return error;
+}
+
+static void
+raft_append_request_from_jsonrpc(struct ovsdb_parser *p,
+                                 struct raft_append_request *rq)
+{
+    rq->term = parse_uint(p, "term");
+    parse_optional_uuid(p, "leader", &rq->leader_sid);
+    rq->prev_log_index = parse_uint(p, "prev_log_index");
+    rq->prev_log_term = parse_uint(p, "prev_log_term");
+    rq->leader_commit = parse_uint(p, "leader_commit");
+
+    const struct json *log = ovsdb_parser_member(p, "log", OP_ARRAY);
+    if (!log) {
+        return;
+    }
+    const struct json_array *entries = json_array(log);
+    rq->entries = xmalloc(entries->n * sizeof *rq->entries);
+    rq->n_entries = 0;
+    for (size_t i = 0; i < entries->n; i++) {
+        struct ovsdb_error *error = raft_entry_parse(entries->elems[i],
+                                                     &rq->entries[i]);
+        if (error) {
+            ovsdb_parser_put_error(p, error);
+            break;
+        }
+        rq->n_entries++;
+    }
+}
+
 static void
 raft_append_reply_to_jsonrpc(const struct raft_append_reply *rpy,
                              struct json *args)
@@ -989,12 +1061,33 @@ raft_append_reply_to_jsonrpc(const struct raft_append_reply *rpy,
 }
 
 static void
+raft_append_reply_from_jsonrpc(struct ovsdb_parser *p,
+                               struct raft_append_reply *rpy)
+{
+    rpy->term = parse_uint(p, "term");
+    rpy->log_end = parse_uint(p, "log_end");
+    rpy->prev_log_index = parse_uint(p, "prev_log_index");
+    rpy->prev_log_term = parse_uint(p, "prev_log_term");
+    rpy->n_entries = parse_uint(p, "n_entries");
+    rpy->success = parse_boolean(p, "success");
+}
+
+static void
 raft_vote_request_to_jsonrpc(const struct raft_vote_request *rq,
                              struct json *args)
 {
     json_object_put_uint(args, "term", rq->term);
     json_object_put_uint(args, "last_log_index", rq->last_log_index);
     json_object_put_uint(args, "last_log_term", rq->last_log_term);
+}
+
+static void
+raft_vote_request_from_jsonrpc(struct ovsdb_parser *p,
+                               struct raft_vote_request *rq)
+{
+    rq->term = parse_uint(p, "term");
+    rq->last_log_index = parse_uint(p, "last_log_index");
+    rq->last_log_term = parse_uint(p, "last_log_term");
 }
 
 static void
@@ -1007,12 +1100,33 @@ raft_vote_reply_to_jsonrpc(const struct raft_vote_reply *rpy,
 }
 
 static void
+raft_vote_reply_from_jsonrpc(struct ovsdb_parser *p,
+                             struct raft_vote_reply *rpy)
+{
+    rpy->term = parse_uint(p, "term");
+    rpy->vote_granted = parse_boolean(p, "vote_granted");
+}
+
+static void
 raft_server_request_to_jsonrpc(const struct raft_server_request *rq,
                                struct json *args)
 {
     json_object_put_format(args, "server_id", UUID_FMT, UUID_ARGS(&rq->sid));
     if (rq->address) {
         json_object_put_string(args, "address", rq->address);
+    }
+}
+
+static void
+raft_server_request_from_jsonrpc(struct ovsdb_parser *p,
+                                 struct raft_server_request *rq)
+{
+    rq->sid = parse_required_uuid(p, "server_id");
+    if (rq->common.type == RAFT_RPC_ADD_SERVER_REQUEST) {
+        const struct json *json = ovsdb_parser_member(p, "address", OP_STRING);
+        if (json) {
+            rq->address = xstrdup(json_string(json));
+        }
     }
 }
 
@@ -1073,7 +1187,7 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
     switch (rpc->common.type) {
     case RAFT_RPC_APPEND_REQUEST:
         raft_append_request_to_jsonrpc(&rpc->append_request,
-                                                args);
+                                       args);
         break;
     case RAFT_RPC_APPEND_REPLY:
         raft_append_reply_to_jsonrpc(&rpc->append_reply, args);
@@ -1111,73 +1225,40 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
     return jsonrpc_create_notify(raft_rpc_type_to_string(rpc->common.type),
                                  json_array_create_1(args));
 }
-
-/* raft_rpc_from_jsonrpc(). */
 
-static struct vlog_rate_limit rpc_rl = VLOG_RATE_LIMIT_INIT(5, 5);
-
-static void
-raft_append_request_from_jsonrpc(struct ovsdb_parser *p,
-                                 struct raft_append_request *rq)
-{
-    rq->term = parse_uint(p, "term");
-    parse_optional_uuid(p, "leader", &rq->leader_sid);
-    rq->prev_log_index = parse_uint(p, "prev_log_index");
-    rq->prev_log_term = parse_uint(p, "prev_log_term");
-    rq->leader_commit = parse_uint(p, "leader_commit");
-
-    struct json *log = ovsdb_parser_member(p, "log", OP_ARRAY);
-    if (!log) {
-        return;
-    }
-    struct json_array *entries = json_array(log);
-    rq->entries = xmalloc(entries->n * sizeof *rq->entries);
-    rq->n_entries = 0;
-    for (size_t i = 0; i < entries->n; i++) {
-        char *error = raft_entry_parse(entries[i], &rq->entries[i]);
-        if (error) {
-            ovsdb_parser_raise_error(p, "%s", error);
-            free(error);
-            break;
-        }
-        rq->n_entries++;
-    }
-}
-
-static bool
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_rpc_from_jsonrpc(const struct raft *raft,
                       const struct jsonrpc_msg *msg, union raft_rpc *rpc)
 {
     memset(rpc, 0, sizeof *rpc);
     if (msg->type != JSONRPC_NOTIFY) {
-        VLOG_WARN_RL(&rpc_rl, "expecting notify RPC but received %s",
-                     jsonrpc_msg_type_to_string(msg->type));
-        return false;
+        return ovsdb_error(NULL, "expecting notify RPC but received %s",
+                           jsonrpc_msg_type_to_string(msg->type));
     }
 
-    if (!raft_rpc_type_from_string(msg->method, &rpc->type)) {
-        VLOG_WARN_RL(&rpc_rl, "unknown method %s", msg->method);
-        return false;
+    if (!raft_rpc_type_from_string(msg->method, &rpc->common.type)) {
+        return ovsdb_error(NULL, "unknown method %s", msg->method);
     }
 
     if (json_array(msg->params)->n != 1) {
-        VLOG_WARN_RL(&rpc_rl, "%s RPC has %"PRIuSIZE" parameters (expected 1)",
-                     json_array(msg->params)->n);
-        return false;
+        return ovsdb_error(NULL,
+                           "%s RPC has %"PRIuSIZE" parameters (expected 1)",
+                           msg->method, json_array(msg->params)->n);
     }
 
     struct ovsdb_parser p;
-    ovsdb_parser_init(&p, json_array(msg->params)->elems[0]);
+    ovsdb_parser_init(&p, json_array(msg->params)->elems[0],
+                      "raft %s RPC", msg->method);
 
     struct uuid cid = parse_required_uuid(&p, "cluster");
-    if (cid != raft->cid) {
+    if (!uuid_equals(&cid, &raft->cid)) {
         ovsdb_parser_raise_error(&p, "wrong cluster "UUID_FMT" "
                                  "(expected "UUID_FMT")",
                                  UUID_ARGS(&cid), UUID_ARGS(&raft->cid));
     }
 
     struct uuid to_sid = parse_required_uuid(&p, "to");
-    if (sid != raft->sid) {
+    if (!uuid_equals(&to_sid, &raft->sid)) {
         ovsdb_parser_raise_error(&p, "misrouted message (addressed to "
                                  UUID_FMT" but we're "UUID_FMT")",
                                  UUID_ARGS(&to_sid), UUID_ARGS(&raft->sid));
@@ -1185,7 +1266,7 @@ raft_rpc_from_jsonrpc(const struct raft *raft,
 
     rpc->common.sid = parse_required_uuid(&p, "from");
 
-    switch (rpc->type) {
+    switch (rpc->common.type) {
     case RAFT_RPC_APPEND_REQUEST:
         raft_append_request_from_jsonrpc(&p, &rpc->append_request);
         break;
