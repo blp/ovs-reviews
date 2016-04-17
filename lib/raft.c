@@ -350,7 +350,7 @@ raft_server_status_from_string(const char *s, enum raft_server_status *status)
     }
     RAFT_SERVER_STATUS_LIST
 #undef RSS
-        return false;
+    return false;
 }
 
 struct raft_server_reply {
@@ -1166,8 +1166,16 @@ static void
 raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
                                struct raft_server_reply *rpy)
 {
-    
+    const char *status = parse_required_string(p, "status");
+    if (status && !raft_server_status_from_string(status, &rpy->status)) {
+        ovsdb_parser_raise_error(p, "unknown server status \"%s\"",
+                                 status);
+    }
 
+    rpy->leader_address = parse_optional_string(p, "leader_address");
+    if (rpy->leader_address) {
+        rpy->leader_sid = parse_required_uuid(p, "leader");
+    }
 }
 
 static void
