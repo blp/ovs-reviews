@@ -356,7 +356,7 @@ raft_server_status_from_string(const char *s, enum raft_server_status *status)
 struct raft_server_reply {
     struct raft_rpc_common common;
     enum raft_server_status status;
-    const char *leader_address;
+    char *leader_address;
     struct uuid leader_sid;
 };
 
@@ -369,12 +369,7 @@ struct raft_install_snapshot_request {
     uint64_t last_index;        /* Replaces everything up to this index. */
     uint64_t last_term;         /* Term of last_index. */
 
-    /* Server configuration. */
-    struct {
-        struct uuid sid;
-        char *address;
-    } *servers;
-    size_t n_servers;
+    struct hmap servers;        /* Contains "struct raft_server"s. */
 
     /* Data.
      *
@@ -384,7 +379,7 @@ struct raft_install_snapshot_request {
      *
      * The data need not be null-terminated. */
     uint64_t offset;
-    const char *data;
+    char *data;
     size_t len;
 
     /* Is this the last chunk? */
@@ -971,9 +966,42 @@ raft_run(struct raft *raft)
     }
 }
 
-/* raft_rpc_to/from_jsonrpc(). */
+static void
+raft_rpc_destroy(union raft_rpc *rpc)
+{
+    if (!rpc) {
+        return;
+    }
 
-static struct vlog_rate_limit rpc_rl = VLOG_RATE_LIMIT_INIT(5, 5);
+    switch (rpc->common.type) {
+    case RAFT_RPC_APPEND_REQUEST:
+        for (size_t i = 0; i < rpc->append_request.n_entries; i++) {
+            free(rpc->append_request.entries[i].data);
+        }
+        free(rpc->append_request.entries);
+        break;
+    case RAFT_RPC_APPEND_REPLY:
+    case RAFT_RPC_VOTE_REQUEST:
+    case RAFT_RPC_VOTE_REPLY:
+        break;
+    case RAFT_RPC_ADD_SERVER_REQUEST:
+    case RAFT_RPC_REMOVE_SERVER_REQUEST:
+        free(rpc->server_request.address);
+        break;
+    case RAFT_RPC_ADD_SERVER_REPLY:
+    case RAFT_RPC_REMOVE_SERVER_REPLY:
+        free(rpc->server_reply.leader_address);
+        break;
+    case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
+        raft_servers_destroy(&rpc->install_snapshot_request.servers);
+        free(rpc->install_snapshot_request.data);
+        break;
+    case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
+        break;
+    }
+}
+
+/* raft_rpc_to/from_jsonrpc(). */
 
 static void
 raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
@@ -1172,7 +1200,8 @@ raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
                                  status);
     }
 
-    rpy->leader_address = parse_optional_string(p, "leader_address");
+    const char *leader_address = parse_optional_string(p, "leader_address");
+    rpy->leader_address = leader_address ? xstrdup(leader_address) : NULL;
     if (rpy->leader_address) {
         rpy->leader_sid = parse_required_uuid(p, "leader");
     }
@@ -1189,10 +1218,11 @@ raft_install_snapshot_request_to_jsonrpc(
     json_object_put_uint(args, "last_term", rq->last_term);
 
     struct json *servers = json_object_create();
-    for (size_t i = 0; i < rq->n_servers; i++) {
+    struct raft_server *s;
+    HMAP_FOR_EACH (s, hmap_node, &rq->servers) {
         char sid_s[UUID_LEN + 1];
-        sprintf(sid_s, UUID_FMT, UUID_ARGS(&rq->servers[i].sid));
-        json_object_put_string(servers, sid_s, rq->servers[i].address);
+        sprintf(sid_s, UUID_FMT, UUID_ARGS(&s->sid));
+        json_object_put_string(servers, sid_s, s->address);
     }
     json_object_put(args, "servers", servers);
 
@@ -1204,10 +1234,44 @@ raft_install_snapshot_request_to_jsonrpc(
 }
 
 static void
+raft_install_snapshot_request_from_jsonrpc(
+    struct ovsdb_parser *p, struct raft_install_snapshot_request *rq)
+{
+    hmap_init(&rq->servers);
+    rq->term = parse_uint(p, "term");
+    rq->leader_sid = parse_required_uuid(p, "leader");
+    rq->last_index = parse_uint(p, "last_index");
+    rq->last_term = parse_uint(p, "last_term");
+
+    const struct json *servers = ovsdb_parser_member(p, "servers", OP_OBJECT);
+    if (servers) {
+        struct ovsdb_error *error = parse_servers(servers, &rq->servers);
+        if (error) {
+            ovsdb_parser_put_error(p, error);
+            return;
+        }
+    }
+
+    rq->offset = parse_uint(p, "offset");
+    rq->data = xstrdup(parse_required_string(p, "data"));
+    rq->len = strlen(rq->data);
+
+    rq->done = parse_boolean(p, "done");
+}
+
+static void
 raft_install_snapshot_reply_to_jsonrpc(
     const struct raft_install_snapshot_reply *rpy, struct json *args)
 {
     json_object_put_uint(args, "term", rpy->term);
+}
+
+static void
+raft_install_snapshot_reply_from_jsonrpc(
+    struct ovsdb_parser *p,
+    struct raft_install_snapshot_reply *rpy)
+{
+    rpy->term = parse_uint(p, "term");
 }
 
 static struct jsonrpc_msg *
@@ -1327,18 +1391,22 @@ raft_rpc_from_jsonrpc(const struct raft *raft,
         raft_server_reply_from_jsonrpc(&p, &rpc->server_reply);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_install_snapshot_request_from_jsonrpc(&p,
-            &rpc->install_snapshot_request);
+        raft_install_snapshot_request_from_jsonrpc(
+            &p, &rpc->install_snapshot_request);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
-        raft_install_snapshot_reply_from_jsonrpc(&p,
-            &rpc->install_snapshot_reply);
+        raft_install_snapshot_reply_from_jsonrpc(
+            &p, &rpc->install_snapshot_reply);
         break;
     default:
         OVS_NOT_REACHED();
     }
 
-
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        raft_rpc_destroy(rpc);
+    }
+    return error;
 }
 
 #if 0
