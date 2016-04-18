@@ -82,7 +82,6 @@ struct raft_server {
     uint64_t next_index;     /* Index of next log entry to send this server. */
     uint64_t match_index;    /* Index of max log entry server known to have. */
     enum raft_server_phase phase;
-    struct uuid reply_xid;      /* For use in AddServer/RemoveServer reply. */
     struct uuid reply_sid;      /* For use in AddServer/RemoveServer reply. */
 };
 
@@ -215,8 +214,6 @@ raft_rpc_type_from_string(const char *s, enum raft_rpc_type *status)
 struct raft_rpc_common {
     enum raft_rpc_type type;    /* One of RAFT_RPC_*. */
     struct uuid sid;            /* SID of peer server. */
-    struct uuid xid;            /* To match up requests and replies
-                                 * XXX---is this needed?. */
 };
 
 struct raft_append_request {
@@ -405,6 +402,8 @@ union raft_rpc {
     struct raft_install_snapshot_reply install_snapshot_reply;
 };
 
+static void raft_receive(struct raft *, const union raft_rpc *);
+static void raft_send(struct raft *, const union raft_rpc *);
 static void raft_rpc_destroy(union raft_rpc *);
 static struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct raft *,
                                                const union raft_rpc *);
@@ -945,16 +944,15 @@ raft_run_session(struct raft *raft, struct jsonrpc_session *s)
 
         union raft_rpc rpc;
         struct ovsdb_error *error = raft_rpc_from_jsonrpc(raft, msg, &rpc);
-        if (!error) {
-            error = raft_receive(raft, msg);
-            raft_rpc_destroy(&rpc);
-        }
         if (error) {
             char *error_s = ovsdb_error_to_string(error);
             ovsdb_error_destroy(error);
             VLOG_INFO("%s: %s", jsonrpc_session_get_name(s), error_s);
             free(error_s);
+            break;
         }
+        raft_receive(raft, &rpc);
+        raft_rpc_destroy(&rpc);
     }
 }
 
@@ -1441,18 +1439,15 @@ raft_rpc_from_jsonrpc(const struct raft *raft,
     return error;
 }
 
-#if 0
 static void
 raft_send_server_reply(struct raft *raft,
-                       const struct uuid *sid, const struct uuid *xid,
-                       enum raft_server_status status)
+                       const struct uuid *sid, enum raft_server_status status)
 {
     union raft_rpc rpy = {
         .server_reply = {
             .common = {
                 .type = RAFT_RPC_ADD_SERVER_REPLY,
                 .sid = *sid,
-                .xid = *xid,
             },
             .status = status,
 
@@ -1461,16 +1456,7 @@ raft_send_server_reply(struct raft *raft,
             .leader_sid = raft->leader ? raft->leader->sid : UUID_ZERO,
         }
     };
-    raft->ops->send(raft, &rpy);
-}
-
-static void
-raft_server_destroy(struct raft_server *s)
-{
-    if (s) {
-        free(s->address);
-        free(s);
-    }
+    raft_send(raft, &rpy);
 }
 
 static void
@@ -1492,12 +1478,10 @@ raft_become_follower(struct raft *raft)
      * the server configuration later, if necessary. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
-        raft_send_server_reply(raft, &s->sid, &s->reply_xid,
-                               RAFT_SERVER_LOST_LEADERSHIP);
+        raft_send_server_reply(raft, &s->sid, RAFT_SERVER_LOST_LEADERSHIP);
     }
     if (raft->remove_server) {
         raft_send_server_reply(raft, &raft->remove_server->reply_sid,
-                               &raft->remove_server->reply_xid,
                                RAFT_SERVER_LOST_LEADERSHIP);
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
@@ -1528,8 +1512,7 @@ raft_send_append_request(struct raft *raft,
             .n_entries = n,
         },
     };
-    uuid_generate(&rq.append_request.common.xid);
-    raft->ops->send(raft, &rq);
+    raft_send(raft, &rq);
 }
 
 static void
@@ -1584,7 +1567,7 @@ raft_receive_term__(struct raft *raft, uint64_t term)
      */
     if (term > raft->current_term) {
         raft->current_term = term;
-        uuid_zero(&raft->voted_for);
+        raft->voted_for = UUID_ZERO;
         raft_become_follower(raft);
     } else if (term < raft->current_term) {
         return false;
@@ -1632,7 +1615,7 @@ raft_handle_append_entries(struct raft *raft,
     /* Figure 3.1: "Append any entries not already in the log." */
     for (; i < n_entries; i++) {
         const struct raft_entry *entry = &entries[i];
-        raft_add_entry__(raft, entry->term, xstrdup(entry->data));
+        raft_add_entry(raft, entry->term, entry->type, xstrdup(entry->data));
     }
 
     return true;
@@ -1821,7 +1804,7 @@ raft_handle_append_request(struct raft *raft,
 
             struct raft_entry *e = &raft->log[raft->last_applied
                                               - raft->log_start];
-            if (e->type == RAFT_CONFIGURATION) {
+            if (e->type == RAFT_SERVERS) {
                 raft_run_reconfigure(raft);
             } else {
                 /* XXX apply log[lastApplied]. */
@@ -1835,7 +1818,6 @@ raft_handle_append_request(struct raft *raft,
             .common = {
                 .type = RAFT_RPC_APPEND_REPLY,
                 .sid = rq->common.sid,
-                .xid = rq->common.xid,
             },
             .term = raft->current_term,
             .log_end = raft->log_end,
@@ -1845,7 +1827,7 @@ raft_handle_append_request(struct raft *raft,
             .success = success,
         }
     };
-    raft->ops->send(raft, &reply);
+    raft_send(raft, &reply);
 }
 
 static struct raft_server *
@@ -1975,13 +1957,12 @@ raft_handle_vote_request(struct raft *raft,
             .common = {
                 .type = RAFT_RPC_VOTE_REPLY,
                 .sid = rq->common.sid,
-                .xid = rq->common.xid
             },
             .term = raft->current_term,
             .vote_granted = vote_granted
         },
     };
-    raft->ops->send(raft, &rpy);
+    raft_send(raft, &rpy);
 }
 
 static void
@@ -2016,7 +1997,7 @@ raft_has_uncommitted_configuration(const struct raft *raft)
     for (uint64_t i = raft->commit_index + 1; i < raft->log_end; i++) {
         ovs_assert(i >= raft->log_start);
         const struct raft_entry *e = &raft->log[i - raft->log_start];
-        if (e->type == RAFT_CONFIGURATION) {
+        if (e->type == RAFT_SERVERS) {
             return false;
         }
     }
@@ -2037,14 +2018,12 @@ raft_run_reconfigure(struct raft *raft)
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s->phase == RAFT_PHASE_COMMITTING) {
-            raft_send_server_reply(raft, &s->reply_sid, &s->reply_xid,
-                                   RAFT_SERVER_OK);
+            raft_send_server_reply(raft, &s->reply_sid, RAFT_SERVER_OK);
             s->phase = RAFT_PHASE_STABLE;
         }
     }
     if (raft->remove_server) {
         raft_send_server_reply(raft, &raft->remove_server->reply_sid,
-                               &raft->remove_server->reply_xid,
                                RAFT_SERVER_OK);
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
@@ -2055,7 +2034,7 @@ raft_run_reconfigure(struct raft *raft)
         if (s->phase == RAFT_PHASE_CAUGHT_UP) {
             /* Move 's' from 'raft->add_servers' to 'raft->servers'. */
             hmap_remove(&raft->add_servers, &s->hmap_node);
-            hmap_insert(&raft->servers, &s->hmap_node, uuid_hash(&s->uuid));
+            hmap_insert(&raft->servers, &s->hmap_node, uuid_hash(&s->sid));
 
             /* Mark 's' as waiting for commit. */
             s->phase = RAFT_PHASE_COMMITTING;
@@ -2094,8 +2073,7 @@ raft_handle_add_server_request__(struct raft *raft,
         /* If the server is scheduled to be removed, cancel it. */
         if (s->phase != RAFT_PHASE_REMOVE) {
             s->phase = RAFT_PHASE_STABLE;
-            raft_send_server_reply(raft, &s->reply_sid, &s->reply_xid,
-                                   RAFT_SERVER_CANCELED);
+            raft_send_server_reply(raft, &s->reply_sid, RAFT_SERVER_CANCELED);
             return RAFT_SERVER_OK;
         }
 
@@ -2116,12 +2094,11 @@ raft_handle_add_server_request__(struct raft *raft,
 
     /* Add server to 'add_servers'. */
     s = xzalloc(sizeof *s);
-    hmap_insert(&raft->add_servers, &s->hmap_node);
+    hmap_insert(&raft->add_servers, &s->hmap_node, uuid_hash(&s->sid));
     raft_server_init_leader(raft, s);
     s->sid = rq->sid;
     s->address = xstrdup(rq->address);
     s->reply_sid = rq->common.sid;
-    s->reply_xid = rq->common.xid;
     s->phase = RAFT_PHASE_CATCHUP;
 
     /* XXX call raft->ops->reconnect().  Or maybe not; if the new server has to
@@ -2145,7 +2122,7 @@ raft_handle_add_server_request(struct raft *raft,
 {
     int status = raft_handle_add_server_request__(raft, rq);
     if (status >= 0) {
-        raft_send_server_reply(raft, &rq->common.sid, &rq->common.xid, status);
+        raft_send_server_reply(raft, &rq->common.sid, status);
     } else {
         /* Operation in progress, reply will be sent later. */
     }
@@ -2170,8 +2147,7 @@ raft_handle_remove_server_request__(struct raft *raft,
     /* If the server to remove is currently waiting to be added, cancel it. */
     struct raft_server *target = raft_find_new_server(raft, &rq->sid);
     if (target) {
-        raft_send_server_reply(raft, &target->reply_sid, &target->reply_xid,
-                               RAFT_SERVER_CANCELED);
+        raft_send_server_reply(raft, &target->reply_sid, RAFT_SERVER_CANCELED);
         hmap_remove(&raft->add_servers, &target->hmap_node);
         raft_server_destroy(target);
         return RAFT_SERVER_OK;
@@ -2210,7 +2186,6 @@ raft_handle_remove_server_request__(struct raft *raft,
     /* Mark the server for removal. */
     s->phase = RAFT_PHASE_REMOVE;
     s->reply_sid = rq->common.sid;
-    s->reply_xid = rq->common.xid;
 
     raft_run_reconfigure(raft);
     return -1;
@@ -2222,8 +2197,7 @@ raft_handle_remove_server_request(struct raft *raft,
 {
     int status = raft_handle_remove_server_request__(raft, rq);
     if (status >= 0) {
-        raft_send_server_reply(raft, &rq->common.sid, &rq->common.xid,
-                               status);
+        raft_send_server_reply(raft, &rq->common.sid, status);
     } else {
         /* Operation in progress, reply will be sent later. */
     }
@@ -2256,14 +2230,13 @@ raft_handle_install_snapshot_request(
     union raft_rpc rpy = {
         .install_snapshot_reply = {
             .common = {
-                .type = RAFT_RPC_SNAPSHOT_REPLY,
+                .type = RAFT_RPC_INSTALL_SNAPSHOT_REPLY,
                 .sid = rq->common.sid,
-                .xid = rq->common.xid,
             },
             .term = raft->current_term,
         },
     };
-    raft->ops->send(raft, &rpy);
+    raft_send(raft, &rpy);
 }
 
 static void
@@ -2276,7 +2249,7 @@ raft_handle_install_snapshot_reply(
     /* XXX */
 }
 
-void
+static void
 raft_receive(struct raft *raft, const union raft_rpc *rpc)
 {
     switch (rpc->common.type) {
@@ -2315,4 +2288,3 @@ raft_receive(struct raft *raft, const union raft_rpc *rpc)
         OVS_NOT_REACHED();
     }
 }
-#endif
