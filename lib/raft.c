@@ -405,6 +405,13 @@ union raft_rpc {
     struct raft_install_snapshot_reply install_snapshot_reply;
 };
 
+static void raft_rpc_destroy(union raft_rpc *);
+static struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct raft *,
+                                               const union raft_rpc *);
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_rpc_from_jsonrpc(const struct raft *, const struct jsonrpc_msg *,
+                      union raft_rpc *);
+
 static struct raft_server *
 raft_find_server__(struct hmap *servers, const struct uuid *uuid)
 {
@@ -926,6 +933,31 @@ raft_close(struct raft *raft)
     free(raft);
 }
 
+static void
+raft_run_session(struct raft *raft, struct jsonrpc_session *s)
+{
+    jsonrpc_session_run(s);
+    for (size_t i = 0; i < 50; i++) {
+        struct jsonrpc_msg *msg = jsonrpc_session_recv(s);
+        if (!msg) {
+            break;
+        }
+
+        union raft_rpc rpc;
+        struct ovsdb_error *error = raft_rpc_from_jsonrpc(raft, msg, &rpc);
+        if (!error) {
+            error = raft_receive(raft, msg);
+            raft_rpc_destroy(&rpc);
+        }
+        if (error) {
+            char *error_s = ovsdb_error_to_string(error);
+            ovsdb_error_destroy(error);
+            VLOG_INFO("%s: %s", jsonrpc_session_get_name(s), error_s);
+            free(error_s);
+        }
+    }
+}
+
 void
 raft_run(struct raft *raft)
 {
@@ -962,7 +994,7 @@ raft_run(struct raft *raft)
         if (!s->conn && s != raft->me) {
             s->conn = jsonrpc_session_open(s->address, true);
         }
-        jsonrpc_session_run(s->conn);
+        raft_run_session(raft, s->conn);
     }
 }
 
