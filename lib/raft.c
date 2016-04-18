@@ -150,7 +150,8 @@ struct raft {
     /* Network connections. */
     struct pstream *listener;
     long long int listen_backoff;
-    struct ovs_list conns;
+    struct jsonrpc_session **conns;
+    size_t n_conns, allocated_conns;
 
     /* Leaders only.  Reinitialized after becoming leader. */
     struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
@@ -926,6 +927,11 @@ raft_close(struct raft *raft)
     raft_servers_destroy(&raft->prev_servers);
     free(raft->snapshot);
 
+    for (size_t i = 0; i < raft->n_conns; i++) {
+        jsonrpc_session_close(raft->conns[i]);
+    }
+    free(raft->conns);
+
     raft_servers_destroy(&raft->add_servers);
     raft_server_destroy(raft->remove_server);
 
@@ -975,10 +981,14 @@ raft_run(struct raft *raft)
         struct stream *stream;
         int error = pstream_accept(raft->listener, &stream);
         if (!error) {
-            struct jsonrpc_session *js;
-            js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
+            struct jsonrpc_session *js
+                = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
                                                  DSCP_DEFAULT);
-            /* XXX add to list of connections */
+            if (raft->n_conns >= raft->allocated_conns) {
+                raft->conns = x2nrealloc(raft->conns, &raft->allocated_conns,
+                                         sizeof *raft->conns);
+            }
+            raft->conns[raft->n_conns++] = js;
         } else if (error != EAGAIN) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
@@ -993,6 +1003,18 @@ raft_run(struct raft *raft)
             s->conn = jsonrpc_session_open(s->address, true);
         }
         raft_run_session(raft, s->conn);
+    }
+
+    for (size_t i = 0; i < raft->n_conns; ) {
+        struct jsonrpc_session *conn = raft->conns[i];
+
+        raft_run_session(raft, conn);
+        if (!jsonrpc_session_is_alive(conn)) {
+            jsonrpc_session_close(conn);
+            raft->conns[i] = raft->conns[--raft->n_conns];
+        } else {
+            i++;
+        }
     }
 }
 
