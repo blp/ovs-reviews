@@ -666,9 +666,11 @@ raft_server_clone(const struct raft_server *src)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-parse_servers(const struct json *json, struct hmap *servers)
+raft_servers_parse(const struct json *json, struct hmap *servers)
 {
-    if (shash_is_empty(json_object(json))) {
+    if (!json || json->type != JSON_OBJECT) {
+        return ovsdb_syntax_error(json, NULL, "servers must be JSON object");
+    } else if (shash_is_empty(json_object(json))) {
         return ovsdb_syntax_error(json, NULL, "must have at least one server");
     }
 
@@ -772,7 +774,8 @@ parse_log_record(struct raft *raft, const struct json *entry)
     const struct json *servers = ovsdb_parser_member(&p, "servers",
                                                      OP_OBJECT | OP_OPTIONAL);
     if (servers) {
-        struct ovsdb_error *error = parse_servers(servers, &raft->servers);
+        struct ovsdb_error *error = raft_servers_parse(servers,
+                                                       &raft->servers);
         if (error) {
             ovsdb_error_destroy(ovsdb_parser_finish(&p));
             return error;
@@ -849,7 +852,7 @@ raft_open(const char *file_name, struct raft **raftp)
         raft->snapshot = xstrdup(json_string(data));
     }
 
-    error = parse_servers(prev_servers_json, &raft->prev_servers);
+    error = raft_servers_parse(prev_servers_json, &raft->prev_servers);
     json_destroy(snapshot);
     if (error) {
         goto error;
@@ -1093,10 +1096,10 @@ raft_entry_parse(struct json *json, struct raft_entry *e)
     ovsdb_parser_init(&p, json, "raft log entry");
     e->term = parse_uint(&p, "term");
     const struct json *servers_json = ovsdb_parser_member(
-        &p, "servers", OP_STRING | OP_OPTIONAL);
+        &p, "servers", OP_OBJECT | OP_OPTIONAL);
     if (servers_json) {
         struct hmap servers = HMAP_INITIALIZER(&servers);
-        struct ovsdb_error *error = parse_servers(servers_json, &servers);
+        struct ovsdb_error *error = raft_servers_parse(servers_json, &servers);
         if (error) {
             return error;
         }
@@ -1296,12 +1299,10 @@ raft_install_snapshot_request_from_jsonrpc(
     rq->last_term = parse_uint(p, "last_term");
 
     const struct json *servers = ovsdb_parser_member(p, "servers", OP_OBJECT);
-    if (servers) {
-        struct ovsdb_error *error = parse_servers(servers, &rq->servers);
-        if (error) {
-            ovsdb_parser_put_error(p, error);
-            return;
-        }
+    struct ovsdb_error *error = raft_servers_parse(servers, &rq->servers);
+    if (error) {
+        ovsdb_parser_put_error(p, error);
+        return;
     }
 
     rq->offset = parse_uint(p, "offset");
@@ -1489,7 +1490,7 @@ raft_become_follower(struct raft *raft)
     }
 
     raft->role = RAFT_FOLLOWER;
-    raft->ops->reset_timer(raft, RAFT_SLOW);
+    //raft_reset_timer(raft, RAFT_SLOW);
 
     /* Notify clients about lost leadership.
      *
@@ -1597,6 +1598,26 @@ raft_receive_term__(struct raft *raft, uint64_t term)
     return true;
 }
 
+static void
+raft_get_servers_from_log(struct raft *raft)
+{
+    for (uint64_t index = raft->log_end - 1; index >= raft->log_start;
+         index--) {
+        struct raft_entry *e = &raft->log[index - raft->log_start];
+        if (e->type == RAFT_SERVERS) {
+            struct json *json = json_from_string(e->data);
+            struct hmap servers = HMAP_INITIALIZER(&servers);
+            struct ovsdb_error *error = raft_servers_parse(json, &servers);
+            ovs_assert(!error);
+            raft_set_servers(raft, &servers);
+            raft_servers_destroy(&servers);
+            json_destroy(json);
+            return;
+        }
+    }
+    raft_set_servers(raft, &raft->prev_servers);
+}
+
 static bool
 raft_handle_append_entries(struct raft *raft,
                            uint64_t prev_log_index, uint64_t prev_log_term,
@@ -1617,6 +1638,7 @@ raft_handle_append_entries(struct raft *raft,
      * index but different terms), delete the existing entry and all that
      * follow it." */
     unsigned int i;
+    bool servers_changed = false;
     for (i = 0; i < n_entries; i++) {
         uint64_t log_index = (prev_log_index + 1) + i;
         if (log_index >= raft->log_end) {
@@ -1628,6 +1650,9 @@ raft_handle_append_entries(struct raft *raft,
             while (raft->log_end > log_index) {
                 struct raft_entry *entry = &raft->log[--raft->log_end
                                                       - raft->log_start];
+                if (entry->type == RAFT_SERVERS) {
+                    servers_changed = true;
+                }
                 free(entry->data);
             }
             break;
@@ -1637,7 +1662,14 @@ raft_handle_append_entries(struct raft *raft,
     /* Figure 3.1: "Append any entries not already in the log." */
     for (; i < n_entries; i++) {
         const struct raft_entry *entry = &entries[i];
+        if (entry->type == RAFT_SERVERS) {
+            servers_changed = true;
+        }
         raft_add_entry(raft, entry->term, entry->type, xstrdup(entry->data));
+    }
+
+    if (servers_changed) {
+        raft_get_servers_from_log(raft);
     }
 
     return true;
