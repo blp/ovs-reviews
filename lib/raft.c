@@ -85,6 +85,8 @@ struct raft_server {
     struct uuid reply_sid;      /* For use in AddServer/RemoveServer reply. */
 };
 
+static void raft_server_init_leader(struct raft *, struct raft_server *);
+
 enum raft_entry_type {
     RAFT_DATA,
     RAFT_SERVERS
@@ -413,11 +415,11 @@ raft_rpc_from_jsonrpc(const struct raft *, const struct jsonrpc_msg *,
                       union raft_rpc *);
 
 static struct raft_server *
-raft_find_server__(struct hmap *servers, const struct uuid *uuid)
+raft_find_server__(const struct hmap *servers, const struct uuid *sid)
 {
     struct raft_server *s;
-    HMAP_FOR_EACH_IN_BUCKET (s, hmap_node, uuid_hash(uuid), servers) {
-        if (uuid_equals(uuid, &s->sid)) {
+    HMAP_FOR_EACH_IN_BUCKET (s, hmap_node, uuid_hash(sid), servers) {
+        if (uuid_equals(sid, &s->sid)) {
             return s;
         }
     }
@@ -425,9 +427,9 @@ raft_find_server__(struct hmap *servers, const struct uuid *uuid)
 }
 
 static struct raft_server *
-raft_find_server(struct raft *raft, const struct uuid *uuid)
+raft_find_server(const struct raft *raft, const struct uuid *sid)
 {
-    return raft_find_server__(&raft->servers, uuid);
+    return raft_find_server__(&raft->servers, sid);
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -641,6 +643,7 @@ static void
 raft_server_destroy(struct raft_server *s)
 {
     if (s) {
+        jsonrpc_session_close(s->conn);
         free(s->address);
         free(s);
     }
@@ -666,7 +669,7 @@ raft_server_clone(const struct raft_server *src)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_servers_parse(const struct json *json, struct hmap *servers)
+raft_servers_parse__(const struct json *json, struct hmap *servers)
 {
     if (!json || json->type != JSON_OBJECT) {
         return ovsdb_syntax_error(json, NULL, "servers must be JSON object");
@@ -675,13 +678,11 @@ raft_servers_parse(const struct json *json, struct hmap *servers)
     }
 
     /* Parse new servers. */
-    struct hmap new_servers = HMAP_INITIALIZER(&new_servers);
     struct shash_node *node;
     SHASH_FOR_EACH (node, json_object(json)) {
         /* Parse server UUID. */
         struct uuid sid;
         if (!uuid_from_string(&sid, node->name)) {
-            raft_servers_destroy(&new_servers);
             return ovsdb_syntax_error(json, NULL, "%s is a not a UUID",
                                       node->name);
         }
@@ -689,31 +690,61 @@ raft_servers_parse(const struct json *json, struct hmap *servers)
         /* Parse server address. */
         const struct json *address_json = node->data;
         if (address_json->type != JSON_STRING) {
-            raft_servers_destroy(&new_servers);
             return ovsdb_syntax_error(json, NULL, "%s value is not string",
                                       node->name);
         }
         const char *address = json_string(address_json);
         struct ovsdb_error *error = raft_parse_address(address, NULL, NULL);
         if (error) {
-            raft_servers_destroy(&new_servers);
             return error;
         }
 
         struct raft_server *s = xzalloc(sizeof *s);
         s->sid = sid;
         s->address = xstrdup(address);
-        hmap_insert(&new_servers, &s->hmap_node, uuid_hash(&s->sid));
+        hmap_insert(servers, &s->hmap_node, uuid_hash(&s->sid));
     }
 
-    /* XXX at this point we possibly should migrate old servers' data to the
-     * new servesr. */
-
-    /* Swap old and new servers, then destroy old ones. */
-    hmap_swap(servers, &new_servers);
-    raft_servers_destroy(&new_servers);
-
     return NULL;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_servers_parse(const struct json *json, struct hmap *servers)
+{
+    hmap_init(servers);
+    struct ovsdb_error *error = raft_servers_parse__(json, servers);
+    if (error) {
+        raft_servers_destroy(servers);
+    }
+    return error;
+}
+
+static void
+raft_set_servers(struct raft *raft, const struct hmap *new_servers)
+{
+    struct raft_server *s, *next;
+    HMAP_FOR_EACH_SAFE (s, next, hmap_node, &raft->servers) {
+        if (!raft_find_server__(new_servers, &s->sid)) {
+            if (raft->me == s) {
+                raft->me = NULL;
+                /* XXX */
+            }
+            /* XXX raft->leader */
+            /* XXX raft->remove_server */
+            hmap_remove(&raft->servers, &s->hmap_node);
+            raft_server_destroy(s);
+        }
+    }
+
+    HMAP_FOR_EACH_SAFE (s, next, hmap_node, new_servers) {
+        if (!raft_find_server__(&raft->servers, &s->sid)) {
+            struct raft_server *new = xzalloc(sizeof *new);
+            new->sid = s->sid;
+            new->address = xstrdup(s->address);
+            new->voted = true;  /* XXX conservative */
+            raft_server_init_leader(raft, new);
+        }
+    }
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -771,17 +802,20 @@ parse_log_record(struct raft *raft, const struct json *entry)
     }
 
     /* Parse "servers". */
-    const struct json *servers = ovsdb_parser_member(&p, "servers",
-                                                     OP_OBJECT | OP_OPTIONAL);
-    if (servers) {
-        struct ovsdb_error *error = raft_servers_parse(servers,
-                                                       &raft->servers);
+    const struct json *servers_json
+        = ovsdb_parser_member(&p, "servers", OP_OBJECT | OP_OPTIONAL);
+    if (servers_json) {
+        struct hmap servers;
+        struct ovsdb_error *error = raft_servers_parse(servers_json, &servers);
         if (error) {
             ovsdb_error_destroy(ovsdb_parser_finish(&p));
             return error;
         }
 
-        raft_add_entry(raft, term, RAFT_SERVERS, json_to_string(servers, 0));
+        raft_set_servers(raft, &servers);
+        raft_servers_destroy(&servers);
+        raft_add_entry(raft, term, RAFT_SERVERS,
+                       json_to_string(servers_json, 0));
         goto done;
     }
 
@@ -852,11 +886,14 @@ raft_open(const char *file_name, struct raft **raftp)
         raft->snapshot = xstrdup(json_string(data));
     }
 
-    error = raft_servers_parse(prev_servers_json, &raft->prev_servers);
+    struct hmap prev_servers;
+    error = raft_servers_parse(prev_servers_json, &prev_servers);
     json_destroy(snapshot);
     if (error) {
         goto error;
     }
+    hmap_swap(&prev_servers, &raft->prev_servers);
+    raft_servers_destroy(&prev_servers);
 
     /* Read log records. */
     for (;;) {
@@ -1098,7 +1135,7 @@ raft_entry_parse(struct json *json, struct raft_entry *e)
     const struct json *servers_json = ovsdb_parser_member(
         &p, "servers", OP_OBJECT | OP_OPTIONAL);
     if (servers_json) {
-        struct hmap servers = HMAP_INITIALIZER(&servers);
+        struct hmap servers;
         struct ovsdb_error *error = raft_servers_parse(servers_json, &servers);
         if (error) {
             return error;
@@ -1292,18 +1329,17 @@ static void
 raft_install_snapshot_request_from_jsonrpc(
     struct ovsdb_parser *p, struct raft_install_snapshot_request *rq)
 {
-    hmap_init(&rq->servers);
-    rq->term = parse_uint(p, "term");
-    rq->leader_sid = parse_required_uuid(p, "leader");
-    rq->last_index = parse_uint(p, "last_index");
-    rq->last_term = parse_uint(p, "last_term");
-
     const struct json *servers = ovsdb_parser_member(p, "servers", OP_OBJECT);
     struct ovsdb_error *error = raft_servers_parse(servers, &rq->servers);
     if (error) {
         ovsdb_parser_put_error(p, error);
         return;
     }
+
+    rq->term = parse_uint(p, "term");
+    rq->leader_sid = parse_required_uuid(p, "leader");
+    rq->last_index = parse_uint(p, "last_index");
+    rq->last_term = parse_uint(p, "last_term");
 
     rq->offset = parse_uint(p, "offset");
     rq->data = xstrdup(parse_required_string(p, "data"));
@@ -1606,7 +1642,7 @@ raft_get_servers_from_log(struct raft *raft)
         struct raft_entry *e = &raft->log[index - raft->log_start];
         if (e->type == RAFT_SERVERS) {
             struct json *json = json_from_string(e->data);
-            struct hmap servers = HMAP_INITIALIZER(&servers);
+            struct hmap servers;
             struct ovsdb_error *error = raft_servers_parse(json, &servers);
             ovs_assert(!error);
             raft_set_servers(raft, &servers);
