@@ -252,6 +252,10 @@ nodist_tests_test_ovsdb_SOURCES = tests/idltest.c tests/idltest.h
 EXTRA_DIST += tests/uuidfilt.pl tests/ovsdb-monitor-sort.pl
 tests_test_ovsdb_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
+noinst_PROGRAMS += tests/test-raft
+tests_test_raft_SOURCES = tests/test-raft.c
+tests_test_raft_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
+
 noinst_PROGRAMS += tests/test-lib
 tests_test_lib_SOURCES = \
 	tests/test-lib.c

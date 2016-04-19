@@ -30,6 +30,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "ovsdb/log.h"
+#include "poll-loop.h"
 #include "socket-util.h"
 #include "stream.h"
 #include "timeval.h"
@@ -469,7 +470,7 @@ static char *
 raft_make_address_passive(const char *address_)
 {
     char *address = xstrdup(address_);
-    char *p = address;
+    char *p = strchr(address, ':') + 1;
     char *host = inet_parse_token(&p);
     char *port = inet_parse_token(&p);
 
@@ -1058,7 +1059,9 @@ raft_run(struct raft *raft)
         if (!s->js && s != raft->me) {
             s->js = jsonrpc_session_open(s->address, true);
         }
-        raft_run_session(raft, s->js, &s->sid);
+        if (s->js) {
+            raft_run_session(raft, s->js, &s->sid);
+        }
     }
 
     struct raft_conn *conn, *next;
@@ -1069,6 +1072,30 @@ raft_run(struct raft *raft)
             ovs_list_remove(&conn->list_node);
             free(conn);
         }
+    }
+}
+
+void
+raft_wait(struct raft *raft)
+{
+    if (raft->listener) {
+        pstream_wait(raft->listener);
+    } else {
+        poll_timer_wait_until(raft->listen_backoff);
+    }
+
+    struct raft_server *s;
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
+        if (s->js) {
+            jsonrpc_session_wait(s->js);
+            jsonrpc_session_recv_wait(s->js);
+        }
+    }
+
+    struct raft_conn *conn;
+    LIST_FOR_EACH (conn, list_node, &raft->conns) {
+        jsonrpc_session_wait(conn->js);
+        jsonrpc_session_recv_wait(conn->js);
     }
 }
 

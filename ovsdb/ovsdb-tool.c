@@ -218,8 +218,8 @@ static void
 do_create_cluster(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argv[1];
-    const char *address = ctx->argv[2];
-    const char *schema_file_name = ctx->argv[3];
+    const char *schema_file_name = ctx->argv[2];
+    const char *address = ctx->argv[3];
 
     /* Read schema from file and convert to JSON. */
     struct ovsdb_schema *schema;
@@ -603,7 +603,7 @@ do_list_commands(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
 static const struct ovs_cmdl_command all_commands[] = {
     { "create", "[db [schema]]", 0, 2, do_create },
-    { "create-cluster", "db address db schema", 3, 3, do_create_cluster },
+    { "create-cluster", "db schema address", 3, 3, do_create_cluster },
     { "compact", "[db [dst]]", 0, 2, do_compact },
     { "convert", "[db [schema [dst]]]", 0, 3, do_convert },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion },
