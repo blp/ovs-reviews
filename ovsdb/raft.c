@@ -485,6 +485,18 @@ raft_make_address_passive(const char *address_)
     return ds_steal_cstr(&paddr);
 }
 
+static struct ovsdb_error *
+raft_write_header(struct ovsdb_log *storage,
+                  const struct uuid *cid, const struct uuid *sid)
+{
+    struct json *header = json_object_create();
+    json_object_put(header, "cluster_id", json_uuid_create(cid));
+    json_object_put(header, "server_id", json_uuid_create(sid));
+    struct ovsdb_error *error = ovsdb_log_write_json(storage, header);
+    json_destroy(header);
+    return error;
+}
+
 /* Creates a new Raft cluster and initializes it to consist of a single server,
  * the one on which this function is called.
  *
@@ -524,11 +536,7 @@ raft_create(const char *file_name, const char *local_address,
     /* Write header record. */
     struct uuid cid = uuid_generate();
     struct uuid sid = uuid_generate();
-    struct json *header = json_object_create();
-    json_object_put(header, "cluster_id", json_uuid_create(&cid));
-    json_object_put(header, "server_id", json_uuid_create(&sid));
-    error = ovsdb_log_write_json(storage, header);
-    json_destroy(header);
+    error = raft_write_header(storage, &cid, &sid);
     if (error) {
         goto error;
     }
@@ -672,6 +680,16 @@ raft_server_clone(const struct raft_server *src)
     struct raft_server *dst = xmemdup(src, sizeof *src);
     dst->address = xstrdup(dst->address);
     return dst;
+}
+
+static void
+raft_servers_clone(struct hmap *dst, struct hmap *src)
+{
+    struct raft_server *s;
+    HMAP_FOR_EACH (s, hmap_node, src) {
+        struct raft_server *s2 = raft_server_clone(s);
+        hmap_insert(dst, &s2->hmap_node, uuid_hash(&s2->sid));
+    }
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -835,40 +853,15 @@ done:
     return ovsdb_parser_finish(&p);
 }
 
-static struct ovsdb_error *
-raft_must_read_log(struct ovsdb_log *log, struct json **jsonp)
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_read(struct raft *raft)
 {
-    struct ovsdb_error *error = ovsdb_log_read_json(log, jsonp);
-    if (!error && !*jsonp) {
-        error = ovsdb_error(NULL, "unexpected end of file reading log");
-    }
-    return error;
-}
-
-/* Starts the local server in an existing Raft cluster, using the local copy of
- * the cluster's log in 'file_name'. */
-struct ovsdb_error *
-raft_open(const char *file_name, struct raft **raftp)
-{
-    struct raft *raft = xzalloc(sizeof *raft);
-    hmap_init(&raft->servers);
-    hmap_init(&raft->prev_servers);
-    hmap_init(&raft->add_servers);
-    raft->listen_backoff = LLONG_MIN;
-    ovs_list_init(&raft->conns);
-
-    struct ovsdb_error *error;
-    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
-                           -1, &raft->storage);
-    if (error) {
-        goto error;
-    }
-
     /* Read header record. */
     struct json *header;
-    error = raft_must_read_log(raft->storage, &header);
-    if (error) {
-        goto error;
+    struct ovsdb_error *error = ovsdb_log_read_json(raft->storage, &header);
+    if (error || !header) {
+        /* Report error or end-of-file. */
+        return error;
     }
     struct ovsdb_parser p;
     ovsdb_parser_init(&p, header, "raft header");
@@ -877,14 +870,15 @@ raft_open(const char *file_name, struct raft **raftp)
     error = ovsdb_parser_finish(&p);
     json_destroy(header);
     if (error) {
-        goto error;
+        return error;
     }
 
     /* Read snapshot record. */
     struct json *snapshot;
-    error = raft_must_read_log(raft->storage, &snapshot);
-    if (error) {
-        goto error;
+    error = ovsdb_log_read_json(raft->storage, &snapshot);
+    if (error || !snapshot) {
+        /* Report error or end-of-file. */
+        return error;
     }
     ovsdb_parser_init(&p, snapshot, "raft snapshot");
     raft->prev_term = parse_uint(&p, "prev_term");
@@ -896,18 +890,16 @@ raft_open(const char *file_name, struct raft **raftp)
     error = ovsdb_parser_finish(&p);
     if (error) {
         json_destroy(snapshot);
-        goto error;
+        return error;
     }
 
-    if (data) {
-        raft->snapshot = xstrdup(json_string(data));
-    }
+    raft->snapshot = xstrdup(data ? json_string(data) : "");
 
     struct hmap prev_servers;
     error = raft_servers_parse(prev_servers_json, &prev_servers);
     json_destroy(snapshot);
     if (error) {
-        goto error;
+        return error;
     }
     hmap_swap(&prev_servers, &raft->prev_servers);
     raft_servers_destroy(&prev_servers);
@@ -935,11 +927,56 @@ raft_open(const char *file_name, struct raft **raftp)
     /* If none of the log entries populated the servers, then they're the same
      * as 'raft->prev_servers', so copy them. */
     if (hmap_is_empty(&raft->servers)) {
-        struct raft_server *s;
-        HMAP_FOR_EACH (s, hmap_node, &raft->prev_servers) {
-            struct raft_server *s2 = raft_server_clone(s);
-            hmap_insert(&raft->servers, &s2->hmap_node, uuid_hash(&s2->sid));
-        }
+        raft_servers_clone(&raft->servers, &raft->prev_servers);
+    }
+
+    return NULL;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
+            struct raft **raftp)
+{
+    struct raft *raft = xzalloc(sizeof *raft);
+    hmap_init(&raft->servers);
+    hmap_init(&raft->prev_servers);
+    hmap_init(&raft->add_servers);
+    raft->listen_backoff = LLONG_MIN;
+    ovs_list_init(&raft->conns);
+
+    struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC, mode,
+                                               -1, &raft->storage);
+    if (error) {
+        goto error;
+    }
+
+    error = raft_read(raft);
+    if (error) {
+        goto error;
+    }
+    *raftp = raft;
+    return NULL;
+
+error:
+    raft_close(raft);
+    *raftp = NULL;
+    return error;
+}
+
+/* Starts the local server in an existing Raft cluster, using the local copy of
+ * the cluster's log in 'file_name'. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_open(const char *file_name, struct raft **raftp)
+{
+    struct raft *raft;
+    struct ovsdb_error *error = raft_open__(file_name, OVSDB_LOG_READ_WRITE,
+                                            &raft);
+    if (!error && (uuid_is_zero(&raft->cid) || !raft->snapshot)) {
+        error = ovsdb_error(NULL, "%s: not a fully initialized log",
+                            file_name);
+    }
+    if (error) {
+        goto error;
     }
 
     /* Find our own server.
@@ -987,40 +1024,70 @@ error:
  *
  * This function blocks until the join succeeds or fails.
  */
-int
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_join(const char *file_name, const char *local_address,
-          const char *remote_addresses[], size_t n_remotes,
-          const struct uuid *cid, struct raft **raftp)
+          const char *remote_addresses[] OVS_UNUSED /* XXX */,
+          size_t n_remotes OVS_UNUSED /* XXX */,
+          const struct uuid *cid_, struct raft **raftp)
 {
+    struct raft *raft = NULL;
+
     /* Parse and verify validity of the local address.
      *
      * XXX Test that the local machine can bind the local address. */
     struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
     if (error) {
-        return error;
+        goto error;
     }
 
-    /* Create or open log file. */
-    struct ovsdb_log *storage;
-    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE,
-                           -1, &storage);
-    if (error) {
-        return error;
-    }
-
-    /* Write header record. */
-    struct uuid cid = uuid_generate();
-    struct uuid sid = uuid_generate();
-    struct json *header = json_object_create();
-    json_object_put(header, "cluster_id", json_uuid_create(&cid));
-    json_object_put(header, "server_id", json_uuid_create(&sid));
-    error = ovsdb_log_write_json(storage, header);
-    json_destroy(header);
+    /* Read the log, if there is one, or create it otherwise. */
+    error = raft_open__(file_name, OVSDB_LOG_CREATE, &raft);
     if (error) {
         goto error;
     }
-    
 
+    /* Check the cluster ID, if specified, against the one in the file, if
+     * there was one. */
+    if (cid_ && !uuid_is_zero(&raft->cid) && !uuid_equals(&raft->cid, cid_)) {
+        error = ovsdb_error(NULL, "%s: already initialized for cluster "
+                            UUID_FMT" (expected "UUID_FMT")",
+                            file_name, UUID_ARGS(&raft->cid), UUID_ARGS(cid_));
+        goto error;
+    }
+    if (uuid_is_zero(&raft->cid)) {
+        raft->sid = uuid_generate();
+        if (cid_) {
+            raft->cid = *cid_;
+            error = raft_write_header(raft->storage, &raft->cid, &raft->sid);
+            if (error) {
+                goto error;
+            }
+        }
+    }
+
+    raft->me = raft_find_server(raft, &raft->sid);
+    if (raft->me) {
+        /* Already joined to this cluster.  Nothing to do. */
+        *raftp = raft;
+        return NULL;
+    }
+
+    /* Connect to all of the 'remote_addresses' in parallel.
+     * Send each of them an AddServer RPC.
+     * For each response:
+     *
+     *     - Adopt the cid in the response, or report an error if we have one
+     *       already and it's different.
+     *
+     *     - addserver reply NOT_LEADER: open connection to leader.
+     *
+     *     - installsnapshot/appendentries: focus on this connection unless it
+     *       dies */
+
+error:
+    raft_close(raft);
+    *raftp = NULL;
+    return error;
 }
 
 void
@@ -1550,18 +1617,22 @@ raft_rpc_from_jsonrpc(const struct raft *raft,
     ovsdb_parser_init(&p, json_array(msg->params)->elems[0],
                       "raft %s RPC", msg->method);
 
-    struct uuid cid = parse_required_uuid(&p, "cluster");
-    if (!uuid_equals(&cid, &raft->cid)) {
+    bool is_add = rpc->common.type == RAFT_RPC_ADD_SERVER_REQUEST;
+    struct uuid cid;
+    if (parse_uuid__(&p, "cluster", is_add, &cid)
+        && !uuid_equals(&cid, &raft->cid)) {
         ovsdb_parser_raise_error(&p, "wrong cluster "UUID_FMT" "
                                  "(expected "UUID_FMT")",
                                  UUID_ARGS(&cid), UUID_ARGS(&raft->cid));
     }
 
-    struct uuid to_sid = parse_required_uuid(&p, "to");
-    if (!uuid_equals(&to_sid, &raft->sid)) {
+    struct uuid to_sid;
+    if (parse_uuid__(&p, "to", is_add, &to_sid)
+        && !uuid_equals(&to_sid, &raft->sid)) {
         ovsdb_parser_raise_error(&p, "misrouted message (addressed to "
                                  UUID_FMT" but we're "UUID_FMT")",
-                                 UUID_ARGS(&to_sid), UUID_ARGS(&raft->sid));
+                                 UUID_ARGS(&to_sid),
+                                 UUID_ARGS(&raft->sid));
     }
 
     rpc->common.sid = parse_required_uuid(&p, "from");

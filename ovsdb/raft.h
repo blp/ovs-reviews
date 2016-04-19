@@ -54,11 +54,13 @@ struct ovsdb_error *raft_create(const char *file_name,
                                 const char *data)
     OVS_WARN_UNUSED_RESULT;
 
-struct ovsdb_error *raft_open(const char *file_name, struct raft **);
+struct ovsdb_error *raft_open(const char *file_name, struct raft **)
+    OVS_WARN_UNUSED_RESULT;
 
-int raft_join(const char *file_name, const char *local_address,
-              const char *remote_addresses[], size_t n_remotes,
-              const struct uuid *cid, struct raft **);
+struct ovsdb_error *raft_join(const char *file_name, const char *local_address,
+                              const char *remote_addresses[], size_t n_remotes,
+                              const struct uuid *cid, struct raft **)
+    OVS_WARN_UNUSED_RESULT;
 
 void raft_close(struct raft *);
 
