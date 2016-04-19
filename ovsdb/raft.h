@@ -67,6 +67,14 @@ void raft_close(struct raft *);
 void raft_run(struct raft *);
 void raft_wait(struct raft *);
 
-uint64_t raft_add_log_entry(struct raft *, const void *data);
+enum raft_command_status {
+    RAFT_CMD_INCOMPLETE,        /* In progress, please wait. */
+    RAFT_CMD_SUCCESS,           /* Committed. */
+    RAFT_CMD_NOT_LEADER,        /* Failed because we are not the leader. */
+    RAFT_CMD_FAILURE,           /* Other failure. */
+};
+struct raft_command *raft_command_execute(struct raft *, const void *data);
+enum raft_command_status raft_command_get_status(const struct raft_command *);
+void raft_command_wait(const struct raft_command *);
 
 #endif /* lib/raft.h */

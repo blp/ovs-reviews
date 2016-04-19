@@ -352,7 +352,7 @@ ovsdb_log_unread(struct ovsdb_log *file)
 }
 
 static struct ovsdb_error *
-ovsdb_log_write__(struct ovsdb_log *file, char *data, size_t length)
+ovsdb_log_write__(struct ovsdb_log *file, const char *data, size_t length)
 {
     uint8_t sha1[SHA1_DIGEST_SIZE];
     struct ovsdb_error *error;
@@ -401,13 +401,13 @@ error:
 }
 
 struct ovsdb_error *
-ovsdb_log_write(struct ovsdb_log *file, char *data)
+ovsdb_log_write(struct ovsdb_log *file, const char *data)
 {
     return ovsdb_log_write__(file, data, strlen(data));
 }
 
 struct ovsdb_error *
-ovsdb_log_write_json(struct ovsdb_log *file, struct json *json)
+ovsdb_log_write_json(struct ovsdb_log *file, const struct json *json)
 {
     if (json->type != JSON_OBJECT && json->type != JSON_ARRAY) {
         return OVSDB_BUG("bad JSON type");
