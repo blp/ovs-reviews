@@ -286,9 +286,27 @@ json_object_put(struct json *json, const char *name, struct json *value)
 }
 
 void
+json_object_put_uint(struct json *json, const char *name, uint64_t value)
+{
+    /* XXX How can we properly handle value > INT64_MAX? */
+    json_object_put(json, name, json_integer_create(value));
+}
+
+void
 json_object_put_string(struct json *json, const char *name, const char *value)
 {
     json_object_put(json, name, json_string_create(value));
+}
+
+void OVS_PRINTF_FORMAT(3, 4)
+json_object_put_format(struct json *json,
+                       const char *name, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    json_object_put(json, name,
+                    json_string_create_nocopy(xvasprintf(format, args)));
+    va_end(args);
 }
 
 const char *

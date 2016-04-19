@@ -40,7 +40,7 @@ VLOG_DEFINE_THIS_MODULE(raft);
 
 #define RAFT_MAGIC "OVSDB RAFT"
 
-//static void raft_run_reconfigure(struct raft *);
+static void raft_run_reconfigure(struct raft *);
 
 struct raft;
 union raft_rpc;
@@ -71,9 +71,9 @@ enum raft_server_phase {
 struct raft_server {
     struct hmap_node hmap_node; /* Hashed based on 'sid'. */
 
-    struct uuid sid;            /* Randomly generater server ID. */
+    struct uuid sid;            /* Randomly generated server ID. */
     char *address;              /* "(tcp|ssl):1.2.3.4:5678" */
-    struct jsonrpc_session *conn; /* Connection to this server. */
+    struct jsonrpc_session *js; /* Connection to this server. */
 
     /* Volatile state on candidates.  Reinitialized at start of election. */
     bool voted;              /* Has this server already voted? */
@@ -96,6 +96,12 @@ struct raft_entry {
     uint64_t term;
     enum raft_entry_type type;
     char *data;
+};
+
+struct raft_conn {
+    struct ovs_list list_node;
+    struct jsonrpc_session *js;
+    struct uuid sid;
 };
 
 /* The Raft state machine. */
@@ -152,8 +158,7 @@ struct raft {
     /* Network connections. */
     struct pstream *listener;
     long long int listen_backoff;
-    struct jsonrpc_session **conns;
-    size_t n_conns, allocated_conns;
+    struct ovs_list conns;
 
     /* Leaders only.  Reinitialized after becoming leader. */
     struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
@@ -643,7 +648,7 @@ static void
 raft_server_destroy(struct raft_server *s)
 {
     if (s) {
-        jsonrpc_session_close(s->conn);
+        jsonrpc_session_close(s->js);
         free(s->address);
         free(s);
     }
@@ -839,6 +844,7 @@ raft_open(const char *file_name, struct raft **raftp)
     hmap_init(&raft->prev_servers);
     hmap_init(&raft->add_servers);
     raft->listen_backoff = LLONG_MIN;
+    ovs_list_init(&raft->conns);
 
     struct ovsdb_error *error;
     error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
@@ -967,10 +973,12 @@ raft_close(struct raft *raft)
     raft_servers_destroy(&raft->prev_servers);
     free(raft->snapshot);
 
-    for (size_t i = 0; i < raft->n_conns; i++) {
-        jsonrpc_session_close(raft->conns[i]);
+    struct raft_conn *conn, *next;
+    LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
+        jsonrpc_session_close(conn->js);
+        ovs_list_remove(&conn->list_node);
+        free(conn);
     }
-    free(raft->conns);
 
     raft_servers_destroy(&raft->add_servers);
     raft_server_destroy(raft->remove_server);
@@ -979,7 +987,8 @@ raft_close(struct raft *raft)
 }
 
 static void
-raft_run_session(struct raft *raft, struct jsonrpc_session *s)
+raft_run_session(struct raft *raft, struct jsonrpc_session *s,
+                 struct uuid *sid)
 {
     jsonrpc_session_run(s);
     for (size_t i = 0; i < 50; i++) {
@@ -996,6 +1005,17 @@ raft_run_session(struct raft *raft, struct jsonrpc_session *s)
             VLOG_INFO("%s: %s", jsonrpc_session_get_name(s), error_s);
             free(error_s);
             break;
+        }
+        if (sid) {
+            if (uuid_is_zero(sid)) {
+                *sid = rpc.common.sid;
+            } else if (!uuid_equals(sid, &rpc.common.sid)) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+                VLOG_WARN_RL(&rl, "%s: remote server ID changed from "
+                             UUID_FMT" to "UUID_FMT,
+                             jsonrpc_session_get_name(s),
+                             UUID_ARGS(sid), UUID_ARGS(&rpc.common.sid));
+            }
         }
         raft_receive(raft, &rpc);
         raft_rpc_destroy(&rpc);
@@ -1021,14 +1041,10 @@ raft_run(struct raft *raft)
         struct stream *stream;
         int error = pstream_accept(raft->listener, &stream);
         if (!error) {
-            struct jsonrpc_session *js
-                = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
-                                                 DSCP_DEFAULT);
-            if (raft->n_conns >= raft->allocated_conns) {
-                raft->conns = x2nrealloc(raft->conns, &raft->allocated_conns,
-                                         sizeof *raft->conns);
-            }
-            raft->conns[raft->n_conns++] = js;
+            struct raft_conn *conn = xzalloc(sizeof *conn);
+            conn->js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
+                                                       DSCP_DEFAULT);
+            ovs_list_push_back(&raft->conns, &conn->list_node);
         } else if (error != EAGAIN) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
@@ -1039,21 +1055,19 @@ raft_run(struct raft *raft)
 
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        if (!s->conn && s != raft->me) {
-            s->conn = jsonrpc_session_open(s->address, true);
+        if (!s->js && s != raft->me) {
+            s->js = jsonrpc_session_open(s->address, true);
         }
-        raft_run_session(raft, s->conn);
+        raft_run_session(raft, s->js, &s->sid);
     }
 
-    for (size_t i = 0; i < raft->n_conns; ) {
-        struct jsonrpc_session *conn = raft->conns[i];
-
-        raft_run_session(raft, conn);
-        if (!jsonrpc_session_is_alive(conn)) {
-            jsonrpc_session_close(conn);
-            raft->conns[i] = raft->conns[--raft->n_conns];
-        } else {
-            i++;
+    struct raft_conn *conn, *next;
+    LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
+        raft_run_session(raft, conn->js, &conn->sid);
+        if (!jsonrpc_session_is_alive(conn->js)) {
+            jsonrpc_session_close(conn->js);
+            ovs_list_remove(&conn->list_node);
+            free(conn);
         }
     }
 }
@@ -2377,4 +2391,38 @@ raft_receive(struct raft *raft, const union raft_rpc *rpc)
     default:
         OVS_NOT_REACHED();
     }
+}
+
+static void
+raft_send__(struct raft *raft, const union raft_rpc *rpc,
+            struct jsonrpc_session *js)
+{
+    jsonrpc_session_send(js, raft_rpc_to_jsonrpc(raft, rpc));
+}
+
+static void
+raft_send(struct raft *raft, const union raft_rpc *rpc)
+{
+    if (uuid_equals(&rpc->common.sid, &raft->sid)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl, "attempting to send RPC to self");
+        return;
+    }
+
+    struct raft_server *s = raft_find_peer(raft, &rpc->common.sid);
+    if (s && s->js && jsonrpc_session_is_connected(s->js)) {
+        raft_send__(raft, rpc, s->js);
+        return;
+    }
+
+    struct raft_conn *conn;
+    LIST_FOR_EACH (conn, list_node, &raft->conns) {
+        if (uuid_equals(&conn->sid, &rpc->common.sid)) {
+            raft_send__(raft, rpc, conn->js);
+        }
+    }
+
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+    VLOG_WARN_RL(&rl, UUID_FMT": no connection, cannot send RPC",
+                 UUID_ARGS(&rpc->common.sid));
 }
