@@ -298,7 +298,7 @@ do_log_io(struct ovs_cmdl_context *ctx)
     } else if (!strcmp(mode_string, "read/write")) {
         mode = OVSDB_LOG_READ_WRITE;
     } else if (!strcmp(mode_string, "create")) {
-        mode = OVSDB_LOG_CREATE;
+        mode = OVSDB_LOG_CREATE_EXCL;
     } else {
         ovs_fatal(0, "unknown log-io open mode \"%s\"", mode_string);
     }

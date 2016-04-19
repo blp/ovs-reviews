@@ -515,7 +515,7 @@ raft_create(const char *file_name, const char *local_address,
 
     /* Create log file. */
     struct ovsdb_log *storage;
-    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE,
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
                            -1, &storage);
     if (error) {
         return error;
@@ -835,6 +835,16 @@ done:
     return ovsdb_parser_finish(&p);
 }
 
+static struct ovsdb_error *
+raft_must_read_log(struct ovsdb_log *log, struct json **jsonp)
+{
+    struct ovsdb_error *error = ovsdb_log_read_json(log, jsonp);
+    if (!error && !*jsonp) {
+        error = ovsdb_error(NULL, "unexpected end of file reading log");
+    }
+    return error;
+}
+
 /* Starts the local server in an existing Raft cluster, using the local copy of
  * the cluster's log in 'file_name'. */
 struct ovsdb_error *
@@ -856,7 +866,7 @@ raft_open(const char *file_name, struct raft **raftp)
 
     /* Read header record. */
     struct json *header;
-    error = ovsdb_log_read_json(raft->storage, &header);
+    error = raft_must_read_log(raft->storage, &header);
     if (error) {
         goto error;
     }
@@ -872,7 +882,7 @@ raft_open(const char *file_name, struct raft **raftp)
 
     /* Read snapshot record. */
     struct json *snapshot;
-    error = ovsdb_log_read_json(raft->storage, &snapshot);
+    error = raft_must_read_log(raft->storage, &snapshot);
     if (error) {
         goto error;
     }
@@ -950,6 +960,67 @@ error:
     raft_close(raft);
     *raftp = NULL;
     return error;
+}
+
+/* Adds a new server, the one one which this function is called, to an existing
+ * Raft cluster.
+ *
+ * Creates the local copy of the cluster's log in 'file_name'.  If 'file_name'
+ * already exists, then it must be from a previous call to this function for
+ * the same cluster and the same 'local_address'; if so, then the previous
+ * attempt to join the cluster will resume.
+ *
+ * The new server is located at 'local_address', which must take one of the
+ * forms "tcp:IP[:PORT]" or "ssl:IP[:PORT]", where IP is an IPv4 address or a
+ * square bracket enclosed IPv6 address.  PORT, if present, is a port number
+ * that defaults to RAFT_PORT.
+ *
+ * Joining the cluster requiring contacting it.  Thus, the 'n_remotes'
+ * addresses in 'remote_addresses' specify the addresses of existing servers in
+ * the cluster.  One server out of the existing cluster is sufficient, as long
+ * as that server is reachable and not partitioned from the current cluster
+ * leader.  If multiple servers from the cluster are specified, then it is
+ * sufficient for any of them to meet this criterion.
+ *
+ * 'cid' is optional.  If specified, the new server will join only the cluster
+ * with the given cluster ID.
+ *
+ * This function blocks until the join succeeds or fails.
+ */
+int
+raft_join(const char *file_name, const char *local_address,
+          const char *remote_addresses[], size_t n_remotes,
+          const struct uuid *cid, struct raft **raftp)
+{
+    /* Parse and verify validity of the local address.
+     *
+     * XXX Test that the local machine can bind the local address. */
+    struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
+    if (error) {
+        return error;
+    }
+
+    /* Create or open log file. */
+    struct ovsdb_log *storage;
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE,
+                           -1, &storage);
+    if (error) {
+        return error;
+    }
+
+    /* Write header record. */
+    struct uuid cid = uuid_generate();
+    struct uuid sid = uuid_generate();
+    struct json *header = json_object_create();
+    json_object_put(header, "cluster_id", json_uuid_create(&cid));
+    json_object_put(header, "server_id", json_uuid_create(&sid));
+    error = ovsdb_log_write_json(storage, header);
+    json_destroy(header);
+    if (error) {
+        goto error;
+    }
+    
+
 }
 
 void
