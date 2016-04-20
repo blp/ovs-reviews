@@ -33,6 +33,7 @@
 #include "ovsdb-parser.h"
 #include "ovsdb/log.h"
 #include "poll-loop.h"
+#include "random.h"
 #include "seq.h"
 #include "socket-util.h"
 #include "stream.h"
@@ -187,6 +188,10 @@ struct raft {
     uint64_t commit_index;      /* Max log index known to be committed. */
     uint64_t last_applied;      /* Max log index applied to state machine. */
     struct raft_server *leader; /* XXX Is this useful? */
+
+#define ELECTION_TIME_BASE_MSEC 1024
+#define ELECTION_TIME_RANGE_MSEC 1024
+    long long int election_timeout;
 
     /* File synchronization. */
     pthread_t fsync_thread;
@@ -509,6 +514,8 @@ static struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct raft *,
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_rpc_from_jsonrpc(const struct raft *, const struct jsonrpc_msg *,
                       union raft_rpc *);
+
+static void raft_become_leader(struct raft *);
 
 static struct raft_server *
 raft_find_server__(const struct hmap *servers, const struct uuid *sid)
@@ -1131,11 +1138,21 @@ raft_read(struct raft *raft)
     return NULL;
 }
 
+static void
+raft_reset_timer(struct raft *raft)
+{
+    raft->election_timeout = (time_msec()
+                              + ELECTION_TIME_BASE_MSEC
+                              + random_range(ELECTION_TIME_RANGE_MSEC));
+}
+
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
             struct raft **raftp)
 {
     struct raft *raft = xzalloc(sizeof *raft);
+    raft->role = RAFT_FOLLOWER;
+    raft_reset_timer(raft);
     hmap_init(&raft->servers);
     hmap_init(&raft->prev_servers);
     hmap_init(&raft->add_servers);
@@ -1459,6 +1476,78 @@ raft_waiters_wait(struct raft *raft)
     }
 }
 
+static void
+raft_set_term(struct raft *raft, uint64_t term, const struct uuid *vote)
+{
+    struct ovsdb_error *error = raft_write_state(raft, term, vote);
+    if (error) {
+        /* XXX */
+    }
+    /* XXX need to commit before replying */
+    raft->current_term = term;
+    raft->voted_for = vote ? *vote : UUID_ZERO;
+}
+
+
+static void
+raft_accept_vote(struct raft *raft, struct raft_server *s, bool granted)
+{
+    if (s->voted) {
+        return;
+    }
+    s->voted = true;
+    if (granted
+        && ++raft->n_votes > hmap_count(&raft->servers) / 2) {
+        raft_become_leader(raft);
+    }
+}
+
+static void
+raft_start_election(struct raft *raft)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+    ovs_assert(raft->role != RAFT_LEADER);
+    raft->role = RAFT_CANDIDATE;
+    raft_reset_timer(raft);
+
+    /* XXX what if we're not part of the server set? */
+
+    raft_set_term(raft, raft->current_term + 1, &raft->sid);
+    raft->n_votes = 0;
+
+    VLOG_INFO_RL(&rl, "term %"PRIu64": starting election", raft->current_term);
+
+    struct raft_server *peer;
+    HMAP_FOR_EACH (peer, hmap_node, &raft->servers) {
+        peer->voted = false;
+        if (peer == raft->me) {
+            continue;
+        }
+
+        union raft_rpc rq = {
+            .vote_request = {
+                .common = {
+                    .type = RAFT_RPC_VOTE_REQUEST,
+                    .sid = peer->sid,
+                },
+                .term = raft->current_term,
+                .last_log_index = raft->log_end - 1,
+                .last_log_term = (
+                    raft->log_end > raft->log_start
+                    ? raft->log[raft->log_end - raft->log_start].term
+                    : raft->prev_term),
+            },
+        };
+        raft_send(raft, &rq);
+    }
+
+    /* Vote for ourselves. */
+    raft_accept_vote(raft, raft->me, true);
+
+    /* XXX how do we handle outstanding waiters? */
+}
+
 void
 raft_run(struct raft *raft)
 {
@@ -1511,6 +1600,11 @@ raft_run(struct raft *raft)
             free(conn);
         }
     }
+
+    if (time_msec() >= raft->election_timeout) {
+        raft_start_election(raft);
+    }
+    /* XXX if we're leader and we're idle, send empty appendrequest */
 }
 
 void
@@ -1537,6 +1631,8 @@ raft_wait(struct raft *raft)
         jsonrpc_session_wait(conn->js);
         jsonrpc_session_recv_wait(conn->js);
     }
+
+    poll_timer_wait_until(raft->election_timeout);
 }
 
 static struct raft_waiter *
@@ -2023,7 +2119,7 @@ raft_become_follower(struct raft *raft)
     }
 
     raft->role = RAFT_FOLLOWER;
-    //raft_reset_timer(raft, RAFT_SLOW);
+    raft_reset_timer(raft);
 
     /* Notify clients about lost leadership.
      *
@@ -2096,9 +2192,15 @@ raft_server_init_leader(struct raft *raft, struct raft_server *s)
 static void
 raft_become_leader(struct raft *raft)
 {
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+    VLOG_INFO_RL(&rl, "term %"PRIu64": elected leader by %d+ of "
+                 "%"PRIuSIZE" servers", raft->current_term,
+                 raft->n_votes, hmap_count(&raft->servers));
+
     ovs_assert(raft->role != RAFT_LEADER);
     raft->role = RAFT_LEADER;
     raft->leader = raft->me;
+    raft->election_timeout = LLONG_MAX;
 
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
@@ -2124,13 +2226,7 @@ raft_receive_term__(struct raft *raft, uint64_t term)
      *     number, it rejects the request.
      */
     if (term > raft->current_term) {
-        struct ovsdb_error *error = raft_write_state(raft, term, NULL);
-        if (error) {
-            /* XXX */
-        }
-        /* XXX need to commit before replying */
-        raft->current_term = term;
-        raft->voted_for = UUID_ZERO;
+        raft_set_term(raft, term, NULL);
         raft_become_follower(raft);
     } else if (term < raft->current_term) {
         return false;
@@ -2251,6 +2347,8 @@ raft_handle_append_request__(struct raft *raft,
          * number, it rejects the request." */
         return false;
     }
+
+    raft_reset_timer(raft);
 
     /* First check for the common case, where the AppendEntries request is
      * entirely for indexes covered by 'log_start' ... 'log_end - 1', something
@@ -2486,7 +2584,10 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
      * (because it is not for the current term) but it can be committed as
      * a side effect of commit the entry for term 4 (the current term).
      * XXX Is there a more efficient way to do this? */
-    for (uint64_t n = raft->commit_index; n < raft->log_end; n++) {
+    printf("log=%"PRIu64"...%"PRIu64", commitIndex=%"PRIu64"\n",
+           raft->log_start, raft->log_end, raft->commit_index);
+    for (uint64_t n = MAX(raft->commit_index, raft->log_start);
+         n < raft->log_end; n++) {
         ovs_assert(n >= raft->log_start);
         if (raft->log[n - raft->log_start].term == raft->current_term) {
             size_t count = 0;
@@ -2498,6 +2599,7 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
             }
             if (count == hmap_count(&raft->servers)) {
                 raft->commit_index = n;
+                printf("commitIndex=%"PRIu64"\n", n);
             }
         }
     }
@@ -2608,6 +2710,9 @@ raft_handle_vote_request__(struct raft *raft,
         /* XXX */
     }
     /* XXX need to commit before replying */
+
+    raft_reset_timer(raft);
+
     return true;
 }
 
@@ -2642,14 +2747,8 @@ raft_handle_vote_reply(struct raft *raft,
     }
 
     struct raft_server *s = raft_find_peer(raft, &rpy->common.sid);
-    if (!s || s->voted) {
-        return;
-    }
-
-    s->voted = true;
-    if (rpy->vote_granted
-        && ++raft->n_votes > hmap_count(&raft->servers) / 2) {
-        raft_become_leader(raft);
+    if (s) {
+        raft_accept_vote(raft, s, rpy->vote_granted);
     }
 }
 
