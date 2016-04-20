@@ -342,6 +342,8 @@ struct raft_append_reply {
 static void raft_send_append_reply(struct raft *,
                                    const struct raft_append_request *,
                                    bool success);
+static void raft_update_match_index(struct raft *, struct raft_server *,
+                                    uint64_t min_index);
 
 struct raft_vote_request {
     struct raft_rpc_common common;
@@ -940,14 +942,28 @@ raft_write_entry(struct raft *raft,
      * just not attempt them) since omitting some writes is fatal */
 
     raft_add_entry(raft, term, type, data);
-    struct json *e = raft_entry_to_json_with_index(raft, raft->log_end - 1);
-    struct ovsdb_error *error = ovsdb_log_write_json(raft->storage, e);
-    json_destroy(e);
+    struct json *json = raft_entry_to_json_with_index(raft, raft->log_end - 1);
+    struct ovsdb_error *error = ovsdb_log_write_json(raft->storage, json);
+    json_destroy(json);
 
     if (error) {
         /* XXX? */
         free(&raft->log[--raft->log_end].data);
     }
+
+    return error;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_write_state(struct raft *raft, uint64_t term, const struct uuid *vote)
+{
+    struct json *json = json_object_create();
+    json_object_put_uint(json, "term", term);
+    if (vote) {
+        json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(vote));
+    }
+    struct ovsdb_error *error = ovsdb_log_write_json(raft->storage, json);
+    json_destroy(json);
 
     return error;
 }
@@ -1361,6 +1377,7 @@ raft_waiter_complete(struct raft *raft, struct raft_waiter *w)
 {
     switch (w->type) {
     case RAFT_W_COMMAND:
+        raft_update_match_index(raft, raft->me, w->command.index);
         break;
 
     case RAFT_W_APPEND:
@@ -2025,6 +2042,8 @@ raft_become_follower(struct raft *raft)
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
     }
+
+    /* XXX how do we handle outstanding waiters? */
 }
 
 static void
@@ -2105,6 +2124,11 @@ raft_receive_term__(struct raft *raft, uint64_t term)
      *     number, it rejects the request.
      */
     if (term > raft->current_term) {
+        struct ovsdb_error *error = raft_write_state(raft, term, NULL);
+        if (error) {
+            /* XXX */
+        }
+        /* XXX need to commit before replying */
         raft->current_term = term;
         raft->voted_for = UUID_ZERO;
         raft_become_follower(raft);
@@ -2443,6 +2467,43 @@ raft_find_new_server(struct raft *raft, const struct uuid *uuid)
 }
 
 static void
+raft_update_match_index(struct raft *raft, struct raft_server *s,
+                        uint64_t min_index)
+{
+    if (s->match_index >= min_index) {
+        return;
+    }
+
+    s->match_index = min_index;
+
+    /* Figure 3.1: "If there exists an N such that N > commitIndex, a
+     * majority of matchIndex[i] >= N, and log[N].term == currentTerm, set
+     * commitIndex = N (sections 3.5 and 3.6)."
+     *
+     * This loop cannot just bail out when it comes across a log entry that
+     * does not match the criteria.  For example, Figure 3.7(d2) shows a
+     * case where the log entry for term 2 cannot be committed directly
+     * (because it is not for the current term) but it can be committed as
+     * a side effect of commit the entry for term 4 (the current term).
+     * XXX Is there a more efficient way to do this? */
+    for (uint64_t n = raft->commit_index; n < raft->log_end; n++) {
+        ovs_assert(n >= raft->log_start);
+        if (raft->log[n - raft->log_start].term == raft->current_term) {
+            size_t count = 0;
+            struct raft_server *s2;
+            HMAP_FOR_EACH (s2, hmap_node, &raft->servers) {
+                if (s2->match_index >= n) {
+                    count++;
+                }
+            }
+            if (count == hmap_count(&raft->servers)) {
+                raft->commit_index = n;
+            }
+        }
+    }
+}
+
+static void
 raft_handle_append_reply(struct raft *raft,
                          const struct raft_append_reply *rpy)
 {
@@ -2473,35 +2534,7 @@ raft_handle_append_reply(struct raft *raft,
         if (s->next_index < min_index) {
             s->next_index = min_index;
         }
-        if (s->match_index < min_index) {
-            s->match_index = min_index;
-        }
-
-        /* Figure 3.1: "If there exists an N such that N > commitIndex, a
-         * majority of matchIndex[i] >= N, and log[N].term == currentTerm, set
-         * commitIndex = N (sections 3.5 and 3.6)."
-         *
-         * This loop cannot just bail out when it comes across a log entry that
-         * does not match the criteria.  For example, Figure 3.7(d2) shows a
-         * case where the log entry for term 2 cannot be committed directly
-         * (because it is not for the current term) but it can be committed as
-         * a side effect of commit the entry for term 4 (the current term).
-         * XXX Is there a more efficient way to do this? */
-        for (uint64_t n = raft->commit_index; n < raft->log_end; n++) {
-            ovs_assert(n >= raft->log_start);
-            if (raft->log[n - raft->log_start].term == raft->current_term) {
-                size_t count = 0;
-                struct raft_server *s2;
-                HMAP_FOR_EACH (s2, hmap_node, &raft->servers) {
-                    if (s2->match_index >= n) {
-                        count++;
-                    }
-                }
-                if (count == hmap_count(&raft->servers)) {
-                    raft->commit_index = n;
-                }
-            }
-        }
+        raft_update_match_index(raft, s, min_index);
     } else {
         /* Figure 3.1: "If AppendEntries fails because of log inconsistency,
          * decrement nextIndex and retry (section 3.5)."
@@ -2569,6 +2602,12 @@ raft_handle_vote_request__(struct raft *raft,
 
     /* Vote for the peer. */
     raft->voted_for = rq->common.sid;
+    struct ovsdb_error *error = raft_write_state(raft, raft->current_term,
+                                                 &raft->voted_for);
+    if (error) {
+        /* XXX */
+    }
+    /* XXX need to commit before replying */
     return true;
 }
 
