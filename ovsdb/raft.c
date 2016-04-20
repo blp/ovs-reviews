@@ -107,6 +107,9 @@ struct raft_conn {
     struct ovs_list list_node;
     struct jsonrpc_session *js;
     struct uuid sid;
+
+    /* Join. */
+    unsigned int js_seqno;
 };
 
 struct raft_command {
@@ -504,18 +507,23 @@ union raft_rpc {
     struct raft_install_snapshot_reply install_snapshot_reply;
 };
 
-static void raft_receive(struct raft *, const union raft_rpc *);
+static void raft_handle_rpc(struct raft *, const union raft_rpc *);
 static void raft_send(struct raft *, const union raft_rpc *);
+static void raft_send__(struct raft *, const union raft_rpc *,
+                        struct jsonrpc_session *);
 static void raft_send_append_request(struct raft *,
                                      struct raft_server *, unsigned int n);
 static void raft_rpc_destroy(union raft_rpc *);
 static struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct raft *,
                                                const union raft_rpc *);
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_rpc_from_jsonrpc(const struct raft *, const struct jsonrpc_msg *,
+raft_rpc_from_jsonrpc(struct raft *, const struct jsonrpc_msg *,
                       union raft_rpc *);
+static bool raft_receive_rpc(struct raft *, struct jsonrpc_session *,
+                             struct uuid *sid, union raft_rpc *);
 static void raft_run_session(struct raft *, struct jsonrpc_session *,
                              struct uuid *sid);
+static void raft_wait_session(struct jsonrpc_session *);
 
 static void raft_become_leader(struct raft *);
 
@@ -584,7 +592,7 @@ raft_make_address_passive(const char *address_)
     return ds_steal_cstr(&paddr);
 }
 
-static struct ovsdb_error *
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_header(struct ovsdb_log *storage,
                   const struct uuid *cid, const struct uuid *sid)
 {
@@ -1277,7 +1285,8 @@ raft_join(const char *file_name, const char *local_address,
                             file_name, UUID_ARGS(&raft->cid), UUID_ARGS(cid_));
         goto error;
     }
-    if (uuid_is_zero(&raft->cid)) {
+    bool unknown_cid = uuid_is_zero(&raft->cid);
+    if (unknown_cid) {
         raft->sid = uuid_generate();
         if (cid_) {
             raft->cid = *cid_;
@@ -1311,13 +1320,53 @@ raft_join(const char *file_name, const char *local_address,
         ovs_list_push_back(&raft->conns, &conn->list_node);
         conn->js = jsonrpc_session_open(remote_addresses[i], true);
         conn->sid = UUID_ZERO;
+        conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
     }
 
     for (;;) {
-        struct raft_conn *conn, *next;
-        LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
-            raft_run_session(raft, conn->js, &conn->sid);
+        struct raft_conn *conn;
+        LIST_FOR_EACH (conn, list_node, &raft->conns) {
+            jsonrpc_session_run(conn->js);
+
+            unsigned int js_seqno = jsonrpc_session_get_seqno(conn->js);
+            if (js_seqno != conn->js_seqno
+                && jsonrpc_session_is_connected(conn->js)) {
+                conn->js_seqno = js_seqno;
+
+                union raft_rpc rq = {
+                    .server_request = {
+                        .common = {
+                            .type = RAFT_RPC_ADD_SERVER_REQUEST,
+                            .sid = conn->sid,
+                        },
+                        .sid = raft->sid,
+                        .address = CONST_CAST(char *, local_address),
+                    },
+                };
+                raft_send__(raft, &rq, conn->js);
+            }
+
+            union raft_rpc rpc;
+            if (!raft_receive_rpc(raft, conn->js, &conn->sid, &rpc)) {
+                continue;
+            }
+            raft_handle_rpc(raft, &rpc);
+            raft_rpc_destroy(&rpc);
+
+            if (unknown_cid && !uuid_is_zero(&raft->cid)) {
+                unknown_cid = false;
+                error = raft_write_header(raft->storage, &raft->cid,
+                                          &raft->sid);
+                if (error) {
+                    goto error;
+                }
+            }
         }
+
+        LIST_FOR_EACH (conn, list_node, &raft->conns) {
+            raft_wait_session(conn->js);
+        }
+        poll_block();
     }
 
 error:
@@ -1367,36 +1416,51 @@ raft_close(struct raft *raft)
     free(raft);
 }
 
+static bool
+raft_receive_rpc(struct raft *raft, struct jsonrpc_session *js,
+                 struct uuid *sid, union raft_rpc *rpc)
+{
+    struct jsonrpc_msg *msg = jsonrpc_session_recv(js);
+    if (!msg) {
+        return false;
+    }
+
+    struct ovsdb_error *error = raft_rpc_from_jsonrpc(raft, msg, rpc);
+    if (error) {
+        char *s = ovsdb_error_to_string(error);
+        ovsdb_error_destroy(error);
+        VLOG_INFO("%s: %s", jsonrpc_session_get_name(js), s);
+        free(s);
+        return false;
+    }
+
+    if (uuid_is_zero(sid)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+        *sid = rpc->common.sid;
+        VLOG_INFO_RL(&rl, "%s: learned server ID "UUID_FMT,
+                     jsonrpc_session_get_name(js), UUID_ARGS(sid));
+    } else if (!uuid_equals(sid, &rpc->common.sid)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "%s: remote server ID changed from "
+                     UUID_FMT" to "UUID_FMT,
+                     jsonrpc_session_get_name(js),
+                     UUID_ARGS(sid), UUID_ARGS(&rpc->common.sid));
+    }
+
+    return true;
+}
+
 static void
-raft_run_session(struct raft *raft, struct jsonrpc_session *s,
+raft_run_session(struct raft *raft, struct jsonrpc_session *js,
                  struct uuid *sid)
 {
-    jsonrpc_session_run(s);
+    jsonrpc_session_run(js);
     for (size_t i = 0; i < 50; i++) {
-        struct jsonrpc_msg *msg = jsonrpc_session_recv(s);
-        if (!msg) {
-            break;
-        }
-
         union raft_rpc rpc;
-        struct ovsdb_error *error = raft_rpc_from_jsonrpc(raft, msg, &rpc);
-        if (error) {
-            char *error_s = ovsdb_error_to_string(error);
-            ovsdb_error_destroy(error);
-            VLOG_INFO("%s: %s", jsonrpc_session_get_name(s), error_s);
-            free(error_s);
+        if (!raft_receive_rpc(raft, js, sid, &rpc)) {
             break;
         }
-        if (uuid_is_zero(sid)) {
-            *sid = rpc.common.sid;
-        } else if (!uuid_equals(sid, &rpc.common.sid)) {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-            VLOG_WARN_RL(&rl, "%s: remote server ID changed from "
-                         UUID_FMT" to "UUID_FMT,
-                         jsonrpc_session_get_name(s),
-                         UUID_ARGS(sid), UUID_ARGS(&rpc.common.sid));
-        }
-        raft_receive(raft, &rpc);
+        raft_handle_rpc(raft, &rpc);
         raft_rpc_destroy(&rpc);
     }
 }
@@ -1619,6 +1683,15 @@ raft_run(struct raft *raft)
     /* XXX if we're leader and we're idle, send empty appendrequest */
 }
 
+static void
+raft_wait_session(struct jsonrpc_session *js)
+{
+    if (js) {
+        jsonrpc_session_wait(js);
+        jsonrpc_session_recv_wait(js);
+    }
+}
+
 void
 raft_wait(struct raft *raft)
 {
@@ -1632,16 +1705,12 @@ raft_wait(struct raft *raft)
 
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        if (s->js) {
-            jsonrpc_session_wait(s->js);
-            jsonrpc_session_recv_wait(s->js);
-        }
+        raft_wait_session(s->js);
     }
 
     struct raft_conn *conn;
     LIST_FOR_EACH (conn, list_node, &raft->conns) {
-        jsonrpc_session_wait(conn->js);
-        jsonrpc_session_recv_wait(conn->js);
+        raft_wait_session(conn->js);
     }
 
     poll_timer_wait_until(raft->election_timeout);
@@ -1969,9 +2038,15 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
                     const union raft_rpc *rpc)
 {
     struct json *args = json_object_create();
-    json_object_put_format(args, "cluster", UUID_FMT, UUID_ARGS(&raft->cid));
+    if (!uuid_is_zero(&raft->cid)) {
+        json_object_put_format(args, "cluster", UUID_FMT,
+                               UUID_ARGS(&raft->cid));
+    }
+    if (!uuid_is_zero(&rpc->common.sid)) {
+        json_object_put_format(args, "to", UUID_FMT,
+                               UUID_ARGS(&rpc->common.sid));
+    }
     json_object_put_format(args, "from", UUID_FMT, UUID_ARGS(&raft->sid));
-    json_object_put_format(args, "to", UUID_FMT, UUID_ARGS(&rpc->common.sid));
 
     switch (rpc->common.type) {
     case RAFT_RPC_APPEND_REQUEST:
@@ -2016,7 +2091,7 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_rpc_from_jsonrpc(const struct raft *raft,
+raft_rpc_from_jsonrpc(struct raft *raft,
                       const struct jsonrpc_msg *msg, union raft_rpc *rpc)
 {
     memset(rpc, 0, sizeof *rpc);
@@ -2043,9 +2118,14 @@ raft_rpc_from_jsonrpc(const struct raft *raft,
     struct uuid cid;
     if (parse_uuid__(&p, "cluster", is_add, &cid)
         && !uuid_equals(&cid, &raft->cid)) {
-        ovsdb_parser_raise_error(&p, "wrong cluster "UUID_FMT" "
-                                 "(expected "UUID_FMT")",
-                                 UUID_ARGS(&cid), UUID_ARGS(&raft->cid));
+        if (uuid_is_zero(&raft->cid)) {
+            raft->cid = cid;
+            VLOG_INFO("learned cluster ID "UUID_FMT, UUID_ARGS(&cid));
+        } else {
+            ovsdb_parser_raise_error(&p, "wrong cluster "UUID_FMT" "
+                                     "(expected "UUID_FMT")",
+                                     UUID_ARGS(&cid), UUID_ARGS(&raft->cid));
+        }
     }
 
     struct uuid to_sid;
@@ -3025,7 +3105,7 @@ raft_handle_install_snapshot_reply(
 }
 
 static void
-raft_receive(struct raft *raft, const union raft_rpc *rpc)
+raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
 {
     switch (rpc->common.type) {
     case RAFT_RPC_APPEND_REQUEST:
@@ -3090,6 +3170,7 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
     LIST_FOR_EACH (conn, list_node, &raft->conns) {
         if (uuid_equals(&conn->sid, &rpc->common.sid)) {
             raft_send__(raft, rpc, conn->js);
+            return;
         }
     }
 
