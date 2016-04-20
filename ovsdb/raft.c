@@ -108,28 +108,34 @@ struct raft_conn {
     struct uuid sid;
 };
 
+struct raft_command {
+    struct ovs_refcount refcnt;
+    enum raft_command_status status;
+};
+
+enum raft_waiter_type {
+    RAFT_W_COMMAND,
+    RAFT_W_APPEND
+};
+
 struct raft_waiter {
     struct ovs_list list_node;
     uint64_t fsync_seqno;
-
-    enum raft_waiter_type {
-        RAFT_W_LOCAL,
-        RAFT_W_APPEND
-    } type;
+    enum raft_waiter_type type;
     union {
         struct {
-            enum raft_command_status status;
+            struct raft_command *cmd;
             uint64_t index;
-        } local;
+        } command;
 
         struct {
-            struct uuid sid;    /* XXX this is just the leader's sid */
-            uint64_t prev_log_index;
-            uint64_t prev_log_term;
-            unsigned int n_entries;
+            struct raft_append_request *rq; /* Does not include 'entries'. */
         } append;
     };
-}
+};
+
+static struct raft_waiter *raft_waiter_create(struct raft *,
+                                              enum raft_waiter_type);
 
 /* The Raft state machine. */
 struct raft {
@@ -182,9 +188,6 @@ struct raft {
     uint64_t last_applied;      /* Max log index applied to state machine. */
     struct raft_server *leader; /* XXX Is this useful? */
 
-    /* Outstanding commands. */
-    struct ovs_list commands;
-
     /* File synchronization. */
     pthread_t fsync_thread;
     struct ovs_mutex fsync_mutex;
@@ -192,6 +195,7 @@ struct raft {
     uint64_t fsync_cur OVS_GUARDED;
     struct seq *fsync_request;
     struct seq *fsync_complete;
+    struct ovs_list waiters;
 
     /* Network connections. */
     struct pstream *listener;
@@ -334,6 +338,10 @@ struct raft_append_reply {
     /* Result. */
     bool success;
 };
+
+static void raft_send_append_reply(struct raft *,
+                                   const struct raft_append_request *,
+                                   bool success);
 
 struct raft_vote_request {
     struct raft_rpc_common common;
@@ -657,94 +665,24 @@ static struct json *
 raft_entry_to_json(const struct raft_entry *e)
 {
     struct json *json = json_object_create();
-    json_object_put_uint(json, "term", src->term);
-    if (src->type == RAFT_DATA) {
-        json_object_put_string(json, "data", src->data);
+    json_object_put_uint(json, "term", e->term);
+    if (e->type == RAFT_DATA) {
+        json_object_put_string(json, "data", e->data);
     } else {
         /* XXX what if json_from_string() reports an error? */
-        json_object_put(json, "servers", json_from_string(src->data));
+        json_object_put(json, "servers", json_from_string(e->data));
     }
+    return json;
 }
 
 static struct json *
 raft_entry_to_json_with_index(const struct raft *raft, uint64_t index)
 {
     ovs_assert(index >= raft->log_start && index < raft->log_end);
-    struct json *json = raft_entry_to_json(&raft->entries[index - log_start]);
+    struct json *json = raft_entry_to_json(&raft->log[index
+                                                      - raft->log_start]);
     json_object_put_uint(json, "index", index);
     return json;
-}
-
-static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_entry_from_json(struct json *json, struct raft_entry *e)
-{
-    memset(e, 0, sizeof *e);
-
-    struct ovsdb_parser p;
-    ovsdb_parser_init(&p, json, "raft log entry");
-    e->term = parse_uint(&p, "term");
-    const struct json *servers_json = ovsdb_parser_member(
-        &p, "servers", OP_OBJECT | OP_OPTIONAL);
-    if (servers_json) {
-        struct hmap servers;
-        struct ovsdb_error *error = raft_servers_from_json(servers_json,
-                                                           &servers);
-        if (error) {
-            return error;
-        }
-        raft_servers_destroy(&servers);
-
-        e->type = RAFT_SERVERS;
-        e->data = json_to_string(servers_json, 0);
-    } else {
-        const struct json *data = ovsdb_parser_member(&p, "data", OP_STRING);
-        if (data) {
-            e->type = RAFT_DATA;
-            e->data = xstrdup(json_string(data));
-        }
-    }
-
-    struct ovsdb_error *error = ovsdb_parser_finish(&p);
-    if (error) {
-        free(e->data);
-    }
-    return error;
-}
-
-static struct raft_entry *
-raft_add_entry(struct raft *raft,
-               uint64_t term, enum raft_entry_type type, char *data)
-{
-    if (raft->log_end - raft->log_start >= raft->allocated_log) {
-        raft->log = x2nrealloc(raft->log, &raft->allocated_log,
-                               sizeof *raft->log);
-    }
-
-    struct raft_entry *entry = &raft->log[raft->log_end++ - raft->log_start];
-    entry->type = type;
-    entry->term = term;
-    entry->data = data;
-    return entry;
-}
-
-static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_entry(struct raft *raft,
-                 uint64_t term, enum raft_entry_type type, char *data)
-{
-    /* XXX when one write fails we need to make all subsequent writes fail (or
-     * just not attempt them) since omitting some writes is fatal */
-
-    raft_add_entry(raft, raft->current_term, RAFT_DATA, xstrdup(data));
-    struct json *e = raft_entry_to_json_with_index(raft, raft->log_end - 1);
-    struct ovsdb_error *error = ovsdb_log_write_json(raft->storage, e);
-    json_destroy(e);
-
-    if (error) {
-        /* XXX? */
-        free(&raft->entries[--raft->log_end].data);
-    }
-
-    return error;
 }
 
 static uint64_t
@@ -943,6 +881,78 @@ raft_set_servers(struct raft *raft, const struct hmap *new_servers)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_entry_from_json(struct json *json, struct raft_entry *e)
+{
+    memset(e, 0, sizeof *e);
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "raft log entry");
+    e->term = parse_uint(&p, "term");
+    const struct json *servers_json = ovsdb_parser_member(
+        &p, "servers", OP_OBJECT | OP_OPTIONAL);
+    if (servers_json) {
+        struct hmap servers;
+        struct ovsdb_error *error = raft_servers_from_json(servers_json,
+                                                           &servers);
+        if (error) {
+            return error;
+        }
+        raft_servers_destroy(&servers);
+
+        e->type = RAFT_SERVERS;
+        e->data = json_to_string(servers_json, 0);
+    } else {
+        const struct json *data = ovsdb_parser_member(&p, "data", OP_STRING);
+        if (data) {
+            e->type = RAFT_DATA;
+            e->data = xstrdup(json_string(data));
+        }
+    }
+
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        free(e->data);
+    }
+    return error;
+}
+
+static struct raft_entry *
+raft_add_entry(struct raft *raft,
+               uint64_t term, enum raft_entry_type type, char *data)
+{
+    if (raft->log_end - raft->log_start >= raft->allocated_log) {
+        raft->log = x2nrealloc(raft->log, &raft->allocated_log,
+                               sizeof *raft->log);
+    }
+
+    struct raft_entry *entry = &raft->log[raft->log_end++ - raft->log_start];
+    entry->type = type;
+    entry->term = term;
+    entry->data = data;
+    return entry;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_write_entry(struct raft *raft,
+                 uint64_t term, enum raft_entry_type type, char *data)
+{
+    /* XXX when one write fails we need to make all subsequent writes fail (or
+     * just not attempt them) since omitting some writes is fatal */
+
+    raft_add_entry(raft, term, type, data);
+    struct json *e = raft_entry_to_json_with_index(raft, raft->log_end - 1);
+    struct ovsdb_error *error = ovsdb_log_write_json(raft->storage, e);
+    json_destroy(e);
+
+    if (error) {
+        /* XXX? */
+        free(&raft->log[--raft->log_end].data);
+    }
+
+    return error;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 parse_log_record(struct raft *raft, const struct json *entry)
 {
     /* All log records include "term", plus at most one of:
@@ -1118,6 +1128,7 @@ raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
     ovs_mutex_init(&raft->fsync_mutex);
     raft->fsync_request = seq_create();
     raft->fsync_complete = seq_create();
+    ovs_list_init(&raft->waiters);
 
     struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC, mode,
                                                -1, &raft->storage);
@@ -1345,9 +1356,97 @@ raft_run_session(struct raft *raft, struct jsonrpc_session *s,
     }
 }
 
+static void
+raft_waiter_complete(struct raft *raft, struct raft_waiter *w)
+{
+    switch (w->type) {
+    case RAFT_W_COMMAND:
+        break;
+
+    case RAFT_W_APPEND:
+        raft_send_append_reply(raft, w->append.rq, true);
+        break;
+    }
+}
+
+static void
+raft_command_unref(struct raft_command *cmd)
+{
+    if (cmd && ovs_refcount_unref(&cmd->refcnt) == 1) {
+        free(cmd);
+    }
+}
+
+static void
+raft_waiter_destroy(struct raft_waiter *w)
+{
+    if (!w) {
+        return;
+    }
+
+    switch (w->type) {
+    case RAFT_W_COMMAND:
+        raft_command_unref(w->command.cmd);
+        break;
+
+    case RAFT_W_APPEND:
+        free(w->append.rq);
+        break;
+    }
+    free(w);
+}
+
+static void
+raft_waiters_run(struct raft *raft)
+{
+    if (ovs_list_is_empty(&raft->waiters)) {
+        return;
+    }
+
+    ovs_mutex_lock(&raft->fsync_mutex);
+    uint64_t cur = raft->fsync_cur;
+    ovs_mutex_unlock(&raft->fsync_mutex);
+
+    struct raft_waiter *w, *next;
+    LIST_FOR_EACH_SAFE (w, next, list_node, &raft->waiters) {
+        if (cur < w->fsync_seqno) {
+            break;
+        }
+        raft_waiter_complete(raft, w);
+        ovs_list_remove(&w->list_node);
+        raft_waiter_destroy(w);
+    }
+}
+
+static void
+raft_waiters_wait(struct raft *raft)
+{
+    if (ovs_list_is_empty(&raft->waiters)) {
+        return;
+    }
+
+    uint64_t complete = seq_read(raft->fsync_complete);
+
+    ovs_mutex_lock(&raft->fsync_mutex);
+    uint64_t cur = raft->fsync_cur;
+    ovs_mutex_unlock(&raft->fsync_mutex);
+
+    struct raft_waiter *w, *next;
+    LIST_FOR_EACH_SAFE (w, next, list_node, &raft->waiters) {
+        if (cur < w->fsync_seqno) {
+            seq_wait(raft->fsync_complete, complete);
+        } else {
+            poll_immediate_wake();
+        }
+        break;
+    }
+}
+
 void
 raft_run(struct raft *raft)
 {
+    raft_waiters_run(raft);
+
     if (!raft->listener && time_msec() >= raft->listen_backoff) {
         char *paddr = raft_make_address_passive(raft->me->address);
         int error = pstream_open(paddr, &raft->listener, DSCP_DEFAULT);
@@ -1400,6 +1499,8 @@ raft_run(struct raft *raft)
 void
 raft_wait(struct raft *raft)
 {
+    raft_waiters_wait(raft);
+
     if (raft->listener) {
         pstream_wait(raft->listener);
     } else {
@@ -1421,15 +1522,8 @@ raft_wait(struct raft *raft)
     }
 }
 
-struct raft_command {
-    struct ovs_list list_node;
-    enum raft_command_status status;
-    uint64_t index;
-    uint64_t fsync_seqno;
-};
-
-static uint64_t
-raft_request_fsync(struct raft *raft)
+static struct raft_waiter *
+raft_waiter_create(struct raft *raft, enum raft_waiter_type type)
 {
     ovs_mutex_lock(&raft->fsync_mutex);
     uint64_t seqno = ++raft->fsync_next;
@@ -1437,7 +1531,11 @@ raft_request_fsync(struct raft *raft)
 
     seq_change(raft->fsync_request);
 
-    return seqno;
+    struct raft_waiter *w = xzalloc(sizeof *w);
+    ovs_list_push_back(&raft->waiters, &w->list_node);
+    w->fsync_seqno = seqno;
+    w->type = type;
+    return w;
 }
 
 struct raft_command *
@@ -1449,13 +1547,24 @@ raft_command_execute(struct raft *raft, const void *data)
         return cmd;
     }
 
+    uint64_t index = raft->log_end;
+    ovs_refcount_init(&cmd->refcnt);
     cmd->status = RAFT_CMD_INCOMPLETE;
-    cmd->index = raft->log_end;
+
+    /* Write to local log.
+     *
+     * XXX If this server is being removed from the configuration then we
+     * should not writ to the local log; see section 4.2.2.  Or we could
+     * implement leadership transfer. */
     struct ovsdb_error *error = raft_write_entry(raft, raft->current_term,
                                                  RAFT_DATA, xstrdup(data));
-    cmd->fsync_seqno = error ? 0 : raft_request_fsync(raft);
+    if (!error) {
+        ovs_refcount_ref(&cmd->refcnt);
 
-    if (error) {
+        struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_COMMAND);
+        w->command.cmd = cmd;
+        w->command.index = index;
+    } else {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
         char *s = ovsdb_error_to_string(error);
         VLOG_WARN_RL(&rl, "%s", s);
@@ -1465,6 +1574,7 @@ raft_command_execute(struct raft *raft, const void *data)
         /* XXX make this a hard failure if cluster has <=2 servers. */
     }
 
+    /* Write to remote logs. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s != raft->me && s->next_index == raft->log_end - 1) {
@@ -2025,7 +2135,7 @@ raft_get_servers_from_log(struct raft *raft)
 }
 
 /* Returns 1 on success, 0 for failure, -1 for an operation in progress. */
-static bool
+static int
 raft_handle_append_entries(struct raft *raft,
                            const struct raft_append_request *rq,
                            uint64_t prev_log_index, uint64_t prev_log_term,
@@ -2095,10 +2205,8 @@ raft_handle_append_entries(struct raft *raft,
     }
 
     struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_APPEND);
-    w->append.sid = rq->common.sid;
-    w->append.prev_log_index = rq->prev_log_index;
-    w->append.prev_log_term = rq->prev_log_term;
-    w->append.n_entries = rq->n_entries;
+    w->append.rq = xmemdup(rq, sizeof *rq);
+    w->append.rq->entries = NULL;
     return -1;
 }
 
@@ -2266,18 +2374,14 @@ raft_handle_append_request__(struct raft *raft,
         &rq->entries[ofs], rq->n_entries - ofs);
 }
 
+/* This doesn't use rq->entries (but it does use rq->n_entries). */
 static void
-raft_handle_append_request(struct raft *raft,
-                           const struct raft_append_request *rq)
+raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
+                       bool success)
 {
-    int status = raft_handle_append_request__(raft, rq);
-    if (status < 0) {
-        return;
-    }
-
     /* Figure 3.1: "If leaderCommit > commitIndex, set commitIndex =
      * min(leaderCommit, index of last new entry)" */
-    if (status > 0 && rq->leader_commit > raft->commit_index) {
+    if (success && rq->leader_commit > raft->commit_index) {
         raft->commit_index = MIN(rq->leader_commit,
                                  rq->prev_log_index + rq->n_entries);
 
@@ -2309,10 +2413,20 @@ raft_handle_append_request(struct raft *raft,
             .prev_log_index = rq->prev_log_index,
             .prev_log_term = rq->prev_log_term,
             .n_entries = rq->n_entries,
-            .success = status > 0,
+            .success = success,
         }
     };
     raft_send(raft, &reply);
+}
+
+static void
+raft_handle_append_request(struct raft *raft,
+                           const struct raft_append_request *rq)
+{
+    int status = raft_handle_append_request__(raft, rq);
+    if (status >= 0) {
+        raft_send_append_reply(raft, rq, status);
+    }
 }
 
 static struct raft_server *
