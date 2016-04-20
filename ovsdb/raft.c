@@ -514,6 +514,8 @@ static struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct raft *,
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_rpc_from_jsonrpc(const struct raft *, const struct jsonrpc_msg *,
                       union raft_rpc *);
+static void raft_run_session(struct raft *, struct jsonrpc_session *,
+                             struct uuid *sid);
 
 static void raft_become_leader(struct raft *);
 
@@ -1248,8 +1250,7 @@ error:
  */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_join(const char *file_name, const char *local_address,
-          const char *remote_addresses[] OVS_UNUSED /* XXX */,
-          size_t n_remotes OVS_UNUSED /* XXX */,
+          char *remote_addresses[], size_t n_remotes,
           const struct uuid *cid_, struct raft **raftp)
 {
     struct raft *raft = NULL;
@@ -1305,6 +1306,19 @@ raft_join(const char *file_name, const char *local_address,
      *
      *     - installsnapshot/appendentries: focus on this connection unless it
      *       dies */
+    for (size_t i = 0; i < n_remotes; i++) {
+        struct raft_conn *conn = xzalloc(sizeof *conn);
+        ovs_list_push_back(&raft->conns, &conn->list_node);
+        conn->js = jsonrpc_session_open(remote_addresses[i], true);
+        conn->sid = UUID_ZERO;
+    }
+
+    for (;;) {
+        struct raft_conn *conn, *next;
+        LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
+            raft_run_session(raft, conn->js, &conn->sid);
+        }
+    }
 
 error:
     raft_close(raft);
@@ -1373,16 +1387,14 @@ raft_run_session(struct raft *raft, struct jsonrpc_session *s,
             free(error_s);
             break;
         }
-        if (sid) {
-            if (uuid_is_zero(sid)) {
-                *sid = rpc.common.sid;
-            } else if (!uuid_equals(sid, &rpc.common.sid)) {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-                VLOG_WARN_RL(&rl, "%s: remote server ID changed from "
-                             UUID_FMT" to "UUID_FMT,
-                             jsonrpc_session_get_name(s),
-                             UUID_ARGS(sid), UUID_ARGS(&rpc.common.sid));
-            }
+        if (uuid_is_zero(sid)) {
+            *sid = rpc.common.sid;
+        } else if (!uuid_equals(sid, &rpc.common.sid)) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_WARN_RL(&rl, "%s: remote server ID changed from "
+                         UUID_FMT" to "UUID_FMT,
+                         jsonrpc_session_get_name(s),
+                         UUID_ARGS(sid), UUID_ARGS(&rpc.common.sid));
         }
         raft_receive(raft, &rpc);
         raft_rpc_destroy(&rpc);

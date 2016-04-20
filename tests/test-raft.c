@@ -25,6 +25,7 @@
 #include "poll-loop.h"
 #include "unixctl.h"
 #include "util.h"
+#include "uuid.h"
 #include "openvswitch/vlog.h"
 
 OVS_NO_RETURN static void usage(void);
@@ -32,6 +33,9 @@ static void parse_options(int argc, char *argv[]);
 
 static unixctl_cb_func test_raft_exit;
 static unixctl_cb_func test_raft_execute;
+
+/* --cluster: UUID of cluster to open or join. */
+static struct uuid cluster_id;
 
 static void
 check_ovsdb_error(struct ovsdb_error *error)
@@ -51,15 +55,31 @@ main(int argc, char *argv[])
     fatal_signal_init();
     parse_options(argc, argv);
 
-    if (argc - optind != 1) {
-        ovs_fatal(0, "exactly one non-option argument required "
-                  "(use --help for help)");
+    argc -= optind;
+    argv += optind;
+    if (argc == 0 || argc == 2) {
+        ovs_fatal(0, "either one or more than two non-option arguments "
+                  " required (use --help for help)");
     }
 
     daemonize_start(false);
 
+
     struct raft *raft;
-    check_ovsdb_error(raft_open(argv[optind], &raft));
+    const char *file_name = argv[0];
+    if (argc == 1) {
+        check_ovsdb_error(raft_open(file_name, &raft));
+    } else {
+        const char *local_address = argv[1];
+        char **remote_addresses = &argv[2];
+        size_t n_remotes = argc - 2;
+        const struct uuid *cid = (uuid_is_zero(&cluster_id)
+                                  ? NULL : &cluster_id);
+
+        check_ovsdb_error(raft_join(file_name, local_address,
+                                    remote_addresses, n_remotes,
+                                    cid, &raft));
+    }
 
     struct unixctl_server *server;
     int error = unixctl_server_create(NULL, &server);
@@ -95,10 +115,12 @@ static void
 parse_options(int argc, char *argv[])
 {
     enum {
+        OPT_CLUSTER = UCHAR_MAX + 1,
         DAEMON_OPTION_ENUMS,
         VLOG_OPTION_ENUMS
     };
     static const struct option long_options[] = {
+        {"cluster", required_argument, NULL, OPT_CLUSTER},
         {"help", no_argument, NULL, 'h'},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
@@ -113,6 +135,12 @@ parse_options(int argc, char *argv[])
         }
 
         switch (c) {
+        case OPT_CLUSTER:
+            if (!uuid_from_string(&cluster_id, optarg)) {
+                ovs_fatal(0, "\"%s\" is not a valid UUID", optarg);
+            }
+            break;
+
         case 'h':
             usage();
 
