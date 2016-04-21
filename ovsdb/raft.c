@@ -145,6 +145,7 @@ static struct raft_waiter *raft_waiter_create(struct raft *,
 /* The Raft state machine. */
 struct raft {
     struct ovsdb_log *storage;
+    char *file_name;
 
 /* Persistent derived state.
  *
@@ -1169,6 +1170,7 @@ raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
             struct raft **raftp)
 {
     struct raft *raft = xzalloc(sizeof *raft);
+    raft->file_name = xstrdup(file_name);
     raft->role = RAFT_FOLLOWER;
     raft_reset_timer(raft);
     hmap_init(&raft->servers);
@@ -1424,6 +1426,7 @@ raft_close(struct raft *raft)
 
     ds_destroy(&raft->snapshot_buf);
 
+    free(raft->file_name);
     free(raft);
 }
 
@@ -3121,6 +3124,27 @@ raft_handle_remove_server_reply(struct raft *raft OVS_UNUSED,
     /* XXX */
 }
 
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_write_snapshot(struct raft *raft)
+{
+    /* Lock temporary file. */
+    char *tmp_name = xasprintf("%s.tmp", raft->file_name);
+    retval = lockfile_lock(tmp_name, &tmp_lock);
+    if (retval) {
+        error = ovsdb_io_error(retval, "could not get lock on %s", tmp_name);
+        goto exit;
+    }
+
+    /* Remove temporary file.  (It might not exist.) */
+    if (unlink(tmp_name) < 0 && errno != ENOENT) {
+        error = ovsdb_io_error(errno, "failed to remove %s", tmp_name);
+        goto exit;
+    }
+
+
+
+}
+
 static void
 raft_handle_install_snapshot_request__(
     struct raft *raft, const struct raft_install_snapshot_request *rq)
@@ -3135,7 +3159,7 @@ raft_handle_install_snapshot_request__(
     }
     if (raft->snapshot_buf.length == rq->length) {
         /* install snapshot */
-
+        raft_write_snapshot(
     }
 }
 
