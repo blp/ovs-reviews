@@ -38,6 +38,7 @@
 #include "socket-util.h"
 #include "stream.h"
 #include "timeval.h"
+#include "unicode.h"
 #include "util.h"
 #include "uuid.h"
 
@@ -180,10 +181,14 @@ struct raft {
      *
      * This is the state of the cluster as of the last discarded log entry,
      * that is, at log index 'log_start - 1' (called prevIndex in Figure 5.1).
-     * Only committed log entries can be included in a snapshot. */
+     * Only committed log entries can be included in a snapshot.
+     *
+     * 'snapshot' is an empty string if there's no snapshot data; it is NULL,
+     * on the other hand, only if */
     uint64_t prev_term;               /* Term for index 'log_start - 1'. */
     struct hmap prev_servers;         /* Contains "struct raft_server"s. */
-    char *snapshot;                   /* Data of snapshot, or NULL if none. */
+    char *snapshot;                   /* Null-terminated data of snapshot. */
+    size_t snapshot_len;              /* strlen(snapshot). */
 
 /* Volatile state. */
 
@@ -216,6 +221,9 @@ struct raft {
 
     /* Candidates only.  Reinitialized at start of election. */
     int n_votes;                /* Number of votes for me. */
+
+    /* Snapshot being received. */
+    struct ds snapshot_buf;     /* XXX reset when term changes */
 };
 
 static void *
@@ -466,7 +474,6 @@ struct raft_install_snapshot_request {
     struct raft_rpc_common common;
 
     uint64_t term;              /* Leader's term. */
-    struct uuid leader_sid;     /* So follower can redirect clients. */
 
     uint64_t last_index;        /* Replaces everything up to this index. */
     uint64_t last_term;         /* Term of last_index. */
@@ -479,13 +486,13 @@ struct raft_install_snapshot_request {
      * a JSON string.  That means that chunks must not be chosen so as to break
      * apart multibyte characters (because that would create invalid UTF-8).
      *
+     * 0 <= offset < offset + chunk <= length.
+     *
      * The data need not be null-terminated. */
-    uint64_t offset;
-    char *data;
-    size_t len;
-
-    /* Is this the last chunk? */
-    bool done;
+    size_t length;              /* Total length of snapshot. */
+    size_t offset;              /* Offset of beginning of this chunk. */
+    char *data;                 /* Data in this chunk. */
+    size_t chunk;               /* Chunk size, in bytes. */
 };
 
 struct raft_install_snapshot_reply {
@@ -1109,6 +1116,7 @@ raft_read(struct raft *raft)
     }
 
     raft->snapshot = xstrdup(data ? json_string(data) : "");
+    raft->snapshot_len = strlen(raft->snapshot);
 
     struct hmap prev_servers;
     error = raft_servers_from_json(prev_servers_json, &prev_servers);
@@ -1172,6 +1180,7 @@ raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
     raft->fsync_request = seq_create();
     raft->fsync_complete = seq_create();
     ovs_list_init(&raft->waiters);
+    ds_init(&raft->snapshot_buf);
 
     struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC, mode,
                                                -1, &raft->storage);
@@ -1412,6 +1421,8 @@ raft_close(struct raft *raft)
 
     raft_servers_destroy(&raft->add_servers);
     raft_server_destroy(raft->remove_server);
+
+    ds_destroy(&raft->snapshot_buf);
 
     free(raft);
 }
@@ -1982,17 +1993,14 @@ raft_install_snapshot_request_to_jsonrpc(
     const struct raft_install_snapshot_request *rq, struct json *args)
 {
     json_object_put_uint(args, "term", rq->term);
-    json_object_put_format(args, "leader",
-                           UUID_FMT, UUID_ARGS(&rq->leader_sid));
     json_object_put_uint(args, "last_index", rq->last_index);
     json_object_put_uint(args, "last_term", rq->last_term);
     json_object_put(args, "servers", raft_servers_to_json(&rq->servers));
 
+    json_object_put_uint(args, "length", rq->length);
     json_object_put_uint(args, "offset", rq->offset);
     json_object_put(args, "data",
-                    json_string_create_nocopy(xmemdup0(rq->data, rq->len)));
-
-    json_object_put(args, "done", json_boolean_create(rq->done));
+                    json_string_create_nocopy(xmemdup0(rq->data, rq->length)));
 }
 
 static void
@@ -2007,15 +2015,21 @@ raft_install_snapshot_request_from_jsonrpc(
     }
 
     rq->term = parse_uint(p, "term");
-    rq->leader_sid = parse_required_uuid(p, "leader");
     rq->last_index = parse_uint(p, "last_index");
     rq->last_term = parse_uint(p, "last_term");
 
     rq->offset = parse_uint(p, "offset");
+    rq->length = parse_uint(p, "length");
     rq->data = xstrdup(parse_required_string(p, "data"));
-    rq->len = strlen(rq->data);
+    rq->chunk = strlen(rq->data);
 
-    rq->done = parse_boolean(p, "done");
+    if (rq->offset > rq->length ||
+        rq->chunk > rq->length ||
+        rq->chunk + rq->offset > rq->length) {
+        ovsdb_parser_raise_error(p, "contradictory sizes: %"PRIuSIZE" + "
+                                 "%"PRIuSIZE" > %"PRIuSIZE,
+                                 rq->offset, rq->chunk, rq->length);
+    }
 }
 
 static void
@@ -2697,6 +2711,48 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
     }
 }
 
+static size_t
+raft_calculate_snapshot_chunk(const struct raft *raft, size_t offset)
+{
+#define MAX_CHUNK 4096
+    if (offset >= raft->snapshot_len) {
+        return 0;
+    } else if (raft->snapshot_len - offset <= MAX_CHUNK) {
+        return raft->snapshot_len - offset;
+    } else {
+        size_t chunk = MAX_CHUNK;
+        while (utf8_is_continuation_byte(raft->snapshot[offset + chunk])) {
+            /* If this assertion fails, the snapshot is not valid UTF-8. */
+            ovs_assert(chunk >= MAX_CHUNK - 16);
+            chunk--;
+        }
+        return chunk;
+    }
+}
+
+static void
+raft_send_install_snapshot_request(struct raft *raft,
+                                   const struct raft_server *s)
+{
+    union raft_rpc rpc = {
+        .install_snapshot_request = {
+            .common = {
+                .type = RAFT_RPC_INSTALL_SNAPSHOT_REQUEST,
+                .sid = s->sid,
+            },
+            .term = raft->current_term,
+            .last_index = raft->log_start - 1,
+            .last_term = raft->prev_term,
+            .servers = raft->prev_servers,
+            .length = raft->snapshot_len,
+            .offset = 0,
+            .data = raft->snapshot,
+            .chunk = raft_calculate_snapshot_chunk(raft, 0),
+        }
+    };
+    raft_send(raft, &rpc);
+}
+
 static void
 raft_handle_append_reply(struct raft *raft,
                          const struct raft_append_reply *rpy)
@@ -2748,7 +2804,7 @@ raft_handle_append_reply(struct raft *raft,
     }
 
     if (s->next_index < raft->log_start) {
-        /* XXX Send installsnapshot. */
+        raft_send_install_snapshot_request(raft, s);
     } else if (s->next_index < raft->log_end) {
         raft_send_append_request(raft, s, 1);
     } else if (s->phase == RAFT_PHASE_CATCHUP) {
@@ -3073,7 +3129,14 @@ raft_handle_install_snapshot_request__(
         return;
     }
 
-    /* XXX snapshot */
+    ds_truncate(&raft->snapshot_buf, rq->offset);
+    if (raft->snapshot_buf.length == rq->offset) {
+        ds_put_buffer(&raft->snapshot_buf, rq->data, rq->chunk);
+    }
+    if (raft->snapshot_buf.length == rq->length) {
+        /* install snapshot */
+
+    }
 }
 
 static void
@@ -3168,7 +3231,8 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
 
     struct raft_conn *conn;
     LIST_FOR_EACH (conn, list_node, &raft->conns) {
-        if (uuid_equals(&conn->sid, &rpc->common.sid)) {
+        if (uuid_equals(&conn->sid, &rpc->common.sid)
+            && jsonrpc_session_is_connected(conn->js)) {
             raft_send__(raft, rpc, conn->js);
             return;
         }
