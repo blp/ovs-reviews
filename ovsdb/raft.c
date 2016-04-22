@@ -24,6 +24,7 @@
 #include "hmap.h"
 #include "json.h"
 #include "jsonrpc.h"
+#include "lockfile.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/list.h"
 #include "openvswitch/vlog.h"
@@ -478,8 +479,7 @@ struct raft_install_snapshot_request {
 
     uint64_t last_index;        /* Replaces everything up to this index. */
     uint64_t last_term;         /* Term of last_index. */
-
-    struct hmap servers;        /* Contains "struct raft_server"s. */
+    struct hmap last_servers;   /* Contains "struct raft_server"s. */
 
     /* Data.
      *
@@ -534,6 +534,12 @@ static void raft_run_session(struct raft *, struct jsonrpc_session *,
 static void raft_wait_session(struct jsonrpc_session *);
 
 static void raft_become_leader(struct raft *);
+static void raft_reset_timer(struct raft *);
+static struct raft_server *raft_server_add(struct hmap *servers,
+                                           const struct uuid *sid,
+                                           const char *address);
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_write_snapshot(struct raft *, const char *file_name);
 
 static struct raft_server *
 raft_find_server__(const struct hmap *servers, const struct uuid *sid)
@@ -600,6 +606,27 @@ raft_make_address_passive(const char *address_)
     return ds_steal_cstr(&paddr);
 }
 
+static struct raft *
+raft_alloc(const char *file_name)
+{
+    struct raft *raft = xzalloc(sizeof *raft);
+    raft->file_name = xstrdup(file_name);
+    raft->role = RAFT_FOLLOWER;
+    raft->log_start = raft->log_end = 1;
+    raft_reset_timer(raft);
+    hmap_init(&raft->servers);
+    hmap_init(&raft->prev_servers);
+    hmap_init(&raft->add_servers);
+    raft->listen_backoff = LLONG_MIN;
+    ovs_list_init(&raft->conns);
+    ovs_mutex_init(&raft->fsync_mutex);
+    raft->fsync_request = seq_create();
+    raft->fsync_complete = seq_create();
+    ovs_list_init(&raft->waiters);
+    ds_init(&raft->snapshot_buf);
+    return raft;
+}
+
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_header(struct ovsdb_log *storage,
                   const struct uuid *cid, const struct uuid *sid)
@@ -640,51 +667,15 @@ raft_create(const char *file_name, const char *local_address,
         return error;
     }
 
-    /* Create log file. */
-    struct ovsdb_log *storage;
-    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
-                           -1, &storage);
-    if (error) {
-        return error;
-    }
+    struct raft *raft = raft_alloc(file_name);
+    raft->cid = uuid_generate();
+    raft->sid = uuid_generate();
+    raft_server_add(&raft->prev_servers, &raft->sid, local_address);
+    raft->snapshot = xstrdup(data);
+    raft->snapshot_len = strlen(data);
 
-    /* Write header record. */
-    struct uuid cid = uuid_generate();
-    struct uuid sid = uuid_generate();
-    error = raft_write_header(storage, &cid, &sid);
-    if (error) {
-        goto error;
-    }
-
-    /* Write snapshot record. */
-    struct json *prev_servers = json_object_create();
-    char sid_s[UUID_LEN + 1];
-    sprintf(sid_s, UUID_FMT, UUID_ARGS(&sid));
-    json_object_put(prev_servers, sid_s, json_string_create(local_address));
-    struct json *snapshot = json_object_create();
-    json_object_put(snapshot, "prev_term", json_integer_create(0));
-    json_object_put(snapshot, "prev_index", json_integer_create(0));
-    json_object_put(snapshot, "prev_servers", prev_servers);
-    if (data) {
-        json_object_put_string(snapshot, "data", data);
-    }
-    error = ovsdb_log_write_json(storage, snapshot);
-    json_destroy(snapshot);
-    if (error) {
-        goto error;
-    }
-
-    error = ovsdb_log_commit(storage);
-    if (error) {
-        goto error;
-    }
-
-    ovsdb_log_close(storage);
-    return NULL;
-
-error:
-    ovsdb_log_close(storage);
-    unlink(file_name);
+    error = raft_write_snapshot(raft, file_name);
+    raft_close(raft);
     return error;
 }
 
@@ -798,6 +789,17 @@ raft_servers_destroy(struct hmap *servers)
 }
 
 static struct raft_server *
+raft_server_add(struct hmap *servers, const struct uuid *sid,
+                const char *address)
+{
+    struct raft_server *s = xzalloc(sizeof *s);
+    s->sid = *sid;
+    s->address = xstrdup(address);
+    hmap_insert(servers, &s->hmap_node, uuid_hash(sid));
+    return s;
+}
+
+static struct raft_server *
 raft_server_clone(const struct raft_server *src)
 {
     struct raft_server *dst = xmemdup(src, sizeof *src);
@@ -806,7 +808,7 @@ raft_server_clone(const struct raft_server *src)
 }
 
 static void
-raft_servers_clone(struct hmap *dst, struct hmap *src)
+raft_servers_clone(struct hmap *dst, const struct hmap *src)
 {
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, src) {
@@ -846,10 +848,7 @@ raft_servers_from_json__(const struct json *json, struct hmap *servers)
             return error;
         }
 
-        struct raft_server *s = xzalloc(sizeof *s);
-        s->sid = sid;
-        s->address = xstrdup(address);
-        hmap_insert(servers, &s->hmap_node, uuid_hash(&s->sid));
+        raft_server_add(servers, &sid, address);
     }
 
     return NULL;
@@ -980,14 +979,15 @@ raft_write_entry(struct raft *raft,
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_state(struct raft *raft, uint64_t term, const struct uuid *vote)
+raft_write_state(struct ovsdb_log *storage,
+                 uint64_t term, const struct uuid *vote)
 {
     struct json *json = json_object_create();
     json_object_put_uint(json, "term", term);
-    if (vote) {
+    if (vote && !uuid_is_zero(vote)) {
         json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(vote));
     }
-    struct ovsdb_error *error = ovsdb_log_write_json(raft->storage, json);
+    struct ovsdb_error *error = ovsdb_log_write_json(storage, json);
     json_destroy(json);
 
     return error;
@@ -1169,20 +1169,7 @@ static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
             struct raft **raftp)
 {
-    struct raft *raft = xzalloc(sizeof *raft);
-    raft->file_name = xstrdup(file_name);
-    raft->role = RAFT_FOLLOWER;
-    raft_reset_timer(raft);
-    hmap_init(&raft->servers);
-    hmap_init(&raft->prev_servers);
-    hmap_init(&raft->add_servers);
-    raft->listen_backoff = LLONG_MIN;
-    ovs_list_init(&raft->conns);
-    ovs_mutex_init(&raft->fsync_mutex);
-    raft->fsync_request = seq_create();
-    raft->fsync_complete = seq_create();
-    ovs_list_init(&raft->waiters);
-    ds_init(&raft->snapshot_buf);
+    struct raft *raft = raft_alloc(file_name);
 
     struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC, mode,
                                                -1, &raft->storage);
@@ -1569,7 +1556,7 @@ raft_waiters_wait(struct raft *raft)
 static void
 raft_set_term(struct raft *raft, uint64_t term, const struct uuid *vote)
 {
-    struct ovsdb_error *error = raft_write_state(raft, term, vote);
+    struct ovsdb_error *error = raft_write_state(raft->storage, term, vote);
     if (error) {
         /* XXX */
     }
@@ -1821,7 +1808,7 @@ raft_rpc_destroy(union raft_rpc *rpc)
         free(rpc->server_reply.leader_address);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_servers_destroy(&rpc->install_snapshot_request.servers);
+        raft_servers_destroy(&rpc->install_snapshot_request.last_servers);
         free(rpc->install_snapshot_request.data);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
@@ -1998,7 +1985,8 @@ raft_install_snapshot_request_to_jsonrpc(
     json_object_put_uint(args, "term", rq->term);
     json_object_put_uint(args, "last_index", rq->last_index);
     json_object_put_uint(args, "last_term", rq->last_term);
-    json_object_put(args, "servers", raft_servers_to_json(&rq->servers));
+    json_object_put(args, "last_servers",
+                    raft_servers_to_json(&rq->last_servers));
 
     json_object_put_uint(args, "length", rq->length);
     json_object_put_uint(args, "offset", rq->offset);
@@ -2011,7 +1999,8 @@ raft_install_snapshot_request_from_jsonrpc(
     struct ovsdb_parser *p, struct raft_install_snapshot_request *rq)
 {
     const struct json *servers = ovsdb_parser_member(p, "servers", OP_OBJECT);
-    struct ovsdb_error *error = raft_servers_from_json(servers, &rq->servers);
+    struct ovsdb_error *error = raft_servers_from_json(servers,
+                                                       &rq->last_servers);
     if (error) {
         ovsdb_parser_put_error(p, error);
         return;
@@ -2746,7 +2735,7 @@ raft_send_install_snapshot_request(struct raft *raft,
             .term = raft->current_term,
             .last_index = raft->log_start - 1,
             .last_term = raft->prev_term,
-            .servers = raft->prev_servers,
+            .last_servers = raft->prev_servers,
             .length = raft->snapshot_len,
             .offset = 0,
             .data = raft->snapshot,
@@ -2855,7 +2844,8 @@ raft_handle_vote_request__(struct raft *raft,
 
     /* Vote for the peer. */
     raft->voted_for = rq->common.sid;
-    struct ovsdb_error *error = raft_write_state(raft, raft->current_term,
+    struct ovsdb_error *error = raft_write_state(raft->storage,
+                                                 raft->current_term,
                                                  &raft->voted_for);
     if (error) {
         /* XXX */
@@ -3125,11 +3115,87 @@ raft_handle_remove_server_reply(struct raft *raft OVS_UNUSED,
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_snapshot(struct raft *raft)
+raft_write_snapshot(struct raft *raft, const char *file_name)
 {
+    /* Create log file. */
+    struct ovsdb_log *storage;
+    struct ovsdb_error *error;
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
+                           -1, &storage);
+    if (error) {
+        /* "goto exit" is unsafe here: it will unlink an existing file! */
+        return error;
+    }
+
+    /* Write header record. */
+    error = raft_write_header(storage, &raft->cid, &raft->sid);
+    if (error) {
+        goto exit;
+    }
+
+    /* Write snapshot record. */
+    struct json *snapshot = json_object_create();
+    json_object_put(snapshot, "prev_term",
+                    json_integer_create(raft->prev_term));
+    json_object_put(snapshot, "prev_index",
+                    json_integer_create(raft->log_start));
+    json_object_put(snapshot, "prev_servers",
+                    raft_servers_to_json(&raft->prev_servers));
+    if (raft->snapshot) {
+        json_object_put_string(snapshot, "data", raft->snapshot);
+    }
+    error = ovsdb_log_write_json(storage, snapshot);
+    json_destroy(snapshot);
+    if (error) {
+        goto exit;
+    }
+
+    /* Write log records. */
+    for (uint64_t index = raft->log_start; index < raft->log_end; index++) {
+        struct json *json = raft_entry_to_json_with_index(raft, index);
+        error = ovsdb_log_write_json(storage, json);
+        json_destroy(json);
+        if (error) {
+            goto exit;
+        }
+    }
+
+    /* Write term and vote (if any).
+     *
+     * The term is redundant if we wrote a log record for that term above.  The
+     * vote, if any, is never redundant.
+     */
+    error = raft_write_state(storage, raft->current_term, &raft->voted_for);
+    if (error) {
+        goto exit;
+    }
+
+    error = ovsdb_log_commit(storage);
+    if (error) {
+        goto exit;
+    }
+
+exit:
+    if (!error) {
+        ovsdb_log_close(raft->storage);
+        raft->storage = storage;
+    } else {
+        ovsdb_log_close(storage);
+        unlink(file_name);
+    }
+    return error;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_save_snapshot(struct raft *raft)
+{
+    struct lockfile *tmp_lock = NULL;
+    struct ovsdb_error *error = NULL;
+    char *tmp_name = NULL;
+
     /* Lock temporary file. */
-    char *tmp_name = xasprintf("%s.tmp", raft->file_name);
-    retval = lockfile_lock(tmp_name, &tmp_lock);
+    tmp_name = xasprintf("%s.tmp", raft->file_name);
+    int retval = lockfile_lock(tmp_name, &tmp_lock);
     if (retval) {
         error = ovsdb_io_error(retval, "could not get lock on %s", tmp_name);
         goto exit;
@@ -3141,8 +3207,24 @@ raft_write_snapshot(struct raft *raft)
         goto exit;
     }
 
+    /* Save a snapshot. */
+    error = raft_write_snapshot(raft, tmp_name);
+    if (error) {
+        goto exit;
+    }
 
+    /* Replace original by temporary. */
+    if (rename(tmp_name, raft->file_name)) {
+        error = ovsdb_io_error(errno, "failed to rename \"%s\" to \"%s\"",
+                               tmp_name, raft->file_name);
+        goto exit;
+    }
+    fsync_parent_dir(raft->file_name);
 
+exit:
+    lockfile_unlock(tmp_lock);
+    free(tmp_name);
+    return error;
 }
 
 static void
@@ -3157,9 +3239,42 @@ raft_handle_install_snapshot_request__(
     if (raft->snapshot_buf.length == rq->offset) {
         ds_put_buffer(&raft->snapshot_buf, rq->data, rq->chunk);
     }
-    if (raft->snapshot_buf.length == rq->length) {
-        /* install snapshot */
-        raft_write_snapshot(
+    if (raft->snapshot_buf.length != rq->length) {
+        /* More chunks to receive. */
+        return;
+    }
+
+    uint64_t new_log_start = rq->last_index + 1;
+    if (new_log_start < raft->log_start) {
+        /* The new snapshot covers less than our current one, why bother? */
+        return;
+    } else if (new_log_start >= raft->log_end) {
+        /* The new snapshot starts past the end of our current log, so discard
+         * all of our current log.
+         *
+         * XXX make sure that last_term is not a regression*/
+        raft->log_start = raft->log_end = new_log_start;
+    } else {
+        /* The new snapshot starts in the middle of our log, so discard the
+         * first 'new_log_start - raft->log_start' entries in the log.
+         *
+         * XXX we can validate last_term and last_servers exactly */
+        memmove(&raft->log[0], &raft->log[new_log_start - raft->log_start],
+                (raft->log_end - new_log_start) * sizeof *raft->log);
+        raft->log_start = new_log_start;
+    }
+
+    raft->prev_term = rq->last_term;
+    raft_servers_clone(&raft->prev_servers, &rq->last_servers);
+
+    /* install snapshot */
+    free(raft->snapshot);
+    raft->snapshot_len = raft->snapshot_buf.length;
+    raft->snapshot = ds_cstr(&raft->snapshot_buf);
+
+    struct ovsdb_error *error = raft_save_snapshot(raft);
+    if (error) {
+        /* XXX handle error */
     }
 }
 
