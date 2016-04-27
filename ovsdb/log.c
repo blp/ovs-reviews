@@ -352,6 +352,23 @@ ovsdb_log_unread(struct ovsdb_log *file)
 }
 
 static struct ovsdb_error *
+ovsdb_log_truncate__(struct ovsdb_log *file)
+{
+    file->mode = OVSDB_LOG_WRITE;
+
+    struct ovsdb_error *error = NULL;
+    if (fseeko(file->stream, file->offset, SEEK_SET)) {
+        error = ovsdb_io_error(errno, "%s: cannot seek to offset %lld",
+                               file->name, (long long int) file->offset);
+    } else if (ftruncate(fileno(file->stream), file->offset)) {
+        error = ovsdb_io_error(errno, "%s: cannot truncate to length %lld",
+                               file->name, (long long int) file->offset);
+    }
+    file->write_error = error != NULL;
+    return error;
+}
+
+static struct ovsdb_error *
 ovsdb_log_write__(struct ovsdb_log *file, const char *data, size_t length)
 {
     uint8_t sha1[SHA1_DIGEST_SIZE];
@@ -359,16 +376,8 @@ ovsdb_log_write__(struct ovsdb_log *file, const char *data, size_t length)
     char header[128];
 
     if (file->mode == OVSDB_LOG_READ || file->write_error) {
-        file->mode = OVSDB_LOG_WRITE;
-        file->write_error = false;
-        if (fseeko(file->stream, file->offset, SEEK_SET)) {
-            error = ovsdb_io_error(errno, "%s: cannot seek to offset %lld",
-                                   file->name, (long long int) file->offset);
-            goto error;
-        }
-        if (ftruncate(fileno(file->stream), file->offset)) {
-            error = ovsdb_io_error(errno, "%s: cannot truncate to length %lld",
-                                   file->name, (long long int) file->offset);
+        error = ovsdb_log_truncate__(file);
+        if (error) {
             goto error;
         }
     }
@@ -434,6 +443,13 @@ ovsdb_log_commit(struct ovsdb_log *file)
     return NULL;
 }
 
+struct ovsdb_error *
+ovsdb_log_truncate(struct ovsdb_log *file)
+{
+    file->offset = 0;
+    return ovsdb_log_truncate__(file);
+}
+
 /* Returns the current offset into the file backing 'log', in bytes.  This
  * reflects the number of bytes that have been read or written in the file.  If
  * the whole file has been read, this is the file size. */
@@ -442,3 +458,4 @@ ovsdb_log_get_offset(const struct ovsdb_log *log)
 {
     return log->offset;
 }
+

@@ -204,6 +204,7 @@ struct raft {
     long long int election_timeout;
 
     /* File synchronization. */
+    bool fsync_thread_running;
     pthread_t fsync_thread;
     struct ovs_mutex fsync_mutex;
     uint64_t fsync_next OVS_GUARDED;
@@ -1177,6 +1178,7 @@ raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
         goto error;
     }
 
+    raft->fsync_thread_running = true;
     raft->fsync_thread = ovs_thread_create("raft_fsync",
                                            raft_fsync_thread, raft);
 
@@ -1386,7 +1388,9 @@ raft_close(struct raft *raft)
     raft->fsync_next = UINT64_MAX;
     ovs_mutex_unlock(&raft->fsync_mutex);
     seq_change(raft->fsync_request);
-    xpthread_join(raft->fsync_thread, NULL);
+    if (raft->fsync_thread_running) {
+        xpthread_join(raft->fsync_thread, NULL);
+    }
 
     ovsdb_log_close(raft->storage);
 
@@ -1998,8 +2002,9 @@ static void
 raft_install_snapshot_request_from_jsonrpc(
     struct ovsdb_parser *p, struct raft_install_snapshot_request *rq)
 {
-    const struct json *servers = ovsdb_parser_member(p, "servers", OP_OBJECT);
-    struct ovsdb_error *error = raft_servers_from_json(servers,
+    const struct json *last_servers = ovsdb_parser_member(p, "last_servers",
+                                                          OP_OBJECT);
+    struct ovsdb_error *error = raft_servers_from_json(last_servers,
                                                        &rq->last_servers);
     if (error) {
         ovsdb_parser_put_error(p, error);
@@ -3120,11 +3125,13 @@ raft_write_snapshot(struct raft *raft, const char *file_name)
     /* Create log file. */
     struct ovsdb_log *storage;
     struct ovsdb_error *error;
-    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE,
                            -1, &storage);
+    if (!error) {
+        error = ovsdb_log_truncate(storage);
+    }
     if (error) {
-        /* "goto exit" is unsafe here: it will unlink an existing file! */
-        return error;
+        goto exit;
     }
 
     /* Write header record. */
@@ -3181,7 +3188,6 @@ exit:
         raft->storage = storage;
     } else {
         ovsdb_log_close(storage);
-        unlink(file_name);
     }
     return error;
 }
@@ -3189,23 +3195,8 @@ exit:
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_save_snapshot(struct raft *raft)
 {
-    struct lockfile *tmp_lock = NULL;
+    char *tmp_name = xasprintf("%s.tmp", raft->file_name);
     struct ovsdb_error *error = NULL;
-    char *tmp_name = NULL;
-
-    /* Lock temporary file. */
-    tmp_name = xasprintf("%s.tmp", raft->file_name);
-    int retval = lockfile_lock(tmp_name, &tmp_lock);
-    if (retval) {
-        error = ovsdb_io_error(retval, "could not get lock on %s", tmp_name);
-        goto exit;
-    }
-
-    /* Remove temporary file.  (It might not exist.) */
-    if (unlink(tmp_name) < 0 && errno != ENOENT) {
-        error = ovsdb_io_error(errno, "failed to remove %s", tmp_name);
-        goto exit;
-    }
 
     /* Save a snapshot. */
     error = raft_write_snapshot(raft, tmp_name);
@@ -3222,7 +3213,6 @@ raft_save_snapshot(struct raft *raft)
     fsync_parent_dir(raft->file_name);
 
 exit:
-    lockfile_unlock(tmp_lock);
     free(tmp_name);
     return error;
 }
@@ -3274,6 +3264,10 @@ raft_handle_install_snapshot_request__(
 
     struct ovsdb_error *error = raft_save_snapshot(raft);
     if (error) {
+        char *error_s = ovsdb_error_to_string(error);
+        VLOG_WARN("could not save snapshot: %s", error_s);
+        free(error_s);
+
         /* XXX handle error */
     }
 }

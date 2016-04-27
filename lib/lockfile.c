@@ -1,4 +1,4 @@
- /* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+ /* Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -121,6 +121,8 @@ lockfile_lock(const char *file, struct lockfile **lockfilep)
 
     lock_name = lockfile_name(file);
 
+    VLOG_INFO("locking %s", file);
+
     ovs_mutex_lock(&lock_table_mutex);
     error = lockfile_try_lock(lock_name, &pid, lockfilep);
     ovs_mutex_unlock(&lock_table_mutex);
@@ -152,6 +154,8 @@ void
 lockfile_unlock(struct lockfile *lockfile)
 {
     if (lockfile) {
+        VLOG_INFO("unlocking %s", lockfile->name);
+
         ovs_mutex_lock(&lock_table_mutex);
         lockfile_do_unlock(lockfile);
         ovs_mutex_unlock(&lock_table_mutex);

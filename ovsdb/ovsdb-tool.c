@@ -60,6 +60,7 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_options(argc, argv);
     fatal_ignore_sigpipe();
+    fatal_signal_init();
     ctx.argc = argc - optind;
     ctx.argv = argv + optind;
     ovs_cmdl_run_command(&ctx, get_all_commands());
