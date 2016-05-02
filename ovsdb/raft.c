@@ -500,8 +500,14 @@ struct raft_install_snapshot_request {
 struct raft_install_snapshot_reply {
     struct raft_rpc_common common;
 
-    /* XXX how do we handle lost fragments? */
     uint64_t term;              /* For leader to update itself. */
+
+    /* Repeated from the install_snapshot request. */
+    uint64_t last_index;
+    uint64_t last_term;
+
+    /* Where to resume sending the snapshot. */
+    size_t next_offset;
 };
 
 union raft_rpc {
@@ -2729,7 +2735,8 @@ raft_calculate_snapshot_chunk(const struct raft *raft, size_t offset)
 
 static void
 raft_send_install_snapshot_request(struct raft *raft,
-                                   const struct raft_server *s)
+                                   const struct raft_server *s,
+                                   size_t offset)
 {
     union raft_rpc rpc = {
         .install_snapshot_request = {
@@ -2742,9 +2749,9 @@ raft_send_install_snapshot_request(struct raft *raft,
             .last_term = raft->prev_term,
             .last_servers = raft->prev_servers,
             .length = raft->snapshot_len,
-            .offset = 0,
-            .data = raft->snapshot,
-            .chunk = raft_calculate_snapshot_chunk(raft, 0),
+            .offset = offset,
+            .data = raft->snapshot + offset,
+            .chunk = raft_calculate_snapshot_chunk(raft, offset),
         }
     };
     raft_send(raft, &rpc);
@@ -2801,7 +2808,7 @@ raft_handle_append_reply(struct raft *raft,
     }
 
     if (s->next_index < raft->log_start) {
-        raft_send_install_snapshot_request(raft, s);
+        raft_send_install_snapshot_request(raft, s, 0);
     } else if (s->next_index < raft->log_end) {
         raft_send_append_request(raft, s, 1);
     } else if (s->phase == RAFT_PHASE_CATCHUP) {
@@ -3285,6 +3292,8 @@ raft_handle_install_snapshot_request(
                 .sid = rq->common.sid,
             },
             .term = raft->current_term,
+            .last_index = rq->last_index,
+            .last_term = rq->last_term,
         },
     };
     raft_send(raft, &rpy);
@@ -3297,7 +3306,44 @@ raft_handle_install_snapshot_reply(
     if (!raft_receive_term__(raft, rpy->term)) {
         return;
     }
-    /* XXX */
+
+    /* We might get an InstallSnapshot reply from a configured server (e.g. a
+     * peer) or a server in the process of being added. */
+    struct raft_server *s = raft_find_peer(raft, &rpy->common.sid);
+    if (!s) {
+        s = raft_find_new_server(raft, &rpy->common.sid);
+        if (!s) {
+            /* XXX log */
+            return;
+        }
+    }
+
+    if (rpy->last_index != raft->log_start - 1 ||
+        rpy->last_term != raft->prev_term) {
+        VLOG_INFO("cluster "UUID_FMT": server "UUID_FMT" installing "
+                  "out-of-date snapshot, starting over",
+                  UUID_ARGS(&raft->cid), UUID_ARGS(&s->sid));
+        raft_send_install_snapshot_request(raft, s, 0);
+        return;
+    }
+
+    if (rpy->next_offset < raft->snapshot_len) {
+        raft_send_install_snapshot_request(raft, s, rpy->next_offset);
+        return;
+    }
+
+    if (rpy->next_offset == raft->snapshot_len) {
+        VLOG_INFO("cluster "UUID_FMT": installed snapshot on server "UUID_FMT
+                  "up to %"PRIu64":%"PRIu64,
+                  UUID_ARGS(&raft->cid), UUID_ARGS(&s->sid),
+                  rpy->last_term, rpy->last_index);
+    } else {
+        VLOG_WARN("cluster "UUID_FMT": server "UUID_FMT" reported overlength "
+                  "snapshot, starting over",
+                  UUID_ARGS(&raft->cid), UUID_ARGS(&rpy->common.sid));
+    }
+    s->next_index = raft->log_end;
+    raft_send_append_request(raft, s, 0);
 }
 
 static void
