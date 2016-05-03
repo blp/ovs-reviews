@@ -203,6 +203,14 @@ struct raft {
 #define ELECTION_TIME_RANGE_MSEC 1024
     long long int election_timeout;
 
+#define PING_TIME_MSEC (ELECTION_TIME_BASE_MSEC / 3)
+    long long int ping_timeout;
+
+    /* Used for joining a cluster. */
+    bool joining;               /* Attempting to join the cluster? */
+    bool unknown_cid;
+    char *local_address;
+
     /* File synchronization. */
     bool fsync_thread_running;
     pthread_t fsync_thread;
@@ -537,7 +545,7 @@ raft_rpc_from_jsonrpc(struct raft *, const struct jsonrpc_msg *,
 static bool raft_receive_rpc(struct raft *, struct jsonrpc_session *,
                              struct uuid *sid, union raft_rpc *);
 static void raft_run_session(struct raft *, struct jsonrpc_session *,
-                             struct uuid *sid);
+                             unsigned int *seqno, struct uuid *sid);
 static void raft_wait_session(struct jsonrpc_session *);
 
 static void raft_become_leader(struct raft *);
@@ -547,6 +555,7 @@ static struct raft_server *raft_server_add(struct hmap *servers,
                                            const char *address);
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_snapshot(struct raft *, const char *file_name);
+static void raft_send_heartbeats(struct raft *);
 
 static struct raft_server *
 raft_find_server__(const struct hmap *servers, const struct uuid *sid)
@@ -778,6 +787,7 @@ static void
 raft_server_destroy(struct raft_server *s)
 {
     if (s) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         jsonrpc_session_close(s->js);
         free(s->address);
         free(s);
@@ -898,17 +908,23 @@ raft_set_servers(struct raft *raft, const struct hmap *new_servers)
             /* XXX raft->leader */
             /* XXX raft->remove_server */
             hmap_remove(&raft->servers, &s->hmap_node);
+            VLOG_INFO("server "UUID_FMT" removed from configuration",
+                      UUID_ARGS(&s->sid));
             raft_server_destroy(s);
         }
     }
 
     HMAP_FOR_EACH_SAFE (s, next, hmap_node, new_servers) {
         if (!raft_find_server__(&raft->servers, &s->sid)) {
+            VLOG_INFO("server "UUID_FMT" added to configuration",
+                      UUID_ARGS(&s->sid));
+
             struct raft_server *new = xzalloc(sizeof *new);
             new->sid = s->sid;
             new->address = xstrdup(s->address);
             new->voted = true;  /* XXX conservative */
             raft_server_init_leader(raft, new);
+            hmap_insert(&raft->servers, &new->hmap_node, uuid_hash(&new->sid));
         }
     }
 }
@@ -1228,6 +1244,7 @@ raft_open(const char *file_name, struct raft **raftp)
         error = ovsdb_error(NULL, "server does not belong to cluster");
         goto error;
     }
+    raft->local_address = xstrdup(raft->me->address);
 
     *raftp = raft;
     return NULL;
@@ -1236,6 +1253,15 @@ error:
     raft_close(raft);
     *raftp = NULL;
     return error;
+}
+
+static void
+raft_add_conn(struct raft *raft, struct jsonrpc_session *js)
+{
+    struct raft_conn *conn = xzalloc(sizeof *conn);
+    ovs_list_push_back(&raft->conns, &conn->list_node);
+    conn->js = js;
+    conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
 /* Adds a new server, the one one which this function is called, to an existing
@@ -1260,8 +1286,6 @@ error:
  *
  * 'cid' is optional.  If specified, the new server will join only the cluster
  * with the given cluster ID.
- *
- * This function blocks until the join succeeds or fails.
  */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_join(const char *file_name, const char *local_address,
@@ -1292,8 +1316,8 @@ raft_join(const char *file_name, const char *local_address,
                             file_name, UUID_ARGS(&raft->cid), UUID_ARGS(cid_));
         goto error;
     }
-    bool unknown_cid = uuid_is_zero(&raft->cid);
-    if (unknown_cid) {
+    raft->unknown_cid = uuid_is_zero(&raft->cid);
+    if (raft->unknown_cid) {
         raft->sid = uuid_generate();
         if (cid_) {
             raft->cid = *cid_;
@@ -1311,6 +1335,9 @@ raft_join(const char *file_name, const char *local_address,
         return NULL;
     }
 
+    raft->joining = true;
+    raft->local_address = xstrdup(local_address);
+
     /* Connect to all of the 'remote_addresses' in parallel.
      * Send each of them an AddServer RPC.
      * For each response:
@@ -1323,58 +1350,11 @@ raft_join(const char *file_name, const char *local_address,
      *     - installsnapshot/appendentries: focus on this connection unless it
      *       dies */
     for (size_t i = 0; i < n_remotes; i++) {
-        struct raft_conn *conn = xzalloc(sizeof *conn);
-        ovs_list_push_back(&raft->conns, &conn->list_node);
-        conn->js = jsonrpc_session_open(remote_addresses[i], true);
-        conn->sid = UUID_ZERO;
-        conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
+        raft_add_conn(raft, jsonrpc_session_open(remote_addresses[i], true));
     }
 
-    for (;;) {
-        struct raft_conn *conn;
-        LIST_FOR_EACH (conn, list_node, &raft->conns) {
-            jsonrpc_session_run(conn->js);
-
-            unsigned int js_seqno = jsonrpc_session_get_seqno(conn->js);
-            if (js_seqno != conn->js_seqno
-                && jsonrpc_session_is_connected(conn->js)) {
-                conn->js_seqno = js_seqno;
-
-                union raft_rpc rq = {
-                    .server_request = {
-                        .common = {
-                            .type = RAFT_RPC_ADD_SERVER_REQUEST,
-                            .sid = conn->sid,
-                        },
-                        .sid = raft->sid,
-                        .address = CONST_CAST(char *, local_address),
-                    },
-                };
-                raft_send__(raft, &rq, conn->js);
-            }
-
-            union raft_rpc rpc;
-            if (!raft_receive_rpc(raft, conn->js, &conn->sid, &rpc)) {
-                continue;
-            }
-            raft_handle_rpc(raft, &rpc);
-            raft_rpc_destroy(&rpc);
-
-            if (unknown_cid && !uuid_is_zero(&raft->cid)) {
-                unknown_cid = false;
-                error = raft_write_header(raft->storage, &raft->cid,
-                                          &raft->sid);
-                if (error) {
-                    goto error;
-                }
-            }
-        }
-
-        LIST_FOR_EACH (conn, list_node, &raft->conns) {
-            raft_wait_session(conn->js);
-        }
-        poll_block();
-    }
+    *raftp = raft;
+    return NULL;
 
 error:
     raft_close(raft);
@@ -1463,10 +1443,31 @@ raft_receive_rpc(struct raft *raft, struct jsonrpc_session *js,
 }
 
 static void
-raft_run_session(struct raft *raft, struct jsonrpc_session *js,
+raft_run_session(struct raft *raft,
+                 struct jsonrpc_session *js, unsigned int *seqno,
                  struct uuid *sid)
 {
     jsonrpc_session_run(js);
+
+    if (raft->joining && seqno) {
+        unsigned int new_seqno = jsonrpc_session_get_seqno(js);
+        if (new_seqno != *seqno && jsonrpc_session_is_connected(js)) {
+            *seqno = new_seqno;
+
+            union raft_rpc rq = {
+                .server_request = {
+                    .common = {
+                        .type = RAFT_RPC_ADD_SERVER_REQUEST,
+                        .sid = *sid,
+                    },
+                    .sid = raft->sid,
+                    .address = raft->local_address,
+                },
+            };
+            raft_send__(raft, &rq, js);
+        }
+    }
+
     for (size_t i = 0; i < 50; i++) {
         union raft_rpc rpc;
         if (!raft_receive_rpc(raft, js, sid, &rpc)) {
@@ -1474,6 +1475,15 @@ raft_run_session(struct raft *raft, struct jsonrpc_session *js,
         }
         raft_handle_rpc(raft, &rpc);
         raft_rpc_destroy(&rpc);
+    }
+
+    if (raft->joining && raft->unknown_cid && !uuid_is_zero(&raft->cid)) {
+        raft->unknown_cid = false;
+        struct ovsdb_error *error = raft_write_header(raft->storage,
+                                                      &raft->cid, &raft->sid);
+        if (error) {
+            /* XXX */
+        }
     }
 }
 
@@ -1642,7 +1652,8 @@ raft_run(struct raft *raft)
     raft_waiters_run(raft);
 
     if (!raft->listener && time_msec() >= raft->listen_backoff) {
-        char *paddr = raft_make_address_passive(raft->me->address);
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
+        char *paddr = raft_make_address_passive(raft->local_address);
         int error = pstream_open(paddr, &raft->listener, DSCP_DEFAULT);
         if (error) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
@@ -1657,10 +1668,8 @@ raft_run(struct raft *raft)
         struct stream *stream;
         int error = pstream_accept(raft->listener, &stream);
         if (!error) {
-            struct raft_conn *conn = xzalloc(sizeof *conn);
-            conn->js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
-                                                       DSCP_DEFAULT);
-            ovs_list_push_back(&raft->conns, &conn->list_node);
+            raft_add_conn(raft, jsonrpc_session_open_unreliably(
+                              jsonrpc_open(stream), DSCP_DEFAULT));
         } else if (error != EAGAIN) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
@@ -1671,28 +1680,33 @@ raft_run(struct raft *raft)
 
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        if (!s->js && s != raft->me) {
+        if (!s->js && !uuid_equals(&s->sid, &raft->sid)) {
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
             s->js = jsonrpc_session_open(s->address, true);
         }
         if (s->js) {
-            raft_run_session(raft, s->js, &s->sid);
+            raft_run_session(raft, s->js, NULL, &s->sid);
         }
     }
 
     struct raft_conn *conn, *next;
     LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
-        raft_run_session(raft, conn->js, &conn->sid);
+        raft_run_session(raft, conn->js, &conn->js_seqno, &conn->sid);
         if (!jsonrpc_session_is_alive(conn->js)) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             jsonrpc_session_close(conn->js);
             ovs_list_remove(&conn->list_node);
             free(conn);
         }
     }
 
-    if (time_msec() >= raft->election_timeout) {
+    if (!raft->joining && time_msec() >= raft->election_timeout) {
         raft_start_election(raft);
     }
-    /* XXX if we're leader and we're idle, send empty appendrequest */
+    if (raft->role == RAFT_LEADER && time_msec() >= raft->ping_timeout) {
+        /* XXX send only if idle */
+        raft_send_heartbeats(raft);
+    }
 }
 
 static void
@@ -1725,7 +1739,12 @@ raft_wait(struct raft *raft)
         raft_wait_session(conn->js);
     }
 
-    poll_timer_wait_until(raft->election_timeout);
+    if (!raft->joining) {
+        poll_timer_wait_until(raft->election_timeout);
+    }
+    if (raft->role == RAFT_LEADER) {
+        poll_timer_wait_until(raft->ping_timeout);
+    }
 }
 
 static struct raft_waiter *
@@ -2302,6 +2321,7 @@ raft_send_heartbeats(struct raft *raft)
             raft_send_append_request(raft, s, 0);
         }
     }
+    raft->ping_timeout = time_msec() + PING_TIME_MSEC;
 }
 
 static void
@@ -2324,6 +2344,7 @@ raft_become_leader(struct raft *raft)
     raft->role = RAFT_LEADER;
     raft->leader = raft->me;
     raft->election_timeout = LLONG_MAX;
+    raft->ping_timeout = time_msec() + PING_TIME_MSEC;
 
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
@@ -2631,19 +2652,29 @@ raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
     /* Figure 3.1: "If leaderCommit > commitIndex, set commitIndex =
      * min(leaderCommit, index of last new entry)" */
     if (success && rq->leader_commit > raft->commit_index) {
+        VLOG_INFO("leaderCommit=%"PRIu64" commitIndex=%"PRIu64,
+                  rq->leader_commit, raft->commit_index);
         raft->commit_index = MIN(rq->leader_commit,
                                  rq->prev_log_index + rq->n_entries);
+        VLOG_INFO("commitIndex=%"PRIu64, raft->commit_index);
 
         /* Figure 3.1: "If commitIndex > lastApplied, increment
          * lastApplied, apply log[lastApplied] to state machine
          * (section 3.5)." */
         while (raft->commit_index > raft->last_applied) {
             raft->last_applied++;
+            VLOG_INFO("applying log index %"PRIu64" "
+                      "log_start=%"PRIu64" log_end=%"PRIu64,
+                      raft->last_applied, raft->log_start, raft->log_end);
 
+            ovs_assert(raft->last_applied >= raft->log_start);
+            ovs_assert(raft->last_applied < raft->log_end);
             struct raft_entry *e = &raft->log[raft->last_applied
                                               - raft->log_start];
             if (e->type == RAFT_SERVERS) {
-                raft_run_reconfigure(raft);
+                if (raft->role == RAFT_LEADER) {
+                    raft_run_reconfigure(raft);
+                }
             } else {
                 /* XXX apply log[lastApplied]. */
             }
@@ -2802,7 +2833,9 @@ raft_handle_append_reply(struct raft *raft,
     if (rpy->success) {
         /* Figure 3.1: "If successful, update nextIndex and matchIndex for
          * follower (section 3.5)." */
-        uint64_t min_index = rpy->prev_log_index + rpy->n_entries;
+        VLOG_INFO("prev_log_index=%"PRIu64" n_entries=%"PRIuSIZE,
+                  rpy->prev_log_index, rpy->n_entries);
+        uint64_t min_index = rpy->prev_log_index + rpy->n_entries + 1;
         if (s->next_index < min_index) {
             s->next_index = min_index;
         }
@@ -2825,11 +2858,15 @@ raft_handle_append_reply(struct raft *raft,
         }
     }
 
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     if (s->next_index < raft->log_start) {
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
         raft_send_install_snapshot_request(raft, s, 0);
     } else if (s->next_index < raft->log_end) {
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
         raft_send_append_request(raft, s, 1);
     } else if (s->phase == RAFT_PHASE_CATCHUP) {
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
         VLOG_INFO("caught up");
         s->phase = RAFT_PHASE_CAUGHT_UP;
         raft_run_reconfigure(raft);
@@ -2988,6 +3025,8 @@ raft_run_reconfigure(struct raft *raft)
                 /* XXX handle error */
             }
 
+            raft_send_server_reply(raft, &s->sid, RAFT_SERVER_OK);
+
             return;
         }
     }
@@ -3076,10 +3115,16 @@ raft_handle_add_server_request(struct raft *raft,
 }
 
 static void
-raft_handle_add_server_reply(struct raft *raft OVS_UNUSED,
-                             const struct raft_server_reply *rpc OVS_UNUSED)
+raft_handle_add_server_reply(struct raft *raft,
+                             const struct raft_server_reply *rpc)
 {
-    /* XXX */
+    if (rpc->status == RAFT_SERVER_OK) {
+        if (raft->me) {
+            raft->joining = false;
+        } else {
+            /* XXX we're not really part of the cluster? */
+        }
+    }
 }
 
 static int
@@ -3263,6 +3308,8 @@ raft_handle_install_snapshot_request__(
         return;
     }
 
+    raft_reset_timer(raft);
+
     ds_truncate(&raft->snapshot_buf, rq->offset);
     if (raft->snapshot_buf.length == rq->offset) {
         ds_put_buffer(&raft->snapshot_buf, rq->data, rq->chunk);
@@ -3292,6 +3339,10 @@ raft_handle_install_snapshot_request__(
         raft->log_start = new_log_start;
     }
     raft->commit_index = raft->log_start - 1;
+    if (raft->commit_index > raft->last_applied) {
+        raft->last_applied = raft->commit_index;
+        /* XXX reset state machine to contents of snapshot */
+    }
 
     raft->prev_term = rq->last_term;
     raft_servers_clone(&raft->prev_servers, &rq->last_servers);
