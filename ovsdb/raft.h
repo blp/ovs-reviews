@@ -73,7 +73,8 @@ enum raft_command_status {
     RAFT_CMD_NOT_LEADER,        /* Failed because we are not the leader. */
     RAFT_CMD_FAILURE,           /* Other failure. */
 };
-struct raft_command *raft_command_execute(struct raft *, const void *data);
+struct raft_command *raft_command_execute(struct raft *, const char *data)
+    OVS_WARN_UNUSED_RESULT;
 enum raft_command_status raft_command_get_status(const struct raft_command *);
 void raft_command_wait(const struct raft_command *);
 

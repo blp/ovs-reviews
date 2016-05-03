@@ -1113,6 +1113,7 @@ raft_read(struct raft *raft)
     ovsdb_parser_init(&p, snapshot, "raft snapshot");
     raft->prev_term = parse_uint(&p, "prev_term");
     raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
+    raft->commit_index = raft->log_start - 1;
     const struct json *prev_servers_json = ovsdb_parser_member(
         &p, "prev_servers", OP_OBJECT);
     const struct json *data = ovsdb_parser_member(
@@ -1743,8 +1744,9 @@ raft_waiter_create(struct raft *raft, enum raft_waiter_type type)
     return w;
 }
 
-struct raft_command *
-raft_command_execute(struct raft *raft, const void *data)
+static struct raft_command * OVS_WARN_UNUSED_RESULT
+raft_command_execute__(struct raft *raft, enum raft_entry_type type,
+                       const char *data)
 {
     struct raft_command *cmd = xzalloc(sizeof *cmd);
     if (raft->role != RAFT_LEADER) {
@@ -1762,7 +1764,7 @@ raft_command_execute(struct raft *raft, const void *data)
      * should not writ to the local log; see section 4.2.2.  Or we could
      * implement leadership transfer. */
     struct ovsdb_error *error = raft_write_entry(raft, raft->current_term,
-                                                 RAFT_DATA, xstrdup(data));
+                                                 type, xstrdup(data));
     if (!error) {
         ovs_refcount_ref(&cmd->refcnt);
 
@@ -1789,6 +1791,12 @@ raft_command_execute(struct raft *raft, const void *data)
     }
 
     return cmd;
+}
+
+struct raft_command * OVS_WARN_UNUSED_RESULT
+raft_command_execute(struct raft *raft, const char *data)
+{
+    return raft_command_execute__(raft, RAFT_DATA, data);
 }
 
 static void
@@ -2040,6 +2048,9 @@ raft_install_snapshot_reply_to_jsonrpc(
     const struct raft_install_snapshot_reply *rpy, struct json *args)
 {
     json_object_put_uint(args, "term", rpy->term);
+    json_object_put_uint(args, "last_index", rpy->last_index);
+    json_object_put_uint(args, "last_term", rpy->last_term);
+    json_object_put_uint(args, "next_offset", rpy->next_offset);
 }
 
 static void
@@ -2048,6 +2059,9 @@ raft_install_snapshot_reply_from_jsonrpc(
     struct raft_install_snapshot_reply *rpy)
 {
     rpy->term = parse_uint(p, "term");
+    rpy->last_index = parse_uint(p, "last_index");
+    rpy->last_term = parse_uint(p, "last_term");
+    rpy->next_offset = parse_uint(p, "next_offset");
 }
 
 static struct jsonrpc_msg *
@@ -2371,9 +2385,13 @@ raft_handle_append_entries(struct raft *raft,
                            const struct raft_entry *entries,
                            unsigned int n_entries)
 {
-    if (prev_log_index >= raft->log_end
-        || (raft->log[prev_log_index - raft->log_start].term
-            != prev_log_term)) {
+    VLOG_INFO("prev_log_index=%"PRIu64" log_start=%"PRIu64" log_end=%"PRIu64,
+              prev_log_index, raft->log_start, raft->log_end);
+    if (prev_log_index < raft->log_start - 1 ? true
+        : prev_log_index == raft->log_start - 1 ? prev_log_term != raft->prev_term
+        : prev_log_index < raft->log_end ? raft->log[prev_log_index - raft->log_start].term
+                != prev_log_term
+        : true /* prev_log_index >= raft->log_end */) {
         /* Section 3.5: "When sending an AppendEntries RPC, the leader includes
          * the index and term of the entry in its log that immediately precedes
          * the new entries. If the follower does not find an entry in its log
@@ -2812,6 +2830,7 @@ raft_handle_append_reply(struct raft *raft,
     } else if (s->next_index < raft->log_end) {
         raft_send_append_request(raft, s, 1);
     } else if (s->phase == RAFT_PHASE_CATCHUP) {
+        VLOG_INFO("caught up");
         s->phase = RAFT_PHASE_CAUGHT_UP;
         raft_run_reconfigure(raft);
     }
@@ -2914,10 +2933,10 @@ raft_has_uncommitted_configuration(const struct raft *raft)
         ovs_assert(i >= raft->log_start);
         const struct raft_entry *e = &raft->log[i - raft->log_start];
         if (e->type == RAFT_SERVERS) {
-            return false;
+            return true;
         }
     }
-    return true;
+    return false;
 }
 
 static void
@@ -2925,11 +2944,13 @@ raft_run_reconfigure(struct raft *raft)
 {
     ovs_assert(raft->role == RAFT_LEADER);
 
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     /* Reconfiguration only progresses when configuration changes commit. */
     if (raft_has_uncommitted_configuration(raft)) {
         return;
     }
 
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     /* If we were waiting for a configuration change to commit, it's done. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
@@ -2946,8 +2967,10 @@ raft_run_reconfigure(struct raft *raft)
     }
 
     /* If a new server is caught up, add it to the configuration.  */
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
         if (s->phase == RAFT_PHASE_CAUGHT_UP) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             /* Move 's' from 'raft->add_servers' to 'raft->servers'. */
             hmap_remove(&raft->add_servers, &s->hmap_node);
             hmap_insert(&raft->servers, &s->hmap_node, uuid_hash(&s->sid));
@@ -2955,7 +2978,15 @@ raft_run_reconfigure(struct raft *raft)
             /* Mark 's' as waiting for commit. */
             s->phase = RAFT_PHASE_COMMITTING;
 
-            /* XXX add log entry */
+            struct json *servers_json = raft_servers_to_json(&raft->servers);
+            char *servers_s = json_to_string(servers_json, 0);
+            json_destroy(servers_json);
+            struct raft_command *cmd = raft_command_execute__(
+                raft, RAFT_SERVERS, servers_s);
+            free(servers_s);
+            if (cmd) {
+                /* XXX handle error */
+            }
 
             return;
         }
@@ -3260,6 +3291,7 @@ raft_handle_install_snapshot_request__(
                 (raft->log_end - new_log_start) * sizeof *raft->log);
         raft->log_start = new_log_start;
     }
+    raft->commit_index = raft->log_start - 1;
 
     raft->prev_term = rq->last_term;
     raft_servers_clone(&raft->prev_servers, &rq->last_servers);
@@ -3267,7 +3299,7 @@ raft_handle_install_snapshot_request__(
     /* install snapshot */
     free(raft->snapshot);
     raft->snapshot_len = raft->snapshot_buf.length;
-    raft->snapshot = ds_cstr(&raft->snapshot_buf);
+    raft->snapshot = ds_steal_cstr(&raft->snapshot_buf);
 
     struct ovsdb_error *error = raft_save_snapshot(raft);
     if (error) {
@@ -3294,6 +3326,7 @@ raft_handle_install_snapshot_request(
             .term = raft->current_term,
             .last_index = rq->last_index,
             .last_term = rq->last_term,
+            .next_offset = rq->offset + rq->chunk,
         },
     };
     raft_send(raft, &rpy);
@@ -3320,7 +3353,7 @@ raft_handle_install_snapshot_reply(
 
     if (rpy->last_index != raft->log_start - 1 ||
         rpy->last_term != raft->prev_term) {
-        VLOG_INFO("cluster "UUID_FMT": server "UUID_FMT" installing "
+        VLOG_INFO("cluster "UUID_FMT": server "UUID_FMT" installed "
                   "out-of-date snapshot, starting over",
                   UUID_ARGS(&raft->cid), UUID_ARGS(&s->sid));
         raft_send_install_snapshot_request(raft, s, 0);

@@ -187,7 +187,10 @@ test_raft_execute(struct unixctl_conn *conn,
                   void *raft_)
 {
     struct raft *raft = raft_;
-    raft_command_execute(raft, argv[1]);
+    struct raft_command *cmd = raft_command_execute(raft, argv[1]);
+    if (cmd) {
+        /* XXX handle error */
+    }
     unixctl_command_reply(conn, NULL);
 }
 
