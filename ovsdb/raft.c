@@ -168,8 +168,12 @@ struct raft {
 
     /* The log.
      *
-     * A new Raft instance contains an empty log:  log_start=1, log_end=1.
-     * Over time, the log grows:                   log_start=1, log_end=N.
+     * A log entry with index 1 never really exists; the initial snapshot for a
+     * Raft is considered to include this index.  The first real log entry has
+     * index 2.
+     *
+     * A new Raft instance contains an empty log:  log_start=2, log_end=2.
+     * Over time, the log grows:                   log_start=2, log_end=N.
      * At some point, the server takes a snapshot: log_start=N, log_end=N.
      * The log continues to grow:                  log_start=N, log_end=N+1...
      *
@@ -208,7 +212,6 @@ struct raft {
 
     /* Used for joining a cluster. */
     bool joining;               /* Attempting to join the cluster? */
-    bool unknown_cid;
     char *local_address;
 
     /* File synchronization. */
@@ -689,6 +692,7 @@ raft_create(const char *file_name, const char *local_address,
     raft_server_add(&raft->prev_servers, &raft->sid, local_address);
     raft->snapshot = xstrdup(data);
     raft->snapshot_len = strlen(data);
+    raft->log_start = raft->log_end = 2;
 
     error = raft_write_snapshot(raft, file_name);
     raft_close(raft);
@@ -787,7 +791,6 @@ static void
 raft_server_destroy(struct raft_server *s)
 {
     if (s) {
-        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         jsonrpc_session_close(s->js);
         free(s->address);
         free(s);
@@ -925,6 +928,10 @@ raft_set_servers(struct raft *raft, const struct hmap *new_servers)
             new->voted = true;  /* XXX conservative */
             raft_server_init_leader(raft, new);
             hmap_insert(&raft->servers, &new->hmap_node, uuid_hash(&new->sid));
+
+            if (!uuid_equals(&raft->sid, &new->sid)) {
+                raft->me = new;
+            }
         }
     }
 }
@@ -1073,7 +1080,9 @@ parse_log_record(struct raft *raft, const struct json *entry)
     /* Parse "servers". */
     const struct json *servers_json
         = ovsdb_parser_member(&p, "servers", OP_OBJECT | OP_OPTIONAL);
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     if (servers_json) {
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
         struct hmap servers;
         struct ovsdb_error *error = raft_servers_from_json(servers_json,
                                                            &servers);
@@ -1082,6 +1091,7 @@ parse_log_record(struct raft *raft, const struct json *entry)
             return error;
         }
 
+        VLOG_INFO("setting servers");
         raft_set_servers(raft, &servers);
         raft_servers_destroy(&servers);
         raft_add_entry(raft, term, RAFT_SERVERS,
@@ -1129,7 +1139,7 @@ raft_read(struct raft *raft)
     ovsdb_parser_init(&p, snapshot, "raft snapshot");
     raft->prev_term = parse_uint(&p, "prev_term");
     raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
-    raft->commit_index = raft->log_start - 1;
+    raft->commit_index = raft->last_applied = raft->log_start - 1;
     const struct json *prev_servers_json = ovsdb_parser_member(
         &p, "prev_servers", OP_OBJECT);
     const struct json *data = ovsdb_parser_member(
@@ -1142,6 +1152,7 @@ raft_read(struct raft *raft)
 
     raft->snapshot = xstrdup(data ? json_string(data) : "");
     raft->snapshot_len = strlen(raft->snapshot);
+    /* XXX reset state machine to snapshot */
 
     struct hmap prev_servers;
     error = raft_servers_from_json(prev_servers_json, &prev_servers);
@@ -1157,25 +1168,30 @@ raft_read(struct raft *raft)
         struct json *entry;
         error = ovsdb_log_read_json(raft->storage, &entry);
         if (!entry) {
+            if (error) {
+                /* We assume that the error is due to a partial write while
+                 * appending to the file before a crash, so log it and
+                 * continue. */
+                char *error_string = ovsdb_error_to_string(error);
+                VLOG_WARN("%s", error_string);
+                free(error_string);
+                ovsdb_error_destroy(error);
+                error = NULL;
+            }
             break;
         }
 
+        VLOG_INFO("parsing log record");
         error = parse_log_record(raft, entry);
-    }
-    if (error) {
-        /* We assume that the error is due to a partial write while appending
-         * to the file before a crash, so log it and continue. */
-        char *error_string = ovsdb_error_to_string(error);
-        VLOG_WARN("%s", error_string);
-        free(error_string);
-        ovsdb_error_destroy(error);
-        error = NULL;
+        if (error) {
+            return error;
+        }
     }
 
     /* If none of the log entries populated the servers, then they're the same
-     * as 'raft->prev_servers', so copy them. */
+     * as 'raft->prev_servers'. */
     if (hmap_is_empty(&raft->servers)) {
-        raft_servers_clone(&raft->servers, &raft->prev_servers);
+        raft_set_servers(raft, &raft->prev_servers);
     }
 
     return NULL;
@@ -1316,8 +1332,7 @@ raft_join(const char *file_name, const char *local_address,
                             file_name, UUID_ARGS(&raft->cid), UUID_ARGS(cid_));
         goto error;
     }
-    raft->unknown_cid = uuid_is_zero(&raft->cid);
-    if (raft->unknown_cid) {
+    if (uuid_is_zero(&raft->cid)) {
         raft->sid = uuid_generate();
         if (cid_) {
             raft->cid = *cid_;
@@ -1331,6 +1346,11 @@ raft_join(const char *file_name, const char *local_address,
     raft->me = raft_find_server(raft, &raft->sid);
     if (raft->me) {
         /* Already joined to this cluster.  Nothing to do. */
+        raft->local_address = xstrdup(raft->me->address);
+        if (strcmp(local_address, raft->me->address)) {
+            VLOG_WARN("%s: using local server address %s from database log",
+                      file_name, raft->local_address);
+        }
         *raftp = raft;
         return NULL;
     }
@@ -1477,8 +1497,8 @@ raft_run_session(struct raft *raft,
         raft_rpc_destroy(&rpc);
     }
 
-    if (raft->joining && raft->unknown_cid && !uuid_is_zero(&raft->cid)) {
-        raft->unknown_cid = false;
+    if (ovsdb_log_get_offset(raft->storage) == 0
+        && !uuid_is_zero(&raft->cid)) {
         struct ovsdb_error *error = raft_write_header(raft->storage,
                                                       &raft->cid, &raft->sid);
         if (error) {
@@ -1633,7 +1653,7 @@ raft_start_election(struct raft *raft)
                 .last_log_index = raft->log_end - 1,
                 .last_log_term = (
                     raft->log_end > raft->log_start
-                    ? raft->log[raft->log_end - raft->log_start].term
+                    ? raft->log[raft->log_end - raft->log_start - 1].term
                     : raft->prev_term),
             },
         };
@@ -1652,7 +1672,6 @@ raft_run(struct raft *raft)
     raft_waiters_run(raft);
 
     if (!raft->listener && time_msec() >= raft->listen_backoff) {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
         char *paddr = raft_make_address_passive(raft->local_address);
         int error = pstream_open(paddr, &raft->listener, DSCP_DEFAULT);
         if (error) {
@@ -1681,7 +1700,6 @@ raft_run(struct raft *raft)
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (!s->js && !uuid_equals(&s->sid, &raft->sid)) {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
             s->js = jsonrpc_session_open(s->address, true);
         }
         if (s->js) {
@@ -1693,7 +1711,6 @@ raft_run(struct raft *raft)
     LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
         raft_run_session(raft, conn->js, &conn->js_seqno, &conn->sid);
         if (!jsonrpc_session_is_alive(conn->js)) {
-            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             jsonrpc_session_close(conn->js);
             ovs_list_remove(&conn->list_node);
             free(conn);
@@ -2308,6 +2325,9 @@ raft_send_append_request(struct raft *raft,
             .n_entries = n,
         },
     };
+    VLOG_INFO("send append_request, prev_log_index=%"PRIu64", n=%"PRIuSIZE,
+              rq.append_request.prev_log_index,
+              rq.append_request.n_entries);
     raft_send(raft, &rq);
 }
 
@@ -2406,8 +2426,6 @@ raft_handle_append_entries(struct raft *raft,
                            const struct raft_entry *entries,
                            unsigned int n_entries)
 {
-    VLOG_INFO("prev_log_index=%"PRIu64" log_start=%"PRIu64" log_end=%"PRIu64,
-              prev_log_index, raft->log_start, raft->log_end);
     if (prev_log_index < raft->log_start - 1 ? true
         : prev_log_index == raft->log_start - 1 ? prev_log_term != raft->prev_term
         : prev_log_index < raft->log_end ? raft->log[prev_log_index - raft->log_start].term
@@ -2520,6 +2538,7 @@ raft_handle_append_request__(struct raft *raft,
     uint64_t first_entry_index = rq->prev_log_index + 1;
     uint64_t nth_entry_index = rq->prev_log_index + rq->n_entries;
     if (OVS_LIKELY(first_entry_index >= raft->log_start)) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return raft_handle_append_entries(raft, rq,
                                           rq->prev_log_index,
                                           rq->prev_log_term,
@@ -2552,6 +2571,7 @@ raft_handle_append_request__(struct raft *raft,
      *                           log_start        log_end
      */
     if (nth_entry_index < raft->log_start - 1) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return true;
     }
 
@@ -2592,6 +2612,7 @@ raft_handle_append_request__(struct raft *raft,
      *       log_start        log_end
      */
     if (nth_entry_index == raft->log_start - 1) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return (rq->n_entries
                 ? raft->prev_term == rq->entries[rq->n_entries - 1].term
                 : raft->prev_term == rq->prev_log_term);
@@ -2637,11 +2658,41 @@ raft_handle_append_request__(struct raft *raft,
      *                       |               |
      *                   log_start        log_end
      */
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
     uint64_t ofs = raft->log_start - first_entry_index;
     return raft_handle_append_entries(
         raft, rq,
         raft->log_start - 1, rq->entries[ofs - 1].term,
         &rq->entries[ofs], rq->n_entries - ofs);
+}
+
+static void
+raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
+{
+    ovs_assert(new_commit_index >= raft->commit_index);
+    raft->commit_index = new_commit_index;
+
+    /* Figure 3.1: "If commitIndex > lastApplied, increment
+     * lastApplied, apply log[lastApplied] to state machine
+     * (section 3.5)." */
+    while (raft->commit_index > raft->last_applied) {
+        raft->last_applied++;
+        ovs_assert(raft->last_applied >= raft->log_start);
+        ovs_assert(raft->last_applied < raft->log_end);
+        struct raft_entry *e = &raft->log[raft->last_applied
+                                          - raft->log_start];
+        VLOG_INFO("applying log index %"PRIu64" \"%s\" "
+                  "log_start=%"PRIu64" log_end=%"PRIu64,
+                  raft->last_applied, e->data, raft->log_start, raft->log_end);
+
+        if (e->type == RAFT_SERVERS) {
+            if (raft->role == RAFT_LEADER) {
+                raft_run_reconfigure(raft);
+            }
+        } else {
+            /* XXX apply log[lastApplied]. */
+        }
+    }
 }
 
 /* This doesn't use rq->entries (but it does use rq->n_entries). */
@@ -2652,33 +2703,8 @@ raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
     /* Figure 3.1: "If leaderCommit > commitIndex, set commitIndex =
      * min(leaderCommit, index of last new entry)" */
     if (success && rq->leader_commit > raft->commit_index) {
-        VLOG_INFO("leaderCommit=%"PRIu64" commitIndex=%"PRIu64,
-                  rq->leader_commit, raft->commit_index);
-        raft->commit_index = MIN(rq->leader_commit,
-                                 rq->prev_log_index + rq->n_entries);
-        VLOG_INFO("commitIndex=%"PRIu64, raft->commit_index);
-
-        /* Figure 3.1: "If commitIndex > lastApplied, increment
-         * lastApplied, apply log[lastApplied] to state machine
-         * (section 3.5)." */
-        while (raft->commit_index > raft->last_applied) {
-            raft->last_applied++;
-            VLOG_INFO("applying log index %"PRIu64" "
-                      "log_start=%"PRIu64" log_end=%"PRIu64,
-                      raft->last_applied, raft->log_start, raft->log_end);
-
-            ovs_assert(raft->last_applied >= raft->log_start);
-            ovs_assert(raft->last_applied < raft->log_end);
-            struct raft_entry *e = &raft->log[raft->last_applied
-                                              - raft->log_start];
-            if (e->type == RAFT_SERVERS) {
-                if (raft->role == RAFT_LEADER) {
-                    raft_run_reconfigure(raft);
-                }
-            } else {
-                /* XXX apply log[lastApplied]. */
-            }
-        }
+        raft_update_commit_index(
+            raft, MIN(rq->leader_commit, rq->prev_log_index + rq->n_entries));
     }
 
     /* Send reply. */
@@ -2742,11 +2768,8 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
      * (because it is not for the current term) but it can be committed as
      * a side effect of commit the entry for term 4 (the current term).
      * XXX Is there a more efficient way to do this? */
-    printf("log=%"PRIu64"...%"PRIu64", commitIndex=%"PRIu64"\n",
-           raft->log_start, raft->log_end, raft->commit_index);
-    for (uint64_t n = MAX(raft->commit_index, raft->log_start);
+    for (uint64_t n = MAX(raft->commit_index + 1, raft->log_start);
          n < raft->log_end; n++) {
-        ovs_assert(n >= raft->log_start);
         if (raft->log[n - raft->log_start].term == raft->current_term) {
             size_t count = 0;
             struct raft_server *s2;
@@ -2755,9 +2778,16 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
                     count++;
                 }
             }
-            if (count == hmap_count(&raft->servers)) {
-                raft->commit_index = n;
-                printf("commitIndex=%"PRIu64"\n", n);
+            if (count > hmap_count(&raft->servers) / 2) {
+                HMAP_FOR_EACH (s2, hmap_node, &raft->servers) {
+                    if (s2->match_index >= n) {
+                        VLOG_INFO(UUID_FMT" has match_index %"PRIu64,
+                                  UUID_ARGS(&s2->sid), s2->match_index);
+                    }
+                }
+                VLOG_INFO("%"PRIu64" committed to %"PRIuSIZE" servers, "
+                          "applying", n, count);
+                raft_update_commit_index(raft, n);
             }
         }
     }
@@ -2833,9 +2863,7 @@ raft_handle_append_reply(struct raft *raft,
     if (rpy->success) {
         /* Figure 3.1: "If successful, update nextIndex and matchIndex for
          * follower (section 3.5)." */
-        VLOG_INFO("prev_log_index=%"PRIu64" n_entries=%"PRIuSIZE,
-                  rpy->prev_log_index, rpy->n_entries);
-        uint64_t min_index = rpy->prev_log_index + rpy->n_entries + 1;
+        uint64_t min_index = rpy->prev_log_index + rpy->n_entries;
         if (s->next_index < min_index) {
             s->next_index = min_index;
         }
@@ -2851,25 +2879,42 @@ raft_handle_append_reply(struct raft *raft,
          * however, is to have followers return the length of their logs in the
          * AppendEntries response; this allows the leader to cap the follower’s
          * nextIndex accordingly." */
+        VLOG_INFO("next_index was %"PRIu64, s->next_index);
         if (s->next_index > 0) {
-            s->next_index = MIN(s->next_index - 1, rpy->log_end);
+            s->next_index = MIN(s->next_index - 1, rpy->log_end - 1);
         } else {
             /* XXX log */
         }
+        VLOG_INFO("next_index is now %"PRIu64, s->next_index);
     }
 
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
+    /*
+     * Our behavior here must depend on the value of next_index relative to
+     * log_start and log_end.  There are three cases:
+     *
+     *        Case 1       |    Case 2     |      Case 3
+     *   <---------------->|<------------->|<------------------>
+     *                     |               |
+     *
+     *                     +---+---+---+---+
+     *                   T | T | T | T | T |
+     *                     +---+---+---+---+
+     *                       ^               ^
+     *                       |               |
+     *                   log_start        log_end
+     */
     if (s->next_index < raft->log_start) {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
+        /* Case 1. */
         raft_send_install_snapshot_request(raft, s, 0);
     } else if (s->next_index < raft->log_end) {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
+        /* Case 2. */
         raft_send_append_request(raft, s, 1);
-    } else if (s->phase == RAFT_PHASE_CATCHUP) {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
-        VLOG_INFO("caught up");
-        s->phase = RAFT_PHASE_CAUGHT_UP;
-        raft_run_reconfigure(raft);
+    } else {
+        /* Case 3. */
+        if (s->phase == RAFT_PHASE_CATCHUP) {
+            s->phase = RAFT_PHASE_CAUGHT_UP;
+            raft_run_reconfigure(raft);
+        }
     }
 }
 
@@ -2981,13 +3026,11 @@ raft_run_reconfigure(struct raft *raft)
 {
     ovs_assert(raft->role == RAFT_LEADER);
 
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     /* Reconfiguration only progresses when configuration changes commit. */
     if (raft_has_uncommitted_configuration(raft)) {
         return;
     }
 
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     /* If we were waiting for a configuration change to commit, it's done. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
@@ -3004,10 +3047,8 @@ raft_run_reconfigure(struct raft *raft)
     }
 
     /* If a new server is caught up, add it to the configuration.  */
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
         if (s->phase == RAFT_PHASE_CAUGHT_UP) {
-            VLOG_INFO("%s:%d", __FILE__, __LINE__);
             /* Move 's' from 'raft->add_servers' to 'raft->servers'. */
             hmap_remove(&raft->add_servers, &s->hmap_node);
             hmap_insert(&raft->servers, &s->hmap_node, uuid_hash(&s->sid));
@@ -3228,7 +3269,7 @@ raft_write_snapshot(struct raft *raft, const char *file_name)
     json_object_put(snapshot, "prev_term",
                     json_integer_create(raft->prev_term));
     json_object_put(snapshot, "prev_index",
-                    json_integer_create(raft->log_start));
+                    json_integer_create(raft->log_start - 1));
     json_object_put(snapshot, "prev_servers",
                     raft_servers_to_json(&raft->prev_servers));
     if (raft->snapshot) {
@@ -3417,8 +3458,8 @@ raft_handle_install_snapshot_reply(
     }
 
     if (rpy->next_offset == raft->snapshot_len) {
-        VLOG_INFO("cluster "UUID_FMT": installed snapshot on server "UUID_FMT
-                  "up to %"PRIu64":%"PRIu64,
+        VLOG_INFO("cluster "UUID_FMT": installed snapshot on server "
+                  UUID_FMT" up to %"PRIu64":%"PRIu64,
                   UUID_ARGS(&raft->cid), UUID_ARGS(&s->sid),
                   rpy->last_term, rpy->last_index);
     } else {
