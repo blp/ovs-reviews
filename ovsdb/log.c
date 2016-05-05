@@ -41,6 +41,7 @@ enum ovsdb_log_mode {
 struct ovsdb_log {
     off_t prev_offset;
     off_t offset;
+    char *rel_name;
     char *name;
     char *magic;
     struct lockfile *lockfile;
@@ -70,6 +71,7 @@ ovsdb_log_open(const char *name, const char *magic,
     struct lockfile *lockfile;
     struct ovsdb_error *error;
     struct ovsdb_log *file;
+    char *abs_name;
     struct stat s;
     FILE *stream;
     int flags;
@@ -77,12 +79,23 @@ ovsdb_log_open(const char *name, const char *magic,
 
     *filep = NULL;
 
+    /* Use the absolute name of the file because ovsdb-server opens its
+     * database before daemonize() chdirs to "/". */
+    char *deref_name = follow_symlinks(name);
+    abs_name = abs_file_name(NULL, deref_name);
+    free(deref_name);
+    if (!name) {
+        error = ovsdb_io_error(0, "could not determine current "
+                              "working directory");
+        goto error;
+    }
+
     ovs_assert(locking == -1 || locking == false || locking == true);
     if (locking < 0) {
         locking = open_mode != OVSDB_LOG_READ_ONLY;
     }
     if (locking) {
-        int retval = lockfile_lock(name, &lockfile);
+        int retval = lockfile_lock(abs_name, &lockfile);
         if (retval) {
             error = ovsdb_io_error(retval, "%s: failed to lock lockfile",
                                    name);
@@ -102,20 +115,7 @@ ovsdb_log_open(const char *name, const char *magic,
         break;
 
     case OVSDB_LOG_CREATE_EXCL:
-#ifndef _WIN32
-        if (stat(name, &s) == -1 && errno == ENOENT
-            && lstat(name, &s) == 0 && S_ISLNK(s.st_mode)) {
-            /* 'name' is a dangling symlink.  We want to create the file that
-             * the symlink points to, but POSIX says that open() with O_EXCL
-             * must fail with EEXIST if the named file is a symlink.  So, we
-             * have to leave off O_EXCL and accept the race. */
-            flags = O_RDWR | O_CREAT;
-        } else {
-            flags = O_RDWR | O_CREAT | O_EXCL;
-        }
-#else
         flags = O_RDWR | O_CREAT | O_EXCL;
-#endif
         break;
 
     case OVSDB_LOG_CREATE:
@@ -128,7 +128,7 @@ ovsdb_log_open(const char *name, const char *magic,
 #ifdef _WIN32
     flags = flags | O_BINARY;
 #endif
-    fd = open(name, flags, 0666);
+    fd = open(abs_name, flags, 0666);
     if (fd < 0) {
         const char *op = (open_mode == OVSDB_LOG_CREATE_EXCL ? "create"
             : open_mode == OVSDB_LOG_CREATE ? "create or open"
@@ -141,7 +141,7 @@ ovsdb_log_open(const char *name, const char *magic,
         if (s.st_size == 0) {
             /* It's (probably) a new file so fsync() its parent directory to
              * ensure that its directory entry is committed to disk. */
-            fsync_parent_dir(name);
+            fsync_parent_dir(abs_name);
         } else if (s.st_size >= strlen(magic) && S_ISREG(s.st_mode)) {
             /* Try to read the magic from the first log record.  If it's not
              * the magic we expect, this is the wrong kind of file, so reject
@@ -170,7 +170,8 @@ ovsdb_log_open(const char *name, const char *magic,
     }
 
     file = xmalloc(sizeof *file);
-    file->name = xstrdup(name);
+    file->name = abs_name;
+    file->rel_name = xstrdup(name);
     file->magic = xstrdup(magic);
     file->lockfile = lockfile;
     file->stream = stream;
@@ -187,6 +188,7 @@ error_close:
 error_unlock:
     lockfile_unlock(lockfile);
 error:
+    free(abs_name);
     return error;
 }
 
@@ -195,11 +197,21 @@ ovsdb_log_close(struct ovsdb_log *file)
 {
     if (file) {
         free(file->name);
-        fclose(file->stream);
+        free(file->rel_name);
+        free(file->magic);
+        if (file->stream) {
+            fclose(file->stream);
+        }
         lockfile_unlock(file->lockfile);
         ovsdb_error_destroy(file->read_error);
         free(file);
     }
+}
+
+const char *
+ovsdb_log_get_name(const struct ovsdb_log *log)
+{
+    return log->rel_name;
 }
 
 static bool
@@ -263,7 +275,8 @@ ovsdb_log_read(struct ovsdb_log *file, char **datap)
     if (!parse_header(file->magic, header, &data_length, expected_sha1)) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: parse error at offset "
                                    "%lld in header line \"%.*s\"",
-                                   file->name, (long long int) file->offset,
+                                   file->rel_name,
+                                   (long long int) file->offset,
                                    (int) strcspn(header, "\n"), header);
         goto error;
     }
@@ -273,7 +286,7 @@ ovsdb_log_read(struct ovsdb_log *file, char **datap)
     if (fread(*datap, 1, data_length, file->stream) != data_length) {
         error = ovsdb_io_error(ferror(file->stream) ? errno : EOF,
                                "%s: error reading %lu bytes "
-                               "starting at offset %lld", file->name,
+                               "starting at offset %lld", file->rel_name,
                                data_length, (long long int) data_offset);
         goto error;
     }
@@ -285,7 +298,7 @@ ovsdb_log_read(struct ovsdb_log *file, char **datap)
         error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
                                    "offset %lld have SHA-1 hash "SHA1_FMT" "
                                    "but should have hash "SHA1_FMT,
-                                   file->name, data_length,
+                                   file->rel_name, data_length,
                                    (long long int) data_offset,
                                    SHA1_ARGS(actual_sha1),
                                    SHA1_ARGS(expected_sha1));
@@ -319,7 +332,7 @@ ovsdb_log_read_json(struct ovsdb_log *file, struct json **jsonp)
     if ((*jsonp)->type == JSON_STRING) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: log record beginning at "
                                    "offset %lld is not valid JSON (%s)",
-                                   file->name, file->prev_offset,
+                                   file->rel_name, file->prev_offset,
                                    (*jsonp)->u.string);
         file->read_error = ovsdb_error_clone(error);
         ovsdb_log_unread(file);
@@ -359,10 +372,10 @@ ovsdb_log_truncate__(struct ovsdb_log *file)
     struct ovsdb_error *error = NULL;
     if (fseeko(file->stream, file->offset, SEEK_SET)) {
         error = ovsdb_io_error(errno, "%s: cannot seek to offset %lld",
-                               file->name, (long long int) file->offset);
+                               file->rel_name, (long long int) file->offset);
     } else if (ftruncate(fileno(file->stream), file->offset)) {
         error = ovsdb_io_error(errno, "%s: cannot truncate to length %lld",
-                               file->name, (long long int) file->offset);
+                               file->rel_name, (long long int) file->offset);
     }
     file->write_error = error != NULL;
     return error;
@@ -392,7 +405,7 @@ ovsdb_log_write__(struct ovsdb_log *file, const char *data, size_t length)
         || fwrite(data, length, 1, file->stream) != 1
         || fflush(file->stream))
     {
-        error = ovsdb_io_error(errno, "%s: write failed", file->name);
+        error = ovsdb_io_error(errno, "%s: write failed", file->rel_name);
 
         /* Remove any partially written data, ignoring errors since there is
          * nothing further we can do. */
@@ -438,7 +451,7 @@ struct ovsdb_error *
 ovsdb_log_commit(struct ovsdb_log *file)
 {
     if (fsync(fileno(file->stream))) {
-        return ovsdb_io_error(errno, "%s: fsync failed", file->name);
+        return ovsdb_io_error(errno, "%s: fsync failed", file->rel_name);
     }
     return NULL;
 }
@@ -458,4 +471,85 @@ ovsdb_log_get_offset(const struct ovsdb_log *log)
 {
     return log->offset;
 }
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_log_replace_start(struct ovsdb_log *old,
+                        struct ovsdb_log **newp)
+{
+    char *tmp_name = xasprintf("%s.tmp", old->rel_name);
+    struct ovsdb_error *error;
 
+    ovs_assert(old->lockfile);
+
+    /* Remove temporary file.  (It might not exist.) */
+    if (unlink(tmp_name) < 0 && errno != ENOENT) {
+        error = ovsdb_io_error(errno, "failed to remove %s", tmp_name);
+        free(tmp_name);
+        *newp = NULL;
+        return error;
+    }
+
+    /* Create temporary file. */
+    error = ovsdb_log_open(tmp_name, old->magic, OVSDB_LOG_CREATE_EXCL,
+                           false, newp);
+    if (error) {
+        free(tmp_name);
+        *newp = NULL;
+    }
+    return error;
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new)
+{
+    struct ovsdb_error *error = ovsdb_log_commit(new);
+    if (error) {
+        ovsdb_log_close(new);
+        return error;
+    }
+
+    /* Replace old file by new file on-disk. */
+    if (rename(new->name, old->name)) {
+        error = ovsdb_io_error(errno, "failed to rename \"%s\" to \"%s\"",
+                               new->name, old->name);
+        ovsdb_log_close(new);
+        return error;
+    }
+    fsync_parent_dir(old->name);
+
+    /* Replace 'old' by 'new' in memory.
+     *
+     * 'old' transitions to OVSDB_LOG_WRITE (it was probably in that mode
+     * anyway). */
+    /* prev_offset only matters for OVSDB_LOG_READ. */
+    old->offset = new->offset;
+    /* Keep old->name and old->rel_name. */
+    free(old->magic);
+    old->magic = new->magic;
+    new->magic = NULL;
+    /* Keep old->lockfile. */
+    fclose(old->stream);
+    old->stream = new->stream;
+    new->stream = NULL;
+    /* read_error only matters for OVSDB_LOG_READ. */
+    old->write_error = new->write_error;
+    old->mode = OVSDB_LOG_WRITE;
+
+    /* Free 'new'. */
+    ovsdb_log_close(new);
+
+    return NULL;
+}
+
+void
+ovsdb_log_replace_abort(struct ovsdb_log *new)
+{
+    if (new) {
+        /* Unlink the new file, but only after we close it (for Windows
+         * compatibility). */
+        char *name = xstrdup(new->name);
+        ovsdb_log_close(new);
+        unlink(name);
+        free(name);
+    }
+}

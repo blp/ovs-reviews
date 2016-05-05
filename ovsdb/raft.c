@@ -557,7 +557,7 @@ static struct raft_server *raft_server_add(struct hmap *servers,
                                            const struct uuid *sid,
                                            const char *address);
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_snapshot(struct raft *, const char *file_name);
+raft_write_snapshot(struct raft *, struct ovsdb_log *);
 static void raft_send_heartbeats(struct raft *);
 
 static struct raft_server *
@@ -694,7 +694,14 @@ raft_create(const char *file_name, const char *local_address,
     raft->snapshot_len = strlen(data);
     raft->log_start = raft->log_end = 2;
 
-    error = raft_write_snapshot(raft, file_name);
+    /* Create log file. */
+    struct ovsdb_log *storage;
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
+                           -1, &storage);
+    if (!error) {
+        error = raft_write_snapshot(raft, storage);
+        ovsdb_log_close(storage);
+    }
     raft_close(raft);
     return error;
 }
@@ -3244,24 +3251,13 @@ raft_handle_remove_server_reply(struct raft *raft OVS_UNUSED,
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_snapshot(struct raft *raft, const char *file_name)
+raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage)
 {
-    /* Create log file. */
-    struct ovsdb_log *storage;
-    struct ovsdb_error *error;
-    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE,
-                           -1, &storage);
-    if (!error) {
-        error = ovsdb_log_truncate(storage);
-    }
-    if (error) {
-        goto exit;
-    }
-
     /* Write header record. */
-    error = raft_write_header(storage, &raft->cid, &raft->sid);
+    struct ovsdb_error *error = raft_write_header(storage,
+                                                  &raft->cid, &raft->sid);
     if (error) {
-        goto exit;
+        return error;
     }
 
     /* Write snapshot record. */
@@ -3278,7 +3274,7 @@ raft_write_snapshot(struct raft *raft, const char *file_name)
     error = ovsdb_log_write_json(storage, snapshot);
     json_destroy(snapshot);
     if (error) {
-        goto exit;
+        return error;
     }
 
     /* Write log records. */
@@ -3287,7 +3283,7 @@ raft_write_snapshot(struct raft *raft, const char *file_name)
         error = ovsdb_log_write_json(storage, json);
         json_destroy(json);
         if (error) {
-            goto exit;
+            return error;
         }
     }
 
@@ -3296,49 +3292,26 @@ raft_write_snapshot(struct raft *raft, const char *file_name)
      * The term is redundant if we wrote a log record for that term above.  The
      * vote, if any, is never redundant.
      */
-    error = raft_write_state(storage, raft->current_term, &raft->voted_for);
-    if (error) {
-        goto exit;
-    }
-
-    error = ovsdb_log_commit(storage);
-    if (error) {
-        goto exit;
-    }
-
-exit:
-    if (!error) {
-        ovsdb_log_close(raft->storage);
-        raft->storage = storage;
-    } else {
-        ovsdb_log_close(storage);
-    }
-    return error;
+    return raft_write_state(storage, raft->current_term, &raft->voted_for);
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_save_snapshot(struct raft *raft)
 {
-    char *tmp_name = xasprintf("%s.tmp", raft->file_name);
-    struct ovsdb_error *error = NULL;
-
-    /* Save a snapshot. */
-    error = raft_write_snapshot(raft, tmp_name);
+    struct ovsdb_log *new_storage;
+    struct ovsdb_error *error;
+    error = ovsdb_log_replace_start(raft->storage, &new_storage);
     if (error) {
-        goto exit;
+        return error;
     }
 
-    /* Replace original by temporary. */
-    if (rename(tmp_name, raft->file_name)) {
-        error = ovsdb_io_error(errno, "failed to rename \"%s\" to \"%s\"",
-                               tmp_name, raft->file_name);
-        goto exit;
+    error = raft_write_snapshot(raft, new_storage);
+    if (error) {
+        ovsdb_log_replace_abort(new_storage);
+        return error;
     }
-    fsync_parent_dir(raft->file_name);
 
-exit:
-    free(tmp_name);
-    return error;
+    return ovsdb_log_replace_commit(raft->storage, new_storage);
 }
 
 static void

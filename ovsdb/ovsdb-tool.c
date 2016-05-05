@@ -248,60 +248,29 @@ compact_or_convert(const char *src_name_, const char *dst_name_,
                    const struct ovsdb_schema *new_schema,
                    const char *comment)
 {
-    char *src_name, *dst_name;
-    struct lockfile *src_lock;
-    struct lockfile *dst_lock;
-    bool in_place = dst_name_ == NULL;
+
+    struct ovsdb_file *file;
     struct ovsdb *db;
-    int retval;
 
-    /* Dereference symlinks for source and destination names.  In the in-place
-     * case this ensures that, if the source name is a symlink, we replace its
-     * target instead of replacing the symlink by a regular file.  In the
-     * non-in-place, this has the same effect for the destination name. */
-    src_name = follow_symlinks(src_name_);
-    dst_name = (in_place
-                ? xasprintf("%s.tmp", src_name)
-                : follow_symlinks(dst_name_));
+    /* We dereference symlinks for source and destination names.  In the
+     * in-place case this ensures that, if the source name is a symlink, we
+     * replace its target instead of replacing the symlink by a regular file.
+     * In the non-in-place, this has the same effect for the destination
+     * name. */
+    char *src_name = follow_symlinks(src_name_);
+    check_ovsdb_error(ovsdb_file_open(src_name, new_schema, true,
+                                      dst_name_ == NULL, &db, &file));
 
-    /* Lock the source, if we will be replacing it. */
-    if (in_place) {
-        retval = lockfile_lock(src_name, &src_lock);
-        if (retval) {
-            ovs_fatal(retval, "%s: failed to lock lockfile", src_name);
-        }
+    if (!dst_name_) {
+        check_ovsdb_error(ovsdb_file_compact(file));
+    } else {
+        char *dst_name = follow_symlinks(dst_name_);
+        check_ovsdb_error(ovsdb_file_save_copy(dst_name, comment, db));
+        free(dst_name);
     }
 
-    /* Get (temporary) destination and lock it. */
-    retval = lockfile_lock(dst_name, &dst_lock);
-    if (retval) {
-        ovs_fatal(retval, "%s: failed to lock lockfile", dst_name);
-    }
-
-    /* Save a copy. */
-    check_ovsdb_error(new_schema
-                      ? ovsdb_file_open_as_schema(src_name, new_schema, &db)
-                      : ovsdb_file_open(src_name, true, &db, NULL));
-    check_ovsdb_error(ovsdb_file_save_copy(dst_name, false, comment, db));
     ovsdb_destroy(db);
-
-    /* Replace source. */
-    if (in_place) {
-#ifdef _WIN32
-        unlink(src_name);
-#endif
-        if (rename(dst_name, src_name)) {
-            ovs_fatal(errno, "failed to rename \"%s\" to \"%s\"",
-                      dst_name, src_name);
-        }
-        fsync_parent_dir(dst_name);
-        lockfile_unlock(src_lock);
-    }
-
-    lockfile_unlock(dst_lock);
-
     free(src_name);
-    free(dst_name);
 }
 
 static void
@@ -393,7 +362,9 @@ transact(bool read_only, int argc, char *argv[])
     struct json *request, *result;
     struct ovsdb *db;
 
-    check_ovsdb_error(ovsdb_file_open(db_file_name, read_only, &db, NULL));
+    struct ovsdb_file *file;
+    check_ovsdb_error(ovsdb_file_open(db_file_name, NULL, read_only,
+                                      !read_only, &db, &file));
 
     request = parse_json(transaction);
     result = ovsdb_execute(db, NULL, request, 0, NULL);

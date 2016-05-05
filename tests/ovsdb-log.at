@@ -45,9 +45,9 @@ AT_CHECK(
   [[file: open successful
 file: read: [1]
 ]], [ignore])
-AT_CHECK(
-  [test-ovsdb log-io file create read], [1],
-  [], [test-ovsdb: I/O error: file: create failed (File exists)
+AT_CHECK([test-ovsdb log-io file create read], [1], [], [stderr])
+AT_CHECK([sed 's,/.*/,,' stderr], [0],
+  [test-ovsdb: I/O error: file: create failed (File exists)
 ])
 AT_CHECK([test -f .file.~lock~])
 AT_CLEANUP

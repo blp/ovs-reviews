@@ -63,64 +63,18 @@ static struct ovsdb_error *ovsdb_file_txn_commit(struct json *,
                                                  bool durable,
                                                  struct ovsdb_log *);
 
-static struct ovsdb_error *ovsdb_file_open__(const char *file_name,
-                                             const struct ovsdb_schema *,
-                                             bool read_only, struct ovsdb **,
-                                             struct ovsdb_file **);
 static struct ovsdb_error *ovsdb_file_txn_from_json(
     struct ovsdb *, const struct json *, bool converting, struct ovsdb_txn **);
 static struct ovsdb_error *ovsdb_file_create(struct ovsdb *,
                                              struct ovsdb_log *,
-                                             const char *file_name,
                                              unsigned int n_transactions,
                                              off_t snapshot_size,
                                              struct ovsdb_file **filep);
 
-/* Opens database 'file_name' and stores a pointer to the new database in
- * '*dbp'.  If 'read_only' is false, then the database will be locked and
- * changes to the database will be written to disk.  If 'read_only' is true,
- * the database will not be locked and changes to the database will persist
- * only as long as the "struct ovsdb".
- *
- * If 'filep' is nonnull and 'read_only' is false, then on success sets
- * '*filep' to an ovsdb_file that represents the open file.  This ovsdb_file
- * persists until '*dbp' is destroyed.
- *
- * On success, returns NULL.  On failure, returns an ovsdb_error (which the
- * caller must destroy) and sets '*dbp' and '*filep' to NULL. */
-struct ovsdb_error *
-ovsdb_file_open(const char *file_name, bool read_only,
-                struct ovsdb **dbp, struct ovsdb_file **filep)
-{
-    return ovsdb_file_open__(file_name, NULL, read_only, dbp, filep);
-}
-
-/* Opens database 'file_name' with an alternate schema.  The specified 'schema'
- * is used to interpret the data in 'file_name', ignoring the schema actually
- * stored in the file.  Data in the file for tables or columns that do not
- * exist in 'schema' are ignored, but the ovsdb file format must otherwise be
- * observed, including column constraints.
- *
- * This function can be useful for upgrading or downgrading databases to
- * "almost-compatible" formats.
- *
- * The database will not be locked.  Changes to the database will persist only
- * as long as the "struct ovsdb".
- *
- * On success, stores a pointer to the new database in '*dbp' and returns a
- * null pointer.  On failure, returns an ovsdb_error (which the caller must
- * destroy) and sets '*dbp' to NULL. */
-struct ovsdb_error *
-ovsdb_file_open_as_schema(const char *file_name,
-                          const struct ovsdb_schema *schema,
-                          struct ovsdb **dbp)
-{
-    return ovsdb_file_open__(file_name, schema, true, dbp, NULL);
-}
-
 static struct ovsdb_error *
 ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
-                    struct ovsdb_log **logp, struct ovsdb_schema **schemap)
+                    int locking, struct ovsdb_log **logp,
+                    struct ovsdb_schema **schemap)
 {
     struct ovsdb_schema *schema = NULL;
     struct ovsdb_log *log = NULL;
@@ -129,7 +83,7 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
 
     ovs_assert(logp || schemap);
 
-    error = ovsdb_log_open(file_name, OVSDB_MAGIC, open_mode, -1, &log);
+    error = ovsdb_log_open(file_name, OVSDB_MAGIC, open_mode, locking, &log);
     if (error) {
         goto error;
     }
@@ -176,11 +130,30 @@ error:
     return error;
 }
 
-static struct ovsdb_error *
-ovsdb_file_open__(const char *file_name,
-                  const struct ovsdb_schema *alternate_schema,
-                  bool read_only, struct ovsdb **dbp,
-                  struct ovsdb_file **filep)
+/* Opens database 'file_name' and stores a pointer to the new database in
+ * '*dbp'.
+ *
+ * If 'schema' is nonnull, then it is used to interpret the data in
+ * 'file_name', ignoring the schema actually stored in the file.  Data in the
+ * file for tables or columns that do not exist in 'schema' are ignored, but
+ * the ovsdb file format must otherwise be observed, including column
+ * constraints.  Theis feature can be useful for upgrading or downgrading
+ * databases to "almost-compatible" formats.
+ *
+ * If 'read_only' is true, the database will opened for reading only, otherwise
+ * for reading and writing.  In the latter case, the database will be locked.
+ *
+ * If 'filep' is nonnull, then on success sets '*filep' to an ovsdb_file that
+ * represents the open file.  This ovsdb_file persists until '*dbp' is
+ * destroyed.
+ *
+ * On success, returns NULL.  On failure, returns an ovsdb_error (which the
+ * caller must destroy) and sets '*dbp' and '*filep' to NULL. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_file_open(const char *file_name,
+                const struct ovsdb_schema *alternate_schema,
+                bool read_only, int locking, struct ovsdb **dbp,
+                struct ovsdb_file **filep)
 {
     enum ovsdb_log_open_mode open_mode;
     struct ovsdb_schema *schema = NULL;
@@ -189,11 +162,8 @@ ovsdb_file_open__(const char *file_name,
     struct json *json;
     struct ovsdb *db = NULL;
 
-    /* In read-only mode there is no ovsdb_file so 'filep' must be null. */
-    ovs_assert(!(read_only && filep));
-
     open_mode = read_only ? OVSDB_LOG_READ_ONLY : OVSDB_LOG_READ_WRITE;
-    error = ovsdb_file_open_log(file_name, open_mode, &log,
+    error = ovsdb_file_open_log(file_name, open_mode, locking, &log,
                                 alternate_schema ? NULL : &schema);
     if (error) {
         goto error;
@@ -244,10 +214,10 @@ ovsdb_file_open__(const char *file_name,
         ovsdb_error_destroy(error);
     }
 
-    if (!read_only) {
+    if (filep) {
         struct ovsdb_file *file;
 
-        error = ovsdb_file_create(db, log, file_name, n_transactions,
+        error = ovsdb_file_create(db, log, n_transactions,
                                   snapshot_size, &file);
         if (error) {
             goto error;
@@ -430,28 +400,20 @@ error:
 }
 
 static struct ovsdb_error *
-ovsdb_file_save_copy__(const char *file_name, int locking,
-                       const char *comment, const struct ovsdb *db,
-                       struct ovsdb_log **logp)
+ovsdb_file_save_copy__(struct ovsdb_log *log, const char *comment,
+                       const struct ovsdb *db)
 {
     const struct shash_node *node;
     struct ovsdb_file_txn ftxn;
     struct ovsdb_error *error;
-    struct ovsdb_log *log;
     struct json *json;
-
-    error = ovsdb_log_open(file_name, OVSDB_MAGIC,
-                           OVSDB_LOG_CREATE_EXCL, locking, &log);
-    if (error) {
-        return error;
-    }
 
     /* Write schema. */
     json = ovsdb_schema_to_json(db->schema);
     error = ovsdb_log_write_json(log, json);
     json_destroy(json);
     if (error) {
-        goto exit;
+        return error;
     }
 
     /* Write data. */
@@ -466,32 +428,32 @@ ovsdb_file_save_copy__(const char *file_name, int locking,
     }
     error = ovsdb_file_txn_commit(ftxn.json, comment, true, log);
 
-exit:
-    if (logp) {
-        if (!error) {
-            *logp = log;
-            log = NULL;
-        } else {
-            *logp = NULL;
-        }
-    }
-    ovsdb_log_close(log);
-    if (error) {
-        remove(file_name);
-    }
     return error;
 }
 
 /* Saves a snapshot of 'db''s current contents as 'file_name'.  If 'comment' is
  * nonnull, then it is added along with the data contents and can be viewed
- * with "ovsdb-tool show-log".
- *
- * 'locking' is passed along to ovsdb_log_open() untouched. */
+ * with "ovsdb-tool show-log". */
 struct ovsdb_error *
-ovsdb_file_save_copy(const char *file_name, int locking,
-                     const char *comment, const struct ovsdb *db)
+ovsdb_file_save_copy(const char *file_name, const char *comment,
+                     const struct ovsdb *db)
 {
-    return ovsdb_file_save_copy__(file_name, locking, comment, db, NULL);
+    struct ovsdb_log *log = NULL;
+    struct ovsdb_error *error;
+
+    error = ovsdb_log_open(file_name, OVSDB_MAGIC,
+                           OVSDB_LOG_CREATE_EXCL, true, &log);
+    if (!error) {
+        error = ovsdb_file_save_copy__(log, comment, db);
+        if (!error) {
+            error = ovsdb_log_commit(log);
+        }
+        if (error) {
+            unlink(file_name);
+        }
+        ovsdb_log_close(log);
+    }
+    return error;
 }
 
 /* Opens database 'file_name', reads its schema, and closes it.  On success,
@@ -502,7 +464,8 @@ struct ovsdb_error *
 ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
 {
     ovs_assert(schemap != NULL);
-    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemap);
+    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, false,
+                               NULL, schemap);
 }
 
 /* Replica implementation. */
@@ -511,7 +474,6 @@ struct ovsdb_file {
     struct ovsdb_replica replica;
     struct ovsdb *db;
     struct ovsdb_log *log;
-    char *file_name;
     long long int last_compact;
     long long int next_compact;
     unsigned int n_transactions;
@@ -522,31 +484,16 @@ static const struct ovsdb_replica_class ovsdb_file_class;
 
 static struct ovsdb_error *
 ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
-                  const char *file_name,
                   unsigned int n_transactions, off_t snapshot_size,
                   struct ovsdb_file **filep)
 {
     struct ovsdb_file *file;
-    char *deref_name;
-    char *abs_name;
-
-    /* Use the absolute name of the file because ovsdb-server opens its
-     * database before daemonize() chdirs to "/". */
-    deref_name = follow_symlinks(file_name);
-    abs_name = abs_file_name(NULL, deref_name);
-    free(deref_name);
-    if (!abs_name) {
-        *filep = NULL;
-        return ovsdb_io_error(0, "could not determine current "
-                              "working directory");
-    }
 
     file = xmalloc(sizeof *file);
     ovsdb_replica_init(&file->replica, &ovsdb_file_class);
     file->db = db;
     file->log = log;
-    file->file_name = abs_name;
-    file->last_compact = time_msec();
+    file->last_compact = time_wall_msec();
     file->next_compact = file->last_compact + COMPACT_MIN_MSEC;
     file->snapshot_size = snapshot_size;
     file->n_transactions = n_transactions;
@@ -612,8 +559,8 @@ ovsdb_file_commit(struct ovsdb_replica *replica,
             char *s = ovsdb_error_to_string(error);
             ovsdb_error_destroy(error);
             VLOG_WARN("%s: compacting database failed (%s), retrying in "
-                      "%d seconds",
-                      file->file_name, s, COMPACT_RETRY_MSEC / 1000);
+                      "%d seconds", ovsdb_log_get_name(file->log),
+                      s, COMPACT_RETRY_MSEC / 1000);
             free(s);
 
             file->next_compact = time_msec() + COMPACT_RETRY_MSEC;
@@ -627,71 +574,34 @@ struct ovsdb_error *
 ovsdb_file_compact(struct ovsdb_file *file)
 {
     struct ovsdb_log *new_log = NULL;
-    struct lockfile *tmp_lock = NULL;
     struct ovsdb_error *error;
-    char *tmp_name = NULL;
     char *comment = NULL;
-    int retval;
 
     comment = xasprintf("compacting database online "
                         "(%.3f seconds old, %u transactions, %llu bytes)",
                         (time_wall_msec() - file->last_compact) / 1000.0,
                         file->n_transactions,
                         (unsigned long long) ovsdb_log_get_offset(file->log));
-    VLOG_INFO("%s: %s", file->file_name, comment);
 
-    /* Commit the old version, so that we can be assured that we'll eventually
-     * have either the old or the new version. */
-    error = ovsdb_log_commit(file->log);
+    error = ovsdb_log_replace_start(file->log, &new_log);
     if (error) {
         goto exit;
     }
 
-    /* Lock temporary file. */
-    tmp_name = xasprintf("%s.tmp", file->file_name);
-    retval = lockfile_lock(tmp_name, &tmp_lock);
-    if (retval) {
-        error = ovsdb_io_error(retval, "could not get lock on %s", tmp_name);
-        goto exit;
-    }
-
-    /* Remove temporary file.  (It might not exist.) */
-    if (unlink(tmp_name) < 0 && errno != ENOENT) {
-        error = ovsdb_io_error(errno, "failed to remove %s", tmp_name);
-        goto exit;
-    }
-
-    /* Save a copy. */
-    error = ovsdb_file_save_copy__(tmp_name, false, comment, file->db,
-                                   &new_log);
+    error = ovsdb_file_save_copy__(new_log, comment, file->db);
     if (error) {
         goto exit;
     }
 
-    /* Replace original by temporary. */
-    if (rename(tmp_name, file->file_name)) {
-        error = ovsdb_io_error(errno, "failed to rename \"%s\" to \"%s\"",
-                               tmp_name, file->file_name);
-        goto exit;
-    }
-    fsync_parent_dir(file->file_name);
+    error = ovsdb_log_replace_commit(file->log, new_log);
 
 exit:
     if (!error) {
-        ovsdb_log_close(file->log);
-        file->log = new_log;
-        file->last_compact = time_msec();
+        file->last_compact = time_wall_msec();
         file->next_compact = file->last_compact + COMPACT_MIN_MSEC;
         file->n_transactions = 1;
-    } else {
-        ovsdb_log_close(new_log);
-        if (tmp_lock) {
-            unlink(tmp_name);
-        }
     }
 
-    lockfile_unlock(tmp_lock);
-    free(tmp_name);
     free(comment);
 
     return error;
@@ -703,7 +613,6 @@ ovsdb_file_destroy(struct ovsdb_replica *replica)
     struct ovsdb_file *file = ovsdb_file_cast(replica);
 
     ovsdb_log_close(file->log);
-    free(file->file_name);
     free(file);
 }
 

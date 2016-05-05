@@ -38,6 +38,8 @@ struct ovsdb_error *ovsdb_log_open(const char *name, const char *magic,
     OVS_WARN_UNUSED_RESULT;
 void ovsdb_log_close(struct ovsdb_log *);
 
+const char *ovsdb_log_get_name(const struct ovsdb_log *);
+
 struct ovsdb_error *ovsdb_log_read(struct ovsdb_log *, char **)
     OVS_WARN_UNUSED_RESULT;
 struct ovsdb_error *ovsdb_log_read_json(struct ovsdb_log *, struct json **)
@@ -56,5 +58,13 @@ struct ovsdb_error *ovsdb_log_truncate(struct ovsdb_log *)
     OVS_WARN_UNUSED_RESULT;
 
 off_t ovsdb_log_get_offset(const struct ovsdb_log *);
+
+struct ovsdb_error *ovsdb_log_replace_start(struct ovsdb_log *old,
+                                            struct ovsdb_log **newp)
+    OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *ovsdb_log_replace_commit(struct ovsdb_log *old,
+                                             struct ovsdb_log *new)
+    OVS_WARN_UNUSED_RESULT;
+void ovsdb_log_replace_abort(struct ovsdb_log *new);
 
 #endif /* ovsdb/log.h */
