@@ -1087,9 +1087,7 @@ parse_log_record(struct raft *raft, const struct json *entry)
     /* Parse "servers". */
     const struct json *servers_json
         = ovsdb_parser_member(&p, "servers", OP_OBJECT | OP_OPTIONAL);
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     if (servers_json) {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
         struct hmap servers;
         struct ovsdb_error *error = raft_servers_from_json(servers_json,
                                                            &servers);
@@ -1188,7 +1186,6 @@ raft_read(struct raft *raft)
             break;
         }
 
-        VLOG_INFO("parsing log record");
         error = parse_log_record(raft, entry);
         if (error) {
             return error;
@@ -1443,6 +1440,8 @@ raft_receive_rpc(struct raft *raft, struct jsonrpc_session *js,
     if (!msg) {
         return false;
     }
+    putchar('.');
+    fflush(stdout);
 
     struct ovsdb_error *error = raft_rpc_from_jsonrpc(raft, msg, rpc);
     if (error) {
@@ -2545,7 +2544,6 @@ raft_handle_append_request__(struct raft *raft,
     uint64_t first_entry_index = rq->prev_log_index + 1;
     uint64_t nth_entry_index = rq->prev_log_index + rq->n_entries;
     if (OVS_LIKELY(first_entry_index >= raft->log_start)) {
-        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return raft_handle_append_entries(raft, rq,
                                           rq->prev_log_index,
                                           rq->prev_log_term,
@@ -2578,7 +2576,6 @@ raft_handle_append_request__(struct raft *raft,
      *                           log_start        log_end
      */
     if (nth_entry_index < raft->log_start - 1) {
-        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return true;
     }
 
@@ -2619,7 +2616,6 @@ raft_handle_append_request__(struct raft *raft,
      *       log_start        log_end
      */
     if (nth_entry_index == raft->log_start - 1) {
-        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return (rq->n_entries
                 ? raft->prev_term == rq->entries[rq->n_entries - 1].term
                 : raft->prev_term == rq->prev_log_term);
@@ -2665,7 +2661,6 @@ raft_handle_append_request__(struct raft *raft,
      *                       |               |
      *                   log_start        log_end
      */
-        VLOG_INFO("%s:%d", __FILE__, __LINE__);
     uint64_t ofs = raft->log_start - first_entry_index;
     return raft_handle_append_entries(
         raft, rq,
