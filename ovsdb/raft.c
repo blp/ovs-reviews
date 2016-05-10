@@ -2432,15 +2432,27 @@ raft_handle_append_entries(struct raft *raft,
                            const struct raft_entry *entries,
                            unsigned int n_entries)
 {
-    if (prev_log_index < raft->log_start - 1 ? true
-        : prev_log_index == raft->log_start - 1 ? prev_log_term != raft->prev_term
-        : prev_log_index < raft->log_end ? raft->log[prev_log_index - raft->log_start].term
-                != prev_log_term
-        : true /* prev_log_index >= raft->log_end */) {
-        /* Section 3.5: "When sending an AppendEntries RPC, the leader includes
-         * the index and term of the entry in its log that immediately precedes
-         * the new entries. If the follower does not find an entry in its log
-         * with the same index and term, then it refuses the new entries." */
+    /* Section 3.5: "When sending an AppendEntries RPC, the leader includes
+     * the index and term of the entry in its log that immediately precedes
+     * the new entries. If the follower does not find an entry in its log
+     * with the same index and term, then it refuses the new entries." */
+    if (prev_log_index < raft->log_start - 1) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
+        return false;
+    } else if (prev_log_index == raft->log_start - 1) {
+        if (prev_log_term != raft->prev_term) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
+            return false;
+        }
+    } else if (prev_log_index < raft->log_end) {
+        if (raft->log[prev_log_index - raft->log_start].term != prev_log_term) {
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
+            return false;
+        }
+    } else {
+        /* prev_log_index >= raft->log_end */
+        VLOG_INFO("%s:%d prev_log_index=%"PRIu64" log_end=%"PRIu64,
+                  __FILE__, __LINE__, rq->prev_log_index, raft->log_end);
         return false;
     }
 
@@ -2493,6 +2505,7 @@ raft_handle_append_entries(struct raft *raft,
     }
 
     if (error) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return false;
     }
 
@@ -2507,6 +2520,10 @@ static int
 raft_handle_append_request__(struct raft *raft,
                              const struct raft_append_request *rq)
 {
+    static int x = 0;
+    if (x++ > 100) {
+        abort();
+    }
     /* We do not check whether we know the server that sent the AppendEntries
      * request to be the leader.  As section 4.1 says, "A server accepts
      * AppendEntries requests from a leader that is not part of the server’s
@@ -2517,6 +2534,7 @@ raft_handle_append_request__(struct raft *raft,
     if (!raft_receive_term__(raft, rq->term)) {
         /* Section 3.3: "If a server receives a request with a stale term
          * number, it rejects the request." */
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return false;
     }
 
@@ -2616,9 +2634,12 @@ raft_handle_append_request__(struct raft *raft,
      *       log_start        log_end
      */
     if (nth_entry_index == raft->log_start - 1) {
-        return (rq->n_entries
+        bool ok = (rq->n_entries
                 ? raft->prev_term == rq->entries[rq->n_entries - 1].term
                 : raft->prev_term == rq->prev_log_term);
+        if (!ok)
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
+        return ok;
     }
 
     /*
@@ -2732,6 +2753,12 @@ raft_handle_append_request(struct raft *raft,
                            const struct raft_append_request *rq)
 {
     int status = raft_handle_append_request__(raft, rq);
+    VLOG_INFO("append %u entries at %"PRIu64":%"PRIu64" => %s",
+              rq->n_entries,
+              rq->prev_log_index, rq->prev_log_term,
+              status < 0 ? "ongoing"
+              : !status ? "failure"
+              : "success");
     if (status >= 0) {
         raft_send_append_reply(raft, rq, status);
     }
@@ -2865,11 +2892,12 @@ raft_handle_append_reply(struct raft *raft,
     if (rpy->success) {
         /* Figure 3.1: "If successful, update nextIndex and matchIndex for
          * follower (section 3.5)." */
-        uint64_t min_index = rpy->prev_log_index + rpy->n_entries;
+        uint64_t min_index = rpy->prev_log_index + rpy->n_entries + 1;
+        VLOG_INFO("min_index=%"PRIu64, min_index);
         if (s->next_index < min_index) {
             s->next_index = min_index;
         }
-        raft_update_match_index(raft, s, min_index);
+        raft_update_match_index(raft, s, min_index - 1);
     } else {
         /* Figure 3.1: "If AppendEntries fails because of log inconsistency,
          * decrement nextIndex and retry (section 3.5)."
@@ -2883,7 +2911,7 @@ raft_handle_append_reply(struct raft *raft,
          * nextIndex accordingly." */
         VLOG_INFO("next_index was %"PRIu64, s->next_index);
         if (s->next_index > 0) {
-            s->next_index = MIN(s->next_index - 1, rpy->log_end - 1);
+            s->next_index = MIN(s->next_index - 1, rpy->log_end);
         } else {
             /* XXX log */
         }
@@ -2907,12 +2935,15 @@ raft_handle_append_reply(struct raft *raft,
      */
     if (s->next_index < raft->log_start) {
         /* Case 1. */
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
         raft_send_install_snapshot_request(raft, s, 0);
     } else if (s->next_index < raft->log_end) {
         /* Case 2. */
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
         raft_send_append_request(raft, s, 1);
     } else {
         /* Case 3. */
+            VLOG_INFO("%s:%d", __FILE__, __LINE__);
         if (s->phase == RAFT_PHASE_CATCHUP) {
             s->phase = RAFT_PHASE_CAUGHT_UP;
             raft_run_reconfigure(raft);
@@ -3331,18 +3362,21 @@ raft_handle_install_snapshot_request__(
     uint64_t new_log_start = rq->last_index + 1;
     if (new_log_start < raft->log_start) {
         /* The new snapshot covers less than our current one, why bother? */
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         return;
     } else if (new_log_start >= raft->log_end) {
         /* The new snapshot starts past the end of our current log, so discard
          * all of our current log.
          *
          * XXX make sure that last_term is not a regression*/
+        VLOG_INFO("%s:%d new_log_start=%"PRIu64, __FILE__, __LINE__, new_log_start);
         raft->log_start = raft->log_end = new_log_start;
     } else {
         /* The new snapshot starts in the middle of our log, so discard the
          * first 'new_log_start - raft->log_start' entries in the log.
          *
          * XXX we can validate last_term and last_servers exactly */
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         memmove(&raft->log[0], &raft->log[new_log_start - raft->log_start],
                 (raft->log_end - new_log_start) * sizeof *raft->log);
         raft->log_start = new_log_start;
