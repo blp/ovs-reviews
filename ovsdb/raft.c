@@ -559,6 +559,7 @@ static struct raft_server *raft_server_add(struct hmap *servers,
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_snapshot(struct raft *, struct ovsdb_log *);
 static void raft_send_heartbeats(struct raft *);
+static void raft_start_election(struct raft *);
 
 static struct raft_server *
 raft_find_server__(const struct hmap *servers, const struct uuid *sid)
@@ -1384,6 +1385,14 @@ error:
     raft_close(raft);
     *raftp = NULL;
     return error;
+}
+
+void
+raft_take_leadership(struct raft *raft)
+{
+    if (raft->role != RAFT_LEADER) {
+        raft_start_election(raft);
+    }
 }
 
 void

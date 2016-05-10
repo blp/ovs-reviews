@@ -62,6 +62,8 @@ struct ovsdb_error *raft_join(const char *file_name, const char *local_address,
                               const struct uuid *cid, struct raft **)
     OVS_WARN_UNUSED_RESULT;
 
+void raft_take_leadership(struct raft *);
+
 void raft_close(struct raft *);
 
 void raft_run(struct raft *);

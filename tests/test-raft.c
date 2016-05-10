@@ -33,6 +33,7 @@ static void parse_options(int argc, char *argv[]);
 
 static unixctl_cb_func test_raft_exit;
 static unixctl_cb_func test_raft_execute;
+static unixctl_cb_func test_raft_take_leadership;
 
 /* --cluster: UUID of cluster to open or join. */
 static struct uuid cluster_id;
@@ -90,6 +91,8 @@ main(int argc, char *argv[])
     bool exiting = false;
     unixctl_command_register("exit", "", 0, 0, test_raft_exit, &exiting);
     unixctl_command_register("execute", "DATA", 1, 1, test_raft_execute, raft);
+    unixctl_command_register("take-leadership", "", 0, 0,
+                             test_raft_take_leadership, raft);
 
     daemonize_complete();
 
@@ -194,3 +197,13 @@ test_raft_execute(struct unixctl_conn *conn,
     unixctl_command_reply(conn, NULL);
 }
 
+
+static void
+test_raft_take_leadership(struct unixctl_conn *conn,
+                          int argc OVS_UNUSED, const char *argv[] OVS_UNUSED,
+                          void *raft_)
+{
+    struct raft *raft = raft_;
+    raft_take_leadership(raft);
+    unixctl_command_reply(conn, NULL);
+}
