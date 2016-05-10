@@ -124,6 +124,8 @@ usage(void)
     printf("%s: Open vSwitch database management utility\n"
            "usage: %s [OPTIONS] COMMAND [ARG...]\n"
            "  create [DB [SCHEMA]]    create DB with the given SCHEMA\n"
+           "  create-cluster DB SCHEMA ADDRESS\n"
+           "    create clustered DB with given SCHEMA and local ADDRESS\n"
            "  compact [DB [DST]]      compact DB in-place (or to DST)\n"
            "  convert [DB [SCHEMA [DST]]]   convert DB to SCHEMA (to DST)\n"
            "  db-version [DB]         report version of schema used by DB\n"
