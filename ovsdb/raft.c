@@ -1046,14 +1046,15 @@ parse_log_record(struct raft *raft, const struct json *entry)
     struct ovsdb_parser p;
     ovsdb_parser_init(&p, entry, "raft log entry");
 
-    /* Parse "term". */
+    /* Parse "term".
+     *
+     * A Raft leader can replicate entries from previous terms to the other
+     * servers in the cluster, retaining the original terms on those entries
+     * (see section 3.6.2 "Committing entries from previous terms" for more
+     * information), so it's OK for the term in a log record to precede the
+     * current term. */
     uint64_t term = parse_uint(&p, "term");
-    if (term < raft->current_term) {
-        ovsdb_parser_raise_error(&p, "log entry term %"PRIu64" precedes "
-                                 "current term %"PRIu64".",
-                                 term, raft->current_term);
-        goto done;
-    } else {
+    if (term > raft->current_term) {
         raft->current_term = term;
         raft->voted_for = UUID_ZERO;
     }
@@ -1082,6 +1083,20 @@ parse_log_record(struct raft *raft, const struct json *entry)
     if (index != raft->log_end) {
         ovsdb_parser_raise_error(&p, "log entry index %"PRIu64" differs from "
                                  "expected %"PRIu64, index, raft->log_end);
+        goto done;
+    }
+
+    /* Since there's an index, this is a log record that includes a Raft log
+     * entry, as opposed to just advancing the term or marking a vote.
+     * Therefore, the term must not precede the term of the previous log
+     * entry. */
+    uint64_t prev_term = (raft->log_end > raft->log_start
+                          ? raft->log[raft->log_end - raft->log_start - 1].term
+                          : raft->prev_term);
+    if (term < prev_term) {
+        ovsdb_parser_raise_error(&p, "log entry index %"PRIu64" term "
+                                 "%"PRIu64" precedes previous entry's term "
+                                 "%"PRIu64, index, term, prev_term);
         goto done;
     }
 
