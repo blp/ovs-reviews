@@ -132,7 +132,8 @@ static struct raft_command *raft_find_command(struct raft *, uint64_t index);
 
 enum raft_waiter_type {
     RAFT_W_COMMAND,
-    RAFT_W_APPEND
+    RAFT_W_APPEND,
+    RAFT_W_VOTE
 };
 
 struct raft_waiter {
@@ -140,11 +141,13 @@ struct raft_waiter {
     uint64_t fsync_seqno;
     enum raft_waiter_type type;
     union {
+        /* RAFT_W_COMMAND. */
         struct {
             struct raft_command *cmd;
             uint64_t index;
         } command;
 
+        /* RAFT_W_APPEND. */
         struct {
             struct raft_append_request *rq; /* Does not include 'entries'. */
         } append;
@@ -213,6 +216,7 @@ struct raft {
     uint64_t commit_index;      /* Max log index known to be committed. */
     uint64_t last_applied;      /* Max log index applied to state machine. */
     struct raft_server *leader; /* XXX Is this useful? */
+    struct raft_waiter *vote_waiter;
 
 #define ELECTION_TIME_BASE_MSEC 1024
 #define ELECTION_TIME_RANGE_MSEC 1024
@@ -405,6 +409,9 @@ struct raft_vote_reply {
     /* XXX is there any value in sending a reply with vote_granted==false? */
     bool vote_granted;      /* True means candidate received vote. */
 };
+
+static void raft_send_vote_reply(struct raft *, const struct uuid *dst,
+                                 bool vote_granted);
 
 struct raft_server_request {
     struct raft_rpc_common common;
@@ -1019,7 +1026,7 @@ static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_entry(struct raft *raft,
                  uint64_t term, enum raft_entry_type type, char *data)
 {
-    /* XXX when one write fails we need to make all subsequent writes fail (or
+    /* XXX  when one write fails we need to make all subsequent writes fail (or
      * just not attempt them) since omitting some writes is fatal */
 
     raft_add_entry(raft, term, type, data);
@@ -1573,6 +1580,13 @@ raft_waiter_complete(struct raft *raft, struct raft_waiter *w)
     case RAFT_W_APPEND:
         raft_send_append_reply(raft, w->append.rq, true);
         break;
+
+    case RAFT_W_VOTE:
+        if (!uuid_is_zero(&raft->voted_for)
+            && !uuid_equals(&raft->voted_for, &raft->sid)) {
+            raft_send_vote_reply(raft, &raft->voted_for, true);
+        }
+        break;
     }
 }
 
@@ -1590,6 +1604,9 @@ raft_waiter_destroy(struct raft_waiter *w)
 
     case RAFT_W_APPEND:
         free(w->append.rq);
+        break;
+
+    case RAFT_W_VOTE:
         break;
     }
     free(w);
@@ -3077,12 +3094,18 @@ raft_handle_append_reply(struct raft *raft,
     }
 }
 
-static bool
+static int
 raft_handle_vote_request__(struct raft *raft,
                            const struct raft_vote_request *rq)
 {
     if (!raft_receive_term__(raft, rq->term)) {
         return false;
+    }
+
+    /* If we're waiting for our vote to be recorded persistently, don't
+     * respond. */
+    if (raft->vote_waiter) {
+        return -1;
     }
 
     /* Figure 3.1: "If votedFor is null or candidateId, and candidate's vote is
@@ -3114,7 +3137,7 @@ raft_handle_vote_request__(struct raft *raft,
         return false;
     }
 
-    /* Vote for the peer. */
+    /* Record a vote for the peer. */
     raft->voted_for = rq->common.sid;
     struct ovsdb_error *error = raft_write_state(raft->storage,
                                                  raft->current_term,
@@ -3122,29 +3145,38 @@ raft_handle_vote_request__(struct raft *raft,
     if (error) {
         /* XXX */
     }
-    /* XXX need to commit before replying */
 
     raft_reset_timer(raft);
 
-    return true;
+    raft->vote_waiter = raft_waiter_create(raft, RAFT_W_VOTE);
+    return -1;
 }
 
 static void
-raft_handle_vote_request(struct raft *raft,
-                         const struct raft_vote_request *rq)
+raft_send_vote_reply(struct raft *raft, const struct uuid *dst,
+                     bool vote_granted)
 {
-    bool vote_granted = raft_handle_vote_request__(raft, rq);
     union raft_rpc rpy = {
         .vote_reply = {
             .common = {
                 .type = RAFT_RPC_VOTE_REPLY,
-                .sid = rq->common.sid,
+                .sid = *dst,
             },
             .term = raft->current_term,
             .vote_granted = vote_granted
         },
     };
     raft_send(raft, &rpy);
+}
+
+static void
+raft_handle_vote_request(struct raft *raft,
+                         const struct raft_vote_request *rq)
+{
+    int vote_granted = raft_handle_vote_request__(raft, rq);
+    if (vote_granted >= 0) {
+        raft_send_vote_reply(raft, &rq->common.sid, vote_granted);
+    }
 }
 
 static void

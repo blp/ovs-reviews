@@ -127,6 +127,9 @@ main(int argc, char *argv[])
 
         unixctl_server_wait(server);
         raft_wait(raft);
+        if (ec.cmd) {
+            raft_command_wait(ec.cmd);
+        }
         poll_block();
     }
     unixctl_server_destroy(server);
