@@ -705,9 +705,7 @@ struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_create(const char *file_name, const char *local_address,
             const char *data)
 {
-    /* Parse and verify validity of the local address.
-     *
-     * XXX Test that the local machine can bind the local address. */
+    /* Parse and verify validity of the local address. */
     struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
     if (error) {
         return error;
@@ -1352,9 +1350,7 @@ raft_join(const char *file_name, const char *local_address,
 {
     struct raft *raft = NULL;
 
-    /* Parse and verify validity of the local address.
-     *
-     * XXX Test that the local machine can bind the local address. */
+    /* Parse and verify validity of the local address. */
     struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
     if (error) {
         goto error;
@@ -2413,6 +2409,12 @@ static void
 raft_send_server_reply(struct raft *raft,
                        const struct uuid *sid, enum raft_server_status status)
 {
+    if (status == RAFT_SERVER_OK) {
+        VLOG_INFO("server "UUID_FMT": added successfully", UUID_ARGS(sid));
+    } else {
+        VLOG_INFO("server "UUID_FMT": add failed (%s)",
+                  UUID_ARGS(sid), raft_server_status_to_string(status));
+    }
     union raft_rpc rpy = {
         .server_reply = {
             .common = {
@@ -3247,6 +3249,7 @@ raft_run_reconfigure(struct raft *raft)
             /* Mark 's' as waiting for commit. */
             s->phase = RAFT_PHASE_COMMITTING;
 
+            /* Add the reconfiguration to the log. */
             struct json *servers_json = raft_servers_to_json(&raft->servers);
             char *servers_s = json_to_string(servers_json, 0);
             json_destroy(servers_json);
@@ -3257,7 +3260,8 @@ raft_run_reconfigure(struct raft *raft)
                 /* XXX handle error */
             }
 
-            raft_send_server_reply(raft, &s->sid, RAFT_SERVER_OK);
+            /* When commit completes we'll transition to RAFT_PHASE_STABLE and
+             * send a RAFT_SERVER_OK reply. */
 
             return;
         }
@@ -3289,10 +3293,15 @@ raft_handle_add_server_request__(struct raft *raft,
     struct raft_server *s = raft_find_server(raft, &rq->sid);
     if (s) {
         /* If the server is scheduled to be removed, cancel it. */
-        if (s->phase != RAFT_PHASE_REMOVE) {
+        if (s->phase == RAFT_PHASE_REMOVE) {
             s->phase = RAFT_PHASE_STABLE;
             raft_send_server_reply(raft, &s->reply_sid, RAFT_SERVER_CANCELED);
             return RAFT_SERVER_OK;
+        }
+
+        /* If the server is being added, then it's in progress. */
+        if (s->phase != RAFT_PHASE_STABLE) {
+            return RAFT_SERVER_IN_PROGRESS;
         }
 
         /* Cannot add a server that is already part of the configuration. */
