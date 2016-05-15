@@ -320,7 +320,10 @@ raft_fsync_thread(void *raft_)
                                                                         \
     /* InstallSnapshot RPC. */                                          \
     RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REQUEST, "install_snapshot_request") \
-    RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REPLY, "install_snapshot_reply")
+    RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REPLY, "install_snapshot_reply") \
+                                                                        \
+    /* BecomeLeader RPC. */                                             \
+    RAFT_RPC(RAFT_RPC_BECOME_LEADER, "become_leader")
 
 enum raft_rpc_type {
 #define RAFT_RPC(ENUM, NAME) ENUM,
@@ -544,6 +547,12 @@ struct raft_install_snapshot_reply {
     size_t next_offset;
 };
 
+struct raft_become_leader {
+    struct raft_rpc_common common;
+
+    uint64_t term;              /* Leader's term. */
+};
+
 union raft_rpc {
     struct raft_rpc_common common;
     struct raft_append_request append_request;
@@ -554,6 +563,7 @@ union raft_rpc {
     struct raft_server_reply server_reply;
     struct raft_install_snapshot_request install_snapshot_request;
     struct raft_install_snapshot_reply install_snapshot_reply;
+    struct raft_become_leader become_leader;
 };
 
 static void raft_handle_rpc(struct raft *, const union raft_rpc *);
@@ -961,7 +971,7 @@ raft_set_servers(struct raft *raft, const struct hmap *new_servers)
             raft_server_init_leader(raft, new);
             hmap_insert(&raft->servers, &new->hmap_node, uuid_hash(&new->sid));
 
-            if (!uuid_equals(&raft->sid, &new->sid)) {
+            if (uuid_equals(&raft->sid, &new->sid)) {
                 raft->me = new;
             }
         }
@@ -1383,7 +1393,12 @@ raft_join(const char *file_name, const char *local_address,
 
     raft->me = raft_find_server(raft, &raft->sid);
     if (raft->me) {
-        /* Already joined to this cluster.  Nothing to do. */
+        /* Already joined to this cluster.  Nothing to do.
+         *
+         * XXX we should always actually send the add_server request so that we
+         * can be sure that we're really in the latest version.
+         *
+         * Not sure what to do about the local_address though. */
         raft->local_address = xstrdup(raft->me->address);
         if (strcmp(local_address, raft->me->address)) {
             VLOG_WARN("%s: using local server address %s from database log",
@@ -1435,7 +1450,27 @@ raft_close(struct raft *raft)
         return;
     }
 
-    /* XXX if we're leader then invoke the leadership transfer procedure? */
+    /* If we're leader, transfer leadership to another server. */
+    if (raft->role == RAFT_LEADER) {
+        struct raft_server *s;
+        HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
+            if (!uuid_equals(&raft->sid, &s->sid)
+                && jsonrpc_session_is_connected(s->js)
+                && s->phase == RAFT_PHASE_STABLE) {
+                union raft_rpc rpc = {
+                    .become_leader = {
+                        .common = {
+                            .type = RAFT_RPC_BECOME_LEADER,
+                            .sid = s->sid,
+                        },
+                        .term = raft->current_term,
+                    }
+                };
+                raft_send__(raft, &rpc, s->js);
+                break;
+            }
+        }
+    }
 
     raft_complete_all_commands(raft, RAFT_CMD_SHUTDOWN);
 
@@ -2016,6 +2051,8 @@ raft_rpc_destroy(union raft_rpc *rpc)
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
         break;
+    case RAFT_RPC_BECOME_LEADER:
+        break;
     }
 }
 
@@ -2300,6 +2337,9 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
         raft_install_snapshot_reply_to_jsonrpc(
             &rpc->install_snapshot_reply, args);
         break;
+    case RAFT_RPC_BECOME_LEADER:
+        json_object_put_uint(args, "term", rpc->become_leader.term);
+        break;
     default:
         OVS_NOT_REACHED();
     }
@@ -2393,6 +2433,9 @@ raft_rpc_from_jsonrpc(struct raft *raft,
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
         raft_install_snapshot_reply_from_jsonrpc(
             &p, &rpc->install_snapshot_reply);
+        break;
+    case RAFT_RPC_BECOME_LEADER:
+        rpc->become_leader.term = parse_uint(&p, "term");
         break;
     default:
         OVS_NOT_REACHED();
@@ -3635,6 +3678,21 @@ raft_handle_install_snapshot_reply(
 }
 
 static void
+raft_handle_become_leader(struct raft *raft,
+                          const struct raft_become_leader *rq)
+{
+    if (!raft_receive_term__(raft, rq->term)) {
+        return;
+    }
+
+    if (raft->role == RAFT_FOLLOWER) {
+        VLOG_INFO("received leadership transfer from "UUID_FMT,
+                  UUID_ARGS(&rq->common.sid));
+        raft_start_election(raft);
+    }
+}
+
+static void
 raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
 {
     switch (rpc->common.type) {
@@ -3670,6 +3728,9 @@ raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
         raft_handle_install_snapshot_reply(raft, &rpc->install_snapshot_reply);
+        break;
+    case RAFT_RPC_BECOME_LEADER:
+        raft_handle_become_leader(raft, &rpc->become_leader);
         break;
     default:
         OVS_NOT_REACHED();

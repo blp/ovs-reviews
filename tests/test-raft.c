@@ -101,7 +101,7 @@ main(int argc, char *argv[])
     unixctl_command_register("execute", "DATA", 1, 1, test_raft_execute, &ec);
 
     unixctl_command_register("take-leadership", "", 0, 0,
-                             test_raft_take_leadership, NULL);
+                             test_raft_take_leadership, raft);
 
     daemonize_complete();
 
