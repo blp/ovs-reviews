@@ -116,9 +116,19 @@ struct raft_conn {
 };
 
 struct raft_command {
-    struct ovs_refcount refcnt;
+    struct hmap_node hmap_node; /* In struct raft's 'commands' hmap. */
+    uint64_t index;             /* Index in log. */
+
+    unsigned int n_refs;
     enum raft_command_status status;
 };
+
+static void raft_command_complete(struct raft *, struct raft_command *,
+                                  enum raft_command_status);
+
+static void raft_complete_all_commands(struct raft *,
+                                       enum raft_command_status);
+static struct raft_command *raft_find_command(struct raft *, uint64_t index);
 
 enum raft_waiter_type {
     RAFT_W_COMMAND,
@@ -234,6 +244,7 @@ struct raft {
     /* Leaders only.  Reinitialized after becoming leader. */
     struct hmap add_servers;    /* Contains "struct raft_server"s to add. */
     struct raft_server *remove_server; /* Server being removed. */
+    struct hmap commands;              /* Contains "struct raft_command"s. */
 
     /* Candidates only.  Reinitialized at start of election. */
     int n_votes;                /* Number of votes for me. */
@@ -644,6 +655,7 @@ raft_alloc(const char *file_name)
     hmap_init(&raft->servers);
     hmap_init(&raft->prev_servers);
     hmap_init(&raft->add_servers);
+    hmap_init(&raft->commands);
     raft->listen_backoff = LLONG_MIN;
     ovs_list_init(&raft->conns);
     ovs_mutex_init(&raft->fsync_mutex);
@@ -1422,6 +1434,8 @@ raft_close(struct raft *raft)
 
     /* XXX if we're leader then invoke the leadership transfer procedure? */
 
+    raft_complete_all_commands(raft, RAFT_CMD_SHUTDOWN);
+
     ovs_mutex_lock(&raft->fsync_mutex);
     raft->fsync_next = UINT64_MAX;
     ovs_mutex_unlock(&raft->fsync_mutex);
@@ -1563,14 +1577,6 @@ raft_waiter_complete(struct raft *raft, struct raft_waiter *w)
 }
 
 static void
-raft_command_unref(struct raft_command *cmd)
-{
-    if (cmd && ovs_refcount_unref(&cmd->refcnt) == 1) {
-        free(cmd);
-    }
-}
-
-static void
 raft_waiter_destroy(struct raft_waiter *w)
 {
     if (!w) {
@@ -1666,6 +1672,7 @@ raft_start_election(struct raft *raft)
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
     ovs_assert(raft->role != RAFT_LEADER);
+    ovs_assert(hmap_is_empty(&raft->commands));
     raft->role = RAFT_CANDIDATE;
 
     /* XXX what if we're not part of the server set? */
@@ -1709,7 +1716,8 @@ raft_start_election(struct raft *raft)
         raft_send(raft, &rq);
     }
 
-    /* Vote for ourselves. */
+    /* Vote for ourselves.
+     * XXX only if we're not being removed? */
     raft_accept_vote(raft, raft->me, true);
 
     /* XXX how do we handle outstanding waiters? */
@@ -1829,33 +1837,50 @@ raft_waiter_create(struct raft *raft, enum raft_waiter_type type)
     return w;
 }
 
+const char *
+raft_command_status_to_string(enum raft_command_status status)
+{
+    switch (status) {
+    case RAFT_CMD_INCOMPLETE:
+        return "operation still in progress";
+    case RAFT_CMD_SUCCESS:
+        return "success";
+    case RAFT_CMD_NOT_LEADER:
+        return "not leader";
+    case RAFT_CMD_LOST_LEADERSHIP:
+        return "lost leadership";
+    case RAFT_CMD_SHUTDOWN:
+        return "server shutdown";
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
 static struct raft_command * OVS_WARN_UNUSED_RESULT
 raft_command_execute__(struct raft *raft, enum raft_entry_type type,
                        const char *data)
 {
     struct raft_command *cmd = xzalloc(sizeof *cmd);
+    cmd->n_refs = 2;            /* One for client, one for raft->commands. */
+    cmd->index = raft->log_end;
+    cmd->status = RAFT_CMD_INCOMPLETE;
+    hmap_insert(&raft->commands, &cmd->hmap_node, cmd->index);
+
     if (raft->role != RAFT_LEADER) {
-        cmd->status = RAFT_CMD_NOT_LEADER;
+        raft_command_complete(raft, cmd, RAFT_CMD_NOT_LEADER);
         return cmd;
     }
-
-    uint64_t index = raft->log_end;
-    ovs_refcount_init(&cmd->refcnt);
-    cmd->status = RAFT_CMD_INCOMPLETE;
 
     /* Write to local log.
      *
      * XXX If this server is being removed from the configuration then we
-     * should not writ to the local log; see section 4.2.2.  Or we could
+     * should not write to the local log; see section 4.2.2.  Or we could
      * implement leadership transfer. */
     struct ovsdb_error *error = raft_write_entry(raft, raft->current_term,
                                                  type, xstrdup(data));
     if (!error) {
-        ovs_refcount_ref(&cmd->refcnt);
-
         struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_COMMAND);
-        w->command.cmd = cmd;
-        w->command.index = index;
+        w->command.index = cmd->index;
     } else {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
         char *s = ovsdb_error_to_string(error);
@@ -1882,6 +1907,66 @@ struct raft_command * OVS_WARN_UNUSED_RESULT
 raft_command_execute(struct raft *raft, const char *data)
 {
     return raft_command_execute__(raft, RAFT_DATA, data);
+}
+
+enum raft_command_status
+raft_command_get_status(const struct raft_command *cmd)
+{
+    ovs_assert(cmd->n_refs > 0);
+    return cmd->status;
+}
+
+void
+raft_command_unref(struct raft_command *cmd)
+{
+    if (cmd) {
+        ovs_assert(cmd->n_refs > 0);
+        if (!--cmd->n_refs) {
+            free(cmd);
+        }
+    }
+}
+
+void
+raft_command_wait(const struct raft_command *cmd)
+{
+    if (cmd->status != RAFT_CMD_INCOMPLETE) {
+        poll_immediate_wake();
+    }
+}
+
+static void
+raft_command_complete(struct raft *raft,
+                      struct raft_command *cmd,
+                      enum raft_command_status status)
+{
+    ovs_assert(cmd->status == RAFT_CMD_INCOMPLETE);
+    ovs_assert(cmd->n_refs > 0);
+    hmap_remove(&raft->commands, &cmd->hmap_node);
+    cmd->status = status;
+    raft_command_unref(cmd);
+}
+
+static void
+raft_complete_all_commands(struct raft *raft, enum raft_command_status status)
+{
+    struct raft_command *cmd, *next;
+    HMAP_FOR_EACH_SAFE (cmd, next, hmap_node, &raft->commands) {
+        raft_command_complete(raft, cmd, status);
+    }
+}
+
+static struct raft_command *
+raft_find_command(struct raft *raft, uint64_t index)
+{
+    struct raft_command *cmd;
+
+    HMAP_FOR_EACH_IN_BUCKET (cmd, hmap_node, index, &raft->commands) {
+        if (cmd->index == index) {
+            return cmd;
+        }
+    }
+    return NULL;
 }
 
 static void
@@ -2356,6 +2441,7 @@ raft_become_follower(struct raft *raft)
     }
 
     /* XXX how do we handle outstanding waiters? */
+    raft_complete_all_commands(raft, RAFT_CMD_LOST_LEADERSHIP);
 }
 
 static void
@@ -2765,6 +2851,13 @@ raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
             }
         } else {
             /* XXX apply log[lastApplied]. */
+            if (raft->role == RAFT_LEADER) {
+                struct raft_command *cmd
+                    = raft_find_command(raft, raft->last_applied);
+                if (cmd) {
+                    raft_command_complete(raft, cmd, RAFT_CMD_SUCCESS);
+                }
+            }
         }
     }
 }

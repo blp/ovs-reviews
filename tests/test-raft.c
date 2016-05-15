@@ -28,8 +28,14 @@
 #include "uuid.h"
 #include "openvswitch/vlog.h"
 
+struct execute_ctx {
+    struct raft *raft;
+    struct raft_command *cmd;
+    struct unixctl_conn *conn;
+};
+
 OVS_NO_RETURN static void usage(void);
-static void parse_options(int argc, char *argv[]);
+static void parse_options(int argc, char *argv[], char **unixctl_pathp);
 
 static unixctl_cb_func test_raft_exit;
 static unixctl_cb_func test_raft_execute;
@@ -51,10 +57,11 @@ check_ovsdb_error(struct ovsdb_error *error)
 int
 main(int argc, char *argv[])
 {
+    char *unixctl_pathp = NULL;
     set_program_name(argv[0]);
     service_start(&argc, &argv);
     fatal_signal_init();
-    parse_options(argc, argv);
+    parse_options(argc, argv, &unixctl_pathp);
 
     argc -= optind;
     argv += optind;
@@ -64,7 +71,6 @@ main(int argc, char *argv[])
     }
 
     daemonize_start(false);
-
 
     struct raft *raft;
     const char *file_name = argv[0];
@@ -83,16 +89,19 @@ main(int argc, char *argv[])
     }
 
     struct unixctl_server *server;
-    int error = unixctl_server_create(NULL, &server);
+    int error = unixctl_server_create(unixctl_pathp, &server);
     if (error) {
         ovs_fatal(error, "failed to create unixctl server");
     }
 
     bool exiting = false;
     unixctl_command_register("exit", "", 0, 0, test_raft_exit, &exiting);
-    unixctl_command_register("execute", "DATA", 1, 1, test_raft_execute, raft);
+
+    struct execute_ctx ec = { .raft = raft };
+    unixctl_command_register("execute", "DATA", 1, 1, test_raft_execute, &ec);
+
     unixctl_command_register("take-leadership", "", 0, 0,
-                             test_raft_take_leadership, raft);
+                             test_raft_take_leadership, NULL);
 
     daemonize_complete();
 
@@ -102,6 +111,18 @@ main(int argc, char *argv[])
 
         if (exiting) {
             break;
+        }
+
+        if (ec.cmd) {
+            enum raft_command_status status = raft_command_get_status(ec.cmd);
+            if (status != RAFT_CMD_INCOMPLETE) {
+                unixctl_command_reply(ec.conn,
+                                      raft_command_status_to_string(status));
+                raft_command_unref(ec.cmd);
+
+                ec.cmd = NULL;
+                ec.conn = NULL;
+            }
         }
 
         unixctl_server_wait(server);
@@ -115,15 +136,17 @@ main(int argc, char *argv[])
 }
 
 static void
-parse_options(int argc, char *argv[])
+parse_options(int argc, char *argv[], char **unixctl_pathp)
 {
     enum {
         OPT_CLUSTER = UCHAR_MAX + 1,
+        OPT_UNIXCTL,
         DAEMON_OPTION_ENUMS,
         VLOG_OPTION_ENUMS
     };
     static const struct option long_options[] = {
         {"cluster", required_argument, NULL, OPT_CLUSTER},
+        {"unixctl", required_argument, NULL, OPT_UNIXCTL},
         {"help", no_argument, NULL, 'h'},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
@@ -142,6 +165,10 @@ parse_options(int argc, char *argv[])
             if (!uuid_from_string(&cluster_id, optarg)) {
                 ovs_fatal(0, "\"%s\" is not a valid UUID", optarg);
             }
+            break;
+
+        case OPT_UNIXCTL:
+            *unixctl_pathp = optarg;
             break;
 
         case 'h':
@@ -170,7 +197,9 @@ usage(void)
     daemon_usage();
     vlog_usage();
     printf("\nOther options:\n"
-           "  -h, --help                  display this help message\n");
+           "  --cluster=UUID          force cluster ID\n"
+           "  --unixctl=SOCKET        override default control socket name\n"
+           "  -h, --help              display this help message\n");
     exit(EXIT_SUCCESS);
 }
 
@@ -187,14 +216,16 @@ test_raft_exit(struct unixctl_conn *conn,
 static void
 test_raft_execute(struct unixctl_conn *conn,
                   int argc OVS_UNUSED, const char *argv[],
-                  void *raft_)
+                  void *ctx_)
 {
-    struct raft *raft = raft_;
-    struct raft_command *cmd = raft_command_execute(raft, argv[1]);
-    if (cmd) {
-        /* XXX handle error */
+    struct execute_ctx *ctx = ctx_;
+    if (ctx->cmd) {
+        unixctl_command_reply_error(conn, "command already in progress");
+        return;
     }
-    unixctl_command_reply(conn, NULL);
+
+    ctx->cmd = raft_command_execute(ctx->raft, argv[1]);
+    ctx->conn = conn;
 }
 
 

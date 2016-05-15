@@ -73,11 +73,15 @@ enum raft_command_status {
     RAFT_CMD_INCOMPLETE,        /* In progress, please wait. */
     RAFT_CMD_SUCCESS,           /* Committed. */
     RAFT_CMD_NOT_LEADER,        /* Failed because we are not the leader. */
-    RAFT_CMD_FAILURE,           /* Other failure. */
+    RAFT_CMD_LOST_LEADERSHIP,   /* Leadership lost after command initiation. */
+    RAFT_CMD_SHUTDOWN,          /* Raft server shut down. */
 };
+const char *raft_command_status_to_string(enum raft_command_status);
+
 struct raft_command *raft_command_execute(struct raft *, const char *data)
     OVS_WARN_UNUSED_RESULT;
 enum raft_command_status raft_command_get_status(const struct raft_command *);
+void raft_command_unref(struct raft_command *);
 void raft_command_wait(const struct raft_command *);
 
 #endif /* lib/raft.h */
