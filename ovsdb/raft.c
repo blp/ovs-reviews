@@ -3328,9 +3328,6 @@ raft_handle_add_server_request__(struct raft *raft,
     s->reply_sid = rq->common.sid;
     s->phase = RAFT_PHASE_CATCHUP;
 
-    /* XXX call raft->ops->reconnect().  Or maybe not; if the new server has to
-     * connect to us then we already have a connection? */
-
     /* Start sending the log.  If this is the first time we've tried to add
      * this server, then this will quickly degenerate into an InstallSnapshot
      * followed by a series of AddEntries, but if it's a retry of an earlier
