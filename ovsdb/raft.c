@@ -255,6 +255,12 @@ struct raft {
 
     /* Snapshot being received. */
     struct ds snapshot_buf;     /* XXX reset when term changes */
+
+    /* Parameters for deciding when to take next snapshot. */
+#define SNAPSHOT_TIME_BASE_MSEC (10 * 60 * 1000)  /* 10 minutes. */
+#define SNAPSHOT_TIME_RANGE_MSEC (10 * 60 * 1000) /* 10 minutes. */
+    long long int next_snapshot; /* Minimum time for next snapshot, in ms. */
+    off_t snapshot_size;         /* Size of previous snapshot, in bytes. */
 };
 
 static void *
@@ -680,6 +686,8 @@ raft_alloc(const char *file_name)
     raft->fsync_complete = seq_create();
     ovs_list_init(&raft->waiters);
     ds_init(&raft->snapshot_buf);
+    raft->next_snapshot = (time_msec() + SNAPSHOT_TIME_BASE_MSEC
+                           + random_range(SNAPSHOT_TIME_RANGE_MSEC));
     return raft;
 }
 
@@ -1207,6 +1215,8 @@ raft_read(struct raft *raft)
     raft->snapshot_len = strlen(raft->snapshot);
     /* XXX reset state machine to snapshot */
 
+    raft->snapshot_size = ovsdb_log_get_offset(raft->storage);
+
     struct hmap prev_servers;
     error = raft_servers_from_json(prev_servers_json, &prev_servers);
     json_destroy(snapshot);
@@ -1441,6 +1451,21 @@ raft_take_leadership(struct raft *raft)
     if (raft->role != RAFT_LEADER) {
         raft_start_election(raft);
     }
+}
+
+bool
+raft_should_snapshot(const struct raft *raft)
+{
+    /* If it has been at least SNAPSHOT_TIME_BASE_MSEC (plus up to
+     * SNAPSHOT_TIME_RANGE_MSEC) ms since the last time we took a snapshot, and
+     * if there are at least 100 log entries, and if the log is at least 10 MB,
+     * and the log is at least 4x the size of the previous snapshot, then we
+     * should take a snapshot. */
+    off_t log_size = ovsdb_log_get_offset(raft->storage);
+    return (time_msec() >= raft->next_snapshot
+            && raft->log_end - raft->log_start >= 100
+            && log_size >= 10 * 1024 * 1024
+            && log_size / 4 >= raft->snapshot_size);
 }
 
 void
@@ -3509,6 +3534,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage)
     if (error) {
         return error;
     }
+    raft->snapshot_size = ovsdb_log_get_offset(storage);
 
     /* Write log records. */
     for (uint64_t index = raft->log_start; index < raft->log_end; index++) {

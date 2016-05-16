@@ -64,6 +64,8 @@ struct ovsdb_error *raft_join(const char *file_name, const char *local_address,
 
 void raft_take_leadership(struct raft *);
 
+bool raft_should_snapshot(const struct raft *);
+
 void raft_close(struct raft *);
 
 void raft_run(struct raft *);
