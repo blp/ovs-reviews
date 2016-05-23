@@ -596,7 +596,8 @@ static struct raft_server *raft_server_add(struct hmap *servers,
                                            const struct uuid *sid,
                                            const char *address);
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_snapshot(struct raft *, struct ovsdb_log *);
+raft_write_snapshot(struct raft *, struct ovsdb_log *,
+                    uint64_t new_log_start, const char *new_snapshot);
 static void raft_send_heartbeats(struct raft *);
 static void raft_start_election(struct raft *);
 static bool raft_truncate(struct raft *, uint64_t new_end);
@@ -667,6 +668,19 @@ raft_make_address_passive(const char *address_)
     return ds_steal_cstr(&paddr);
 }
 
+static void
+raft_schedule_snapshot(struct raft *raft, bool quick)
+{
+    unsigned int base = SNAPSHOT_TIME_BASE_MSEC;
+    unsigned int range = SNAPSHOT_TIME_RANGE_MSEC;
+    if (quick) {
+        base /= 10;
+        range /= 10;
+    }
+
+    raft->next_snapshot = time_msec() + base + random_range(range);
+}
+
 static struct raft *
 raft_alloc(const char *file_name)
 {
@@ -686,8 +700,7 @@ raft_alloc(const char *file_name)
     raft->fsync_complete = seq_create();
     ovs_list_init(&raft->waiters);
     ds_init(&raft->snapshot_buf);
-    raft->next_snapshot = (time_msec() + SNAPSHOT_TIME_BASE_MSEC
-                           + random_range(SNAPSHOT_TIME_RANGE_MSEC));
+    raft_schedule_snapshot(raft, false);
     return raft;
 }
 
@@ -742,7 +755,7 @@ raft_create(const char *file_name, const char *local_address,
     error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
                            -1, &storage);
     if (!error) {
-        error = raft_write_snapshot(raft, storage);
+        error = raft_write_snapshot(raft, storage, raft->log_start, NULL);
         ovsdb_log_close(storage);
     }
     raft_close(raft);
@@ -946,6 +959,44 @@ raft_servers_to_json(const struct hmap *servers)
         json_object_put_string(json, sid_s, s->address);
     }
     return json;
+}
+
+static const struct raft_entry *
+raft_get_entry(const struct raft *raft, uint64_t index)
+{
+    ovs_assert(index >= raft->log_start);
+    ovs_assert(index < raft->log_end);
+    return &raft->log[index - raft->log_start];
+}
+
+static uint64_t
+raft_get_term(const struct raft *raft, uint64_t index)
+{
+    return (index == raft->log_start - 1
+            ? raft->prev_term
+            : raft_get_entry(raft, index)->term);
+}
+
+static struct json *
+raft_servers_for_index(const struct raft *raft, uint64_t index)
+{
+    ovs_assert(index >= raft->log_start - 1);
+    ovs_assert(index < raft->log_end);
+
+    const char *servers = NULL;
+    for (uint64_t i = raft->log_start; i <= index; i++) {
+        const struct raft_entry *e = raft_get_entry(raft, i);
+        if (e->type == RAFT_SERVERS) {
+            servers = e->data;
+        }
+    }
+    if (servers) {
+        struct json *json = json_from_string(servers);
+        ovs_assert(json->type == JSON_OBJECT);
+        return json;
+    } else {
+        return raft_servers_to_json(&raft->prev_servers);
+    }
 }
 
 static void
@@ -1451,21 +1502,6 @@ raft_take_leadership(struct raft *raft)
     if (raft->role != RAFT_LEADER) {
         raft_start_election(raft);
     }
-}
-
-bool
-raft_should_snapshot(const struct raft *raft)
-{
-    /* If it has been at least SNAPSHOT_TIME_BASE_MSEC (plus up to
-     * SNAPSHOT_TIME_RANGE_MSEC) ms since the last time we took a snapshot, and
-     * if there are at least 100 log entries, and if the log is at least 10 MB,
-     * and the log is at least 4x the size of the previous snapshot, then we
-     * should take a snapshot. */
-    off_t log_size = ovsdb_log_get_offset(raft->storage);
-    return (time_msec() >= raft->next_snapshot
-            && raft->log_end - raft->log_start >= 100
-            && log_size >= 10 * 1024 * 1024
-            && log_size / 4 >= raft->snapshot_size);
 }
 
 void
@@ -2913,40 +2949,83 @@ raft_handle_append_request__(struct raft *raft,
         &rq->entries[ofs], rq->n_entries - ofs);
 }
 
+static const struct raft_entry *
+raft_peek_next_entry(struct raft *raft, enum raft_entry_type type)
+{
+    if (raft->commit_index > raft->last_applied) {
+        const struct raft_entry *e = raft_get_entry(raft, raft->last_applied + 1);
+        if (e->type == type) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static const struct raft_entry *
+raft_get_next_entry(struct raft *raft, enum raft_entry_type type)
+{
+    const struct raft_entry *e = raft_peek_next_entry(raft, type);
+    if (e) {
+        raft->last_applied++;
+    }
+    return NULL;
+}
+
+static void
+raft_commit_servers(struct raft *raft)
+{
+    for (;;) {
+        const struct raft_entry *e = raft_get_next_entry(raft, RAFT_SERVERS);
+        if (!e) {
+            break;
+        }
+        VLOG_INFO("applying log index %"PRIu64": servers \"%s\"",
+                  raft->last_applied, e->data);
+        if (raft->role == RAFT_LEADER) {
+            raft_run_reconfigure(raft);
+        }
+    }
+}
+
 static void
 raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
 {
     ovs_assert(new_commit_index >= raft->commit_index);
     raft->commit_index = new_commit_index;
 
-    /* Figure 3.1: "If commitIndex > lastApplied, increment
-     * lastApplied, apply log[lastApplied] to state machine
-     * (section 3.5)." */
-    while (raft->commit_index > raft->last_applied) {
-        raft->last_applied++;
-        ovs_assert(raft->last_applied >= raft->log_start);
-        ovs_assert(raft->last_applied < raft->log_end);
-        struct raft_entry *e = &raft->log[raft->last_applied
-                                          - raft->log_start];
-        VLOG_INFO("applying log index %"PRIu64" \"%s\" "
-                  "log_start=%"PRIu64" log_end=%"PRIu64,
-                  raft->last_applied, e->data, raft->log_start, raft->log_end);
+    raft_commit_servers(raft);
+}
 
-        if (e->type == RAFT_SERVERS) {
-            if (raft->role == RAFT_LEADER) {
-                raft_run_reconfigure(raft);
-            }
-        } else {
-            /* XXX apply log[lastApplied]. */
-            if (raft->role == RAFT_LEADER) {
-                struct raft_command *cmd
-                    = raft_find_command(raft, raft->last_applied);
-                if (cmd) {
-                    raft_command_complete(raft, cmd, RAFT_CMD_SUCCESS);
-                }
-            }
+bool
+raft_has_next_entry(const struct raft *raft_)
+{
+    struct raft *raft = CONST_CAST(struct raft *, raft_);
+    return raft_peek_next_entry(raft, RAFT_DATA);
+}
+
+const char *
+raft_next_entry(struct raft *raft, bool *is_snapshot)
+{
+    const struct raft_entry *e = raft_get_next_entry(raft, RAFT_DATA);
+    if (!e) {
+        return NULL;
+    }
+
+    VLOG_INFO("applying log index %"PRIu64": data \"%s\"",
+              raft->last_applied, e->data);
+
+    if (raft->role == RAFT_LEADER) {
+        struct raft_command *cmd
+            = raft_find_command(raft, raft->last_applied);
+        if (cmd) {
+            raft_command_complete(raft, cmd, RAFT_CMD_SUCCESS);
         }
     }
+
+    raft_commit_servers(raft);
+
+    *is_snapshot = false;       /* XXX */
+    return e->data;
 }
 
 /* This doesn't use rq->entries (but it does use rq->n_entries). */
@@ -3509,8 +3588,16 @@ raft_handle_remove_server_reply(struct raft *raft OVS_UNUSED,
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage)
+raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
+                    uint64_t new_log_start, const char *new_snapshot)
 {
+    ovs_assert(new_log_start >= raft->log_start);
+    ovs_assert(new_log_start <= raft->log_end);
+    ovs_assert(new_log_start <= raft->last_applied + 1);
+    ovs_assert(new_log_start > raft->log_end
+               ? new_snapshot != NULL
+               : new_snapshot == NULL);
+
     /* Write header record. */
     struct ovsdb_error *error = raft_write_header(storage,
                                                   &raft->cid, &raft->sid);
@@ -3518,14 +3605,17 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage)
         return error;
     }
 
+    /* Compose snapshot record. */
+    uint64_t prev_term = raft_get_term(raft, new_log_start - 1);
+    uint64_t prev_index = new_log_start - 1;
+    struct json *prev_servers = raft_servers_for_index(raft,
+                                                       new_log_start - 1);
+
     /* Write snapshot record. */
     struct json *snapshot = json_object_create();
-    json_object_put(snapshot, "prev_term",
-                    json_integer_create(raft->prev_term));
-    json_object_put(snapshot, "prev_index",
-                    json_integer_create(raft->log_start - 1));
-    json_object_put(snapshot, "prev_servers",
-                    raft_servers_to_json(&raft->prev_servers));
+    json_object_put(snapshot, "prev_term", json_integer_create(prev_term));
+    json_object_put(snapshot, "prev_index", json_integer_create(prev_index));
+    json_object_put(snapshot, "prev_servers", prev_servers);
     if (raft->snapshot) {
         json_object_put_string(snapshot, "data", raft->snapshot);
     }
@@ -3537,7 +3627,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage)
     raft->snapshot_size = ovsdb_log_get_offset(storage);
 
     /* Write log records. */
-    for (uint64_t index = raft->log_start; index < raft->log_end; index++) {
+    for (uint64_t index = new_log_start; index < raft->log_end; index++) {
         struct json *json = raft_entry_to_json_with_index(raft, index);
         error = ovsdb_log_write_json(storage, json);
         json_destroy(json);
@@ -3555,7 +3645,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_save_snapshot(struct raft *raft)
+raft_save_snapshot(struct raft *raft,
+                   uint64_t new_start, const char *new_snapshot)
 {
     struct ovsdb_log *new_storage;
     struct ovsdb_error *error;
@@ -3564,7 +3655,7 @@ raft_save_snapshot(struct raft *raft)
         return error;
     }
 
-    error = raft_write_snapshot(raft, new_storage);
+    error = raft_write_snapshot(raft, new_storage, new_start, new_snapshot);
     if (error) {
         ovsdb_log_replace_abort(new_storage);
         return error;
@@ -3625,7 +3716,8 @@ raft_handle_install_snapshot_request__(
     raft->snapshot_len = raft->snapshot_buf.length;
     raft->snapshot = ds_steal_cstr(&raft->snapshot_buf);
 
-    struct ovsdb_error *error = raft_save_snapshot(raft);
+    struct ovsdb_error *error = raft_save_snapshot(raft,
+                                                   raft->log_start, NULL);
     if (error) {
         char *error_s = ovsdb_error_to_string(error);
         VLOG_WARN("could not save snapshot: %s", error_s);
@@ -3701,6 +3793,78 @@ raft_handle_install_snapshot_reply(
     }
     s->next_index = raft->log_end;
     raft_send_append_request(raft, s, 0);
+}
+
+bool
+raft_should_snapshot(const struct raft *raft)
+{
+    if (raft->joining) {
+        return false;
+    }
+
+    /* If it has been at least SNAPSHOT_TIME_BASE_MSEC (plus up to
+     * SNAPSHOT_TIME_RANGE_MSEC) ms since the last time we took a snapshot, and
+     * if there are at least 100 log entries, and if the log is at least 10 MB,
+     * and the log is at least 4x the size of the previous snapshot, then we
+     * should take a snapshot. */
+    off_t log_size = ovsdb_log_get_offset(raft->storage);
+    return (time_msec() >= raft->next_snapshot
+            && raft->last_applied - raft->log_start >= 100
+            && log_size >= 10 * 1024 * 1024
+            && log_size / 4 >= raft->snapshot_size);
+}
+
+static bool
+raft_try_store_snapshot(struct raft *raft, const char *new_snapshot)
+{
+    if (raft->joining) {
+        VLOG_WARN("cannot store a snapshot while joining");
+        return false;
+    }
+
+    if (raft->last_applied <= raft->log_start) {
+        VLOG_WARN("not storing a duplicate snapshot");
+        return false;
+    }
+
+    uint64_t new_log_start = raft->last_applied + 1;
+    struct ovsdb_error *error = raft_save_snapshot(raft, new_log_start,
+                                                   new_snapshot);
+    if (error) {
+        char *error_s = ovsdb_error_to_string(error);
+        VLOG_WARN("saving snapshot failed (%s)", error_s);
+        free(error_s);
+        ovsdb_error_destroy(error);
+        return false;
+    }
+
+    raft->prev_term = raft_get_term(raft, new_log_start);
+    free(raft->snapshot);
+    raft->snapshot_len = strlen(new_snapshot);
+    raft->snapshot = xmemdup0(new_snapshot, raft->snapshot_len);
+
+    struct json *prev_servers_json = raft_servers_for_index(raft,
+                                                            new_log_start - 1);
+    struct hmap prev_servers;
+    error = raft_servers_from_json(prev_servers_json, &prev_servers);
+    if (error) {
+        /* XXX */
+    }
+    json_destroy(prev_servers_json);
+    hmap_swap(&prev_servers, &raft->prev_servers);
+    raft_servers_destroy(&prev_servers);
+
+    memmove(&raft->log[0], &raft->log[new_log_start - raft->log_start],
+            (raft->log_end - new_log_start) * sizeof *raft->log);
+    raft->log_start = new_log_start;
+    return true;
+}
+
+void
+raft_store_snapshot(struct raft *raft, const char *data)
+{
+    bool ok = raft_try_store_snapshot(raft, data);
+    raft_schedule_snapshot(raft, !ok);
 }
 
 static void

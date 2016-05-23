@@ -49,28 +49,30 @@ struct uuid;
 /* Default TCP port number for OVSDB RAFT. */
 #define RAFT_PORT 6641
 
+/* Setting up a new cluster. */
 struct ovsdb_error *raft_create(const char *file_name,
                                 const char *local_address,
                                 const char *data)
     OVS_WARN_UNUSED_RESULT;
 
+/* Starting up or shutting down a server within a cluster. */
 struct ovsdb_error *raft_open(const char *file_name, struct raft **)
     OVS_WARN_UNUSED_RESULT;
-
 struct ovsdb_error *raft_join(const char *file_name, const char *local_address,
                               char *remote_addresses[], size_t n_remotes,
                               const struct uuid *cid, struct raft **)
     OVS_WARN_UNUSED_RESULT;
-
-void raft_take_leadership(struct raft *);
-
-bool raft_should_snapshot(const struct raft *);
-
 void raft_close(struct raft *);
 
+/* Running a server. */
 void raft_run(struct raft *);
 void raft_wait(struct raft *);
 
+/* Reading snapshots and log entries. */
+const char *raft_next_entry(struct raft *, bool *is_snapshot);
+bool raft_has_next_entry(const struct raft *);
+
+/* Writing log entries (executing commands). */
 enum raft_command_status {
     RAFT_CMD_INCOMPLETE,        /* In progress, please wait. */
     RAFT_CMD_SUCCESS,           /* Committed. */
@@ -85,5 +87,12 @@ struct raft_command *raft_command_execute(struct raft *, const char *data)
 enum raft_command_status raft_command_get_status(const struct raft_command *);
 void raft_command_unref(struct raft_command *);
 void raft_command_wait(const struct raft_command *);
+
+/* Replacing the local log by a snapshot. */
+bool raft_should_snapshot(const struct raft *);
+void raft_store_snapshot(struct raft *, const char *data);
+
+/* Cluster management. */
+void raft_take_leadership(struct raft *);
 
 #endif /* lib/raft.h */
