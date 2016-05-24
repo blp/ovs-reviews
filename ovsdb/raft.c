@@ -210,7 +210,16 @@ struct raft {
     char *snapshot;                   /* Null-terminated data of snapshot. */
     size_t snapshot_len;              /* strlen(snapshot). */
 
-/* Volatile state. */
+/* Volatile state.
+ *
+ * The snapshot is always committed, but the rest of the log might not be yet.
+ * 'last_applied' tracks what entries have been passed to the client.  If the
+ * client hasn't yet read the latest snapshot, then even the snapshot isn't
+ * applied yet.  Thus, the invariants are different for these members:
+ *
+ *     log_start - 1 <= commit_index < log_end.
+ *     log_start - 2 <= last_applied < log_end.
+ * */
 
     enum raft_role role;        /* Current role. */
     uint64_t commit_index;      /* Max log index known to be committed. */
@@ -749,6 +758,8 @@ raft_create(const char *file_name, const char *local_address,
     raft->snapshot = xstrdup(data);
     raft->snapshot_len = strlen(data);
     raft->log_start = raft->log_end = 2;
+    raft->commit_index = 1;
+    raft->last_applied = 0;
 
     /* Create log file. */
     struct ovsdb_log *storage;
@@ -1251,7 +1262,8 @@ raft_read(struct raft *raft)
     ovsdb_parser_init(&p, snapshot, "raft snapshot");
     raft->prev_term = parse_uint(&p, "prev_term");
     raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
-    raft->commit_index = raft->last_applied = raft->log_start - 1;
+    raft->commit_index = raft->log_start - 1;
+    raft->last_applied = raft->log_start - 2;
     const struct json *prev_servers_json = ovsdb_parser_member(
         &p, "prev_servers", OP_OBJECT);
     const struct json *data = ovsdb_parser_member(
@@ -1264,7 +1276,6 @@ raft_read(struct raft *raft)
 
     raft->snapshot = xstrdup(data ? json_string(data) : "");
     raft->snapshot_len = strlen(raft->snapshot);
-    /* XXX reset state machine to snapshot */
 
     raft->snapshot_size = ovsdb_log_get_offset(raft->storage);
 
@@ -2952,7 +2963,8 @@ raft_handle_append_request__(struct raft *raft,
 static const struct raft_entry *
 raft_peek_next_entry(struct raft *raft, enum raft_entry_type type)
 {
-    if (raft->commit_index > raft->last_applied) {
+    if (raft->commit_index > raft->last_applied
+        && raft->last_applied + 1 >= raft->log_start) {
         const struct raft_entry *e = raft_get_entry(raft, raft->last_applied + 1);
         if (e->type == type) {
             return e;
@@ -2968,7 +2980,7 @@ raft_get_next_entry(struct raft *raft, enum raft_entry_type type)
     if (e) {
         raft->last_applied++;
     }
-    return NULL;
+    return e;
 }
 
 static void
@@ -2979,8 +2991,10 @@ raft_commit_servers(struct raft *raft)
         if (!e) {
             break;
         }
+#if 0
         VLOG_INFO("applying log index %"PRIu64": servers \"%s\"",
                   raft->last_applied, e->data);
+#endif
         if (raft->role == RAFT_LEADER) {
             raft_run_reconfigure(raft);
         }
@@ -3000,12 +3014,21 @@ bool
 raft_has_next_entry(const struct raft *raft_)
 {
     struct raft *raft = CONST_CAST(struct raft *, raft_);
+    if (raft->last_applied + 2 == raft->log_start) {
+        return true;
+    }
     return raft_peek_next_entry(raft, RAFT_DATA);
 }
 
 const char *
 raft_next_entry(struct raft *raft, bool *is_snapshot)
 {
+    if (raft->last_applied + 2 == raft->log_start) {
+        raft->last_applied++;
+        *is_snapshot = true;
+        return raft->snapshot;
+    }
+
     const struct raft_entry *e = raft_get_next_entry(raft, RAFT_DATA);
     if (!e) {
         return NULL;
@@ -3593,8 +3616,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
 {
     ovs_assert(new_log_start >= raft->log_start);
     ovs_assert(new_log_start <= raft->log_end);
-    ovs_assert(new_log_start <= raft->last_applied + 1);
-    ovs_assert(new_log_start > raft->log_end
+    ovs_assert(new_log_start <= raft->last_applied + 2);
+    ovs_assert(new_log_start > raft->log_start
                ? new_snapshot != NULL
                : new_snapshot == NULL);
 
@@ -3616,8 +3639,9 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
     json_object_put(snapshot, "prev_term", json_integer_create(prev_term));
     json_object_put(snapshot, "prev_index", json_integer_create(prev_index));
     json_object_put(snapshot, "prev_servers", prev_servers);
-    if (raft->snapshot) {
-        json_object_put_string(snapshot, "data", raft->snapshot);
+    if (raft->snapshot || new_snapshot) {
+        json_object_put_string(snapshot, "data",
+                               new_snapshot ? new_snapshot : raft->snapshot);
     }
     error = ovsdb_log_write_json(storage, snapshot);
     json_destroy(snapshot);
@@ -3703,9 +3727,8 @@ raft_handle_install_snapshot_request__(
         raft->log_start = new_log_start;
     }
     raft->commit_index = raft->log_start - 1;
-    if (raft->commit_index > raft->last_applied) {
-        raft->last_applied = raft->commit_index;
-        /* XXX reset state machine to contents of snapshot */
+    if (raft->last_applied < raft->commit_index) {
+        raft->last_applied = raft->log_start - 2;
     }
 
     raft->prev_term = rq->last_term;
@@ -3822,7 +3845,7 @@ raft_try_store_snapshot(struct raft *raft, const char *new_snapshot)
         return false;
     }
 
-    if (raft->last_applied <= raft->log_start) {
+    if (raft->last_applied < raft->log_start) {
         VLOG_WARN("not storing a duplicate snapshot");
         return false;
     }
@@ -3838,7 +3861,7 @@ raft_try_store_snapshot(struct raft *raft, const char *new_snapshot)
         return false;
     }
 
-    raft->prev_term = raft_get_term(raft, new_log_start);
+    raft->prev_term = raft_get_term(raft, new_log_start - 1);
     free(raft->snapshot);
     raft->snapshot_len = strlen(new_snapshot);
     raft->snapshot = xmemdup0(new_snapshot, raft->snapshot_len);
@@ -3849,6 +3872,7 @@ raft_try_store_snapshot(struct raft *raft, const char *new_snapshot)
     error = raft_servers_from_json(prev_servers_json, &prev_servers);
     if (error) {
         /* XXX */
+        return false;
     }
     json_destroy(prev_servers_json);
     hmap_swap(&prev_servers, &raft->prev_servers);

@@ -28,10 +28,15 @@
 #include "uuid.h"
 #include "openvswitch/vlog.h"
 
-struct execute_ctx {
-    struct raft *raft;
+struct execute_command {
+    struct ovs_list list_node;
     struct raft_command *cmd;
     struct unixctl_conn *conn;
+};
+
+struct execute_ctx {
+    struct raft *raft;
+    struct ovs_list commands;
 };
 
 OVS_NO_RETURN static void usage(void);
@@ -40,6 +45,7 @@ static void parse_options(int argc, char *argv[], char **unixctl_pathp);
 static unixctl_cb_func test_raft_exit;
 static unixctl_cb_func test_raft_execute;
 static unixctl_cb_func test_raft_take_leadership;
+static unixctl_cb_func test_raft_store_snapshot;
 
 /* --cluster: UUID of cluster to open or join. */
 static struct uuid cluster_id;
@@ -97,38 +103,52 @@ main(int argc, char *argv[])
     bool exiting = false;
     unixctl_command_register("exit", "", 0, 0, test_raft_exit, &exiting);
 
-    struct execute_ctx ec = { .raft = raft };
+    struct execute_ctx ec = { raft, OVS_LIST_INITIALIZER(&ec.commands) };
     unixctl_command_register("execute", "DATA", 1, 1, test_raft_execute, &ec);
 
     unixctl_command_register("take-leadership", "", 0, 0,
                              test_raft_take_leadership, raft);
+    unixctl_command_register("store-snapshot", "SNAPSHOT", 1, 1,
+                             test_raft_store_snapshot, raft);
 
     daemonize_complete();
 
     for (;;) {
         unixctl_server_run(server);
+
         raft_run(raft);
+        while (raft_has_next_entry(raft)) {
+            const char *entry;
+            bool snapshot;
+
+            entry = raft_next_entry(raft, &snapshot);
+            if (snapshot) {
+                printf("new snapshot \"%s\"\n", entry);
+            } else {
+                printf("applying entry \"%s\"\n", entry);
+            }
+        }
 
         if (exiting) {
             break;
         }
 
-        if (ec.cmd) {
-            enum raft_command_status status = raft_command_get_status(ec.cmd);
+        struct execute_command *c;
+        LIST_FOR_EACH (c, list_node, &ec.commands) {
+            enum raft_command_status status = raft_command_get_status(c->cmd);
             if (status != RAFT_CMD_INCOMPLETE) {
-                unixctl_command_reply(ec.conn,
+                unixctl_command_reply(c->conn,
                                       raft_command_status_to_string(status));
-                raft_command_unref(ec.cmd);
-
-                ec.cmd = NULL;
-                ec.conn = NULL;
+                raft_command_unref(c->cmd);
+                ovs_list_remove(&c->list_node);
+                free(c);
             }
         }
 
         unixctl_server_wait(server);
         raft_wait(raft);
-        if (ec.cmd) {
-            raft_command_wait(ec.cmd);
+        LIST_FOR_EACH (c, list_node, &ec.commands) {
+            raft_command_wait(c->cmd);
         }
         poll_block();
     }
@@ -222,13 +242,10 @@ test_raft_execute(struct unixctl_conn *conn,
                   void *ctx_)
 {
     struct execute_ctx *ctx = ctx_;
-    if (ctx->cmd) {
-        unixctl_command_reply_error(conn, "command already in progress");
-        return;
-    }
-
-    ctx->cmd = raft_command_execute(ctx->raft, argv[1]);
-    ctx->conn = conn;
+    struct execute_command *command = xmalloc(sizeof *command);
+    ovs_list_push_back(&ctx->commands, &command->list_node);
+    command->cmd = raft_command_execute(ctx->raft, argv[1]);
+    command->conn = conn;
 }
 
 
@@ -239,5 +256,15 @@ test_raft_take_leadership(struct unixctl_conn *conn,
 {
     struct raft *raft = raft_;
     raft_take_leadership(raft);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
+test_raft_store_snapshot(struct unixctl_conn *conn,
+                         int argc OVS_UNUSED, const char *argv[],
+                         void *raft_)
+{
+    struct raft *raft = raft_;
+    raft_store_snapshot(raft, argv[1]);
     unixctl_command_reply(conn, NULL);
 }
