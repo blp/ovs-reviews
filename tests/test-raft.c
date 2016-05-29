@@ -44,7 +44,9 @@ static void parse_options(int argc, char *argv[], char **unixctl_pathp);
 
 static unixctl_cb_func test_raft_exit;
 static unixctl_cb_func test_raft_execute;
+static unixctl_cb_func test_raft_leave;
 static unixctl_cb_func test_raft_take_leadership;
+static unixctl_cb_func test_raft_transfer_leadership;
 static unixctl_cb_func test_raft_store_snapshot;
 
 /* --cluster: UUID of cluster to open or join. */
@@ -106,8 +108,11 @@ main(int argc, char *argv[])
     struct execute_ctx ec = { raft, OVS_LIST_INITIALIZER(&ec.commands) };
     unixctl_command_register("execute", "DATA", 1, 1, test_raft_execute, &ec);
 
+    unixctl_command_register("leave", "", 0, 0, test_raft_leave, raft);
     unixctl_command_register("take-leadership", "", 0, 0,
                              test_raft_take_leadership, raft);
+    unixctl_command_register("transfer-leadership", "", 0, 0,
+                             test_raft_transfer_leadership, raft);
     unixctl_command_register("store-snapshot", "SNAPSHOT", 1, 1,
                              test_raft_store_snapshot, raft);
 
@@ -117,6 +122,9 @@ main(int argc, char *argv[])
         unixctl_server_run(server);
 
         raft_run(raft);
+        if (raft_left(raft)) {
+            break;
+        }
         while (raft_has_next_entry(raft)) {
             const char *entry;
             bool snapshot;
@@ -260,6 +268,15 @@ test_raft_take_leadership(struct unixctl_conn *conn,
 }
 
 static void
+test_raft_transfer_leadership(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                              const char *argv[] OVS_UNUSED, void *raft_)
+{
+    struct raft *raft = raft_;
+    raft_transfer_leadership(raft);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
 test_raft_store_snapshot(struct unixctl_conn *conn,
                          int argc OVS_UNUSED, const char *argv[],
                          void *raft_)
@@ -267,4 +284,20 @@ test_raft_store_snapshot(struct unixctl_conn *conn,
     struct raft *raft = raft_;
     raft_store_snapshot(raft, argv[1]);
     unixctl_command_reply(conn, NULL);
+}
+
+static void
+test_raft_leave(struct unixctl_conn *conn,
+                int argc OVS_UNUSED, const char *argv[] OVS_UNUSED,
+                void *raft_)
+{
+    struct raft *raft = raft_;
+    if (raft_is_joining(raft)) {
+        unixctl_command_reply_error(conn, "cannot leave while joining");
+    } else if (raft_is_leaving(raft)) {
+        unixctl_command_reply_error(conn, "already leaving");
+    } else {
+        raft_leave(raft);
+        unixctl_command_reply(conn, NULL);
+    }
 }

@@ -224,7 +224,7 @@ struct raft {
     enum raft_role role;        /* Current role. */
     uint64_t commit_index;      /* Max log index known to be committed. */
     uint64_t last_applied;      /* Max log index applied to state machine. */
-    struct raft_server *leader; /* XXX Is this useful? */
+    struct uuid leader_sid;     /* Session ID of leader (zero, if unknown). */
     struct raft_waiter *vote_waiter;
 
 #define ELECTION_TIME_BASE_MSEC 1024
@@ -232,12 +232,18 @@ struct raft {
     long long int election_base;
     long long int election_timeout;
 
+    long long int retx_timeout;
+
 #define PING_TIME_MSEC (ELECTION_TIME_BASE_MSEC / 3)
     long long int ping_timeout;
 
     /* Used for joining a cluster. */
     bool joining;               /* Attempting to join the cluster? */
     char *local_address;
+
+    /* Used for leaving a cluster. */
+    bool leaving;
+    bool left;
 
     /* File synchronization. */
     bool fsync_thread_running;
@@ -378,7 +384,6 @@ struct raft_rpc_common {
 struct raft_append_request {
     struct raft_rpc_common common;
     uint64_t term;              /* Leader's term. */
-    struct uuid leader_sid;     /* So follower can redirect clients. */
     uint64_t prev_log_index;    /* Log entry just before new ones. */
     uint64_t prev_log_term;     /* Term of prev_log_index entry. */
     uint64_t leader_commit;     /* Leader's commit_index. */
@@ -600,6 +605,7 @@ static void raft_run_session(struct raft *, struct jsonrpc_session *,
 static void raft_wait_session(struct jsonrpc_session *);
 
 static void raft_become_leader(struct raft *);
+static void raft_become_follower(struct raft *);
 static void raft_reset_timer(struct raft *);
 static struct raft_server *raft_server_add(struct hmap *servers,
                                            const struct uuid *sid,
@@ -1507,6 +1513,102 @@ error:
     return error;
 }
 
+bool
+raft_is_joining(const struct raft *raft)
+{
+    return raft->joining;
+}
+
+/* If we're leader, try to transfer leadership to another server. */
+void
+raft_transfer_leadership(struct raft *raft)
+{
+    if (raft->role != RAFT_LEADER) {
+        return;
+    }
+
+    struct raft_server *s;
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
+        if (!uuid_equals(&raft->sid, &s->sid)
+            && jsonrpc_session_is_connected(s->js)
+            && s->phase == RAFT_PHASE_STABLE) {
+            union raft_rpc rpc = {
+                .become_leader = {
+                    .common = {
+                        .type = RAFT_RPC_BECOME_LEADER,
+                        .sid = s->sid,
+                    },
+                    .term = raft->current_term,
+                }
+            };
+            raft_send__(raft, &rpc, s->js);
+            break;
+        }
+    }
+}
+
+/* Send a RemoveServerRequest to the rest of the servers in the cluster.
+ *
+ * If we know which server is the leader, we can just send the request to it.
+ * However, we might not know which server is the leader, and we might never
+ * find out if the remove request was actually previously committed by a
+ * majority of the servers (because in that case the new leader will not send
+ * AppendRequests or heartbeats to us).  Therefore, we instead send
+ * RemoveRequests to every server.  This theoretically has the same problem, if
+ * the current cluster leader was not previously a member of the cluster, but
+ * it seems likely to be more robust in practice.  */
+static void
+raft_send_remove_server_requests(struct raft *raft)
+{
+    VLOG_INFO("sending remove requests (joining=%s, leaving=%s)",
+              raft->joining ? "true" : "false",
+              raft->leaving ? "true" : "false");
+    const struct raft_server *s;
+    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
+        if (s != raft->me) {
+            union raft_rpc rpc = (union raft_rpc) {
+                .server_request = {
+                    .common = {
+                        .type = RAFT_RPC_REMOVE_SERVER_REQUEST,
+                        .sid = s->sid,
+                    },
+                    .sid = raft->sid,
+                },
+            };
+            raft_send__(raft, &rpc, s->js);
+        }
+    }
+
+    raft_reset_timer(raft);
+}
+
+void
+raft_leave(struct raft *raft)
+{
+    ovs_assert(!raft->joining);
+    if (raft->leaving) {
+        return;
+    }
+
+    raft->leaving = true;
+    raft_transfer_leadership(raft);
+    raft_become_follower(raft);
+    raft_send_remove_server_requests(raft);
+    raft_reset_timer(raft);
+}
+
+bool
+raft_is_leaving(const struct raft *raft)
+{
+    return raft->leaving;
+}
+
+bool
+raft_left(const struct raft *raft)
+{
+    return raft->left;
+}
+
 void
 raft_take_leadership(struct raft *raft)
 {
@@ -1522,28 +1624,7 @@ raft_close(struct raft *raft)
         return;
     }
 
-    /* If we're leader, transfer leadership to another server. */
-    if (raft->role == RAFT_LEADER) {
-        struct raft_server *s;
-        HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-            if (!uuid_equals(&raft->sid, &s->sid)
-                && jsonrpc_session_is_connected(s->js)
-                && s->phase == RAFT_PHASE_STABLE) {
-                union raft_rpc rpc = {
-                    .become_leader = {
-                        .common = {
-                            .type = RAFT_RPC_BECOME_LEADER,
-                            .sid = s->sid,
-                        },
-                        .term = raft->current_term,
-                    }
-                };
-                raft_send__(raft, &rpc, s->js);
-                break;
-            }
-        }
-    }
-
+    raft_transfer_leadership(raft);
     raft_complete_all_commands(raft, RAFT_CMD_SHUTDOWN);
 
     ovs_mutex_lock(&raft->fsync_mutex);
@@ -1639,6 +1720,16 @@ raft_run_session(struct raft *raft,
                         },
                         .sid = raft->sid,
                         .address = raft->local_address,
+                    },
+                };
+            } else if (raft->leaving) {
+                rq = (union raft_rpc) {
+                    .server_request = {
+                        .common = {
+                            .type = RAFT_RPC_REMOVE_SERVER_REQUEST,
+                            .sid = *sid,
+                        },
+                        .sid = raft->sid,
                     },
                 };
             } else {
@@ -1846,6 +1937,10 @@ raft_start_election(struct raft *raft)
 void
 raft_run(struct raft *raft)
 {
+    if (raft->left) {
+        return;
+    }
+
     raft_waiters_run(raft);
 
     if (!raft->listener && time_msec() >= raft->listen_backoff) {
@@ -1895,8 +1990,13 @@ raft_run(struct raft *raft)
     }
 
     if (!raft->joining && time_msec() >= raft->election_timeout) {
-        raft_start_election(raft);
+        if (raft->leaving) {
+            raft_send_remove_server_requests(raft);
+        } else {
+            raft_start_election(raft);
+        }
     }
+
     if (raft->role == RAFT_LEADER && time_msec() >= raft->ping_timeout) {
         /* XXX send only if idle */
         raft_send_heartbeats(raft);
@@ -1915,6 +2015,10 @@ raft_wait_session(struct jsonrpc_session *js)
 void
 raft_wait(struct raft *raft)
 {
+    if (raft->left) {
+        return;
+    }
+
     raft_waiters_wait(raft);
 
     if (raft->listener) {
@@ -2135,10 +2239,6 @@ raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
                                struct json *args)
 {
     json_object_put_uint(args, "term", rq->term);
-    if (!uuid_is_zero(&rq->leader_sid)) {
-        json_object_put_format(args, "leader",
-                               UUID_FMT, UUID_ARGS(&rq->leader_sid));
-    }
     json_object_put_uint(args, "prev_log_index", rq->prev_log_index);
     json_object_put_uint(args, "prev_log_term", rq->prev_log_term);
     json_object_put_uint(args, "leader_commit", rq->leader_commit);
@@ -2155,7 +2255,6 @@ raft_append_request_from_jsonrpc(struct ovsdb_parser *p,
                                  struct raft_append_request *rq)
 {
     rq->term = parse_uint(p, "term");
-    parse_optional_uuid(p, "leader", &rq->leader_sid);
     rq->prev_log_index = parse_uint(p, "prev_log_index");
     rq->prev_log_term = parse_uint(p, "prev_log_term");
     rq->leader_commit = parse_uint(p, "leader_commit");
@@ -2521,34 +2620,54 @@ raft_rpc_from_jsonrpc(struct raft *raft,
 }
 
 static void
-raft_send_server_reply(struct raft *raft,
+raft_send_server_reply(struct raft *raft, bool add,
                        const struct uuid *sid, enum raft_server_status status)
 {
     if (status == RAFT_SERVER_OK) {
-        VLOG_INFO("server "UUID_FMT": added successfully", UUID_ARGS(sid));
+        VLOG_INFO("server "UUID_FMT": %s successfully",
+                  UUID_ARGS(sid), add ? "added" : "removed");
     } else {
-        VLOG_INFO("server "UUID_FMT": add failed (%s)",
-                  UUID_ARGS(sid), raft_server_status_to_string(status));
+        VLOG_INFO("server "UUID_FMT": %s failed (%s)",
+                  UUID_ARGS(sid), add ? "add" : "remove",
+                  raft_server_status_to_string(status));
     }
+    const struct raft_server *leader = raft_find_server(raft,
+                                                        &raft->leader_sid);
     union raft_rpc rpy = {
         .server_reply = {
             .common = {
-                .type = RAFT_RPC_ADD_SERVER_REPLY,
+                .type = (add
+                         ? RAFT_RPC_ADD_SERVER_REPLY
+                         : RAFT_RPC_REMOVE_SERVER_REPLY),
                 .sid = *sid,
             },
             .status = status,
 
-            /* XXX do we maintain leaderHint properly? */
-            .leader_address = raft->leader ? raft->leader->address : NULL,
-            .leader_sid = raft->leader ? raft->leader->sid : UUID_ZERO,
+            .leader_address = leader ? leader->address : NULL,
+            .leader_sid = leader ? leader->sid : UUID_ZERO,
         }
     };
     raft_send(raft, &rpy);
 }
 
 static void
+raft_send_add_server_reply(struct raft *raft, const struct uuid *sid,
+                           enum raft_server_status status)
+{
+    return raft_send_server_reply(raft, true, sid, status);
+}
+
+static void
+raft_send_remove_server_reply(struct raft *raft, const struct uuid *sid,
+                              enum raft_server_status status)
+{
+    return raft_send_server_reply(raft, false, sid, status);
+}
+
+static void
 raft_become_follower(struct raft *raft)
 {
+    raft->leader_sid = UUID_ZERO;
     if (raft->role == RAFT_FOLLOWER) {
         return;
     }
@@ -2565,11 +2684,11 @@ raft_become_follower(struct raft *raft)
      * the server configuration later, if necessary. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
-        raft_send_server_reply(raft, &s->sid, RAFT_SERVER_LOST_LEADERSHIP);
+        raft_send_add_server_reply(raft, &s->sid, RAFT_SERVER_LOST_LEADERSHIP);
     }
     if (raft->remove_server) {
-        raft_send_server_reply(raft, &raft->remove_server->reply_sid,
-                               RAFT_SERVER_LOST_LEADERSHIP);
+        raft_send_remove_server_reply(raft, &raft->remove_server->reply_sid,
+                                      RAFT_SERVER_LOST_LEADERSHIP);
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
     }
@@ -2582,7 +2701,7 @@ static void
 raft_send_append_request(struct raft *raft,
                          struct raft_server *peer, unsigned int n)
 {
-    ovs_assert(raft->leader == raft->me);
+    ovs_assert(raft->role == RAFT_LEADER);
 
     union raft_rpc rq = {
         .append_request = {
@@ -2591,7 +2710,6 @@ raft_send_append_request(struct raft *raft,
                 .sid = peer->sid,
             },
             .term = raft->current_term,
-            .leader_sid = raft->me->sid,
             .prev_log_index = peer->next_index - 1,
             .prev_log_term = (peer->next_index - 1 >= raft->log_start
                               ? raft->log[peer->next_index - 1
@@ -2636,7 +2754,7 @@ raft_become_leader(struct raft *raft)
 
     ovs_assert(raft->role != RAFT_LEADER);
     raft->role = RAFT_LEADER;
-    raft->leader = raft->me;
+    raft->leader_sid = raft->me->sid;
     raft->election_timeout = LLONG_MAX;
     raft->ping_timeout = time_msec() + PING_TIME_MSEC;
 
@@ -2793,24 +2911,49 @@ raft_handle_append_entries(struct raft *raft,
     return -1;
 }
 
+static bool
+raft_update_leader(struct raft *raft, const struct uuid *sid)
+{
+    if (raft->role == RAFT_LEADER && !uuid_equals(sid, &raft->sid)) {
+        VLOG_ERR("this server is leader but server "UUID_FMT" claims to be",
+                 UUID_ARGS(sid));
+        return false;
+    } else if (!uuid_equals(sid, &raft->leader_sid)) {
+        if (!uuid_is_zero(&raft->leader_sid)) {
+            VLOG_ERR("leader for term %"PRIu64" changed "
+                     "from "UUID_FMT" to "UUID_FMT,
+                     raft->current_term,
+                     UUID_ARGS(&raft->leader_sid),
+                     UUID_ARGS(sid));
+        } else {
+            VLOG_INFO("server "UUID_FMT" is leader for term %"PRIu64,
+                      UUID_ARGS(sid), raft->current_term);
+        }
+        raft->leader_sid = *sid;
+    }
+    return true;
+}
+
 /* Returns 1 on success, 0 for failure, -1 for an operation in progress. */
 static int
 raft_handle_append_request__(struct raft *raft,
                              const struct raft_append_request *rq)
 {
-    /* We do not check whether we know the server that sent the AppendEntries
-     * request to be the leader.  As section 4.1 says, "A server accepts
-     * AppendEntries requests from a leader that is not part of the server’s
-     * latest configuration.  Otherwise, a new server could never be added to
-     * the cluster (it would never accept any log entries preceding the
-     * configuration entry that adds the server)." */
-
     if (!raft_receive_term__(raft, rq->term)) {
         /* Section 3.3: "If a server receives a request with a stale term
          * number, it rejects the request." */
         return false;
     }
 
+    /* We do not check whether the server that sent the request is part of the
+     * cluster.  As section 4.1 says, "A server accepts AppendEntries requests
+     * from a leader that is not part of the server’s latest configuration.
+     * Otherwise, a new server could never be added to the cluster (it would
+     * never accept any log entries preceding the configuration entry that adds
+     * the server)." */
+    if (!raft_update_leader(raft, &rq->common.sid)) {
+        return false;
+    }
     raft_reset_timer(raft);
 
     /* First check for the common case, where the AppendEntries request is
@@ -3385,6 +3528,21 @@ raft_has_uncommitted_configuration(const struct raft *raft)
 }
 
 static void
+raft_log_reconfiguration(struct raft *raft)
+{
+    /* Add the reconfiguration to the log. */
+    struct json *servers_json = raft_servers_to_json(&raft->servers);
+    char *servers_s = json_to_string(servers_json, 0);
+    json_destroy(servers_json);
+    struct raft_command *cmd = raft_command_execute__(
+        raft, RAFT_SERVERS, servers_s);
+    free(servers_s);
+    if (cmd) {
+        /* XXX handle error */
+    }
+}
+
+static void
 raft_run_reconfigure(struct raft *raft)
 {
     ovs_assert(raft->role == RAFT_LEADER);
@@ -3398,13 +3556,13 @@ raft_run_reconfigure(struct raft *raft)
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s->phase == RAFT_PHASE_COMMITTING) {
-            raft_send_server_reply(raft, &s->reply_sid, RAFT_SERVER_OK);
+            raft_send_add_server_reply(raft, &s->reply_sid, RAFT_SERVER_OK);
             s->phase = RAFT_PHASE_STABLE;
         }
     }
     if (raft->remove_server) {
-        raft_send_server_reply(raft, &raft->remove_server->reply_sid,
-                               RAFT_SERVER_OK);
+        raft_send_remove_server_reply(raft, &raft->remove_server->reply_sid,
+                                      RAFT_SERVER_OK);
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
     }
@@ -3419,16 +3577,7 @@ raft_run_reconfigure(struct raft *raft)
             /* Mark 's' as waiting for commit. */
             s->phase = RAFT_PHASE_COMMITTING;
 
-            /* Add the reconfiguration to the log. */
-            struct json *servers_json = raft_servers_to_json(&raft->servers);
-            char *servers_s = json_to_string(servers_json, 0);
-            json_destroy(servers_json);
-            struct raft_command *cmd = raft_command_execute__(
-                raft, RAFT_SERVERS, servers_s);
-            free(servers_s);
-            if (cmd) {
-                /* XXX handle error */
-            }
+            raft_log_reconfiguration(raft);
 
             /* When commit completes we'll transition to RAFT_PHASE_STABLE and
              * send a RAFT_SERVER_OK reply. */
@@ -3443,7 +3592,7 @@ raft_run_reconfigure(struct raft *raft)
             hmap_remove(&raft->servers, &s->hmap_node);
             raft->remove_server = s;
 
-            /* XXX add log entry */
+            raft_log_reconfiguration(raft);
 
             return;
         }
@@ -3465,7 +3614,8 @@ raft_handle_add_server_request__(struct raft *raft,
         /* If the server is scheduled to be removed, cancel it. */
         if (s->phase == RAFT_PHASE_REMOVE) {
             s->phase = RAFT_PHASE_STABLE;
-            raft_send_server_reply(raft, &s->reply_sid, RAFT_SERVER_CANCELED);
+            raft_send_remove_server_reply(raft, &s->reply_sid,
+                                          RAFT_SERVER_CANCELED);
             return RAFT_SERVER_OK;
         }
 
@@ -3516,7 +3666,7 @@ raft_handle_add_server_request(struct raft *raft,
 {
     int status = raft_handle_add_server_request__(raft, rq);
     if (status >= 0) {
-        raft_send_server_reply(raft, &rq->common.sid, status);
+        raft_send_add_server_reply(raft, &rq->common.sid, status);
     } else {
         /* Operation in progress, reply will be sent later. */
     }
@@ -3529,6 +3679,13 @@ raft_handle_add_server_reply(struct raft *raft,
     if (rpc->status == RAFT_SERVER_OK) {
         if (raft->me) {
             raft->joining = false;
+
+            /* Disable reconnect on the initial remote connections.  Some of
+             * them might not even be correct. */
+            struct raft_conn *conn;
+            LIST_FOR_EACH (conn, list_node, &raft->conns) {
+                jsonrpc_session_disable_reconnect(conn->js);
+            }
         } else {
             /* XXX we're not really part of the cluster? */
         }
@@ -3547,7 +3704,8 @@ raft_handle_remove_server_request__(struct raft *raft,
     /* If the server to remove is currently waiting to be added, cancel it. */
     struct raft_server *target = raft_find_new_server(raft, &rq->sid);
     if (target) {
-        raft_send_server_reply(raft, &target->reply_sid, RAFT_SERVER_CANCELED);
+        raft_send_remove_server_reply(raft, &target->reply_sid,
+                                      RAFT_SERVER_CANCELED);
         hmap_remove(&raft->add_servers, &target->hmap_node);
         raft_server_destroy(target);
         return RAFT_SERVER_OK;
@@ -3584,8 +3742,8 @@ raft_handle_remove_server_request__(struct raft *raft,
     }
 
     /* Mark the server for removal. */
-    s->phase = RAFT_PHASE_REMOVE;
-    s->reply_sid = rq->common.sid;
+    target->phase = RAFT_PHASE_REMOVE;
+    target->reply_sid = rq->common.sid;
 
     raft_run_reconfigure(raft);
     return -1;
@@ -3597,7 +3755,7 @@ raft_handle_remove_server_request(struct raft *raft,
 {
     int status = raft_handle_remove_server_request__(raft, rq);
     if (status >= 0) {
-        raft_send_server_reply(raft, &rq->common.sid, status);
+        raft_send_remove_server_reply(raft, &rq->common.sid, status);
     } else {
         /* Operation in progress, reply will be sent later. */
     }
@@ -3607,7 +3765,11 @@ static void
 raft_handle_remove_server_reply(struct raft *raft OVS_UNUSED,
                                 const struct raft_server_reply *rpc OVS_UNUSED)
 {
-    /* XXX */
+    if (rpc->status == RAFT_SERVER_OK || rpc->status == RAFT_SERVER_NO_OP) {
+        VLOG_INFO("left cluster");
+        raft->leaving = false;
+        raft->left = true;
+    }
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -3900,8 +4062,9 @@ raft_handle_become_leader(struct raft *raft,
     }
 
     if (raft->role == RAFT_FOLLOWER) {
-        VLOG_INFO("received leadership transfer from "UUID_FMT,
-                  UUID_ARGS(&rq->common.sid));
+        VLOG_INFO("received leadership transfer from "UUID_FMT" "
+                  "in term %"PRIu64,
+                  UUID_ARGS(&rq->common.sid), rq->term);
         raft_start_election(raft);
     }
 }

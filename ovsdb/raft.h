@@ -58,11 +58,19 @@ struct ovsdb_error *raft_create(const char *file_name,
 /* Starting up or shutting down a server within a cluster. */
 struct ovsdb_error *raft_open(const char *file_name, struct raft **)
     OVS_WARN_UNUSED_RESULT;
+void raft_close(struct raft *);
+
+/* Joining a cluster. */
 struct ovsdb_error *raft_join(const char *file_name, const char *local_address,
                               char *remote_addresses[], size_t n_remotes,
                               const struct uuid *cid, struct raft **)
     OVS_WARN_UNUSED_RESULT;
-void raft_close(struct raft *);
+bool raft_is_joining(const struct raft *);
+
+/* Leaving a cluster */
+void raft_leave(struct raft *);
+bool raft_is_leaving(const struct raft *);
+bool raft_left(const struct raft *);
 
 /* Running a server. */
 void raft_run(struct raft *);
@@ -94,5 +102,6 @@ void raft_store_snapshot(struct raft *, const char *data);
 
 /* Cluster management. */
 void raft_take_leadership(struct raft *);
+void raft_transfer_leadership(struct raft *);
 
 #endif /* lib/raft.h */
