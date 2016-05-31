@@ -3676,7 +3676,7 @@ static void
 raft_handle_add_server_reply(struct raft *raft,
                              const struct raft_server_reply *rpc)
 {
-    if (rpc->status == RAFT_SERVER_OK) {
+    if (rpc->status == RAFT_SERVER_OK || rpc->status == RAFT_SERVER_NO_OP) {
         if (raft->me) {
             raft->joining = false;
 
