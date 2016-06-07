@@ -2948,6 +2948,256 @@ AT_CHECK([ovstest test-ovn-put-dhcp-opts-action reg0 $dhcp_options $expected_dhc
 
 AT_CLEANUP
 
+AT_SETUP([ovn -- dhcp : 1 HV, 2 LS, 3 lports])
+AT_KEYWORDS([dhcp])
+AT_SKIP_IF([test $HAVE_PYTHON = no])
+ovn_start
+
+ovn-nbctl lswitch-add ls1
+ovn-nbctl lswitch-add ls2
+
+ovn-nbctl -- --id=@s1 create Subnet cidr=10.0.0.0/24 gateway_ip=10.0.0.1 \
+ip_version=4 enable_dhcp=true dhcp_options="\"server_id\"=\"10.0.0.1\" \
+\"server_mac\"=\"00:00:00:10:00:01\" \"lease_time\"=\"36\"" \
+-- add Logical_Switch ls1 subnets @s1
+
+ovn-nbctl lport-add ls1 ls1-lp1 \
+-- lport-set-addresses ls1-lp1 "f0:00:00:00:00:01 10.0.0.4"
+
+ovn-nbctl lport-set-port-security ls1-lp1 "f0:00:00:00:00:01 10.0.0.4"
+
+ovn-nbctl lport-add ls2 ls2-lp1 \
+-- lport-set-addresses ls2-lp1 "f0:00:00:00:00:02 20.0.0.3"
+
+ovn-nbctl lport-set-port-security ls2-lp1 "f0:00:00:00:00:02 20.0.0.3"
+
+ovn-nbctl lport-add ls1 ls1-lp2 \
+-- lport-set-addresses ls1-lp2 "f0:00:00:00:00:03 10.0.0.5"
+
+ovn-nbctl lport-set-port-security ls1-lp2 "f0:00:00:00:00:03 10.0.0.5"
+#disable dhcp on lport - ls1-lp2
+ovn-nbctl lport-set-options ls1-lp2 "dhcp_disabled=true"
+
+net_add n1
+sim_add hv1
+
+as hv1
+ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+ovs-vsctl -- add-port br-int hv1-vif1 -- \
+    set interface hv1-vif1 external-ids:iface-id=ls1-lp1 \
+    options:tx_pcap=hv1/vif1-tx.pcap \
+    options:rxq_pcap=hv1/vif1-rx.pcap \
+    ofport-request=1
+ovs-vsctl -- add-port br-int hv1-vif2 -- \
+    set interface hv1-vif2 external-ids:iface-id=ls2-lp1 \
+    options:tx_pcap=hv1/vif2-tx.pcap \
+    options:rxq_pcap=hv1/vif2-rx.pcap \
+    ofport-request=2
+
+ovs-vsctl -- add-port br-int hv1-vif3 -- \
+    set interface hv1-vif3 external-ids:iface-id=ls1-lp2 \
+    options:tx_pcap=hv1/vif3-tx.pcap \
+    options:rxq_pcap=hv1/vif3-rx.pcap \
+    ofport-request=3
+
+ovn_populate_arp
+
+sleep 2
+
+# This shell function sends a DHCP request packet
+# test_dhcp INPORT SRC_MAC DHCP_TYPE OUTPORT...
+# The OUTPORTs (zero or more) list the VIFs on which the original DHCP
+# packet should be received twice (one from ovn-controller and the other
+# from the "ovs-ofctl monitor br-int resume"
+test_dhcp() {
+    local inport=$1 src_mac=$2 dhcp_type=$3
+    local request=ffffffffffff${src_mac}080045100110000000008011000000000000ffffffff
+    # udp header and dhcp header
+    request+=0044004300fc0000
+    request+=010106006359aa760000000000000000000000000000000000000000${src_mac}
+    # client hardware padding
+    request+=00000000000000000000
+    # server hostname
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    # boot file name
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    request+=0000000000000000000000000000000000000000000000000000000000000000
+    # dhcp magic cookie
+    request+=63825363
+    # dhcp message type
+    request+=3501${dhcp_type}ff
+    shift; shift; shift;
+    for outport; do
+        # the packet will be received twice, one from ovn-controller
+        # and the other from ovs-ofctl monitor br-int resume
+        echo $request | trim_zeros >> $outport.expected
+        echo $request | trim_zeros >> $outport.expected
+    done
+    as hv1 ovs-appctl netdev-dummy/receive hv1-vif$inport $request
+}
+
+reset_pcap_file() {
+    local iface=$1
+    local pcap_file=$2
+    ovs-vsctl -- set Interface $iface options:tx_pcap=dummy-tx.pcap \
+options:rxq_pcap=dummy-rx.pcap
+    rm -f ${pcap_file}*.pcap
+    ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
+options:rxq_pcap=${pcap_file}-rx.pcap
+}
+
+trim_zeros() {
+    sed 's/\(00\)\{1,\}$//'
+}
+
+AT_CAPTURE_FILE([ofctl_monitor0.log])
+as hv1 ovs-ofctl monitor br-int resume --detach --no-chdir \
+--pidfile=ovs-ofctl0.pid 2> ofctl_monitor0.log
+
+echo "---------NB dump-----"
+ovn-nbctl show
+echo "---------------------"
+echo "---------SB dump-----"
+ovn-sbctl list datapath_binding
+echo "---------------------"
+ovn-sbctl list logical_flow
+echo "---------------------"
+
+echo "---------------------"
+ovn-sbctl dump-flows
+echo "---------------------"
+
+echo "------ hv1 dump ----------"
+as hv1 ovs-ofctl dump-flows br-int
+
+#send DHCP DISCOVER
+test_dhcp 1 f00000000001 01
+
+# Wait for the expected number of NXT_RESUMEs to be logged.
+echo "waiting for 1 NXT_RESUMEs..."
+OVS_WAIT_UNTIL([test 1 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+# Extract the dhcp options in userdata. It will be in the format
+# ' userdata=00.00.00.02.00.00.00.00.00.00.00.00.0a.00.00.04.01.04.ff......'
+# Skip 59 columns - userdata=<DHCP_ACTION_CODE (8 B)><REG-IDX (4B)><OFFER-IP (4 B)>
+dhcp_opts_in_user_data=`cat ofctl_monitor0.log  | grep userdata | cut -c 59-`
+
+AT_CHECK([ovstest test-ovn-dhcp hv1/vif1-tx.pcap 10.0.0.4 10.0.0.1 \
+          00:00:00:10:00:01 1 $dhcp_opts_in_user_data], [0], [ignore])
+
+# ovs-ofctl also resumes the packets and this causes other ports to receive
+# the DHCP request packet. So reset the pcap files so that its easier
+# for "test-ovn-dhcp" to validate the DHCP reply packet
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif2 hv1/vif2
+reset_pcap_file hv1-vif3 hv1/vif3
+
+# run dhcp test on ls2-lp1. There are no dhcp options defined. So the dhcp
+# packet should not be handled by ovn-controller
+test_dhcp 2 f00000000002 01
+
+# NXT_RESUMEs should be 1.
+echo "waiting for 1 NXT_RESUMEs..."
+cat ofctl_monitor*.log
+echo "###########################################"
+
+OVS_WAIT_UNTIL([test 1 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+ovn-nbctl subnet-add ls2 20.0.0.0/24 20.0.0.1 true
+subnet_id=`ovn-nbctl subnet-list ls2 | cut -c -37`
+
+ovn-nbctl subnet-set-dhcp-options $subnet_id "server_id=20.0.0.1" \
+"lease_time=4500"
+
+sleep 1
+
+# there is no "server_mac" field in the dhcp options. So there should be no
+# dhcp flow for this port
+OVS_WAIT_UNTIL([test 1 = `as hv1 ovs-ofctl dump-flows br-int | \
+grep -c "actions=controller(userdata=00.00.00.02.00.00.00"`])
+
+ovn-nbctl subnet-set-dhcp-options $subnet_id "server_id=20.0.0.1" \
+"server_mac=00:00:00:10:00:02" "lease_time=4500"
+
+sleep 2
+OVS_WAIT_UNTIL([test 2 = `as hv1 ovs-ofctl dump-flows br-int | \
+grep -c "actions=controller(userdata=00.00.00.02.00.00.00"`])
+
+test_dhcp 2 f00000000002 03
+
+# NXT_RESUMEs should be 2.
+echo "waiting for 2 NXT_RESUMEs..."
+OVS_WAIT_UNTIL([test 2 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+dhcp_opts_in_user_data=`cat ofctl_monitor0.log  | grep userdata | \
+cut -c 59- | sed '1d'`
+
+AT_CHECK([ovstest test-ovn-dhcp hv1/vif2-tx.pcap 20.0.0.3 20.0.0.1 \
+          00:00:00:10:00:02 3 $dhcp_opts_in_user_data], [0], [ignore])
+
+reset_pcap_file hv1-vif1 hv1/vif1
+reset_pcap_file hv1-vif2 hv1/vif2
+reset_pcap_file hv1-vif3 hv1/vif3
+
+#enable dhcp on lport - ls1-lp2
+ovn-nbctl lport-set-options ls1-lp2 "dhcp_disabled=false"
+
+sleep 2
+
+OVS_WAIT_UNTIL([test 3 = `as hv1 ovs-ofctl dump-flows br-int | \
+grep -c "actions=controller(userdata=00.00.00.02.00.00.00"`])
+
+#send invalid dhcp packet on hv1/vif3 (ie ls1-lp3).
+# This packet should be received by hv1/vif1 (ls1-lp1)
+test_dhcp 3 f00000000003 04 1
+
+# NXT_RESUMEs should be 3.
+echo "waiting for 3 NXT_RESUMEs..."
+OVS_WAIT_UNTIL([test 3 = `cat ofctl_monitor*.log | grep -c NXT_RESUME`])
+
+# vif3-tx.pcap should not have received the DHCP reply packet
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif3-tx.pcap | trim_zeros > 3.packets
+AT_CHECK([cat 3.packets], [0], [])
+
+# vif1-tx.pcap should have received the DHCP (invalid) request packet
+$PYTHON "$top_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | trim_zeros > 1.packets
+cat 1.expected > expout
+AT_CHECK([cat 1.packets], [0], [expout])
+
+
+echo "---------NB dump-----"
+ovn-nbctl show
+echo "---------SB dump-----"
+ovn-sbctl list datapath_binding
+echo "---------------------"
+ovn-sbctl list logical_flow
+ovn-sbctl list port_binding
+echo "---------------------"
+ovn-sbctl dump-flows
+echo "---------------------"
+
+echo "------ hv1 dump ----------"
+as hv1 ovs-ofctl dump-flows br-int
+
+as ovn-sb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as ovn-nb
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+as northd
+OVS_APP_EXIT_AND_WAIT([ovn-northd])
+
+as main
+OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+AT_CLEANUP
+
 AT_SETUP([ovn -- 2 HVs, 2 LRs connected via LS, gateway router])
 AT_KEYWORDS([ovngatewayrouter])
 AT_SKIP_IF([test $HAVE_PYTHON = no])

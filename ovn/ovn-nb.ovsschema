@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
-    "version": "2.1.2",
-    "cksum": "429668869 5325",
+    "version": "2.2.0",
+    "cksum": "2504037701 6138",
     "tables": {
         "Logical_Switch": {
             "columns": {
@@ -14,6 +14,11 @@
                 "acls": {"type": {"key": {"type": "uuid",
                                           "refTable": "ACL",
                                           "refType": "strong"},
+                                  "min": 0,
+                                  "max": "unlimited"}},
+                "subnets": {"type": {"key": {"type": "uuid",
+                                             "refTable": "Subnet",
+                                             "refType": "strong"},
                                   "min": 0,
                                   "max": "unlimited"}},
                 "external_ids": {
@@ -62,6 +67,16 @@
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
+            "isRoot": false},
+        "Subnet": {
+            "columns": {
+                "cidr": {"type": "string"},
+                "ip_version": {"type": {"key": {"type": "integer",
+                                                 "enum": ["set", [4, 6]]}}},
+                "gateway_ip": {"type": "string"},
+                "enable_dhcp": {"type": "boolean"},
+                "dhcp_options": {"type": {"key": "string", "value": "string",
+                                          "min": 0, "max": "unlimited"}}},
             "isRoot": false},
         "Logical_Router": {
             "columns": {

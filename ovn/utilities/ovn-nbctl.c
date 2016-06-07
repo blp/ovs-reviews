@@ -352,6 +352,18 @@ Logical port commands:\n\
                             Set options related to the type of LPORT\n\
   lport-get-options LPORT   Get the type specific options for LPORT\n\
 \n\
+Subnet commands:\n\
+  subnet-add LSWITCH CIDR GATEWAYIP [ENABLE_DHCP]\n\
+                            add a subnet to LSWITCH\n\
+  subnet-del SUBNET_UUID\n\
+                            remove subnet from its attached LSWITCH\n\
+  subnet-list LSWITCH\n\
+                            list subnets attached to LSWITCH\n\
+  subnet-set-dhcp-options SUBNET_UUID KEY=VALUE [KEY=VALUE]...\n\
+                            Set DHCP options for the SUBNET\n\
+  subnet-get-dhcp-options SUBNET_UUID\n\
+                            Get the DHCP options for the SUBNET\n\
+\n\
 %s\
 \n\
 Options:\n\
@@ -664,6 +676,7 @@ nbctl_lswitch_list(struct ctl_context *ctx)
     smap_destroy(&lswitches);
     free(nodes);
 }
+
 
 /* Find the lrport given its id. */
 static const struct nbrec_logical_router_port *
@@ -1237,6 +1250,175 @@ nbctl_lport_get_options(struct ctl_context *ctx)
     }
 }
 
+static void
+nbctl_subnet_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *lswitch;
+    lswitch = lswitch_by_name_or_uuid(ctx, ctx->argv[1], true);
+
+    /* Validate the cidr */
+    int64_t ip_version = 4;
+    ovs_be32 ip;
+    unsigned int plen;
+    char *error = ip_parse_cidr(ctx->argv[2], &ip, &plen);
+    if (error){
+        /* check if its IPv6 cidr */
+        free(error);
+        struct in6_addr ipv6;
+        error = ipv6_parse_cidr(ctx->argv[2], &ipv6, &plen);
+        if (error) {
+            free(error);
+            VLOG_WARN("Invalid cidr format '%s'", ctx->argv[2]);
+            return;
+        }
+        ip_version = 6;
+    }
+
+    /* Validate the gateway ip format */
+    bool valid_gatewap_ip = false;
+    if (ip_version == 4) {
+        valid_gatewap_ip = ip_parse(ctx->argv[3], &ip);
+    }
+    else {
+        struct in6_addr ipv6;
+        valid_gatewap_ip = ipv6_parse(ctx->argv[3], &ipv6);
+    }
+
+    if (!valid_gatewap_ip) {
+        VLOG_WARN("Invalid Gateway ip format '%s'", ctx->argv[3]);
+        return;
+    }
+
+    bool enable_dhcp = true;
+    if (ctx->argc == 5) {
+         if (!strcmp(ctx->argv[4], "false")) {
+             enable_dhcp = false;
+         }
+    }
+
+    struct nbrec_subnet *subnet = nbrec_subnet_insert(ctx->txn);
+    nbrec_subnet_set_cidr(subnet, ctx->argv[2]);
+    nbrec_subnet_set_ip_version(subnet, ip_version);
+    nbrec_subnet_set_gateway_ip(subnet, ctx->argv[3]);
+    nbrec_subnet_set_enable_dhcp(subnet, enable_dhcp);
+
+    /* Insert the subnet into the logical switch */
+    nbrec_logical_switch_verify_subnets(lswitch);
+    struct nbrec_subnet **new_subnets = xmalloc(sizeof *new_subnets *
+                                                (lswitch->n_subnets + 1));
+    memcpy(new_subnets, lswitch->subnets,
+           sizeof *new_subnets * lswitch->n_subnets);
+    new_subnets[lswitch->n_subnets] = subnet;
+    nbrec_logical_switch_set_subnets(lswitch, new_subnets,
+                                     lswitch->n_subnets + 1);
+    free(new_subnets);
+}
+
+static void
+remove_subnet(const struct nbrec_logical_switch *lswitch, size_t idx)
+{
+    const struct nbrec_subnet *subnet = lswitch->subnets[idx];
+
+    struct nbrec_subnet **new_subnets
+        = xmemdup(lswitch->subnets, sizeof *new_subnets * lswitch->n_subnets);
+    new_subnets[idx] = new_subnets[lswitch->n_subnets - 1];
+    nbrec_logical_switch_verify_subnets(lswitch);
+    nbrec_logical_switch_set_subnets(lswitch, new_subnets, lswitch->n_subnets - 1);
+    free(new_subnets);
+
+    nbrec_subnet_delete(subnet);
+}
+
+static const struct nbrec_subnet *
+subnet_get(struct ctl_context *ctx, char *id)
+{
+    struct uuid subnet_uuid;
+    if (uuid_from_string(&subnet_uuid, id)) {
+        return nbrec_subnet_get_for_uuid(ctx->idl, &subnet_uuid);
+    }
+
+    return NULL;
+}
+
+static void
+nbctl_subnet_del(struct ctl_context *ctx)
+{
+    const struct nbrec_subnet *subnet = subnet_get(ctx, ctx->argv[1]);
+    if (!subnet) {
+        VLOG_WARN("subnet not found for '%s'", ctx->argv[1]);
+        return;
+    }
+
+    /* Find the switch that contains 'subnet', then delete it. */
+    const struct nbrec_logical_switch *lswitch;
+    NBREC_LOGICAL_SWITCH_FOR_EACH (lswitch, ctx->idl) {
+        for (size_t i = 0; i < lswitch->n_subnets; i++) {
+            if (lswitch->subnets[i] == subnet) {
+                remove_subnet(lswitch, i);
+                return;
+            }
+        }
+    }
+
+    VLOG_WARN("subnet %s is not part of any logical switch",
+              ctx->argv[1]);
+}
+
+static void
+nbctl_subnet_list(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *lswitch;
+    lswitch = lswitch_by_name_or_uuid(ctx, ctx->argv[1], false);
+    if (!lswitch) {
+        return;
+    }
+
+    for (size_t i = 0; i < lswitch->n_subnets; i++) {
+        const struct nbrec_subnet *subnet = lswitch->subnets[i];
+        ds_put_format(&ctx->output, UUID_FMT " (%s)\n",
+                      UUID_ARGS(&subnet->header_.uuid), subnet->cidr);
+    }
+}
+
+static void
+nbctl_subnet_set_dhcp_options(struct ctl_context *ctx)
+{
+    const struct nbrec_subnet *subnet = subnet_get(ctx, ctx->argv[1]);
+    if (!subnet) {
+        VLOG_WARN("subnet not found for '%s'", ctx->argv[1]);
+        return;
+    }
+
+    struct smap dhcp_options = SMAP_INITIALIZER(&dhcp_options);
+    for (size_t i = 2; i < ctx->argc; i++) {
+        char *key, *value;
+        value = xstrdup(ctx->argv[i]);
+        key = strsep(&value, "=");
+        if (value) {
+            smap_add(&dhcp_options, key, value);
+        }
+        free(key);
+    }
+
+    nbrec_subnet_set_dhcp_options(subnet, &dhcp_options);
+    smap_destroy(&dhcp_options);
+}
+
+static void
+nbctl_subnet_get_dhcp_options(struct ctl_context *ctx)
+{
+    const struct nbrec_subnet *subnet = subnet_get(ctx, ctx->argv[1]);
+    if (!subnet) {
+        VLOG_WARN("subnet not found for '%s'", ctx->argv[1]);
+        return;
+    }
+
+    struct smap_node *node;
+    SMAP_FOR_EACH(node, &subnet->dhcp_options) {
+        ds_put_format(&ctx->output, "%s=%s\n", node->key, node->value);
+    }
+}
+
 enum {
     DIR_FROM_LPORT,
     DIR_TO_LPORT
@@ -1434,6 +1616,10 @@ static const struct ctl_table_class tables[] = {
     {&nbrec_table_acl,
      {{NULL, NULL, NULL},
       {NULL, NULL, NULL}}},
+
+    {&nbrec_table_subnet,
+     {{&nbrec_table_subnet, NULL, NULL},
+     {NULL, NULL, NULL}}},
 
     {&nbrec_table_logical_router,
      {{&nbrec_table_logical_router, &nbrec_logical_router_col_name, NULL},
@@ -1821,6 +2007,16 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_lport_set_options, NULL, "", RW },
     { "lport-get-options", 1, 1, "LPORT", NULL, nbctl_lport_get_options, NULL,
       "", RO },
+
+    /* subnet commands */
+    {"subnet-add", 3, 4, "LSWITCH CIDR GATEWAY_IP ENABLE_DHCP", NULL,
+      nbctl_subnet_add, NULL, "", RW },
+    {"subnet-del", 1, 1, "SUBNET", NULL, nbctl_subnet_del, NULL, "", RW},
+    {"subnet-list", 1, 1, "LSWITCH", NULL, nbctl_subnet_list, NULL, "", RO},
+    {"subnet-set-dhcp-options", 1, INT_MAX, "SUBNET KEY=VALUE [KEY=VALUE]...",
+      NULL, nbctl_subnet_set_dhcp_options, NULL, "", RW },
+    {"subnet-get-dhcp-options", 1, 1, "SUBNET", NULL,
+      nbctl_subnet_get_dhcp_options, NULL, "", RO },
 
     {NULL, 0, 0, NULL, NULL, NULL, NULL, "", RO},
 };

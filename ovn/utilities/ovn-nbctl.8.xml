@@ -100,6 +100,35 @@
       </dd>
     </dl>
 
+    <h1>Subnet Commands</h1>
+
+    <dl>
+      <dt><code>subnet-add</code> <var>lswitch</var> <var>cidr</var> <var>gateway_ip</var> [<var>enable_dhcp</var>]</dt>
+      <dd>
+        Adds a Subnet to the <var>lswitch</var>
+      </dd>
+
+      <dt><code>subnet-del</code> <var>subnet</var></dt>
+      <dd>
+        Deletes the subnet referred by <var>subnet</var> UUID.
+      </dd>
+
+      <dt><code>subnet-list</code> <var>lswitch</var></dt>
+      <dd>
+        Lists all the subnets belonging to the <var>lswitch</var>
+      </dd>
+
+      <dt><code>subnet-set-dhcp-options</code> <var>subnet</var> [<var>key=value</var>]...</dt>
+      <dd>
+        Sets the DHCP options for the <var>subnet</var>
+      </dd>
+
+      <dt><code>subnet-get-dhcp-options</code> <var>subnet</var></dt>
+      <dd>
+        Lists the DHCP options of the <var>subnet</var>
+      </dd>
+    </dl>
+
     <h1>ACL Commands</h1>
     <dl>
       <dt>[<code>--log</code>] <code>acl-add</code> <var>lswitch</var> <var>direction</var> <var>priority</var> <var>match</var> <var>action</var></dt>

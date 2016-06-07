@@ -73,11 +73,18 @@
       Access control rules that apply to packets within the logical switch.
     </column>
 
+    <column name="subnets">
+      <p>
+        Subnets configured to the logical switch.
+      </p>
+    </column>
+
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
       </column>
     </group>
+
   </table>
 
   <table name="Logical_Port" title="L2 logical switch port">
@@ -203,6 +210,28 @@
         <column name="options" key="policing_burst">
           If set, indicates the maximum burst size for data sent from this
           interface, in kb.
+        </column>
+      </group>
+
+      <group title="DHCP Options">
+        <p>
+          These options apply to logical ports with <ref column="type"/> having
+          (empty string)
+        </p>
+
+        <column name="options" key="dhcp_opt_OPTION_NAME">
+          Each logical port can override the DHCP options defined in the
+          <ref column="dhcp_options"/> of <ref table="Subnet"/>
+          by defining them in this column with the prefix "dhcp_opt_".
+          Please see the <ref column="dhcp_options"/> of
+          <ref table="Subnet"/> for supported DHCP options.
+
+          Example: key="dhcp_opt_mtu", value="1300"
+        </column>
+
+        <column name="options" key="dhcp_disabled">
+          If this is defined, <code>ovn-northd</code> will disable the native
+          DHCP responder for the logical port.
         </column>
       </group>
     </group>
@@ -598,6 +627,289 @@
     </group>
   </table>
 
+  <table name="Subnet" title="L2 logical switch subnet">
+    <p>
+      A subnet within an L2 logical switch. This is an optional table. CMS
+      can add the rows to this table to define the subnets belonging to logical
+      switch.
+    </p>
+
+    <column name="cidr">
+      <p>
+        cidr of the subnet.
+      </p>
+    </column>
+
+    <column name="ip_version">
+      <p>
+        IP version of the subnet -4 or 6.
+      </p>
+    </column>
+
+    <column name="gateway_ip">
+      <p>
+        Gateway ip of the subnet.
+      </p>
+    </column>
+
+    <column name="enable_dhcp">
+      <p>
+        If set to true, native DHCP support will be enabled for all the
+        logical ports having the IPv4 address from the subnet cidr.
+      </p>
+    </column>
+
+    <group title="DHCP options">
+      <column name="dhcp_options">
+        <p>
+          OVN implements a native DHCP support which caters to the common
+          use case of providing an IP address to a booting instance by
+          providing stateless replies to DHCP requests based on statically
+          configured address mappings. To do this it allows a short list of
+          DHCP options to be configured and applied at each compute host
+          running ovn-controller.
+        </p>
+
+        <p>
+          CMS should define the set of DHCP options as key/value pairs.
+          The defined DHCP options will be include in the DHCP response to the
+          DHCP DISCOVER/REQUEST packet from the logical ports having the IPv4
+          addresses in the <ref column="cidr"/>.
+        </p>
+      </column>
+
+      <group title="Supported DHCP options">
+        <p>
+          Below are the supported DHCP options whose values are IPv4 address
+          or addresses. If the value has more than one IPv4 address, then it
+          should be enclosed within '{}' braces. Please refer to the
+          RFC 2132 <code>"https://tools.ietf.org/html/rfc2132"</code> for
+          more details on the DHCP options and their codes.
+        </p>
+
+        <column name="dhcp_options" key="netmask">
+          <p>
+            The DHCP option code for this option is 1.
+          </p>
+
+          <p>
+            Example. key="netmask", value="255.255.255.0"
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="router">
+          <p>
+            The DHCP option code for this option is 3.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="dns_server">
+          <p>
+            The DHCP option code for this option is 6.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="log_server">
+          <p>
+            The DHCP option code for this option is 7.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="lpr_server">
+          <p>
+            The DHCP option code for this option is 9.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="swap_server">
+          <p>
+            The DHCP option code for this option is 16.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="policy_filter">
+          <p>
+            The DHCP option code for this option is 21.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="router_solicitation">
+          <p>
+            The DHCP option code for this option is 32.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="nis_server">
+          <p>
+            The DHCP option code for this option is 41.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="ntp_server">
+          <p>
+            The DHCP option code for this option is 42.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="server_id">
+          <p>
+            The DHCP option code for this option is 54.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="tftp_server">
+          <p>
+            The DHCP option code for this option is 66.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="classless_static_route">
+          <p>
+            The DHCP option code for this option is 121.
+          </p>
+
+          <p>
+             This option can contain one or more static routes, each of which
+             consists of a destination descriptor and the IP address of the
+             router that should be used to reach that destination. Please see
+             RFC 3442 for more details.
+          </p>
+
+          <p>
+            Example.
+            key="classless_static_route"
+            value="{30.0.0.0/24,10.0.0.10, 0.0.0.0/0,10.0.0.1}"
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="ms_classless_static_route">
+          <p>
+            The DHCP option code for this option is 249. This option is
+            similar to <code>classless_static_route</code> supported by
+            Microsoft Windows DHCP clients.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="server_mac">
+          <p>
+            <code>eth.src</code> will be set to this value in the DHCP
+            response packet.
+          </p>
+        </column>
+      </group>
+
+      <group title="Other supported DHCP options">
+        <column name="dhcp_options" key="ip_forward_enable">
+          <p>
+            The DHCP option code for this option is 19.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>bool</code>.
+
+            Example. key="ip_forward_enable", value="1"
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="router_discovery">
+          <p>
+            The DHCP option code for this option is 31.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>bool</code>.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="ethernet_encap">
+          <p>
+            The DHCP option code for this option is 36.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>bool</code>.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="default_ttl">
+          <p>
+            The DHCP option code for this option is 23.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>uint8</code>.
+
+            Example. key="default_ttl", value="128".
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="tcp_ttl">
+          <p>
+            The DHCP option code for this option is 37.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>uint8</code>.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="mtu">
+          <p>
+            The DHCP option code for this option is 26.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>uint16</code>.
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="lease_time">
+          <p>
+            The DHCP option code for this option is 51.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>uint32</code>.
+
+            Example. key="lease_time", value="42000"
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="T1">
+          <p>
+            The DHCP option code for this option is 58.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>uint32</code>.
+
+            Example. key="T1", value="30000"
+          </p>
+        </column>
+
+        <column name="dhcp_options" key="T2">
+          <p>
+            The DHCP option code for this option is 59.
+          </p>
+
+          <p>
+            The value of this DHCP option is of type <code>uint32</code>.
+
+            Example. key="T2", value="40000"
+          </p>
+        </column>
+      </group>
+
+      <group title="Mandatory DHCP options">
+        <p>
+          DHCP options <code>"server_id"</code>, <code>"server_mac"</code>
+          and <code>"lease_time"</code> are mandatory options which CMS should
+          define for <code>OVN</code> to support native DHCP.
+        </p>
+      </group>
+    </group>
+  </table>
+
   <table name="Logical_Router" title="L3 logical router">
     <p>
       Each row represents one L3 logical router.
@@ -645,7 +957,7 @@
         <code>Open_vSwitch</code> table of Open_vSwitch database.
       </column>
     </group>
-    
+
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
