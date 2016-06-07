@@ -338,6 +338,7 @@ tests_ovstest_SOURCES = \
 	tests/test-odp.c \
 	tests/test-ofpbuf.c \
 	tests/test-ovn.c \
+	tests/test-ovn-dhcp.c \
 	tests/test-packets.c \
 	tests/test-random.c \
 	tests/test-rcu.c \
