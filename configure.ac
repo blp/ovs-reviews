@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -109,6 +109,8 @@ AC_CHECK_FUNCS([mlockall strnlen getloadavg statvfs getmntent_r])
 AC_CHECK_HEADERS([mntent.h sys/statvfs.h linux/types.h linux/if_ether.h stdatomic.h])
 AC_CHECK_HEADERS([net/if_mib.h], [], [], [[#include <sys/types.h>
 #include <net/if.h>]])
+
+AC_SEARCH_LIBS([grpc_init], [grpc], [HAVE_GRPC=yes], [HAVE_GRPC=no])
 
 OVS_CHECK_PKIDIR
 OVS_CHECK_RUNDIR

@@ -255,6 +255,7 @@ OpenFlow connections over SSL will not be supported.
    AM_CONDITIONAL([HAVE_OPENSSL], [test "$HAVE_OPENSSL" = yes])
    if test "$HAVE_OPENSSL" = yes; then
       AC_DEFINE([HAVE_OPENSSL], [1], [Define to 1 if OpenSSL is installed.])
+      LIBS="$SSL_LIBS $LIBS"
    fi])
 
 dnl Checks for libraries needed by lib/socket-util.c.
@@ -589,3 +590,6 @@ AC_DEFUN([OVS_CHECK_PRAGMA_MESSAGE],
      [AC_DEFINE(HAVE_PRAGMA_MESSAGE,1,[Define if compiler supports #pragma
      message directive])])
   ])
+
+dnl Check for gRPC (Google RPC) library.
+AC_DEFUN([OVS_CHECK_GRPC], [AC_CHECK_LIB([grpc], [grpc_init])])

@@ -295,6 +295,11 @@ tests_test_lib_SOURCES = \
 	tests/test-lib.c
 tests_test_lib_LDADD = lib/libopenvswitch.la
 
+noinst_PROGRAMS += tests/test-grpc
+tests_test_grpc_SOURCES = \
+	tests/test-grpc.c
+tests_test_grpc_LDADD = lib/libopenvswitch.la -lgrpc $(LIBS)
+
 # idltest schema and IDL
 OVSIDL_BUILT += tests/idltest.c tests/idltest.h tests/idltest.ovsidl
 IDLTEST_IDL_FILES = tests/idltest.ovsschema tests/idltest.ann
