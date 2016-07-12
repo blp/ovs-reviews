@@ -3386,8 +3386,8 @@ mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:50,dl_dst=50:54:00:00:00:07,
 ])
 
 dnl Modified MPLS controller action.
-dnl In this test, the input packet is vlan-tagged, which should be stripped
-dnl before we push the MPLS and VLAN tags.
+dnl In this test, the input packet is vlan-tagged, which should be kept as
+dnl inner vlan.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
@@ -3397,26 +3397,29 @@ OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
 
 AT_CHECK([ofctl_strip < ofctl_monitor.log], [0], [dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:51,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 51 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:51,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 51 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:51,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 51 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 ])
 
 dnl Modified MPLS controller action.
@@ -3457,8 +3460,8 @@ mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:52,dl_dst=52:54:00:00:00:07,
 ])
 
 dnl Modified MPLS controller action.
-dnl In this test, the input packet is vlan-tagged, which should be stripped
-dnl before we push the MPLS and VLAN tags.
+dnl In this test, the input packet is vlan-tagged, which should be kept as
+dnl inner vlan.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
@@ -3468,26 +3471,29 @@ OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
 
 AT_CHECK([ofctl_strip < ofctl_monitor.log], [0], [dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:53,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 53 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:53,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 53 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:53,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 53 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 ])
 
 dnl Modified MPLS controller action.
@@ -3528,8 +3534,8 @@ mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:54,dl_dst=50:54:00:00:00:07,
 ])
 
 dnl Modified MPLS controller action.
-dnl In this test, the input packet is vlan-tagged, which should be stripped
-dnl before we push the MPLS and VLAN tags.
+dnl In this test, the input packet is vlan-tagged, which should be kept as
+dnl inner vlan.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
@@ -3539,26 +3545,29 @@ OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
 
 AT_CHECK([ofctl_strip < ofctl_monitor.log], [0], [dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:55,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 55 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:55,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 55 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:55,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 55 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 ])
 
 dnl Modified MPLS controller action.
@@ -3599,8 +3608,8 @@ mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:56,dl_dst=50:54:00:00:00:07,
 ])
 
 dnl Modified MPLS controller action.
-dnl In this test, the input packet is vlan-tagged, which should be stripped
-dnl before we push the MPLS and VLAN tags.
+dnl In this test, the input packet is vlan-tagged, which should be kept as
+dnl inner vlan.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 -m 65534 -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
@@ -3610,31 +3619,34 @@ OVS_WAIT_UNTIL([test `grep OFPT_PACKET_IN ofctl_monitor.log | wc -l` -ge 3])
 OVS_APP_EXIT_AND_WAIT(ovs-ofctl)
 
 AT_CHECK([ofctl_strip < ofctl_monitor.log], [0], [dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:57,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 57 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:57,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 57 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 dnl
-OFPT_PACKET_IN (OF1.2): total_len=64 in_port=1 (via action) data_len=64 (unbuffered)
+OFPT_PACKET_IN (OF1.2): total_len=68 in_port=1 (via action) data_len=68 (unbuffered)
 mpls,dl_vlan=99,dl_vlan_pcp=1,dl_src=40:44:44:44:54:57,dl_dst=50:54:00:00:00:07,mpls_label=10,mpls_tc=0,mpls_ttl=64,mpls_bos=1
 00000000  50 54 00 00 00 07 40 44-44 44 54 57 81 00 20 63
-00000010  88 47 00 00 a1 40 45 00-00 28 00 00 00 00 40 06
-00000020  f9 7c c0 a8 00 01 c0 a8-00 02 00 00 00 00 00 00
-00000030  00 00 00 00 00 00 50 00-00 00 00 00 00 00 00 00
+00000010  81 00 e0 58 88 47 00 00-a1 40 45 00 00 28 00 00
+00000020  00 00 40 06 f9 7c c0 a8-00 01 c0 a8 00 02 00 00
+00000030  00 00 00 00 00 00 00 00-00 00 50 00 00 00 00 00
+00000040  00 00 00 00
 ])
 
 dnl Modified MPLS controller action.
-dnl In this test, the input packet is vlan-tagged, which should be stripped
-dnl before we push the MPLS and VLAN tags.
+dnl In this test, the input packet is vlan-tagged, which should be kept as
+dnl inner vlan.
 AT_CHECK([ovs-ofctl --protocols=OpenFlow12 monitor br0 65534 -m -P standard --detach --pidfile 2> ofctl_monitor.log])
 
 for i in 1 2 3; do
