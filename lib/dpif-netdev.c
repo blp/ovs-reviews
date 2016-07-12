@@ -90,6 +90,7 @@ static struct shash dp_netdevs OVS_GUARDED_BY(dp_netdev_mutex)
 static struct vlog_rate_limit upcall_rl = VLOG_RATE_LIMIT_INIT(600, 600);
 
 static struct odp_support dp_netdev_support = {
+    .max_vlan_headers = SIZE_MAX,
     .max_mpls_depth = SIZE_MAX,
     .recirc = true,
 };
