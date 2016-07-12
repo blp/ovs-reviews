@@ -123,9 +123,13 @@ struct xbundle {
     struct lacp *lacp;             /* LACP handle or null. */
 
     enum port_vlan_mode vlan_mode; /* VLAN mode. */
+    uint16_t qinq_ethtype;         /* Ethertype of dot1q-tunnel interface
+                                    * either 0x8100 or 0x88a8. */
     int vlan;                      /* -1=trunk port, else a 12-bit VLAN ID. */
     unsigned long *trunks;         /* Bitmap of trunked VLANs, if 'vlan' == -1.
                                     * NULL if all VLANs are trunked. */
+    unsigned long *cvlans;         /* Bitmap of allowed customer vlans,
+                                    * NULL if all VLANs are allowed */
     bool use_priority_tags;        /* Use 802.1p tag for frames in VLAN 0? */
     bool floodable;                /* No port has OFPUTIL_PC_NO_FLOOD set? */
 };
@@ -376,6 +380,13 @@ struct xlate_ctx {
     enum xlate_error error;     /* Translation failed. */
 };
 
+/* Structure to track VLAN manipulation */
+struct xvlan {
+    uint16_t tpid;
+    uint16_t vid;
+    ovs_be16 pcp;
+};
+
 const char *xlate_strerror(enum xlate_error error)
 {
     switch (error) {
@@ -547,9 +558,19 @@ static void xlate_table_action(struct xlate_ctx *, ofp_port_t in_port,
                                uint8_t table_id, bool may_packet_in,
                                bool honor_table_miss);
 static bool input_vid_is_valid(uint16_t vid, struct xbundle *, bool warn);
-static uint16_t input_vid_to_vlan(const struct xbundle *, uint16_t vid);
+static void xvlan_copy(struct xvlan *dst, const struct xvlan *src);
+static void xvlan_copy_pop(struct xvlan *dst, const struct xvlan *src);
+static void xvlan_copy_shift(struct xvlan *dst, const struct xvlan *src);
+static void xvlan_extract(const struct flow *, struct xvlan *);
+static void xvlan_put(struct flow *, const struct xvlan *);
+static void xvlan_input_translate(const struct xbundle *,
+                                  const struct xvlan *in,
+                                  struct xvlan *xvlan);
+static void xvlan_output_translate(const struct xbundle *,
+                                   const struct xvlan *xvlan,
+                                   struct xvlan *out);
 static void output_normal(struct xlate_ctx *, const struct xbundle *,
-                          uint16_t vlan);
+                          const struct xvlan *);
 
 /* Optional bond recirculation parameter to compose_output_action(). */
 struct xlate_bond_recirc {
@@ -592,8 +613,10 @@ static void xlate_xbridge_set(struct xbridge *, struct dpif *,
                               bool forward_bpdu, bool has_in_band,
                               const struct dpif_backer_support *);
 static void xlate_xbundle_set(struct xbundle *xbundle,
-                              enum port_vlan_mode vlan_mode, int vlan,
-                              unsigned long *trunks, bool use_priority_tags,
+                              enum port_vlan_mode vlan_mode,
+                              uint16_t qinq_ethtype, int vlan,
+                              unsigned long *trunks, unsigned long *cvlans,
+                              bool use_priority_tags,
                               const struct bond *bond, const struct lacp *lacp,
                               bool floodable);
 static void xlate_xport_set(struct xport *xport, odp_port_t odp_port,
@@ -735,16 +758,19 @@ xlate_xbridge_set(struct xbridge *xbridge,
 
 static void
 xlate_xbundle_set(struct xbundle *xbundle,
-                  enum port_vlan_mode vlan_mode, int vlan,
-                  unsigned long *trunks, bool use_priority_tags,
+                  enum port_vlan_mode vlan_mode, uint16_t qinq_ethtype,
+                  int vlan, unsigned long *trunks, unsigned long *cvlans,
+                  bool use_priority_tags,
                   const struct bond *bond, const struct lacp *lacp,
                   bool floodable)
 {
     ovs_assert(xbundle->xbridge);
 
     xbundle->vlan_mode = vlan_mode;
+    xbundle->qinq_ethtype = qinq_ethtype;
     xbundle->vlan = vlan;
     xbundle->trunks = trunks;
+    xbundle->cvlans = cvlans;
     xbundle->use_priority_tags = use_priority_tags;
     xbundle->floodable = floodable;
 
@@ -838,8 +864,8 @@ xlate_xbundle_copy(struct xbridge *xbridge, struct xbundle *xbundle)
     new_xbundle->name = xstrdup(xbundle->name);
     xlate_xbundle_init(new_xcfg, new_xbundle);
 
-    xlate_xbundle_set(new_xbundle, xbundle->vlan_mode,
-                      xbundle->vlan, xbundle->trunks,
+    xlate_xbundle_set(new_xbundle, xbundle->vlan_mode, xbundle->qinq_ethtype,
+                      xbundle->vlan, xbundle->trunks, xbundle->cvlans,
                       xbundle->use_priority_tags, xbundle->bond, xbundle->lacp,
                       xbundle->floodable);
     LIST_FOR_EACH (xport, bundle_node, &xbundle->xports) {
@@ -1032,8 +1058,10 @@ xlate_remove_ofproto(struct ofproto_dpif *ofproto)
 
 void
 xlate_bundle_set(struct ofproto_dpif *ofproto, struct ofbundle *ofbundle,
-                 const char *name, enum port_vlan_mode vlan_mode, int vlan,
-                 unsigned long *trunks, bool use_priority_tags,
+                 const char *name, enum port_vlan_mode vlan_mode,
+                 uint16_t qinq_ethtype, int vlan,
+                 unsigned long *trunks, unsigned long *cvlans,
+                 bool use_priority_tags,
                  const struct bond *bond, const struct lacp *lacp,
                  bool floodable)
 {
@@ -1053,7 +1081,7 @@ xlate_bundle_set(struct ofproto_dpif *ofproto, struct ofbundle *ofbundle,
     free(xbundle->name);
     xbundle->name = xstrdup(name);
 
-    xlate_xbundle_set(xbundle, vlan_mode, vlan, trunks,
+    xlate_xbundle_set(xbundle, vlan_mode, qinq_ethtype, vlan, trunks, cvlans,
                       use_priority_tags, bond, lacp, floodable);
 }
 
@@ -1586,9 +1614,30 @@ xbundle_trunks_vlan(const struct xbundle *bundle, uint16_t vlan)
 }
 
 static bool
-xbundle_includes_vlan(const struct xbundle *xbundle, uint16_t vlan)
+xbundle_allows_cvlan(const struct xbundle *bundle, uint16_t vlan)
 {
-    return vlan == xbundle->vlan || xbundle_trunks_vlan(xbundle, vlan);
+    return (!bundle->cvlans || bitmap_is_set(bundle->cvlans, vlan));
+}
+
+static bool
+xbundle_includes_vlan(const struct xbundle *xbundle, const struct xvlan *xvlan)
+{
+    switch (xbundle->vlan_mode) {
+    case PORT_VLAN_ACCESS:
+        return xvlan[0].vid == xbundle->vlan && xvlan[1].vid == 0;
+
+    case PORT_VLAN_TRUNK:
+    case PORT_VLAN_NATIVE_UNTAGGED:
+    case PORT_VLAN_NATIVE_TAGGED:
+        return xbundle_trunks_vlan(xbundle, xvlan[0].vid);
+
+    case PORT_VLAN_DOT1Q_TUNNEL:
+        return xvlan[0].vid == xbundle->vlan &&
+               xbundle_allows_cvlan(xbundle, xvlan[1].vid);
+
+    default:
+        OVS_NOT_REACHED();
+    }
 }
 
 static mirror_mask_t
@@ -1669,11 +1718,13 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
     /* Figure out what VLAN the packet is in (because mirrors can select
      * packets on basis of VLAN). */
     bool warn = ctx->xin->packet != NULL;
-    uint16_t vid = vlan_tci_to_vid(ctx->xin->flow.vlan_tci);
-    if (!input_vid_is_valid(vid, xbundle, warn)) {
+    struct xvlan in_xvlan[FLOW_MAX_VLAN_HEADERS];
+    struct xvlan xvlan[FLOW_MAX_VLAN_HEADERS];
+    xvlan_extract(&ctx->xin->flow, in_xvlan);
+    if (!input_vid_is_valid(in_xvlan[0].vid, xbundle, warn)) {
         return;
     }
-    uint16_t vlan = input_vid_to_vlan(xbundle, vid);
+    xvlan_input_translate(xbundle, in_xvlan, xvlan);
 
     const struct xbridge *xbridge = ctx->xbridge;
 
@@ -1715,9 +1766,9 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
         /* If this mirror selects on the basis of VLAN, and it does not select
          * 'vlan', then discard this mirror and go on to the next one. */
         if (vlans) {
-            ctx->wc->masks.vlan_tci |= htons(VLAN_CFI | VLAN_VID_MASK);
+            ctx->wc->masks.vlan[0].tci |= htons(VLAN_CFI | VLAN_VID_MASK);
         }
-        if (vlans && !bitmap_is_set(vlans, vlan)) {
+        if (vlans && !bitmap_is_set(vlans, xvlan[0].vid)) {
             mirrors = zero_rightmost_1bit(mirrors);
             continue;
         }
@@ -1734,18 +1785,21 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
             struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
             struct xbundle *out_xbundle = xbundle_lookup(xcfg, out);
             if (out_xbundle) {
-                output_normal(ctx, out_xbundle, vlan);
+                output_normal(ctx, out_xbundle, xvlan);
             }
-        } else if (vlan != out_vlan
+        } else if (xvlan[0].vid != out_vlan
                    && !eth_addr_is_reserved(ctx->xin->flow.dl_dst)) {
             struct xbundle *xbundle;
+            uint16_t old_vid = xvlan[0].vid;
 
+            xvlan[0].vid = out_vlan;
             LIST_FOR_EACH (xbundle, list_node, &xbridge->xbundles) {
-                if (xbundle_includes_vlan(xbundle, out_vlan)
+                if (xbundle_includes_vlan(xbundle, xvlan)
                     && !xbundle_mirror_out(xbridge, xbundle)) {
-                    output_normal(ctx, xbundle, out_vlan);
+                    output_normal(ctx, xbundle, xvlan);
                 }
             }
+            xvlan[0].vid = old_vid;
         }
 
         /* output_normal() could have recursively output (to different
@@ -1766,32 +1820,6 @@ mirror_ingress_packet(struct xlate_ctx *ctx)
             mirror_packet(ctx, xbundle,
                           xbundle_mirror_src(ctx->xbridge, xbundle));
         }
-    }
-}
-
-/* Given 'vid', the VID obtained from the 802.1Q header that was received as
- * part of a packet (specify 0 if there was no 802.1Q header), and 'in_xbundle',
- * the bundle on which the packet was received, returns the VLAN to which the
- * packet belongs.
- *
- * Both 'vid' and the return value are in the range 0...4095. */
-static uint16_t
-input_vid_to_vlan(const struct xbundle *in_xbundle, uint16_t vid)
-{
-    switch (in_xbundle->vlan_mode) {
-    case PORT_VLAN_ACCESS:
-        return in_xbundle->vlan;
-        break;
-
-    case PORT_VLAN_TRUNK:
-        return vid;
-
-    case PORT_VLAN_NATIVE_UNTAGGED:
-    case PORT_VLAN_NATIVE_TAGGED:
-        return vid ? vid : in_xbundle->vlan;
-
-    default:
-        OVS_NOT_REACHED();
     }
 }
 
@@ -1832,11 +1860,23 @@ input_vid_is_valid(uint16_t vid, struct xbundle *in_xbundle, bool warn)
         }
         /* Fall through. */
     case PORT_VLAN_TRUNK:
-        if (!xbundle_includes_vlan(in_xbundle, vid)) {
+        if (!xbundle_trunks_vlan(in_xbundle, vid)) {
             if (warn) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
                 VLOG_WARN_RL(&rl, "dropping VLAN %"PRIu16" packet "
                              "received on port %s not configured for trunking "
+                             "VLAN %"PRIu16, vid, in_xbundle->name, vid);
+            }
+            return false;
+        }
+        return true;
+
+    case PORT_VLAN_DOT1Q_TUNNEL:
+        if (!xbundle_allows_cvlan(in_xbundle, vid)) {
+            if (warn) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+                VLOG_WARN_RL(&rl, "dropping VLAN %"PRIu16" packet received "
+                             "on port %s not configured for dot1q tunneling"
                              "VLAN %"PRIu16, vid, in_xbundle->name, vid);
             }
             return false;
@@ -1849,44 +1889,164 @@ input_vid_is_valid(uint16_t vid, struct xbundle *in_xbundle, bool warn)
 
 }
 
-/* Given 'vlan', the VLAN that a packet belongs to, and
- * 'out_xbundle', a bundle on which the packet is to be output, returns the VID
- * that should be included in the 802.1Q header.  (If the return value is 0,
- * then the 802.1Q header should only be included in the packet if there is a
- * nonzero PCP.)
- *
- * Both 'vlan' and the return value are in the range 0...4095. */
-static uint16_t
-output_vlan_to_vid(const struct xbundle *out_xbundle, uint16_t vlan)
+static void
+xvlan_copy(struct xvlan *dst, const struct xvlan *src)
 {
-    switch (out_xbundle->vlan_mode) {
+    memcpy(dst, src, sizeof(*dst) * FLOW_MAX_VLAN_HEADERS);
+}
+
+static void
+xvlan_copy_pop(struct xvlan *dst, const struct xvlan *src)
+{
+    memcpy(dst, src + 1, sizeof(*dst) * (FLOW_MAX_VLAN_HEADERS - 1));
+    memset(&dst[FLOW_MAX_VLAN_HEADERS - 1], 0, sizeof(*dst));
+}
+
+static void
+xvlan_copy_shift(struct xvlan *dst, const struct xvlan *src)
+{
+    memcpy(dst + 1, src, sizeof(*dst) * (FLOW_MAX_VLAN_HEADERS - 1));
+    memset(&dst[0], 0, sizeof(*dst));
+}
+
+/* Extract VLAN information (headers) from flow */
+static void
+xvlan_extract(const struct flow *flow, struct xvlan *xvlan)
+{
+    int i;
+    memset(xvlan, 0, sizeof(struct xvlan) * FLOW_MAX_VLAN_HEADERS);
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        if (!eth_type_vlan(flow->vlan[i].tpid) ||
+                !(flow->vlan[i].tci & htons(VLAN_CFI))) {
+            break;
+        }
+        xvlan[i].tpid = ntohs(flow->vlan[i].tpid);
+        xvlan[i].vid = vlan_tci_to_vid(flow->vlan[i].tci);
+        xvlan[i].pcp = flow->vlan[i].tci & htons(VLAN_PCP_MASK);
+    }
+}
+
+/* Put VLAN information (headers) to flow */
+static void
+xvlan_put(struct flow *flow, const struct xvlan *xvlan)
+{
+    ovs_be16 tci;
+    int i;
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        tci = htons(xvlan[i].vid) | (xvlan[i].pcp & htons(VLAN_PCP_MASK));
+        if (tci) {
+            tci |= htons(VLAN_CFI);
+            flow->vlan[i].tpid = xvlan[i].tpid ?
+                                 htons(xvlan[i].tpid) : htons(ETH_TYPE_VLAN);
+        }
+        flow->vlan[i].tci = tci;
+    }
+}
+
+/* Given 'in_xvlan', extracted from the input 802.1Q headers received as part
+ * of a packet, and 'in_xbundle', the bundle on which the packet was received,
+ * returns the VLANs of the packet during bridge internal processing. */
+static void
+xvlan_input_translate(const struct xbundle *in_xbundle,
+                      const struct xvlan *in_xvlan, struct xvlan *xvlan)
+{
+
+    switch (in_xbundle->vlan_mode) {
     case PORT_VLAN_ACCESS:
-        return 0;
+        memset(xvlan, 0, sizeof(*xvlan) * FLOW_MAX_VLAN_HEADERS);
+        xvlan->tpid = in_xvlan->tpid? in_xvlan->tpid: ETH_TYPE_VLAN;
+        xvlan->vid = in_xbundle->vlan;
+        xvlan->pcp = in_xvlan->pcp;
+        return;
 
     case PORT_VLAN_TRUNK:
-    case PORT_VLAN_NATIVE_TAGGED:
-        return vlan;
+        xvlan_copy(xvlan, in_xvlan);
+        return;
 
     case PORT_VLAN_NATIVE_UNTAGGED:
-        return vlan == out_xbundle->vlan ? 0 : vlan;
+    case PORT_VLAN_NATIVE_TAGGED:
+        xvlan_copy(xvlan, in_xvlan);
+        if (!in_xvlan->vid) {
+            xvlan->tpid = in_xvlan->tpid? in_xvlan->tpid: ETH_TYPE_VLAN;
+            xvlan->vid = in_xbundle->vlan;
+            xvlan->pcp = in_xvlan->pcp;
+        }
+        return;
+
+    case PORT_VLAN_DOT1Q_TUNNEL:
+        xvlan_copy_shift(xvlan, in_xvlan);
+        xvlan->tpid = in_xbundle->qinq_ethtype;
+        xvlan->vid = in_xbundle->vlan;
+        xvlan->pcp = htons(0);
+        return;
 
     default:
         OVS_NOT_REACHED();
     }
 }
 
+/* Given 'xvlan', the VLANs of a packet during internal processing, and
+ * 'out_xbundle', a bundle on which the packet is to be output, returns the
+ * VLANs that should be included in output packet. */
+static void
+xvlan_output_translate(const struct xbundle *out_xbundle,
+                       const struct xvlan *xvlan, struct xvlan *out_xvlan)
+{
+    switch (out_xbundle->vlan_mode) {
+    case PORT_VLAN_ACCESS:
+        memset(out_xvlan, 0, sizeof(*out_xvlan) * FLOW_MAX_VLAN_HEADERS);
+        return;
+
+    case PORT_VLAN_TRUNK:
+    case PORT_VLAN_NATIVE_TAGGED:
+        xvlan_copy(out_xvlan, xvlan);
+        return;
+
+    case PORT_VLAN_NATIVE_UNTAGGED:
+        if (xvlan->vid == out_xbundle->vlan) {
+            xvlan_copy_pop(out_xvlan, xvlan);
+        } else {
+            xvlan_copy(out_xvlan, xvlan);
+        }
+        return;
+
+    case PORT_VLAN_DOT1Q_TUNNEL:
+        xvlan_copy_pop(out_xvlan, xvlan);
+        return;
+
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
+/* If output xbundle is dot1q-tunnel, set mask bits of cvlan */
+static void
+check_and_set_cvlan_mask(struct flow_wildcards *wc,
+                         const struct xbundle *xbundle)
+{
+    if (xbundle->vlan_mode == PORT_VLAN_DOT1Q_TUNNEL && xbundle->cvlans) {
+        wc->masks.vlan[1].tci = htons(0xffff);
+    }
+}
+
 static void
 output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
-              uint16_t vlan)
+              const struct xvlan *xvlan)
 {
-    ovs_be16 *flow_tci = &ctx->xin->flow.vlan_tci;
     uint16_t vid;
-    ovs_be16 tci, old_tci;
+    struct flow_vlan_hdr old_vlan[FLOW_MAX_VLAN_HEADERS];
     struct xport *xport;
     struct xlate_bond_recirc xr;
     bool use_recirc = false;
+    struct xvlan out_xvlan[FLOW_MAX_VLAN_HEADERS];
 
-    vid = output_vlan_to_vid(out_xbundle, vlan);
+    check_and_set_cvlan_mask(ctx->wc, out_xbundle);
+
+    xvlan_output_translate(out_xbundle, xvlan, out_xvlan);
+    if (out_xbundle->use_priority_tags) {
+        out_xvlan[0].pcp = ctx->xin->flow.vlan[0].tci & htons(VLAN_PCP_MASK);
+    }
+    vid = out_xvlan[0].vid;
     if (ovs_list_is_empty(&out_xbundle->xports)) {
         /* Partially configured bundle with no slaves.  Drop the packet. */
         return;
@@ -1941,18 +2101,11 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
         }
     }
 
-    old_tci = *flow_tci;
-    tci = htons(vid);
-    if (tci || out_xbundle->use_priority_tags) {
-        tci |= *flow_tci & htons(VLAN_PCP_MASK);
-        if (tci) {
-            tci |= htons(VLAN_CFI);
-        }
-    }
-    *flow_tci = tci;
+    memcpy(&old_vlan, &ctx->xin->flow.vlan, sizeof(old_vlan));
+    xvlan_put(&ctx->xin->flow, out_xvlan);
 
     compose_output_action(ctx, xport->ofp_port, use_recirc ? &xr : NULL);
-    *flow_tci = old_tci;
+    memcpy(&ctx->xin->flow.vlan, &old_vlan, sizeof(old_vlan));
 }
 
 /* A VM broadcasts a gratuitous ARP to indicate that it has resumed after
@@ -2287,7 +2440,8 @@ static void
 xlate_normal_mcast_send_group(struct xlate_ctx *ctx,
                               struct mcast_snooping *ms OVS_UNUSED,
                               struct mcast_group *grp,
-                              struct xbundle *in_xbundle, uint16_t vlan)
+                              struct xbundle *in_xbundle,
+                              const struct xvlan *xvlan)
     OVS_REQ_RDLOCK(ms->rwlock)
 {
     struct xlate_cfg *xcfg;
@@ -2299,7 +2453,7 @@ xlate_normal_mcast_send_group(struct xlate_ctx *ctx,
         mcast_xbundle = xbundle_lookup(xcfg, b->port);
         if (mcast_xbundle && mcast_xbundle != in_xbundle) {
             xlate_report(ctx, "forwarding to mcast group port");
-            output_normal(ctx, mcast_xbundle, vlan);
+            output_normal(ctx, mcast_xbundle, xvlan);
         } else if (!mcast_xbundle) {
             xlate_report(ctx, "mcast group port is unknown, dropping");
         } else {
@@ -2312,7 +2466,8 @@ xlate_normal_mcast_send_group(struct xlate_ctx *ctx,
 static void
 xlate_normal_mcast_send_mrouters(struct xlate_ctx *ctx,
                                  struct mcast_snooping *ms,
-                                 struct xbundle *in_xbundle, uint16_t vlan)
+                                 struct xbundle *in_xbundle,
+                                 const struct xvlan *xvlan)
     OVS_REQ_RDLOCK(ms->rwlock)
 {
     struct xlate_cfg *xcfg;
@@ -2324,7 +2479,7 @@ xlate_normal_mcast_send_mrouters(struct xlate_ctx *ctx,
         mcast_xbundle = xbundle_lookup(xcfg, mrouter->port);
         if (mcast_xbundle && mcast_xbundle != in_xbundle) {
             xlate_report(ctx, "forwarding to mcast router port");
-            output_normal(ctx, mcast_xbundle, vlan);
+            output_normal(ctx, mcast_xbundle, xvlan);
         } else if (!mcast_xbundle) {
             xlate_report(ctx, "mcast router port is unknown, dropping");
         } else {
@@ -2337,7 +2492,8 @@ xlate_normal_mcast_send_mrouters(struct xlate_ctx *ctx,
 static void
 xlate_normal_mcast_send_fports(struct xlate_ctx *ctx,
                                struct mcast_snooping *ms,
-                               struct xbundle *in_xbundle, uint16_t vlan)
+                               struct xbundle *in_xbundle,
+                               const struct xvlan *xvlan)
     OVS_REQ_RDLOCK(ms->rwlock)
 {
     struct xlate_cfg *xcfg;
@@ -2349,7 +2505,7 @@ xlate_normal_mcast_send_fports(struct xlate_ctx *ctx,
         mcast_xbundle = xbundle_lookup(xcfg, fport->port);
         if (mcast_xbundle && mcast_xbundle != in_xbundle) {
             xlate_report(ctx, "forwarding to mcast flood port");
-            output_normal(ctx, mcast_xbundle, vlan);
+            output_normal(ctx, mcast_xbundle, xvlan);
         } else if (!mcast_xbundle) {
             xlate_report(ctx, "mcast flood port is unknown, dropping");
         } else {
@@ -2362,7 +2518,8 @@ xlate_normal_mcast_send_fports(struct xlate_ctx *ctx,
 static void
 xlate_normal_mcast_send_rports(struct xlate_ctx *ctx,
                                struct mcast_snooping *ms,
-                               struct xbundle *in_xbundle, uint16_t vlan)
+                               struct xbundle *in_xbundle,
+                               const struct xvlan *xvlan)
     OVS_REQ_RDLOCK(ms->rwlock)
 {
     struct xlate_cfg *xcfg;
@@ -2374,7 +2531,7 @@ xlate_normal_mcast_send_rports(struct xlate_ctx *ctx,
         mcast_xbundle = xbundle_lookup(xcfg, rport->port);
         if (mcast_xbundle && mcast_xbundle != in_xbundle) {
             xlate_report(ctx, "forwarding Report to mcast flagged port");
-            output_normal(ctx, mcast_xbundle, vlan);
+            output_normal(ctx, mcast_xbundle, xvlan);
         } else if (!mcast_xbundle) {
             xlate_report(ctx, "mcast port is unknown, dropping the Report");
         } else {
@@ -2385,16 +2542,16 @@ xlate_normal_mcast_send_rports(struct xlate_ctx *ctx,
 
 static void
 xlate_normal_flood(struct xlate_ctx *ctx, struct xbundle *in_xbundle,
-                   uint16_t vlan)
+                   struct xvlan *xvlan)
 {
     struct xbundle *xbundle;
 
     LIST_FOR_EACH (xbundle, list_node, &ctx->xbridge->xbundles) {
         if (xbundle != in_xbundle
-            && xbundle_includes_vlan(xbundle, vlan)
+            && xbundle_includes_vlan(xbundle, xvlan)
             && xbundle->floodable
             && !xbundle_mirror_out(ctx->xbridge, xbundle)) {
-            output_normal(ctx, xbundle, vlan);
+            output_normal(ctx, xbundle, xvlan);
         }
     }
     ctx->nf_output_iface = NF_OUT_FLOOD;
@@ -2423,12 +2580,13 @@ xlate_normal(struct xlate_ctx *ctx)
     struct xport *in_port;
     struct mac_entry *mac;
     void *mac_port;
+    struct xvlan in_xvlan[FLOW_MAX_VLAN_HEADERS];
+    struct xvlan xvlan[FLOW_MAX_VLAN_HEADERS];
     uint16_t vlan;
-    uint16_t vid;
 
     memset(&wc->masks.dl_src, 0xff, sizeof wc->masks.dl_src);
     memset(&wc->masks.dl_dst, 0xff, sizeof wc->masks.dl_dst);
-    wc->masks.vlan_tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+    wc->masks.vlan[0].tci |= htons(VLAN_VID_MASK | VLAN_CFI);
 
     in_xbundle = lookup_input_bundle(ctx->xbridge, flow->in_port.ofp_port,
                                      ctx->xin->packet != NULL, &in_port);
@@ -2438,8 +2596,8 @@ xlate_normal(struct xlate_ctx *ctx)
     }
 
     /* Drop malformed frames. */
-    if (flow->dl_type == htons(ETH_TYPE_VLAN) &&
-        !(flow->vlan_tci & htons(VLAN_CFI))) {
+    if (eth_type_vlan(flow->dl_type) &&
+        !(flow->vlan[0].tci & htons(VLAN_CFI))) {
         if (ctx->xin->packet != NULL) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
             VLOG_WARN_RL(&rl, "bridge %s: dropping packet with partial "
@@ -2463,12 +2621,14 @@ xlate_normal(struct xlate_ctx *ctx)
     }
 
     /* Check VLAN. */
-    vid = vlan_tci_to_vid(flow->vlan_tci);
-    if (!input_vid_is_valid(vid, in_xbundle, ctx->xin->packet != NULL)) {
+    xvlan_extract(flow, in_xvlan);
+    if (!input_vid_is_valid(in_xvlan[0].vid, in_xbundle,
+                            ctx->xin->packet != NULL)) {
         xlate_report(ctx, "disallowed VLAN VID for this input port, dropping");
         return;
     }
-    vlan = input_vid_to_vlan(in_xbundle, vid);
+    xvlan_input_translate(in_xbundle, in_xvlan, xvlan);
+    vlan = xvlan[0].vid;
 
     /* Check other admissibility requirements. */
     if (in_port && !is_admissible(ctx, in_port, vlan)) {
@@ -2515,7 +2675,7 @@ xlate_normal(struct xlate_ctx *ctx)
 
             if (mcast_snooping_is_membership(flow->tp_src)) {
                 ovs_rwlock_rdlock(&ms->rwlock);
-                xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, vlan);
+                xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, xvlan);
                 /* RFC4541: section 2.1.1, item 1: A snooping switch should
                  * forward IGMP Membership Reports only to those ports where
                  * multicast routers are attached.  Alternatively stated: a
@@ -2524,11 +2684,11 @@ xlate_normal(struct xlate_ctx *ctx)
                  * An administrative control may be provided to override this
                  * restriction, allowing the report messages to be flooded to
                  * other ports. */
-                xlate_normal_mcast_send_rports(ctx, ms, in_xbundle, vlan);
+                xlate_normal_mcast_send_rports(ctx, ms, in_xbundle, xvlan);
                 ovs_rwlock_unlock(&ms->rwlock);
             } else {
                 xlate_report(ctx, "multicast traffic, flooding");
-                xlate_normal_flood(ctx, in_xbundle, vlan);
+                xlate_normal_flood(ctx, in_xbundle, xvlan);
             }
             return;
         } else if (is_mld(flow, wc)) {
@@ -2539,12 +2699,12 @@ xlate_normal(struct xlate_ctx *ctx)
             }
             if (is_mld_report(flow, wc)) {
                 ovs_rwlock_rdlock(&ms->rwlock);
-                xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, vlan);
-                xlate_normal_mcast_send_rports(ctx, ms, in_xbundle, vlan);
+                xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, xvlan);
+                xlate_normal_mcast_send_rports(ctx, ms, in_xbundle, xvlan);
                 ovs_rwlock_unlock(&ms->rwlock);
             } else {
                 xlate_report(ctx, "MLD query, flooding");
-                xlate_normal_flood(ctx, in_xbundle, vlan);
+                xlate_normal_flood(ctx, in_xbundle, xvlan);
             }
         } else {
             if (is_ip_local_multicast(flow, wc)) {
@@ -2552,7 +2712,7 @@ xlate_normal(struct xlate_ctx *ctx)
                  * address in the 224.0.0.x range which are not IGMP must
                  * be forwarded on all ports */
                 xlate_report(ctx, "RFC4541: section 2.1.2, item 2, flooding");
-                xlate_normal_flood(ctx, in_xbundle, vlan);
+                xlate_normal_flood(ctx, in_xbundle, xvlan);
                 return;
             }
         }
@@ -2565,16 +2725,16 @@ xlate_normal(struct xlate_ctx *ctx)
             grp = mcast_snooping_lookup(ms, &flow->ipv6_dst, vlan);
         }
         if (grp) {
-            xlate_normal_mcast_send_group(ctx, ms, grp, in_xbundle, vlan);
-            xlate_normal_mcast_send_fports(ctx, ms, in_xbundle, vlan);
-            xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, vlan);
+            xlate_normal_mcast_send_group(ctx, ms, grp, in_xbundle, xvlan);
+            xlate_normal_mcast_send_fports(ctx, ms, in_xbundle, xvlan);
+            xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, xvlan);
         } else {
             if (mcast_snooping_flood_unreg(ms)) {
                 xlate_report(ctx, "unregistered multicast, flooding");
-                xlate_normal_flood(ctx, in_xbundle, vlan);
+                xlate_normal_flood(ctx, in_xbundle, xvlan);
             } else {
-                xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, vlan);
-                xlate_normal_mcast_send_fports(ctx, ms, in_xbundle, vlan);
+                xlate_normal_mcast_send_mrouters(ctx, ms, in_xbundle, xvlan);
+                xlate_normal_mcast_send_fports(ctx, ms, in_xbundle, xvlan);
             }
         }
         ovs_rwlock_unlock(&ms->rwlock);
@@ -2589,7 +2749,7 @@ xlate_normal(struct xlate_ctx *ctx)
             struct xbundle *mac_xbundle = xbundle_lookup(xcfg, mac_port);
             if (mac_xbundle && mac_xbundle != in_xbundle) {
                 xlate_report(ctx, "forwarding to learned port");
-                output_normal(ctx, mac_xbundle, vlan);
+                output_normal(ctx, mac_xbundle, xvlan);
             } else if (!mac_xbundle) {
                 xlate_report(ctx, "learned port is unknown, dropping");
             } else {
@@ -2597,7 +2757,7 @@ xlate_normal(struct xlate_ctx *ctx)
             }
         } else {
             xlate_report(ctx, "no learned MAC for destination, flooding");
-            xlate_normal_flood(ctx, in_xbundle, vlan);
+            xlate_normal_flood(ctx, in_xbundle, xvlan);
         }
     }
 }
@@ -2726,7 +2886,7 @@ fix_sflow_action(struct xlate_ctx *ctx, unsigned int user_cookie_offset)
     ovs_assert(cookie->type == USER_ACTION_COOKIE_SFLOW);
 
     cookie->type = USER_ACTION_COOKIE_SFLOW;
-    cookie->sflow.vlan_tci = base->vlan_tci;
+    cookie->sflow.vlan_tci = base->vlan[0].tci;
 
     /* See http://www.sflow.org/sflow_version_5.txt (search for "Input/output
      * port information") for the interpretation of cookie->output. */
@@ -3007,7 +3167,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
 
     /* If 'struct flow' gets additional metadata, we'll need to zero it out
      * before traversing a patch port. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 35);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
     memset(&flow_tnl, 0, sizeof flow_tnl);
 
     if (!xport) {
@@ -3142,7 +3302,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         return;
     }
 
-    flow_vlan_tci = flow->vlan_tci;
+    flow_vlan_tci = flow->vlan[0].tci;
     flow_pkt_mark = flow->pkt_mark;
     flow_nw_tos = flow->nw_tos;
 
@@ -3270,7 +3430,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
 
  out:
     /* Restore flow */
-    flow->vlan_tci = flow_vlan_tci;
+    flow->vlan[0].tci = flow_vlan_tci;
     flow->pkt_mark = flow_pkt_mark;
     flow->nw_tos = flow_nw_tos;
 }
@@ -4800,34 +4960,44 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             break;
 
         case OFPACT_SET_VLAN_VID:
-            wc->masks.vlan_tci |= htons(VLAN_VID_MASK | VLAN_CFI);
-            if (flow->vlan_tci & htons(VLAN_CFI) ||
+            wc->masks.vlan[0].tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+            if (flow->vlan[0].tci & htons(VLAN_CFI) ||
                 ofpact_get_SET_VLAN_VID(a)->push_vlan_if_needed) {
-                flow->vlan_tci &= ~htons(VLAN_VID_MASK);
-                flow->vlan_tci |= (htons(ofpact_get_SET_VLAN_VID(a)->vlan_vid)
-                                   | htons(VLAN_CFI));
+                if (!flow->vlan[0].tpid) {
+                    flow->vlan[0].tpid = htons(ETH_TYPE_VLAN);
+                }
+                flow->vlan[0].tci &= ~htons(VLAN_VID_MASK);
+                flow->vlan[0].tci |=
+                    (htons(ofpact_get_SET_VLAN_VID(a)->vlan_vid) |
+                     htons(VLAN_CFI));
             }
             break;
 
         case OFPACT_SET_VLAN_PCP:
-            wc->masks.vlan_tci |= htons(VLAN_PCP_MASK | VLAN_CFI);
-            if (flow->vlan_tci & htons(VLAN_CFI) ||
+            wc->masks.vlan[0].tci |= htons(VLAN_PCP_MASK | VLAN_CFI);
+            if (flow->vlan[0].tci & htons(VLAN_CFI) ||
                 ofpact_get_SET_VLAN_PCP(a)->push_vlan_if_needed) {
-                flow->vlan_tci &= ~htons(VLAN_PCP_MASK);
-                flow->vlan_tci |= htons((ofpact_get_SET_VLAN_PCP(a)->vlan_pcp
-                                         << VLAN_PCP_SHIFT) | VLAN_CFI);
+                if (!flow->vlan[0].tpid) {
+                    flow->vlan[0].tpid = htons(ETH_TYPE_VLAN);
+                }
+                flow->vlan[0].tci &= ~htons(VLAN_PCP_MASK);
+                flow->vlan[0].tci |=
+                    htons((ofpact_get_SET_VLAN_PCP(a)->vlan_pcp
+                           << VLAN_PCP_SHIFT) | VLAN_CFI);
             }
             break;
 
         case OFPACT_STRIP_VLAN:
-            memset(&wc->masks.vlan_tci, 0xff, sizeof wc->masks.vlan_tci);
-            flow->vlan_tci = htons(0);
+            memset(&wc->masks.vlan[0], 0xff, sizeof wc->masks.vlan[0]);
+            flow_pop_vlan(flow);
             break;
 
         case OFPACT_PUSH_VLAN:
-            /* XXX 802.1AD(QinQ) */
-            memset(&wc->masks.vlan_tci, 0xff, sizeof wc->masks.vlan_tci);
-            flow->vlan_tci = htons(VLAN_CFI);
+            flow_shift_vlan(&wc->masks);
+            memset(&wc->masks.vlan[0], 0xff, sizeof wc->masks.vlan[0]);
+            flow_shift_vlan(flow);
+            flow->vlan[0].tpid = ofpact_get_PUSH_VLAN(a)->ethertype;
+            flow->vlan[0].tci = htons(VLAN_CFI);
             break;
 
         case OFPACT_SET_ETH_SRC:
@@ -4931,8 +5101,8 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             /* Set field action only ever overwrites packet's outermost
              * applicable header fields.  Do nothing if no header exists. */
             if (mf->id == MFF_VLAN_VID) {
-                wc->masks.vlan_tci |= htons(VLAN_CFI);
-                if (!(flow->vlan_tci & htons(VLAN_CFI))) {
+                wc->masks.vlan[0].tci |= htons(VLAN_CFI);
+                if (!(flow->vlan[0].tci & htons(VLAN_CFI))) {
                     break;
                 }
             } else if ((mf->id == MFF_MPLS_LABEL || mf->id == MFF_MPLS_TC)
@@ -5324,6 +5494,8 @@ xlate_wc_init(struct xlate_ctx *ctx)
 static void
 xlate_wc_finish(struct xlate_ctx *ctx)
 {
+    int i;
+
     /* Clear the metadata and register wildcard masks, because we won't
      * use non-header fields as part of the cache. */
     flow_wildcards_clear_non_packet_fields(ctx->wc);
@@ -5343,8 +5515,10 @@ xlate_wc_finish(struct xlate_ctx *ctx)
         ctx->wc->masks.tp_dst &= htons(UINT8_MAX);
     }
     /* VLAN_TCI CFI bit must be matched if any of the TCI is matched. */
-    if (ctx->wc->masks.vlan_tci) {
-        ctx->wc->masks.vlan_tci |= htons(VLAN_CFI);
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        if (ctx->wc->masks.vlan[i].tci) {
+            ctx->wc->masks.vlan[i].tci |= htons(VLAN_CFI);
+        }
     }
 }
 

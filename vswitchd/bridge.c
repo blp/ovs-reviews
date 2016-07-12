@@ -919,6 +919,11 @@ port_configure(struct port *port)
         s.trunks = vlan_bitmap_from_array(cfg->trunks, cfg->n_trunks);
     }
 
+    s.cvlans = NULL;
+    if (cfg->n_cvlans) {
+        s.cvlans = vlan_bitmap_from_array(cfg->cvlans, cfg->n_cvlans);
+    }
+
     /* Get VLAN mode. */
     if (cfg->vlan_mode) {
         if (!strcmp(cfg->vlan_mode, "access")) {
@@ -929,6 +934,8 @@ port_configure(struct port *port)
             s.vlan_mode = PORT_VLAN_NATIVE_TAGGED;
         } else if (!strcmp(cfg->vlan_mode, "native-untagged")) {
             s.vlan_mode = PORT_VLAN_NATIVE_UNTAGGED;
+        } else if (!strcmp(cfg->vlan_mode, "dot1q-tunnel")) {
+            s.vlan_mode = PORT_VLAN_DOT1Q_TUNNEL;
         } else {
             /* This "can't happen" because ovsdb-server should prevent it. */
             VLOG_WARN("port %s: unknown VLAN mode %s, falling "
@@ -938,7 +945,7 @@ port_configure(struct port *port)
     } else {
         if (s.vlan >= 0) {
             s.vlan_mode = PORT_VLAN_ACCESS;
-            if (cfg->n_trunks) {
+            if (cfg->n_trunks || cfg->n_cvlans) {
                 VLOG_WARN("port %s: ignoring trunks in favor of implicit vlan",
                           port->name);
             }
@@ -946,6 +953,24 @@ port_configure(struct port *port)
             s.vlan_mode = PORT_VLAN_TRUNK;
         }
     }
+
+    if (cfg->qinq_ethtype) {
+        if (!strcmp(cfg->qinq_ethtype, "802.1q") ||
+            !strcmp(cfg->qinq_ethtype, "0x8100")) {
+            s.qinq_ethtype = ETH_TYPE_VLAN_8021Q;
+        } else if (!strcmp(cfg->qinq_ethtype, "802.1ad") ||
+                   !strcmp(cfg->qinq_ethtype, "0x88a8")) {
+            s.qinq_ethtype = ETH_TYPE_VLAN_8021AD;
+        } else {
+            /* This "can't happen" because ovsdb-server should prevent it. */
+            VLOG_WARN("port %s: invalid QinQ ethertype %s, falling "
+                      "back to 802.1ad", port->name, cfg->qinq_ethtype);
+            s.qinq_ethtype = ETH_TYPE_VLAN_8021AD;
+        }
+    } else {
+        s.qinq_ethtype = ETH_TYPE_VLAN_8021AD;
+    }
+
     s.use_priority_tags = smap_get_bool(&cfg->other_config, "priority-tags",
                                         false);
 

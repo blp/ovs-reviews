@@ -1309,6 +1309,22 @@
           exception that a packet that egresses on a native-untagged port in
           the native VLAN will not have an 802.1Q header.
         </dd>
+
+        <dt>dot1q-tunnel</dt>
+        <dd>
+          <p>
+            A dot1q-tunnel port tunnels packets with VLAN specified in
+            <ref column="tag"/> column. That is it adds 802.1Q header, with
+            ethertype and VLAN ID specified in <ref column="qinq-ethtype"/>
+            and <ref column="tag"/>, to both tagged and untagged packets on
+            ingress, and pops dot1q header of this VLAN on egress.
+          </p>
+
+          <p>
+            If <ref column="cvlans"/> is set, only allows packets of these
+            VLANs.
+          </p>
+        </dd>
       </dl>
       <p>
         A packet will only egress through bridge ports that carry the VLAN of
@@ -1332,6 +1348,13 @@
         </ul>
       </column>
 
+      <column name="qinq_ethtype">
+        <p>
+          Ethertype of dot1q-tunnel port, could be either "802.1q"(0x8100) or
+          "802.1ad"(0x88a8). Defaults to "802.1ad".
+        </p>
+      </column>
+
       <column name="tag">
         <p>
           For an access port, the port's implicitly tagged VLAN.  For a
@@ -1350,6 +1373,14 @@
           A native-tagged or native-untagged port always trunks its native
           VLAN, regardless of whether <ref column="trunks"/> includes that
           VLAN.
+        </p>
+      </column>
+
+      <column name="cvlans">
+        <p>
+          For a trunk-qinq port if specific cvlans are specified only those
+          cvlans are 1ad tunneled, others are dropped. If no cvlans specified
+          explicitly then all cvlans are 1ad tunneled.
         </p>
       </column>
 

@@ -450,8 +450,8 @@ match_set_dl_tci(struct match *match, ovs_be16 tci)
 void
 match_set_dl_tci_masked(struct match *match, ovs_be16 tci, ovs_be16 mask)
 {
-    match->flow.vlan_tci = tci & mask;
-    match->wc.masks.vlan_tci = mask;
+    match->flow.vlan[0].tci = tci & mask;
+    match->wc.masks.vlan[0].tci = mask;
 }
 
 /* Modifies 'match' so that the VLAN VID is wildcarded.  If the PCP is already
@@ -460,9 +460,9 @@ match_set_dl_tci_masked(struct match *match, ovs_be16 tci, ovs_be16 mask)
 void
 match_set_any_vid(struct match *match)
 {
-    if (match->wc.masks.vlan_tci & htons(VLAN_PCP_MASK)) {
-        match->wc.masks.vlan_tci &= ~htons(VLAN_VID_MASK);
-        match->flow.vlan_tci &= ~htons(VLAN_VID_MASK);
+    if (match->wc.masks.vlan[0].tci & htons(VLAN_PCP_MASK)) {
+        match->wc.masks.vlan[0].tci &= ~htons(VLAN_VID_MASK);
+        match->flow.vlan[0].tci &= ~htons(VLAN_VID_MASK);
     } else {
         match_set_dl_tci_masked(match, htons(0), htons(0));
     }
@@ -481,9 +481,9 @@ match_set_dl_vlan(struct match *match, ovs_be16 dl_vlan)
 {
     flow_set_dl_vlan(&match->flow, dl_vlan);
     if (dl_vlan == htons(OFP10_VLAN_NONE)) {
-        match->wc.masks.vlan_tci = OVS_BE16_MAX;
+        match->wc.masks.vlan[0].tci = OVS_BE16_MAX;
     } else {
-        match->wc.masks.vlan_tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+        match->wc.masks.vlan[0].tci |= htons(VLAN_VID_MASK | VLAN_CFI);
     }
 }
 
@@ -508,7 +508,8 @@ match_set_vlan_vid_masked(struct match *match, ovs_be16 vid, ovs_be16 mask)
 
     mask &= vid_mask;
     flow_set_vlan_vid(&match->flow, vid & mask);
-    match->wc.masks.vlan_tci = mask | (match->wc.masks.vlan_tci & pcp_mask);
+    match->wc.masks.vlan[0].tci =
+        mask | (match->wc.masks.vlan[0].tci & pcp_mask);
 }
 
 /* Modifies 'match' so that the VLAN PCP is wildcarded.  If the VID is already
@@ -517,9 +518,9 @@ match_set_vlan_vid_masked(struct match *match, ovs_be16 vid, ovs_be16 mask)
 void
 match_set_any_pcp(struct match *match)
 {
-    if (match->wc.masks.vlan_tci & htons(VLAN_VID_MASK)) {
-        match->wc.masks.vlan_tci &= ~htons(VLAN_PCP_MASK);
-        match->flow.vlan_tci &= ~htons(VLAN_PCP_MASK);
+    if (match->wc.masks.vlan[0].tci & htons(VLAN_VID_MASK)) {
+        match->wc.masks.vlan[0].tci &= ~htons(VLAN_PCP_MASK);
+        match->flow.vlan[0].tci &= ~htons(VLAN_PCP_MASK);
     } else {
         match_set_dl_tci_masked(match, htons(0), htons(0));
     }
@@ -531,7 +532,7 @@ void
 match_set_dl_vlan_pcp(struct match *match, uint8_t dl_vlan_pcp)
 {
     flow_set_vlan_pcp(&match->flow, dl_vlan_pcp);
-    match->wc.masks.vlan_tci |= htons(VLAN_CFI | VLAN_PCP_MASK);
+    match->wc.masks.vlan[0].tci |= htons(VLAN_CFI | VLAN_PCP_MASK);
 }
 
 /* Modifies 'match' so that the MPLS label 'idx' matches 'lse' exactly. */
@@ -1060,7 +1061,7 @@ match_format(const struct match *match, struct ds *s, int priority)
 
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 35);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "%spriority=%s%d,",
@@ -1192,30 +1193,30 @@ match_format(const struct match *match, struct ds *s, int priority)
         ofputil_format_port(f->in_port.ofp_port, s);
         ds_put_char(s, ',');
     }
-    if (wc->masks.vlan_tci) {
-        ovs_be16 vid_mask = wc->masks.vlan_tci & htons(VLAN_VID_MASK);
-        ovs_be16 pcp_mask = wc->masks.vlan_tci & htons(VLAN_PCP_MASK);
-        ovs_be16 cfi = wc->masks.vlan_tci & htons(VLAN_CFI);
+    if (wc->masks.vlan[0].tci) {
+        ovs_be16 vid_mask = wc->masks.vlan[0].tci & htons(VLAN_VID_MASK);
+        ovs_be16 pcp_mask = wc->masks.vlan[0].tci & htons(VLAN_PCP_MASK);
+        ovs_be16 cfi = wc->masks.vlan[0].tci & htons(VLAN_CFI);
 
-        if (cfi && f->vlan_tci & htons(VLAN_CFI)
+        if (cfi && f->vlan[0].tci & htons(VLAN_CFI)
             && (!vid_mask || vid_mask == htons(VLAN_VID_MASK))
             && (!pcp_mask || pcp_mask == htons(VLAN_PCP_MASK))
             && (vid_mask || pcp_mask)) {
             if (vid_mask) {
                 ds_put_format(s, "%sdl_vlan=%s%"PRIu16",", colors.param,
-                              colors.end, vlan_tci_to_vid(f->vlan_tci));
+                              colors.end, vlan_tci_to_vid(f->vlan[0].tci));
             }
             if (pcp_mask) {
                 ds_put_format(s, "%sdl_vlan_pcp=%s%d,", colors.param,
-                              colors.end, vlan_tci_to_pcp(f->vlan_tci));
+                              colors.end, vlan_tci_to_pcp(f->vlan[0].tci));
             }
-        } else if (wc->masks.vlan_tci == htons(0xffff)) {
+        } else if (wc->masks.vlan[0].tci == htons(0xffff)) {
             ds_put_format(s, "%svlan_tci=%s0x%04"PRIx16",", colors.param,
-                          colors.end, ntohs(f->vlan_tci));
+                          colors.end, ntohs(f->vlan[0].tci));
         } else {
             ds_put_format(s, "%svlan_tci=%s0x%04"PRIx16"/0x%04"PRIx16",",
                           colors.param, colors.end,
-                          ntohs(f->vlan_tci), ntohs(wc->masks.vlan_tci));
+                          ntohs(f->vlan[0].tci), ntohs(wc->masks.vlan[0].tci));
         }
     }
     format_eth_masked(s, "dl_src", f->dl_src, wc->masks.dl_src);

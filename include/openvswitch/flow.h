@@ -23,7 +23,7 @@
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
-#define FLOW_WC_SEQ 35
+#define FLOW_WC_SEQ 36
 
 /* Number of Open vSwitch extension 32-bit registers. */
 #define FLOW_N_REGS 8
@@ -54,6 +54,10 @@ const char *flow_tun_flag_to_string(uint32_t flags);
 
 /* Maximum number of supported MPLS labels. */
 #define FLOW_MAX_MPLS_LABELS 3
+
+/* Maximum number of supported VLAN headers.
+ * Multiple of 2 to satisfy 64-bit alignment */
+#define FLOW_MAX_VLAN_HEADERS 2
 
 /*
  * A flow in the network.
@@ -97,7 +101,8 @@ struct flow {
     struct eth_addr dl_dst;     /* Ethernet destination address. */
     struct eth_addr dl_src;     /* Ethernet source address. */
     ovs_be16 dl_type;           /* Ethernet frame type. */
-    ovs_be16 vlan_tci;          /* If 802.1Q, TCI | VLAN_CFI; otherwise 0. */
+    uint8_t pad2[2];            /* Pad to 64 bits. */
+    struct flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];     /* VLAN headers */
     ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
                                                              (with padding). */
     /* L3 (64-bit aligned) */
@@ -129,8 +134,8 @@ BUILD_ASSERT_DECL(sizeof(struct flow_tnl) % sizeof(uint64_t) == 0);
 
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
 BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
-                  == sizeof(struct flow_tnl) + 216
-                  && FLOW_WC_SEQ == 35);
+                  == sizeof(struct flow_tnl) + 224
+                  && FLOW_WC_SEQ == 36);
 
 /* Incremental points at which flow classification may be performed in
  * segments.

@@ -3753,6 +3753,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet,
     struct match match;
     ovs_u128 ufid;
     int error;
+    int i;
 
     match.tun_md.valid = false;
     miniflow_expand(&key->mf, &match.flow);
@@ -3776,8 +3777,10 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet,
      * VLAN.  Unless we refactor a lot of code that translates between
      * Netlink and struct flow representations, we have to do the same
      * here. */
-    if (!match.wc.masks.vlan_tci) {
-        match.wc.masks.vlan_tci = htons(0xffff);
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        if (!match.wc.masks.vlan[i].tci) {
+            match.wc.masks.vlan[i].tci = htons(0xffff);
+        }
     }
 
     /* We can't allow the packet batching in the next loop to execute
