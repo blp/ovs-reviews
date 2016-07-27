@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1583,7 +1583,7 @@ dpctl_normalize_actions(int argc, const char *argv[],
         sort_output_actions(af->actions.data, af->actions.size);
 
         for (encaps = 0; encaps < FLOW_MAX_VLAN_HEADERS; encaps ++) {
-            union flow_vlan_hdr *vlan = &af->flow.vlan[encaps];
+            struct flow_vlan_hdr *vlan = &af->flow.vlan[encaps];
             if (vlan->tci != htons(0)) {
                 dpctl_print(dpctl_p, "vlan(");
                 if (vlan->tpid != htons(ETH_TYPE_VLAN)) {

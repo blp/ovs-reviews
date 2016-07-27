@@ -735,8 +735,8 @@ static inline uint16_t
 miniflow_get_vid(const struct miniflow *flow, size_t n)
 {
     if (n < FLOW_MAX_VLAN_HEADERS) {
-        union flow_vlan_hdr hdr = { .qtag = MINIFLOW_GET_BE32(flow, vlan[n]) };
-        return vlan_tci_to_vid(hdr.tci);
+        uint32_t u32 = MINIFLOW_GET_U32(flow, vlan[n]);
+        return vlan_tci_to_vid(((struct flow_vlan_hdr *)&u32)->tci);
     }
     return 0;
 }

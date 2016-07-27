@@ -2034,7 +2034,7 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
               const struct xvlan *xvlan)
 {
     uint16_t vid;
-    union flow_vlan_hdr old_vlan[FLOW_MAX_VLAN_HEADERS];
+    struct flow_vlan_hdr old_vlan[FLOW_MAX_VLAN_HEADERS];
     struct xport *xport;
     struct xlate_bond_recirc xr;
     bool use_recirc = false;

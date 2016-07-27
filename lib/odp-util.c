@@ -5560,7 +5560,8 @@ commit_vlan_action(const struct flow* flow, struct flow *base,
     for (base_n--, flow_n--;
          base_n >= 0 && flow_n >= 0;
          base_n--, flow_n--) {
-        if (base->vlan[base_n].qtag != flow->vlan[flow_n].qtag) {
+        if (memcmp(&base->vlan[base_n], &flow->vlan[flow_n],
+                   sizeof(struct flow_vlan_hdr))) {
             break;
         }
     }
@@ -5568,7 +5569,7 @@ commit_vlan_action(const struct flow* flow, struct flow *base,
     /* Pop all mismatching vlan of base, push thoses of flow */
     for (; base_n >= 0; base_n--) {
         nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_VLAN);
-        wc->masks.vlan[base_n] = OVS_BE32_MAX;
+        memset(&wc->masks.vlan[base_n], 0xff, sizeof(wc->masks.vlan[base_n]));
     }
 
     for (; flow_n >= 0; flow_n--) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -326,12 +326,16 @@ parse_mpls(const void **datap, size_t *sizep)
 }
 
 static inline bool
-parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
+parse_vlan(const void **datap, size_t *sizep, struct flow_vlan_hdr *vlan_hdrs)
 {
     int encaps;
     const ovs_be16 *eth_type;
+    struct qtag_prefix {
+        ovs_be16 eth_type;
+        ovs_be16 tci;
+    };
 
-    memset(vlan_hdrs, 0, sizeof(union flow_vlan_hdr) * FLOW_MAX_VLAN_HEADERS);
+    memset(vlan_hdrs, 0, sizeof(struct flow_vlan_hdr) * FLOW_MAX_VLAN_HEADERS);
     data_pull(datap, sizep, ETH_ADDR_LEN * 2);
 
     eth_type = *datap;
@@ -339,11 +343,11 @@ parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
     for (encaps = 0;
          eth_type_vlan(*eth_type) && encaps < FLOW_MAX_VLAN_HEADERS;
          encaps++) {
-        if (OVS_LIKELY(*sizep >= sizeof(ovs_be32) + sizeof(ovs_be16))) {
-            const ovs_16aligned_be32 *qp = data_pull(datap, sizep, sizeof *qp);
-            vlan_hdrs[encaps].qtag = get_16aligned_be32(qp);
-            vlan_hdrs[encaps].tci |= htons(VLAN_CFI);
-
+        if (OVS_LIKELY(*sizep
+                       >= sizeof(struct qtag_prefix) + sizeof(ovs_be16))) {
+            const struct qtag_prefix *qp = data_pull(datap, sizep, sizeof *qp);
+            vlan_hdrs[encaps].tpid = qp->eth_type;
+            vlan_hdrs[encaps].tci = qp->tci | htons(VLAN_CFI);
             eth_type = *datap;
         } else {
             return false;
@@ -541,7 +545,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     if (OVS_UNLIKELY(size < sizeof(struct eth_header))) {
         goto out;
     } else {
-        union flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];
+        struct flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];
 
         /* Link layer. */
         ASSERT_SEQUENTIAL(dl_dst, dl_src);
@@ -1980,16 +1984,16 @@ flow_set_vlan_pcp(struct flow *flow, uint8_t pcp)
 void
 flow_pop_vlan(struct flow *flow) {
     memmove(&flow->vlan[0], &flow->vlan[1],
-            sizeof(union flow_vlan_hdr) * (FLOW_MAX_VLAN_HEADERS - 1));
+            sizeof(struct flow_vlan_hdr) * (FLOW_MAX_VLAN_HEADERS - 1));
     memset(&flow->vlan[FLOW_MAX_VLAN_HEADERS - 1], 0,
-           sizeof(union flow_vlan_hdr));
+           sizeof(struct flow_vlan_hdr));
 }
 
 void
 flow_shift_vlan(struct flow *flow) {
     memmove(&flow->vlan[1], &flow->vlan[0],
-            sizeof(union flow_vlan_hdr) * (FLOW_MAX_VLAN_HEADERS - 1));
-    memset(&flow->vlan[0], 0, sizeof(union flow_vlan_hdr));
+            sizeof(struct flow_vlan_hdr) * (FLOW_MAX_VLAN_HEADERS - 1));
+    memset(&flow->vlan[0], 0, sizeof(struct flow_vlan_hdr));
 }
 
 /* Returns the number of MPLS LSEs present in 'flow'
