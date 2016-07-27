@@ -102,7 +102,7 @@ struct flow {
     struct eth_addr dl_src;     /* Ethernet source address. */
     ovs_be16 dl_type;           /* Ethernet frame type. */
     uint8_t pad2[2];            /* Pad to 64 bits. */
-    struct flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];     /* VLAN headers */
+    union flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];     /* VLAN headers */
     ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
                                                              (with padding). */
     /* L3 (64-bit aligned) */

@@ -7048,7 +7048,7 @@ ofpacts_check(struct ofpact ofpacts[], size_t ofpacts_len,
     ovs_be16 dl_type = flow->dl_type;
     uint8_t nw_proto = flow->nw_proto;
     enum ofperr error = 0;
-    struct flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];
+    union flow_vlan_hdr vlan[FLOW_MAX_VLAN_HEADERS];
 
     memcpy(&vlan, &flow->vlan, sizeof(vlan));
 
