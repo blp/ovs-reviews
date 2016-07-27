@@ -5034,29 +5034,46 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                    uint64_t present_attrs, int out_of_range_attr,
                    uint64_t expected_attrs, struct flow *flow,
                    const struct nlattr *key, size_t key_len,
-                   const struct flow *src_flow)
+                   const struct flow *src_flow, int encap_idx)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     bool is_mask = src_flow != flow;
 
-    const struct nlattr *encap;
-    enum odp_key_fitness encap_fitness;
-    enum odp_key_fitness fitness[FLOW_MAX_VLAN_HEADERS];
-    enum odp_key_fitness max_fitness;
-    int encaps = 0;
+    /* If we've run out of VLAN header slots, we're done. */
+    if (encap_idx >= FLOW_MAX_VLAN_HEADERS) {
+        return ODP_FIT_TOO_MUCH;
+    }
 
-    while (encaps < FLOW_MAX_VLAN_HEADERS &&
-           (is_mask?
-            (src_flow->vlan[encaps].tci & htons(VLAN_CFI)) != 0 :
-            eth_type_vlan(flow->dl_type))) {
+    /* If we're not looking at a VLAN header, we're done. */
+    if (is_mask
+        ? !(src_flow->vlan[encaps].tci & htons(VLAN_CFI))
+        : !eth_type_vlan(flow->dl_type)) {
+        if (is_mask) {
+            /* A missing VLAN mask means exact match on "no VLAN". */
+            flow->vlan[0].tpid = htons(0xffff);
+            flow->vlan[0].tci = htons(0xffff);
+            if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)) {
+                flow->vlan[0].tci = nl_attr_get_be16(attrs[OVS_KEY_ATTR_VLAN]);
+                expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
+            }
+        }
+        return ODP_FIT_PERFECT;
+    }
+
+
+    enum odp_key_fitness overall_fitness = ODP_FIT_PERFECT;
+
+    for (int encaps = 0; encaps < FLOW_MAX_VLAN_HEADERS; encaps++) {
+
         /* Calculate fitness of outer attributes. */
-        encap  = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)
-           ? attrs[OVS_KEY_ATTR_ENCAP] : NULL);
+        const struct nlattr *encap
+            = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)
+               ? attrs[OVS_KEY_ATTR_ENCAP] : NULL);
+
         /* In case dpif support less VLAN headers, nested VLAN and ENCAP are
          * not necessary. */
         if (!is_mask && encaps > 0) {
             expected_attrs |= ((UINT64_C(1) << OVS_KEY_ATTR_VLAN) |
-                              (UINT64_C(1) << OVS_KEY_ATTR_ENCAP));
+                               (UINT64_C(1) << OVS_KEY_ATTR_ENCAP));
         } else {
             if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)) {
                 expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
@@ -5065,10 +5082,12 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                 expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_ENCAP);
             }
         }
-        fitness[encaps] = check_expectations(present_attrs, out_of_range_attr,
-                                     expected_attrs, key, key_len);
+        enum odp_key_fitness fit = check_expectations(present_attrs,
+                                                      out_of_range_attr,
+                                                      expected_attrs,
+                                                      key, key_len);
 
-        /* Set vlan_tci.
+        /* Set vlan[encaps].
          * Remove the TPID from dl_type since it's not the real Ethertype.  */
         flow->vlan[encaps].tpid = flow->dl_type;
         flow->dl_type = htons(0);
@@ -5081,12 +5100,12 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                 return ODP_FIT_TOO_LITTLE;
             } else if (flow->vlan[encaps].tci == htons(0)) {
                 /* Corner case for a truncated 802.1Q header. */
-                if (fitness[encaps] == ODP_FIT_PERFECT &&
-                    nl_attr_get_size(encap)) {
+                if (fit == ODP_FIT_PERFECT && nl_attr_get_size(encap)) {
                     return ODP_FIT_TOO_MUCH;
                 }
-                return fitness[encaps];
+                return fit;
             } else if (!(flow->vlan[encaps].tci & htons(VLAN_CFI))) {
+                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
                 VLOG_ERR_RL(&rl, "OVS_KEY_ATTR_VLAN 0x%04"PRIx16" is nonzero "
                             "but CFI bit is not set",
                             ntohs(flow->vlan[encaps].tci));
@@ -5094,7 +5113,7 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             }
         } else {
             if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP))) {
-                return fitness[encaps];
+                return fit;
             }
         }
 
@@ -5110,19 +5129,17 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             return ODP_FIT_ERROR;
         }
 
-        encaps++;
+        /* Overall fitness is the worst   */
     }
-
-    encap_fitness = parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
-                                      expected_attrs, flow, key, key_len,
-                                      src_flow);
 
     /* The overall fitness is the worse of the outer and inner attributes. */
-    max_fitness = encap_fitness;
+    enum odp_key_fitness overall_fitness = parse_l2_5_onward(
+        attrs, present_attrs, out_of_range_attr, expected_attrs, flow,
+        key, key_len, src_flow);
     for (encaps--; encaps >= 0; encaps--) {
-        max_fitness = MAX(max_fitness, fitness[encaps]);
+        overall_fitness = MAX(overall_fitness, fitness[encaps]);
     }
-    return max_fitness;
+    return overall_fitness;
 }
 
 static enum odp_key_fitness
@@ -5232,23 +5249,23 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         return ODP_FIT_ERROR;
     }
 
-    if (is_mask
-        ? (src_flow->vlan[0].tci & htons(VLAN_CFI)) != 0
-        : eth_type_vlan(src_flow->dl_type)) {
-        return parse_8021q_onward(attrs, present_attrs, out_of_range_attr,
-                                  expected_attrs, flow, key, key_len, src_flow);
+    /* Parse 802.1Q headers.
+     *
+     * XXX this needs to update some of the parameters*/
+    enum odp_key_fitness outer_fitness = parse_8021q_onward(
+        attrs, present_attrs, out_of_range_attr, expected_attrs,
+        flow, key, key_len, src_flow, 0);
+    if (outer_fitness == ODP_FIT_ERROR) {
+        return ODP_FIT_ERROR;
     }
-    if (is_mask) {
-        /* A missing VLAN mask means exact match on vlan_tci 0 (== no VLAN). */
-        flow->vlan[0].tpid = htons(0xffff);
-        flow->vlan[0].tci = htons(0xffff);
-        if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)) {
-            flow->vlan[0].tci = nl_attr_get_be16(attrs[OVS_KEY_ATTR_VLAN]);
-            expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
-        }
-    }
-    return parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
-                             expected_attrs, flow, key, key_len, src_flow);
+
+    /* Parse MPLS labels and beyond.
+     *
+     * The overall fitness is the worse of the outer and inner fitness. */
+    enum odp_key_fitness inner_fitness = parse_l2_5_onward(
+        attrs, present_attrs, out_of_range_attr, expected_attrs, flow,
+        key, key_len, src_flow);
+    return MAX(outer_fitness, inner_fitness);
 }
 
 /* Converts the 'key_len' bytes of OVS_KEY_ATTR_* attributes in 'key' to a flow
@@ -5539,7 +5556,7 @@ commit_vlan_action(const struct flow* flow, struct flow *base,
 {
     int flow_n, base_n;
 
-    /* Find inner-most VLAN header of base */
+    /* Find inner-most VLAN header of 'base'. */
     for (base_n = 0; base_n < FLOW_MAX_VLAN_HEADERS; base_n++) {
         if (!(base->vlan[base_n].tci & htons(VLAN_CFI))) {
             break;
@@ -5549,14 +5566,14 @@ commit_vlan_action(const struct flow* flow, struct flow *base,
         }
     }
 
-    /* Find inner-most VLAN header of base */
+    /* Find inner-most VLAN header of 'flow'. */
     for (flow_n = 0; flow_n < FLOW_MAX_VLAN_HEADERS; flow_n++) {
         if (!(flow->vlan[flow_n].tci & htons(VLAN_CFI))) {
             break;
         }
     }
 
-    /* Skip common headers */
+    /* Skip common headers. */
     for (base_n--, flow_n--;
          base_n >= 0 && flow_n >= 0;
          base_n--, flow_n--) {
@@ -5566,7 +5583,7 @@ commit_vlan_action(const struct flow* flow, struct flow *base,
         }
     }
 
-    /* Pop all mismatching vlan of base, push thoses of flow */
+    /* Pop all mismatching vlan of base, push thoses of flow. */
     for (; base_n >= 0; base_n--) {
         nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_VLAN);
         memset(&wc->masks.vlan[base_n], 0xff, sizeof(wc->masks.vlan[base_n]));

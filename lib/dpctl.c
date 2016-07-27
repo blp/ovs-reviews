@@ -1492,7 +1492,6 @@ dpctl_normalize_actions(int argc, const char *argv[],
     struct ds s;
     int left;
     int i, error;
-    int encaps = 0;
 
     ds_init(&s);
 
@@ -1553,10 +1552,8 @@ dpctl_normalize_actions(int argc, const char *argv[],
             continue;
 
         case OVS_ACTION_ATTR_PUSH_VLAN:
-            flow_shift_vlan(&flow);
             push = nl_attr_get_unspec(a, sizeof *push);
-            flow.vlan[0].tpid = push->vlan_tpid;
-            flow.vlan[0].tci = push->vlan_tci;
+            flow_push_vlan(&flow, push->vlan_tpid, push->vlan_tci);
             continue;
         }
 
@@ -1582,7 +1579,7 @@ dpctl_normalize_actions(int argc, const char *argv[],
 
         sort_output_actions(af->actions.data, af->actions.size);
 
-        for (encaps = 0; encaps < FLOW_MAX_VLAN_HEADERS; encaps ++) {
+        for (int encaps = 0; encaps < FLOW_MAX_VLAN_HEADERS; encaps++) {
             struct flow_vlan_hdr *vlan = &af->flow.vlan[encaps];
             if (vlan->tci != htons(0)) {
                 dpctl_print(dpctl_p, "vlan(");

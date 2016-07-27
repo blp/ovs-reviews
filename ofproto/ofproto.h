@@ -385,7 +385,7 @@ enum port_vlan_mode {
      * Other VLANs in 'trunks' are trunked. */
     PORT_VLAN_NATIVE_UNTAGGED,
 
-    /* 802.1q tunnel port. Incomming packets are added an outer vlan tag
+    /* 802.1q tunnel port. Incoming packets are added an outer vlan tag
      * 'vlan'. If 'cvlans' is set, only allows VLANs in 'cvlans'. */
     PORT_VLAN_DOT1Q_TUNNEL
 };

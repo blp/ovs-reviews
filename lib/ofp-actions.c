@@ -6824,8 +6824,7 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
             return OFPERR_OFPBAC_BAD_TAG;
         }
         /* Temporary mark that we have a vlan tag. */
-        flow_shift_vlan(flow);
-        flow->vlan[0].tci |= htons(VLAN_CFI);
+        flow_push_vlan(flow, 0, htons(VLAN_CFI));
         return 0;
 
     case OFPACT_SET_ETH_SRC:

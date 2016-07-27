@@ -4993,11 +4993,9 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             break;
 
         case OFPACT_PUSH_VLAN:
-            flow_shift_vlan(&wc->masks);
-            memset(&wc->masks.vlan[0], 0xff, sizeof wc->masks.vlan[0]);
-            flow_shift_vlan(flow);
-            flow->vlan[0].tpid = ofpact_get_PUSH_VLAN(a)->ethertype;
-            flow->vlan[0].tci = htons(VLAN_CFI);
+            flow_push_vlan(&wc->masks, OVS_BE16_MAX, OVS_BE16_MAX);
+            flow_push_vlan(flow, ofpact_get_PUSH_VLAN(a)->ethertype,
+                           htons(VLAN_CFI));
             break;
 
         case OFPACT_SET_ETH_SRC:

@@ -1147,9 +1147,7 @@ check_max_vlan_headers(struct dpif_backer *backer)
         struct odputil_keybuf keybuf;
         struct ofpbuf key;
 
-        flow_shift_vlan(&flow);
-        flow.vlan[0].tpid = htons(ETH_TYPE_VLAN);
-        flow.vlan[0].tci = htons(1) | htons(VLAN_CFI);
+        flow_push_vlan(&flow, htons(ETH_TYPE_VLAN), htons(VLAN_CFI | 1));
 
         ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
         odp_flow_key_from_flow(&odp_parms, &key);

@@ -89,8 +89,8 @@ static inline size_t flow_hash(const struct flow *, uint32_t basis);
 void flow_set_dl_vlan(struct flow *, ovs_be16 vid);
 void flow_set_vlan_vid(struct flow *, ovs_be16 vid);
 void flow_set_vlan_pcp(struct flow *, uint8_t pcp);
-void flow_pop_vlan(struct flow*);
-void flow_shift_vlan(struct flow*);
+void flow_pop_vlan(struct flow *);
+void flow_push_vlan(struct flow *, ovs_be16 tpid, ovs_be16 tci);
 
 int flow_count_mpls_labels(const struct flow *, struct flow_wildcards *);
 int flow_count_common_mpls_labels(const struct flow *a, int an,
@@ -729,13 +729,12 @@ static inline ovs_be32 miniflow_get_be32(const struct miniflow *flow,
     return (OVS_FORCE ovs_be32)miniflow_get_u32(flow, be32_ofs);
 }
 
-/* Returns the VID within the vlan_tci member of the "struct flow" represented
- * by 'flow'. */
+/* Returns the VID within the 'i'th VLAN in 'flow'. */
 static inline uint16_t
-miniflow_get_vid(const struct miniflow *flow, size_t n)
+miniflow_get_vid(const struct miniflow *flow, size_t i)
 {
-    if (n < FLOW_MAX_VLAN_HEADERS) {
-        uint32_t u32 = MINIFLOW_GET_U32(flow, vlan[n]);
+    if (i < FLOW_MAX_VLAN_HEADERS) {
+        uint32_t u32 = MINIFLOW_GET_U32(flow, vlan[i]);
         return vlan_tci_to_vid(((struct flow_vlan_hdr *)&u32)->tci);
     }
     return 0;
@@ -755,12 +754,11 @@ minimask_get_be32(const struct minimask *mask, unsigned int be32_ofs)
     return (OVS_FORCE ovs_be32)minimask_get_u32(mask, be32_ofs);
 }
 
-/* Returns the VID mask within the vlan_tci member of the "struct
- * flow_wildcards" represented by 'mask'. */
+/* Returns the VID mask within the 'i'th VLAN in 'mask'. */
 static inline uint16_t
-minimask_get_vid_mask(const struct minimask *mask, size_t n)
+minimask_get_vid_mask(const struct minimask *mask, size_t i)
 {
-    return miniflow_get_vid(&mask->masks, n);
+    return miniflow_get_vid(&mask->masks, i);
 }
 
 /* Returns the value of the "tcp_flags" field in 'flow'. */
