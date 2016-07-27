@@ -764,9 +764,8 @@ ovn-nbctl acl-add lsw0 to-lport 1000 'eth.type == 0x1237 && eth.src == $set1 && 
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Given the name of a logical port, prints the name of the hypervisor
 # on which it is located.
@@ -946,9 +945,14 @@ done
 # lp13 should be configured with only 192.168.0.13.
 ovn-nbctl lsp-set-addresses lp13 "f0:00:00:00:00:13 192.168.0.13 invalid 192.169.0.13"
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
+# Wait for ovs-vswitchd to catch up.
+# XXX We should make this possible via OpenFlow, and after that we should
+# make ovn-controller do it for us.
+for i in 1 2 3; do
+    as hv$i ovs-appctl revalidator/purge
+done
 
 sip=`ip_to_hex 192 168 0 11`
 tip=`ip_to_hex 192 168 0 13`
@@ -1387,9 +1391,8 @@ ovs-vsctl add-port br-phys vif3 -- set Interface vif3 options:tx_pcap=hv3/vif3-t
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # test_packet INPORT DST SRC ETHTYPE OUTPORT...
 #
@@ -1584,9 +1587,8 @@ done
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # test_ip INPORT SRC_MAC DST_MAC SRC_IP DST_IP OUTPORT...
 #
@@ -1932,9 +1934,8 @@ done
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Given the name of a logical port, prints the name of the hypervisor
 # on which it is located.
@@ -2341,9 +2342,8 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Send ip packets between the two ports.
 ip_to_hex() {
@@ -2437,10 +2437,8 @@ ovs-vsctl -- add-port br-int vif2 -- \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=1
 
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Send ip packets between the two ports.
 ip_to_hex() {
@@ -2477,9 +2475,12 @@ as hv1 ovs-ofctl dump-flows br-int
 #Disable router R1
 ovn-nbctl set Logical_Router R1 enabled=false
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
+# Wait for ovs-vswitchd to catch up.
+# XXX We should make this possible via OpenFlow, and after that we should
+# make ovn-controller do it for us.
+as hv1 ovs-appctl revalidator/purge
 
 echo "---------SB dump-----"
 ovn-sbctl list datapath_binding
@@ -2498,7 +2499,6 @@ expect_dst_mac="f00000010204"
 echo "${expect_dst_mac}${expect_src_mac}08004500001c000000003f110100${src_ip}${dst_ip}0035111100080000" > expected
 
 OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
-
 
 as hv1
 OVS_APP_EXIT_AND_WAIT([ovn-controller])
@@ -2572,10 +2572,8 @@ ovs-vsctl -- add-port br-int vif2 -- \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=1
 
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Send ip packets between the two ports.
 ip_to_hex() {
@@ -2611,6 +2609,13 @@ as hv1 ovs-ofctl dump-flows br-int
 #Disable router R1
 ovn-nbctl set Logical_Router R1 enabled=false
 
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
+# Wait for ovs-vswitchd to catch up.
+# XXX We should make this possible via OpenFlow, and after that we should
+# make ovn-controller do it for us.
+as hv1 ovs-appctl revalidator/purge
+
 echo "---------SB dump-----"
 ovn-sbctl list datapath_binding
 echo "---------------------"
@@ -2619,10 +2624,6 @@ echo "---------------------"
 
 echo "------ hv1 dump ----------"
 as hv1 ovs-ofctl dump-flows br-int
-
-# Allow some time for the disabling of logical router R1 to propagate.
-# XXX This should be more systematic.
-sleep 1
 
 as hv1 ovs-appctl netdev-dummy/receive vif1 $packet
 
@@ -2726,9 +2727,8 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
@@ -2940,9 +2940,8 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
 # for ARP resolution).
 ovn_populate_arp
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
@@ -3365,13 +3364,9 @@ ovn-nbctl lsp-add foo foo1 \
 -- lsp-set-addresses foo1 "f0:00:00:01:02:03 192.168.1.2"
 
 # Create logical port alice1 in alice
-ovn-nbctl lsp-add alice alice1 \
+# and wait for ovn-northd and ovn-controller to catch up.
+ovn-nbctl --timeout=5 --wait=hv lsp-add alice alice1 \
 -- lsp-set-addresses alice1 "f0:00:00:01:02:04 172.16.1.2"
-
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 2
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
@@ -3433,12 +3428,9 @@ ovn-nbctl lrp-add R2 alice 00:00:02:01:02:03 172.16.1.1/24
 # Connect R2 to join
 ovn-nbctl lrp-add R2 R2_join 00:00:04:01:02:04 20.0.0.2/24
 
-ovn-nbctl -- --id=@lrt create Logical_Router_Static_Route \
+ovn-nbctl --timeout=5 --wait=hv -- --id=@lrt create Logical_Router_Static_Route \
 ip_prefix=192.168.1.0/24 nexthop=20.0.0.1 -- add Logical_Router \
 R2 static_routes @lrt
-
-# Wait for ovn-controller to catch up.
-sleep 1
 
 # Send the packet again.
 as hv1 ovs-appctl netdev-dummy/receive hv1-vif1 $packet
@@ -3509,11 +3501,8 @@ ovs-vsctl -- add-port br-int vif2 -- \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=1
 
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
-
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
@@ -3668,9 +3657,8 @@ ovn-nbctl acl-add lsw0 from-lport 1002 'ip6 && icmp6'  allow-related
 ovn-nbctl acl-add lsw0 to-lport 1002 'outport == "lp1" && ip6 && icmp6'  allow-related
 ovn-nbctl acl-add lsw0 to-lport 1002 'outport == "lp2" && ip6 && icmp6'  allow-related
 
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 1
+# Wait for ovn-northd and ovn-controller to catch up.
+AT_CHECK([ovn-nbctl --timeout=5 --wait=hv sync])
 
 # Given the name of a logical port, prints the name of the hypervisor
 # on which it is located.
@@ -3716,9 +3704,7 @@ ovn_attach n1 br-phys 192.168.0.1
 
 row=`ovn-nbctl create Address_Set name=set1 addresses=\"1.1.1.1\"`
 ovn-nbctl set Address_Set $row name=set1 addresses=\"1.1.1.1,1.1.1.2\"
-ovn-nbctl destroy Address_Set $row
-
-sleep 1
+ovn-nbctl --timeout=5 --wait=hv destroy Address_Set $row
 
 # A bug previously existed in the address set support code
 # that caused ovn-controller to crash after an address set
