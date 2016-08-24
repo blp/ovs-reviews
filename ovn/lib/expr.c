@@ -960,7 +960,7 @@ expr_addr_sets_add(struct shash *addr_sets, const char *name,
         /* Use the lexer to convert each address set into the proper
          * integer format. */
         struct lexer lex;
-        lexer_init(&lex, values[i]);
+        lexer_init(&lex, values[i], NULL);
         lexer_get(&lex);
         if (lex.token.type != LEX_T_INTEGER
             && lex.token.type != LEX_T_MASKED_INTEGER) {
@@ -1237,7 +1237,7 @@ expr_parse_string(const char *s, const struct shash *symtab,
 {
     struct lexer lexer;
 
-    lexer_init(&lexer, s);
+    lexer_init(&lexer, s, NULL);
     lexer_get(&lexer);
     struct expr *expr = expr_parse(&lexer, symtab, addr_sets);
     lexer_force_end(&lexer);
@@ -1371,7 +1371,7 @@ parse_field_from_string(const char *s, const struct shash *symtab,
                         struct expr_field *field, char **errorp)
 {
     struct lexer lexer;
-    lexer_init(&lexer, s);
+    lexer_init(&lexer, s, NULL);
     lexer_get(&lexer);
 
     struct expr_context ctx = { .lexer = &lexer, .symtab = symtab };
@@ -3270,7 +3270,7 @@ expr_parse_microflow(const char *s, const struct shash *symtab,
                      const void *aux, struct flow *uflow)
 {
     struct lexer lexer;
-    lexer_init(&lexer, s);
+    lexer_init(&lexer, s, NULL);
     lexer_get(&lexer);
 
     struct expr *e = expr_parse(&lexer, symtab, addr_sets);

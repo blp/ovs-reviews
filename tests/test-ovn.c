@@ -111,7 +111,7 @@ test_lex(struct ovs_cmdl_context *ctx OVS_UNUSED)
     while (!ds_get_test_line(&input, stdin)) {
         struct lexer lexer;
 
-        lexer_init(&lexer, ds_cstr(&input));
+        lexer_init(&lexer, ds_cstr(&input), NULL);
         ds_clear(&output);
         while (lexer_get(&lexer) != LEX_T_END) {
             size_t len = output.length;
@@ -123,7 +123,7 @@ test_lex(struct ovs_cmdl_context *ctx OVS_UNUSED)
                 const char *s = ds_cstr(&output) + len;
                 struct lexer l2;
 
-                lexer_init(&l2, s);
+                lexer_init(&l2, s, NULL);
                 lexer_get(&l2);
                 compare_token(&lexer.token, &l2.token);
                 lexer_destroy(&l2);
@@ -1330,7 +1330,7 @@ parse_relops(const char *s)
     unsigned int relops = 0;
     struct lexer lexer;
 
-    lexer_init(&lexer, s);
+    lexer_init(&lexer, s, NULL);
     lexer_get(&lexer);
     do {
         enum expr_relop relop;
