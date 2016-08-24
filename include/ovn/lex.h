@@ -117,17 +117,21 @@ void lex_token_vsprintf(struct lex_token *, const char *format, va_list args);
 
 void lex_token_format(const struct lex_token *, struct ds *);
 const char *lex_token_parse(struct lex_token *, const char *input,
-                            const char **startp);
+                            const char **startp, int *line_numberp);
 
 /* A lexical analyzer. */
 struct lexer {
     const char *input;          /* Remaining input (not owned by lexer). */
     const char *start;          /* Start of current token in 'input'. */
     struct lex_token token;     /* Current token (owned by lexer). */
+
+    /* Error reporting. */
+    const char *file_name;      /* File being parsed, or NULL if not a file. */
+    int line_number;            /* Number of new-lines parsed, plus one. */
     char *error;                /* Error message, if any (owned by lexer). */
 };
 
-void lexer_init(struct lexer *, const char *input);
+void lexer_init(struct lexer *, const char *input, const char *file_name);
 void lexer_destroy(struct lexer *);
 
 enum lex_type lexer_get(struct lexer *);
@@ -135,6 +139,7 @@ enum lex_type lexer_lookahead(const struct lexer *);
 bool lexer_match(struct lexer *, enum lex_type);
 bool lexer_force_match(struct lexer *, enum lex_type);
 bool lexer_match_id(struct lexer *, const char *id);
+bool lexer_force_match_id(struct lexer *, const char *id);
 bool lexer_is_int(const struct lexer *);
 bool lexer_get_int(struct lexer *, int64_t *value);
 bool lexer_force_int(struct lexer *, int64_t *value);

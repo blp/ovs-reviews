@@ -578,7 +578,8 @@ lex_parse_macro(const char *p, struct lex_token *token)
  * the token (after skipping white space and comments, if any) into '*startp'.
  * Returns the character position at which to begin parsing the next token. */
 const char *
-lex_token_parse(struct lex_token *token, const char *p, const char **startp)
+lex_token_parse(struct lex_token *token, const char *p,
+                const char **startp, int *line_numberp)
 {
     lex_token_init(token);
 
@@ -589,7 +590,10 @@ next:
         token->type = LEX_T_END;
         return p;
 
-    case ' ': case '\t': case '\n': case '\r': case '\v': case '\f':
+    case '\n':
+        ++*line_numberp;
+        /* Fall through. */
+    case ' ': case '\t': case '\r': case '\v': case '\f':
         p++;
         goto next;
 
@@ -606,10 +610,13 @@ next:
                 if (*p == '*' && p[1] == '/') {
                     p += 2;
                     goto next;
-                } else if (*p == '\0' || *p == '\n') {
+                } else if (*p == '\0') {
                     lex_error(token, "`/*' without matching `*/'.");
                     return p;
                 } else {
+                    if (*p == '\n') {
+                        ++*line_numberp;
+                    }
                     p++;
                 }
             }
@@ -791,18 +798,22 @@ next:
     return p;
 }
 
-/* Initializes 'lexer' for parsing 'input'.
+/* Initializes 'lexer' for parsing 'input', which is drawn from the file named
+ * 'file_name' (which is used for error reporting only).  If input is not from
+ * a file, use NULL for 'file_name'.
  *
- * While the lexer is in use, 'input' must remain available, but the caller
- * otherwise retains ownership of 'input'.
+ * While the lexer is in use, 'input' and 'file_name' must remain available,
+ * but the caller otherwise retains ownership of both strings.
  *
  * The caller must call lexer_get() to obtain the first token. */
 void
-lexer_init(struct lexer *lexer, const char *input)
+lexer_init(struct lexer *lexer, const char *input, const char *file_name)
 {
     lexer->input = input;
     lexer->start = NULL;
     lex_token_init(&lexer->token);
+    lexer->file_name = file_name;
+    lexer->line_number = 1;
     lexer->error = NULL;
 }
 
@@ -821,7 +832,8 @@ enum lex_type
 lexer_get(struct lexer *lexer)
 {
     lex_token_destroy(&lexer->token);
-    lexer->input = lex_token_parse(&lexer->token, lexer->input, &lexer->start);
+    lexer->input = lex_token_parse(&lexer->token, lexer->input,
+                                   &lexer->start, &lexer->line_number);
     return lexer->token.type;
 }
 
@@ -833,8 +845,9 @@ lexer_lookahead(const struct lexer *lexer)
     struct lex_token next;
     enum lex_type type;
     const char *start;
+    int line_number = 0;
 
-    lex_token_parse(&next, lexer->input, &start);
+    lex_token_parse(&next, lexer->input, &start, &line_number);
     type = next.type;
     lex_token_destroy(&next);
     return type;
@@ -922,6 +935,16 @@ lexer_force_end(struct lexer *lexer)
     }
 }
 
+static struct ds
+lexer_error_prefix(const struct lexer *lexer)
+{
+    struct ds s = DS_EMPTY_INITIALIZER;
+    if (lexer->file_name) {
+        ds_put_format(&s, "%s:%d: ", lexer->file_name, lexer->line_number);
+    }
+    return s;
+}
+
 static bool
 lexer_error_handle_common(struct lexer *lexer)
 {
@@ -933,7 +956,9 @@ lexer_error_handle_common(struct lexer *lexer)
         /* The lexer signaled an error.  Nothing at a higher level accepts an
          * error token, so we'll inevitably end up here with some meaningless
          * parse error.  Report the lexical error instead. */
-        lexer->error = xstrdup(lexer->token.s);
+        struct ds s = lexer_error_prefix(lexer);
+        ds_put_cstr(&s, lexer->token.s);
+        lexer->error = ds_steal_cstr(&s);
         return true;
     } else {
         return false;
@@ -949,7 +974,9 @@ lexer_error(struct lexer *lexer, const char *message, ...)
 
     va_list args;
     va_start(args, message);
-    lexer->error = xvasprintf(message, args);
+    struct ds s = lexer_error_prefix(lexer);
+    ds_put_format_valist(&s, message, args);
+    lexer->error = ds_steal_cstr(&s);
     va_end(args);
 }
 
@@ -960,9 +987,7 @@ lexer_syntax_error(struct lexer *lexer, const char *message, ...)
         return;
     }
 
-    struct ds s;
-
-    ds_init(&s);
+    struct ds s = lexer_error_prefix(lexer);
     ds_put_cstr(&s, "Syntax error");
     if (lexer->token.type == LEX_T_END) {
         ds_put_cstr(&s, " at end of input");

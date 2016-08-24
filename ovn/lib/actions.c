@@ -1808,7 +1808,7 @@ ovnacts_parse_string(const char *s, const struct ovnact_parse_params *pp,
 {
     struct lexer lexer;
 
-    lexer_init(&lexer, s);
+    lexer_init(&lexer, s, NULL);
     lexer_get(&lexer);
     ovnacts_parse(&lexer, pp, ofpacts, prereqsp);
     char *error = lexer_steal_error(&lexer);
