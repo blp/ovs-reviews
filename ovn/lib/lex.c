@@ -898,6 +898,16 @@ lexer_match_id(struct lexer *lexer, const char *id)
 }
 
 bool
+lexer_force_match_id(struct lexer *lexer, const char *id)
+{
+    bool ok = lexer_match_id(lexer, id);
+    if (!ok) {
+        lexer_syntax_error(lexer, "expecting `%s'", id);
+    }
+    return ok;
+}
+
+bool
 lexer_is_int(const struct lexer *lexer)
 {
     return (lexer->token.type == LEX_T_INTEGER
