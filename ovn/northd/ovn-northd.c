@@ -1450,7 +1450,7 @@ cleanup_mac_bindings(struct northd_context *ctx, struct hmap *ports)
 {
     const struct sbrec_mac_binding *b, *n;
     SBREC_MAC_BINDING_FOR_EACH_SAFE (b, n, ctx->ovnsb_idl) {
-        if (!ovn_port_find(ports, b->logical_port)) {
+        if (!b->logical_port || !ovn_port_find(ports, b->logical_port)) {
             sbrec_mac_binding_delete(b);
         }
     }
@@ -4313,7 +4313,9 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     const struct sbrec_logical_flow *sbflow, *next_sbflow;
     SBREC_LOGICAL_FLOW_FOR_EACH_SAFE (sbflow, next_sbflow, ctx->ovnsb_idl) {
         struct ovn_datapath *od
-            = ovn_datapath_from_sbrec(datapaths, sbflow->logical_datapath);
+            = (sbflow->logical_datapath
+               ? ovn_datapath_from_sbrec(datapaths, sbflow->logical_datapath)
+               : NULL);
         if (!od) {
             sbrec_logical_flow_delete(sbflow);
             continue;
@@ -4370,8 +4372,10 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
     /* Push changes to the Multicast_Group table to database. */
     const struct sbrec_multicast_group *sbmc, *next_sbmc;
     SBREC_MULTICAST_GROUP_FOR_EACH_SAFE (sbmc, next_sbmc, ctx->ovnsb_idl) {
-        struct ovn_datapath *od = ovn_datapath_from_sbrec(datapaths,
-                                                          sbmc->datapath);
+        struct ovn_datapath *od = (sbmc->datapath
+                                   ? ovn_datapath_from_sbrec(datapaths,
+                                                             sbmc->datapath)
+                                   : NULL);
         if (!od) {
             sbrec_multicast_group_delete(sbmc);
             continue;
