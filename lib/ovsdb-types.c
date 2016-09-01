@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -426,8 +426,8 @@ ovsdb_base_type_from_json(struct ovsdb_base_type *base,
             base->u.uuid.refTableName = xstrdup(refTable->u.string);
 
             /* We can't set base->u.uuid.refTable here because we don't have
-             * enough context (we might not even be running in ovsdb-server).
-             * ovsdb_create() will set refTable later. */
+             * enough context.  Code with a broader view must set it later, if
+             * it is desirable. */
 
             refType = ovsdb_parser_member(&parser, "refType",
                                           OP_ID | OP_OPTIONAL);

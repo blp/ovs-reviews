@@ -402,10 +402,10 @@ class BaseType(object):
                        StringType: '%s = NULL;'}[self.type]
             return pattern % var
 
-    def cInitBaseType(self, prefix, prereqs):
+    def cInitBaseType(self, prefix, enum_prefix, prereqs):
         init = [".type = %s," % self.toAtomicType()]
         if self.enum:
-            datum_name = "%s_enum" % prefix
+            datum_name = "%s_enum" % enum_prefix
             init += [".enum_ = &%s," % datum_name]
             prereqs += self.enum.cDeclareDatum(datum_name)
         if self.type == IntegerType:
@@ -441,10 +441,15 @@ class BaseType(object):
                 low, high))
         elif self.type == UuidType:
             if self.ref_table_name is not None:
-                init.append(".u.uuid = { .refTableName = \"%s\", "
-                            ".refType = OVSDB_REF_%s }," % (
-                                escapeCString(self.ref_table_name),
-                                self.ref_type.upper()))
+                d = {'T': self.ref_table_name,
+                     't': self.ref_table_name.lower(),
+                     'p': prefix,
+                     'r': self.ref_type.upper()}
+                init.append(".u.uuid = {")
+                init.append("    .refTableName = \"%(T)s\"," % d)
+                init.append("    .refTable = &%(p)stable_%(t)s," % d)
+                init.append("    .refType = OVSDB_REF_%(r)s" % d)
+                init.append("},")
         return init
 
 
@@ -623,15 +628,17 @@ class Type(object):
         else:
             return ""
 
-    def cInitType(self, prefix, prereqs):
+    def cInitType(self, prefix, enum_prefix, prereqs):
         init = [".key = {"]
-        init += ["   " + x for x in self.key.cInitBaseType(prefix + "_key",
-                                                           prereqs)]
+        init += ["   " + x
+                 for x in self.key.cInitBaseType(prefix, enum_prefix + "_key",
+                                                 prereqs)]
         init += ["},"]
         if self.value:
             init += [".value = {"]
             init += ["    " + x
-                     for x in self.value.cInitBaseType(prefix + "_value",
+                     for x in self.value.cInitBaseType(prefix,
+                                                       enum_prefix + "_value",
                                                        prereqs)]
             init += ["},"]
         else:

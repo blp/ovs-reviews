@@ -1165,7 +1165,9 @@ void
         # Table columns.
         for columnName, column in sorted_columns(table):
             prereqs = []
-            x = column.type.cInitType("%s_col_%s" % (tableName, columnName), prereqs)
+            x = column.type.cInitType(prefix,
+                                      "%s_col_%s" % (tableName, columnName),
+                                      prereqs)
             if prereqs:
                 print '\n'.join(prereqs)
         print "\nstruct ovsdb_idl_column %s_columns[%s_N_COLUMNS] = {" % (
@@ -1176,7 +1178,9 @@ void
             else:
                 mutable = "false"
             type_init = '\n'.join("            " + x
-                                  for x in column.type.cInitType("%s_col_%s" % (tableName, columnName), prereqs))
+                                  for x in column.type.cInitType(prefix,
+                                                                 "%s_col_%s" % (tableName, columnName), 
+                                                                 prereqs))
             print """\
     [%(P)s%(T)s_COL_%(C)s] = {
          .name = "%(c)s",

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,8 +75,12 @@ struct ovsdb_base_type {
         } string;
 
         struct ovsdb_uuid_constraints {
+            /* 'refTable' points to an application-specific type.
+             * In ovsdb-server, it points to struct ovsdb_table.
+             * In the IDL, it points to struct ovsdb_idl_table_class.
+             * Other users might not bother with it at all. */
             char *refTableName; /* Name of referenced table, or NULL. */
-            struct ovsdb_table *refTable; /* Referenced table, if available. */
+            void *refTable;     /* Referenced table, if available. */
             enum ovsdb_ref_type refType;  /* Reference type. */
         } uuid;
     } u;
