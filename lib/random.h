@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2012 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2012, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #ifndef RANDOM_H
 #define RANDOM_H 1
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -43,6 +44,12 @@ static inline uint16_t
 random_uint16(void)
 {
     return random_uint32();
+}
+
+static inline bool
+random_bool(void)
+{
+    return random_uint32() & 1;
 }
 
 #endif /* random.h */
