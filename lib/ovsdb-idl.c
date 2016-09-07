@@ -1384,9 +1384,16 @@ ovsdb_idl_send_monitor_request__(struct ovsdb_idl *idl,
         columns = table->need_table ? json_array_create_empty() : NULL;
         for (j = 0; j < tc->n_columns; j++) {
             const struct ovsdb_idl_column *column = &tc->columns[j];
-            if (table->modes[j] & OVSDB_IDL_MONITOR) {
-                if (table_schema
-                    && !sset_contains(table_schema, column->name)) {
+            bool db_has_column = (table_schema &&
+                                  sset_contains(table_schema, column->name));
+            if (column->synthetic) {
+                if (db_has_column) {
+                    VLOG_WARN("%s table in %s database has synthetic "
+                              "column %s", table->class->name,
+                              idl->class->database, column->name);
+                }
+            } else if (table->modes[j] & OVSDB_IDL_MONITOR) {
+                if (table_schema && !db_has_column) {
                     VLOG_WARN("%s table in %s database lacks %s column "
                               "(database needs upgrade?)",
                               table->class->name, idl->class->database,
@@ -2204,7 +2211,6 @@ ovsdb_idl_insert_row(struct ovsdb_idl_row *row, const struct json *row_json)
     ovsdb_idl_row_update(row, row_json, OVSDB_IDL_CHANGE_INSERT);
     ovsdb_idl_row_add_arcs(row);
     ovsdb_idl_row_parse(row);
-
     ovsdb_idl_row_reparse_backrefs(row);
 }
 
@@ -3355,6 +3361,7 @@ ovsdb_idl_txn_write__(const struct ovsdb_idl_row *row_,
     size_t column_idx;
     bool write_only;
 
+    ovs_assert(!column->synthetic);
     if (ovsdb_idl_row_is_synthetic(row)) {
         goto discard_datum;
     }
@@ -4278,4 +4285,211 @@ ovsdb_idl_loop_commit_and_wait(struct ovsdb_idl_loop *loop)
     ovsdb_idl_wait(loop->idl);
 
     return retval;
+}
+
+static struct ovsdb_idl_row ***
+get_set_at_ofs(struct ovsdb_idl_row *row, size_t ofs)
+{
+    return ALIGNED_CAST(struct ovsdb_idl_row ***, (uint8_t *) row + ofs);
+}
+
+static struct ovsdb_idl_row **
+get_row_ptr_at_ofs(struct ovsdb_idl_row *row, size_t ofs)
+{
+    return ALIGNED_CAST(struct ovsdb_idl_row **, (uint8_t *) row + ofs);
+}
+
+static size_t *
+get_n_set_at_ofs(struct ovsdb_idl_row *row, size_t ofs)
+{
+    return ALIGNED_CAST(size_t *, (uint8_t *) row + ofs);
+}
+
+static bool
+datum_contains_uuid(const struct ovsdb_datum *datum, const struct uuid *uuid)
+{
+    for (size_t i = 0; i < datum->n; i++) {
+        if (uuid_equals(&datum->keys[i].uuid, uuid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void
+parse_injective_up(const struct ovsdb_datum *datum_ OVS_UNUSED,
+                   struct ovsdb_idl_row *row,
+                   const struct ovsdb_idl_table_class *src_table_class,
+                   size_t column_idx, size_t up_ofs)
+{
+    /* Iterate over rows that reference 'row'. */
+    struct ovsdb_idl_row *best = NULL;
+    struct ovsdb_idl_arc *arc;
+    LIST_FOR_EACH (arc, dst_node, &row->dst_arcs) {
+        struct ovsdb_idl_row *ref = arc->src;
+        if (!ovsdb_idl_row_is_orphan(ref)
+            && ref->table->class == src_table_class
+            && (!best || uuid_compare_3way(&ref->uuid, &best->uuid) < 0)
+            && datum_contains_uuid(&ref->new[column_idx], &row->uuid)) {
+            best = ref;
+        }
+    }
+    struct ovsdb_idl_row **up = get_row_ptr_at_ofs(row, up_ofs);
+    *up = best;
+}
+
+void
+read_injective_up(const struct ovsdb_idl_row *up, struct ovsdb_datum *datum)
+{
+    if (up) {
+        datum->n = 1;
+        datum->keys = xmalloc(sizeof *datum->keys);
+        datum->keys[0].uuid = up->uuid;
+        datum->values = NULL;
+    } else {
+        datum->n = 0;
+        datum->keys = NULL;
+        datum->values = NULL;
+    }
+}
+
+void
+parse_injective_set(const struct ovsdb_datum *datum,
+                    struct ovsdb_idl_row *row,
+                    const struct ovsdb_idl_table_class *dst_table_class,
+                    size_t column_idx, size_t set_ofs, size_t n_set_ofs,
+                    size_t up_ofs)
+{
+    /* Start with an empty set. */
+    struct ovsdb_idl_row ***row_set = get_set_at_ofs(row, set_ofs);
+    size_t *row_n_set = get_n_set_at_ofs(row, n_set_ofs);
+    *row_set = NULL;
+    *row_n_set = 0;
+
+    for (size_t i = 0; i < datum->n; i++) {
+        /* Locate the referenced row.  If there is none, then we can't include
+         * the reference in 'row_set'. */
+        struct ovsdb_idl_row *target = ovsdb_idl_get_row_arc(
+            row, dst_table_class, &datum->keys[i].uuid);
+        if (!target) {
+            goto next;
+        }
+
+        if (target && ovs_list_is_empty(&target->reparse_node)) {
+            ovs_list_push_back(&row->table->idl->reparse_list,
+                               &target->reparse_node);
+        }
+
+        /* Iterate over the other rows that reference 'target'. */
+        struct ovsdb_idl_arc *arc;
+        LIST_FOR_EACH (arc, dst_node, &target->dst_arcs) {
+            struct ovsdb_idl_row *ref = arc->src;
+
+            /* Skip "false positives": references to 'target' from 'row' or
+             * from a different row but some other column. */
+            if (ref == row
+                || ref->table->class != row->table->class) {
+                continue;
+            }
+            const struct ovsdb_datum *ref_datum;
+            if (ref->written && bitmap_is_set(ref->written, column_idx)) {
+                ref_datum = &ref->new[column_idx];
+            } else if (ref->old) {
+                ref_datum = &ref->old[column_idx];
+            } else {
+                continue;
+            }
+            if (ovsdb_datum_find_key(ref_datum, &datum->keys[i],
+                                     OVSDB_TYPE_UUID) == UINT_MAX) {
+                continue;
+            }
+
+            /* 'ref' is a reference from the same column in a different row.
+             *
+             * If 'ref' has a lower UUID, then omit it from 'row_set'. */
+            if (uuid_compare_3way(&ref->uuid, &row->uuid) < 0) {
+                goto next;
+            }
+
+            /* 'ref' has a higher UUID.  Possibly it has 'target' in its
+             * parsed reference set, so if so then remove it. */
+            if (ovs_list_is_empty(&ref->reparse_node)) {
+                ovs_list_push_back(&row->table->idl->reparse_list,
+                                   &ref->reparse_node);
+            }
+            ovsdb_idl_mark_column_modified(ref, column_idx);
+        }
+
+        /* Add 'target' to 'row_set'. */
+        if (!*row_set) {
+            *row_set = xmalloc(datum->n * sizeof **row_set);
+        }
+        (*row_set)[*row_n_set] = target;
+        ++*row_n_set;
+
+        struct ovsdb_idl_row **up = get_row_ptr_at_ofs(target, up_ofs);
+        *up = row;
+
+    next:;
+    }
+}
+
+void
+unparse_injective_set(struct ovsdb_idl_row *row,
+                      const struct ovsdb_idl_table_class *dst_table_class,
+                      size_t column_idx,
+                      size_t set_ofs, size_t n_set_ofs OVS_UNUSED,
+                      size_t up_ofs OVS_UNUSED)
+{
+    struct ovsdb_idl_row **row_set = *get_set_at_ofs(row, set_ofs);
+    free(row_set);
+
+    struct ovsdb_datum *datum;
+    if (row->written && bitmap_is_set(row->written, column_idx)) {
+        datum = &row->new[column_idx];
+    } else if (row->old) {
+        datum = &row->old[column_idx];
+    } else {
+        return;
+    }
+
+    for (size_t i = 0; i < datum->n; i++) {
+        /* Locate the referenced row.  If there is none, then we can't include
+         * the reference in 'row_set'. */
+        struct ovsdb_idl_row *target = ovsdb_idl_get_row_arc(
+            row, dst_table_class, &datum->keys[i].uuid);
+        if (!target) {
+            continue;
+        }
+        if (ovs_list_is_empty(&target->reparse_node)) {
+            ovs_list_push_back(&row->table->idl->reparse_list,
+                               &target->reparse_node);
+        }
+
+        /* Find the row with the highest UUID that also references 'target', as
+         * 'best'. */
+        struct ovsdb_idl_row *best = NULL;
+        struct ovsdb_idl_arc *arc;
+        LIST_FOR_EACH (arc, dst_node, &target->dst_arcs) {
+            struct ovsdb_idl_row *ref = arc->src;
+            if (ref != row
+                && !ovsdb_idl_row_is_orphan(ref)
+                && ref->table->class == row->table->class
+                && (!best || uuid_compare_3way(&ref->uuid, &best->uuid) < 0)
+                && datum_contains_uuid(&ref->new[column_idx], &target->uuid)) {
+                best = ref;
+            }
+        }
+
+        /* If the best UUID is better than ours, then it should already have
+         * the row. */
+        if (best && uuid_compare_3way(&best->uuid, &row->uuid) < 0) {
+            continue;
+        }
+
+        if (best && ovs_list_is_empty(&best->reparse_node)){
+            ovs_list_push_back(&row->table->idl->reparse_list,
+                               &best->reparse_node);
+        }
+    }
 }

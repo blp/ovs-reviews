@@ -164,6 +164,24 @@
           "type": "string"
         }
       }
+    },
+    "Parent": {
+      "columns": {
+        "children": {
+	  "type": {
+	    "key": {"type": "uuid",
+		    "refTable": "Child",
+		    "refType": "strong"},
+	       "min": 0,
+	       "max": "unlimited"
+	    }
+	}
+      }
+    },
+    "Child": {
+      "columns": {
+	"dummy": {"type": "integer"}
+      }
     }
   }
 }

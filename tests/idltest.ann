@@ -7,3 +7,7 @@
 
 s["idlPrefix"] = "idltest_"
 s["idlHeader"] = "\"tests/idltest.h\""
+
+s["tables"]["Parent"]["columns"]["children"]["extensions"] = {
+    "injective": "up"
+}

@@ -772,6 +772,8 @@ AT_CHECK([sort stdout | ${PERL} $srcdir/uuidfilt.pl], [0],
 
 # Check that ovsdb-idl figured out that table link2 and column l2 are missing.
 AT_CHECK([grep ovsdb_idl stderr | sort], [0], [dnl
+test-ovsdb|ovsdb_idl|idltest database lacks Child table (database needs upgrade?)
+test-ovsdb|ovsdb_idl|idltest database lacks Parent table (database needs upgrade?)
 test-ovsdb|ovsdb_idl|idltest database lacks link2 table (database needs upgrade?)
 test-ovsdb|ovsdb_idl|link1 table in idltest database lacks l2 column (database needs upgrade?)
 ])
@@ -1300,3 +1302,25 @@ OVSDB_CHECK_IDL_NOTIFY([simple idl verify notify],
 014: i=1 r=123.5 b=false s=mystring u=<3> ia=[1 2 3] ra=[-0.5] ba=[true] sa=[abc def] ua=[<4> <5>] uuid=<0>
 015: done
 ]])
+
+AT_SETUP([ovsdb-idl injective references - exhaustive])
+AT_KEYWORDS([ovsdb server idl positive])
+AT_CHECK([ovsdb_start_idltest])
+AT_CHECK([test-ovsdb -vwarn idl-injective-exhaustive unix:socket 2 3])
+AT_CHECK([test-ovsdb -vwarn idl-injective-exhaustive unix:socket 3 2])
+# Uncommenting the following yields a more thorough test but
+# extends the test runtime from less than 1s to almost 1 min.
+#AT_CHECK([test-ovsdb -vwarn idl-injective-exhaustive unix:socket 3 3])
+OVSDB_SERVER_SHUTDOWN
+AT_CLEANUP
+
+AT_SETUP([ovsdb-idl injective references - random])
+AT_KEYWORDS([ovsdb server idl positive])
+AT_CHECK([ovsdb_start_idltest])
+for np in 1 2 3 4; do
+    for nc in 1 2 3 4; do
+	AT_CHECK([test-ovsdb -vwarn idl-injective-random unix:socket $np $nc 0 1000])
+    done
+done
+OVSDB_SERVER_SHUTDOWN
+AT_CLEANUP

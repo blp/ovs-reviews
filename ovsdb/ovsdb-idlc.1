@@ -55,7 +55,34 @@ after the \fB#include\fR directives in those files.
 This member is optional.  If specified, it is an object whose contents
 describes extensions to the OVSDB schema language, for the purpose of
 specifying interpretation by the IDL.
-No extensions are supported yet.
+.
+.IP "\fB""\fBinjective\fR"" member of \fBextensions\fR object"
+This optional member may be present in a column
+\fIC\fR in table \fIT1\fR that contains references to rows in a
+distinct table \fIT2\fR.  When enabled, the IDL ensures that the
+references in \fIC\fR from every row in \fIT1\fR refer to any given
+row in \fIT2\fR at most once.  That is, this feature ensures that
+\fIC\fR is an injective (``one-to-one'') mapping from rows in \fIT1\fR
+to rows in \fIT2\fR.  OVSDB strong references and garbage collection
+can constrain such a mapping to be surjective (``onto''), so that
+taken together these features ensure a bijective (one-to-one and onto)
+relationship between table rows.
+.IP
+The value for this member should be a string that matches <id> from
+RFC 7047.  The IDL adds to \fIT2\fR a column with this name and type
+``strong reference to \fIT1\fR'' and automatically maintains it at
+runtime so that it always points back to the instance of \fIT1\fR that
+refers to it.  The injectivity constraint guarantees that this is a
+unique relationship; if the mapping is also constrained to be
+surjective, then the pointer will also always be nonnull.
+.IP
+The OVSDB protocol and \fBovsdb\-server\fR(1) do not support an
+injectivity constraint.  The IDL implements such a constraint by
+checking for duplicate references and deleting them, leaving only a
+single reference from the row in \fIT1\fR with the lexicographically
+lowest UUID.  This deletion is transparent to the IDL's client, which
+never observes the database in a state that violates the injectivity
+constraint.
 .
 .IP "\fB""\fBsynthetic\fR"" member of \fBextensions\fR object"
 If this optional member is set to \fBtrue\fR, then it indicates that

@@ -90,6 +90,7 @@ struct ovsdb_idl_column {
     char *name;
     struct ovsdb_type type;
     bool mutable;
+    bool synthetic;
     void (*parse)(struct ovsdb_idl_row *, const struct ovsdb_datum *);
     void (*unparse)(struct ovsdb_idl_row *);
     void (*read)(const struct ovsdb_idl_row *, struct ovsdb_datum *);
@@ -133,6 +134,21 @@ struct ovsdb_idl_row *ovsdb_idl_get_row_arc(
     struct ovsdb_idl_row *src,
     const struct ovsdb_idl_table_class *dst_table,
     const struct uuid *dst_uuid);
+
+void parse_injective_set(const struct ovsdb_datum *, struct ovsdb_idl_row *,
+                         const struct ovsdb_idl_table_class *dst_table_class,
+                         size_t column_idx,
+                         size_t set_ofs, size_t n_set_ofs,
+                         size_t up_ofs);
+void unparse_injective_set(struct ovsdb_idl_row *,
+                           const struct ovsdb_idl_table_class *dst_table_class,
+                           size_t column_idx,
+                           size_t set_ofs, size_t n_set_ofs,
+                           size_t up_ofs);
+void parse_injective_up(const struct ovsdb_datum *, struct ovsdb_idl_row *,
+                        const struct ovsdb_idl_table_class *src_table_class,
+                        size_t column_idx, size_t up_ofs);
+void read_injective_up(const struct ovsdb_idl_row *, struct ovsdb_datum *);
 
 void ovsdb_idl_txn_verify(const struct ovsdb_idl_row *,
                           const struct ovsdb_idl_column *);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <valgrind/valgrind.h>
 #else
 #define RUNNING_ON_VALGRIND 0
+#define VALGRIND_COUNT_ERRORS 0
 #endif
 
 #endif /* valgrind.h */

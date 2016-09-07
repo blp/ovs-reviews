@@ -45,16 +45,21 @@
 #include "ovsdb/transaction.h"
 #include "ovsdb/trigger.h"
 #include "poll-loop.h"
+#include "random.h"
 #include "stream.h"
 #include "svec.h"
 #include "tests/idltest.h"
 #include "timeval.h"
 #include "util.h"
 #include "openvswitch/vlog.h"
+#include "valgrind.h"
 
 struct test_ovsdb_pvt_context {
     bool track;
 };
+
+/* -m, --more: Increase verbosity. */
+static int verbosity;
 
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[],
@@ -81,6 +86,7 @@ parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
         {"timeout", required_argument, NULL, 't'},
         {"verbose", optional_argument, NULL, 'v'},
         {"change-track", optional_argument, NULL, 'c'},
+        {"more", no_argument, NULL, 'm'},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -115,6 +121,10 @@ parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
 
         case 'c':
             pvt->track = true;
+            break;
+
+        case 'm':
+            verbosity++;
             break;
 
         case '?':
@@ -215,7 +225,16 @@ usage(void)
            "  idl-partial-update-set-column SERVER \n"
            "    connect to SERVER and executes different operations to\n"
            "    test the capacity of updating elements inside a set column\n"
-           "    displaying the table information after each operation.\n",
+           "    displaying the table information after each operation.\n"
+           "  idl-injective-exhaustive SERVER N_PARENTS N_CHILDREN\n"
+           "    Connect to SERVER and exhaustively test injective mapping\n"
+           "    implementation with N_PARENTS and N_CHILDREN.  Runs in\n"
+           "    O(4**n) time, where n = N_PARENTS + N_CHILDREN.  For n=5\n"
+           "    runtime is less than 1s, with n=6 less than 1min.\n"
+           "  idl-injective-random SERVER N_PARENTS N_CHILDREN SEED N\n"
+           "    Connect to SERVER and randomly test injective mapping\n"
+           "    implementation with N_PARENTS and N_CHILDREN.  Runs N\n"
+           "    iterations starting from the given random SEED.\n",
            program_name, program_name);
     vlog_usage();
     printf("\nOther options:\n"
@@ -2492,7 +2511,550 @@ do_idl(struct ovs_cmdl_context *ctx)
     ovsdb_idl_destroy(idl);
     printf("%03d: done\n", step);
 }
+
+/* idl-injective test. */
 
+/* Run with 3 parents and 2 children, or 2 parents and 3 children, for useful
+ * checking in less than a second
+ *
+ * Run with 3 parents and 3 children for a more thorough test that takes almost
+ * a minute. */
+enum { MAX_PARENTS = 5 };
+enum { MAX_CHILDREN = 6 };
+
+/* A bitmask of parents*children must fit in an unsigned int. */
+BUILD_ASSERT_DECL(MAX_PARENTS * MAX_CHILDREN <= 8 * sizeof(unsigned int));
+
+struct injective_ctx {
+    struct ovsdb_idl *idl;
+    int n_parents, n_children;
+    struct uuid parent_uuids[MAX_PARENTS];
+    struct uuid child_uuids[MAX_CHILDREN];
+    unsigned int old_state;
+    unsigned int old_actual_state;
+};
+
+static struct idltest_child *
+injective_get_child(const struct injective_ctx *ctx, unsigned int i)
+{
+    ovs_assert(i < ctx->n_children);
+    const struct uuid *id = &ctx->child_uuids[i];
+    const struct idltest_child *c = idltest_child_get_for_uuid(ctx->idl, id);
+    ovs_assert(c);
+    return CONST_CAST(struct idltest_child *, c);
+}
+
+static struct idltest_parent *
+injective_get_parent(const struct injective_ctx *ctx, unsigned int i)
+{
+    ovs_assert(i < ctx->n_parents);
+    const struct uuid *id = &ctx->parent_uuids[i];
+    const struct idltest_parent *p = idltest_parent_get_for_uuid(ctx->idl, id);
+    ovs_assert(p);
+    return CONST_CAST(struct idltest_parent *, p);
+}
+
+static int
+injective_get_pid(const struct injective_ctx *ctx,
+                  const struct idltest_parent *p)
+{
+    for (int pid = 0; pid < ctx->n_parents; pid++) {
+        if (uuid_equals(&ctx->parent_uuids[pid], &p->header_.uuid)) {
+            return pid;
+        }
+    }
+    OVS_NOT_REACHED();
+}
+
+static int
+compare_uuids(const void *a_, const void *b_)
+{
+    const struct uuid *a = a_;
+    const struct uuid *b = b_;
+    return uuid_compare_3way(a, b);
+}
+
+static void
+injective_print_state(const struct injective_ctx *ctx,
+                      const char *title, unsigned int state)
+{
+    printf("%s:", title);
+    unsigned int s = state;
+    for (int i = 0; i < ctx->n_parents; i++) {
+        printf(" ");
+        for (int j = 0; j < ctx->n_children; j++) {
+            if (s & (1u << j)) {
+                printf("%d", j);
+            } else {
+                putchar('.');
+            }
+        }
+        s >>= ctx->n_children;
+    }
+    printf(" (%#x)\n", state);
+}
+
+static void
+injective_print_parents(const struct injective_ctx *ctx,
+                        const char *title, int *parents)
+{
+    printf("%s:", title);
+    for (int i = 0; i < ctx->n_parents; i++) {
+        printf(" %2d", parents[i]);
+    }
+    putchar('\n');
+}
+
+static void
+injective_print_changes(const struct injective_ctx *ctx,
+                        const char *title, unsigned int changes)
+{
+    printf("%s: ", title);
+    for (int i = 0; i < ctx->n_parents; i++) {
+        putchar(changes & (1u << i) ? '1' : '.');
+    }
+    putchar('\n');
+}
+
+static void
+injective_transition(struct injective_ctx *ctx, const unsigned int state)
+{
+    const int NC = ctx->n_children;
+    const int NP = ctx->n_parents;
+
+    /* Transition all the parents to the new state. */
+    struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(ctx->idl);
+    for (int i = 0; i < NP; i++) {
+        const unsigned int mask = ((1u << NC) - 1) << (i * NC);
+        if ((state ^ ctx->old_state) & mask) {
+            struct idltest_child *children[MAX_CHILDREN];
+            int n_children = 0;
+            for (int j = 0; j < NC; j++) {
+                if (state & (1u << (j + i * NC))) {
+                    children[n_children++] = injective_get_child(ctx, j);
+                }
+            }
+            idltest_parent_set_children(injective_get_parent(ctx, i),
+                                        children, n_children);
+            ovsdb_idl_check_consistency(ctx->idl);
+        }
+    }
+    enum ovsdb_idl_txn_status txn_status = ovsdb_idl_txn_commit_block(txn);
+    ovsdb_idl_check_consistency(ctx->idl);
+    if (txn_status != TXN_SUCCESS && txn_status != TXN_UNCHANGED) {
+        ovs_fatal(0, "transaction failed (%s)",
+                  ovsdb_idl_txn_status_to_string(txn_status));
+    }
+    ovsdb_idl_txn_destroy(txn);
+    ovsdb_idl_check_consistency(ctx->idl);
+
+    /* Compute the state that should be visible in the IDL. */
+    unsigned int expected_state = 0;
+    unsigned int already_seen = 0;
+    unsigned int s = state;
+    for (int i = 0; i < NP; i++) {
+        const unsigned int mask = (1u << NC) - 1;
+        expected_state |= ((s & ~already_seen) & mask) << (i * NC);
+        already_seen |= s & mask;
+        s >>= NC;
+    }
+
+    int expected_parents[MAX_CHILDREN];
+    for (int i = 0; i < NC; i++) {
+        expected_parents[i] = -1;
+        for (int j = 0; j < NP; j++) {
+            if (expected_state & (1u << (i + j * NC))) {
+                expected_parents[i] = j;
+                break;
+            }
+        }
+    }
+
+    /* Verify that the IDL correctly represents the new state. */
+    unsigned int actual_state = 0;
+    s = state;
+    for (int i = 0; i < NP; i++) {
+        const struct idltest_parent *p = injective_get_parent(ctx, i);
+        for (int j = 0; j < NC; j++) {
+            for (int k = 0; k < p->n_children; k++) {
+                if (uuid_equals(&p->children[k]->header_.uuid,
+                                &ctx->child_uuids[j])) {
+                    unsigned int bit = 1u << (j + i * NC);
+                    ovs_assert(!(actual_state & bit));
+                    actual_state |= bit;
+                }
+            }
+        }
+    }
+    int actual_parents[MAX_CHILDREN];
+    bool wrong_parents = false;
+    for (int i = 0; i < NC; i++) {
+        const struct idltest_child *c = injective_get_child(ctx, i);
+        actual_parents[i] = c->up ? injective_get_pid(ctx, c->up) : -1;
+        if (actual_parents[i] != expected_parents[i]) {
+            wrong_parents = true;
+        }
+    }
+
+    /* Check for change tracking correctness.
+     *
+     * It's OK for change tracking to report changes that didn't actually
+     * happen, but it must report every actual change. */
+    unsigned int reported_changes = 0;
+    const struct idltest_parent *parent;
+    IDLTEST_PARENT_FOR_EACH_TRACKED (parent, ctx->idl) {
+        if (idltest_parent_is_updated(parent, IDLTEST_PARENT_COL_CHILDREN)) {
+            reported_changes |= 1u << injective_get_pid(ctx, parent);
+        }
+    }
+    unsigned int expected_changes = 0;
+    bool any_missing_change = false;
+    unsigned int state_diff = ctx->old_actual_state ^ actual_state;
+    for (int i = 0; i < NP; i++) {
+        const unsigned int mask = (1u << NC) - 1;
+        if (state_diff & (mask << (i * NC))) {
+            const unsigned int bit = 1u << i;
+            expected_changes |= bit;
+            if (!(reported_changes & bit)) {
+                any_missing_change = true;
+            }
+        }
+    }
+    ovsdb_idl_track_clear(ctx->idl);
+
+    if (actual_state != expected_state
+        || wrong_parents
+        || any_missing_change) {
+        if (actual_state != expected_state) {
+            puts("wrong children:");
+        }
+        injective_print_state(ctx, "   prev cfg state", ctx->old_state);
+        injective_print_state(ctx, "prev actual state", ctx->old_actual_state);
+        injective_print_state(ctx, " configured state", state);
+        injective_print_state(ctx, "   expected state", expected_state);
+        injective_print_state(ctx, "     actual state", actual_state);
+        if (wrong_parents) {
+            puts("wrong parents:");
+        }
+        injective_print_parents(ctx, "expected parents", expected_parents);
+        injective_print_parents(ctx, "  actual parents", actual_parents);
+        if (any_missing_change) {
+            puts("unreported change:");
+        }
+        injective_print_changes(ctx, "expected changes", expected_changes);
+        injective_print_changes(ctx, "reported changes", reported_changes);
+        exit(1);
+    }
+
+    ctx->old_state = state;
+    ctx->old_actual_state = actual_state;
+}
+
+static void
+do_idl_injective_exhaustive(struct ovs_cmdl_context *cmdl_ctx)
+{
+    struct injective_ctx ctx;
+
+    ctx.n_parents = atoi(cmdl_ctx->argv[2]);
+    if (ctx.n_parents <= 0 || ctx.n_parents > MAX_PARENTS) {
+        ovs_fatal(0, "number of parents must be between 1 and %d",
+                  MAX_PARENTS);
+    }
+
+    ctx.n_children = atoi(cmdl_ctx->argv[3]);
+    if (ctx.n_children <= 0 || ctx.n_children > MAX_CHILDREN) {
+        ovs_fatal(0, "number of children must be between 1 and %d",
+                  MAX_CHILDREN);
+    }
+
+    /* Create IDL and wait to connect to database. */
+    ctx.idl = ovsdb_idl_create(cmdl_ctx->argv[1], &idltest_idl_class,
+                               true, true);
+    ovsdb_idl_track_add_column(ctx.idl, &idltest_parent_col_children);
+    for (;;) {
+        ovsdb_idl_run(ctx.idl);
+        if (ovsdb_idl_get_seqno(ctx.idl)) {
+            break;
+        }
+        ovsdb_idl_wait(ctx.idl);
+        poll_block();
+    }
+
+    /* Delete all existing rows from Parent and Child tables, then create
+     * correct number of Parent and Child records. */
+    struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(ctx.idl);
+    const struct idltest_parent *parent, *next_parent;
+    const struct idltest_child *child, *next_child;
+    IDLTEST_PARENT_FOR_EACH_SAFE (parent, next_parent, ctx.idl) {
+        idltest_parent_delete(parent);
+    }
+    IDLTEST_CHILD_FOR_EACH_SAFE (child, next_child, ctx.idl) {
+        idltest_child_delete(child);
+    }
+    for (int i = 0; i < ctx.n_parents; i++) {
+        parent = idltest_parent_insert(txn);
+        ctx.parent_uuids[i] = parent->header_.uuid;
+    }
+    for (int i = 0; i < ctx.n_children; i++) {
+        child = idltest_child_insert(txn);
+        ctx.child_uuids[i] = child->header_.uuid;
+    }
+
+    /* Commit our changes, then get the permanent UUIDs. */
+    enum ovsdb_idl_txn_status txn_status = ovsdb_idl_txn_commit_block(txn);
+    if (txn_status != TXN_SUCCESS) {
+        ovs_fatal(0, "transaction failed (%s)",
+                  ovsdb_idl_txn_status_to_string(txn_status));
+    }
+    for (int i = 0; i < ctx.n_parents; i++) {
+        const struct uuid *new_uuid
+            = ovsdb_idl_txn_get_insert_uuid(txn, &ctx.parent_uuids[i]);
+        ovs_assert(new_uuid);
+        ctx.parent_uuids[i] = *new_uuid;
+    }
+    for (int i = 0; i < ctx.n_children; i++) {
+        const struct uuid *new_uuid
+            = ovsdb_idl_txn_get_insert_uuid(txn, &ctx.child_uuids[i]);
+        ovs_assert(new_uuid);
+        ctx.child_uuids[i] = *new_uuid;
+    }
+    ovsdb_idl_txn_destroy(txn);
+    ovsdb_idl_track_clear(ctx.idl);
+
+    /* Sort the UUIDs because the injectivity specification prefers rows with
+     * lower UUIDs. */
+    qsort(ctx.parent_uuids, ctx.n_parents,
+          sizeof *ctx.parent_uuids, compare_uuids);
+    qsort(ctx.child_uuids, ctx.n_children,
+          sizeof *ctx.child_uuids, compare_uuids);
+
+    ovsdb_idl_check_consistency(ctx.idl);
+
+    const unsigned int n_states = 1u << (ctx.n_parents * ctx.n_children);
+    ctx.old_state = 0;
+    ctx.old_actual_state = 0;
+    for (unsigned int state1 = 0; state1 < n_states; state1++) {
+        injective_transition(&ctx, state1);
+        for (unsigned int state2 = state1 + 1; state2 < n_states; state2++) {
+            injective_transition(&ctx, state2);
+            injective_transition(&ctx, state1);
+        }
+    }
+    ovsdb_idl_destroy(ctx.idl);
+}
+
+#if 0
+static unsigned int
+n_next_states(const struct injective_ctx *ctx)
+{
+    unsigned int n_next_states = 1;
+    for (int i = 0; i < ctx->n_children; i++) {
+        bool does_exist = !uuid_is_zero(&ctx->child_uuids[i]);
+        /* If the child does not exist, one may choose to create it.
+         *
+         * If the child does exist, one may choose to leave it in place, to
+         * delete it, or to delete and re-create it. */
+        n_next_states *= does_exist ? 3 : 2;
+    }
+    for (int i = 0; i < ctx->n_parents; i++) {
+        bool does_exist = !uuid_is_zero(&ctx->parent_uuids[i]);
+        /* If the parent does not exist, one may choose to create it.
+         *
+         * If the parent does exist, one may choose to leave it in place, to
+         * delete it, or to delete and re-create it. */
+        n_next_states *= does_exist ? 3 : 2;
+    }
+}
+#endif
+
+static void
+do_idl_injective_random_iteration(struct injective_ctx *ctx)
+{
+    struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(ctx->idl);
+    unsigned int new_children = 0;
+
+    if (verbosity) {
+        printf("\nchildren: ");
+    }
+    for (int i = 0; i < ctx->n_children; i++) {
+        bool should_exist = random_bool();
+        bool does_exist = !uuid_is_zero(&ctx->child_uuids[i]);
+        char c;
+        if (should_exist && !does_exist) {
+            ctx->child_uuids[i] = idltest_child_insert(txn)->header_.uuid;
+            new_children |= 1u << i;
+            c = 'n';
+        } else if (!should_exist && does_exist) {
+            idltest_child_delete(injective_get_child(ctx, i));
+            uuid_zero(&ctx->child_uuids[i]);
+            c = 'd';
+        } else if (should_exist && does_exist && random_bool()) {
+            idltest_child_delete(injective_get_child(ctx, i));
+            ctx->child_uuids[i] = idltest_child_insert(txn)->header_.uuid;
+            new_children |= 1u << i;
+            c = 'r';
+        } else {
+            c = should_exist ? '.' : '_';
+        }
+        if (verbosity) {
+            putchar(c);
+        }
+        ovsdb_idl_check_consistency(ctx->idl);
+    }
+    if (verbosity) {
+        putchar('\n');
+    }
+
+    unsigned int new_parents = 0;
+    if (verbosity) {
+        printf(" parents:");
+    }
+    for (int i = 0; i < ctx->n_parents; i++) {
+        bool should_exist = random_bool();
+        bool does_exist = !uuid_is_zero(&ctx->parent_uuids[i]);
+        char c;
+
+        if (should_exist && !does_exist) {
+            ctx->parent_uuids[i] = idltest_parent_insert(txn)->header_.uuid;
+            new_parents |= 1u << i;
+            c = 'n';
+        } else if (!should_exist && does_exist) {
+            idltest_parent_delete(injective_get_parent(ctx, i));
+            uuid_zero(&ctx->parent_uuids[i]);
+            c = 'd';
+        } else if (should_exist && does_exist && random_bool()) {
+            idltest_parent_delete(injective_get_parent(ctx, i));
+            ctx->parent_uuids[i] = idltest_parent_insert(txn)->header_.uuid;
+            new_parents |= 1u << i;
+            c = 'r';
+        } else {
+            c = should_exist ? '.' : '_';
+        }
+        if (verbosity) {
+            printf(" %c", c);
+        }
+        ovsdb_idl_check_consistency(ctx->idl);
+
+        if (should_exist) {
+            struct idltest_child *children[MAX_CHILDREN];
+            int n_children = 0;
+            for (int k = 0; k < ctx->n_children; k++) {
+                if (!uuid_is_zero(&ctx->child_uuids[k]) && random_bool()) {
+                    children[n_children++] = injective_get_child(ctx, k);
+                    c = '1';
+                } else {
+                    c = '.';
+                }
+                if (verbosity) {
+                    putchar(c);
+                }
+            }
+            idltest_parent_set_children(injective_get_parent(ctx, i),
+                                        children, n_children);
+            ovsdb_idl_check_consistency(ctx->idl);
+        } else {
+            if (verbosity) {
+                for (int k = 0; k < ctx->n_children; k++) {
+                    putchar(' ');
+                }
+            }
+        }
+        if (verbosity) {
+            putchar('#');
+        }
+    }
+    if (verbosity) {
+        putchar('\n');
+    }
+    enum ovsdb_idl_txn_status txn_status = ovsdb_idl_txn_commit_block(txn);
+    if (txn_status != TXN_SUCCESS && txn_status != TXN_UNCHANGED) {
+        ovs_fatal(0, "transaction failed (%s)",
+                  ovsdb_idl_txn_status_to_string(txn_status));
+    }
+    for (int i = 0; i < ctx->n_children; i++) {
+        if (new_children & (1u << i)) {
+            ctx->child_uuids[i] = *ovsdb_idl_txn_get_insert_uuid(
+                txn, &ctx->child_uuids[i]);
+        }
+    }
+    for (int i = 0; i < ctx->n_parents; i++) {
+        if (new_parents & (1u << i)) {
+            ctx->parent_uuids[i] = *ovsdb_idl_txn_get_insert_uuid(
+                txn, &ctx->parent_uuids[i]);
+        }
+    }
+    ovsdb_idl_txn_destroy(txn);
+    ovsdb_idl_track_clear(ctx->idl);
+    ovsdb_idl_check_consistency(ctx->idl);
+
+    if (VALGRIND_COUNT_ERRORS) {
+        fprintf(stderr, "exiting due to valgrind errors\n");
+        exit(1);
+    }
+}
+
+static void
+do_idl_injective_random(struct ovs_cmdl_context *cmdl_ctx)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    struct injective_ctx ctx;
+    memset(&ctx, 0, sizeof ctx);
+
+    ctx.n_parents = atoi(cmdl_ctx->argv[2]);
+    if (ctx.n_parents <= 0 || ctx.n_parents > MAX_PARENTS) {
+        ovs_fatal(0, "number of parents must be between 1 and %d",
+                  MAX_PARENTS);
+    }
+
+    ctx.n_children = atoi(cmdl_ctx->argv[3]);
+    if (ctx.n_children <= 0 || ctx.n_children > MAX_CHILDREN) {
+        ovs_fatal(0, "number of children must be between 1 and %d",
+                  MAX_CHILDREN);
+    }
+
+    int seed = atoi(cmdl_ctx->argv[4]);
+    random_set_seed(seed ? seed : 1);
+
+    /* Create IDL and wait to connect to database. */
+    ctx.idl = ovsdb_idl_create(cmdl_ctx->argv[1], &idltest_idl_class,
+                               true, true);
+    ovsdb_idl_track_add_column(ctx.idl, &idltest_parent_col_children);
+    for (;;) {
+        ovsdb_idl_run(ctx.idl);
+        if (ovsdb_idl_get_seqno(ctx.idl)) {
+            break;
+        }
+        ovsdb_idl_wait(ctx.idl);
+        poll_block();
+    }
+
+    /* Delete all existing rows from Parent and Child tables. */
+    struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(ctx.idl);
+    const struct idltest_parent *parent, *next_parent;
+    const struct idltest_child *child, *next_child;
+    IDLTEST_PARENT_FOR_EACH_SAFE (parent, next_parent, ctx.idl) {
+        idltest_parent_delete(parent);
+    }
+    IDLTEST_CHILD_FOR_EACH_SAFE (child, next_child, ctx.idl) {
+        idltest_child_delete(child);
+    }
+    enum ovsdb_idl_txn_status txn_status = ovsdb_idl_txn_commit_block(txn);
+    if (txn_status != TXN_SUCCESS && txn_status != TXN_UNCHANGED) {
+        ovs_fatal(0, "transaction failed (%s)",
+                  ovsdb_idl_txn_status_to_string(txn_status));
+    }
+    ovsdb_idl_txn_destroy(txn);
+    ovsdb_idl_track_clear(ctx.idl);
+    ovsdb_idl_check_consistency(ctx.idl);
+
+    int n_iterations = atoi(cmdl_ctx->argv[5]);
+    for (int i = 0; i < n_iterations; i++) {
+        do_idl_injective_random_iteration(&ctx);
+    }
+    ovsdb_idl_destroy(ctx.idl);
+}
+
 static void
 print_idl_row_simple2(const struct idltest_simple2 *s, int step)
 {
@@ -2514,6 +3076,7 @@ print_idl_row_simple2(const struct idltest_simple2 *s, int step)
     }
     printf("]\n");
 }
+
 
 static void
 dump_simple2(struct ovsdb_idl *idl,
@@ -2754,6 +3317,9 @@ static struct ovs_cmdl_command all_commands[] = {
         do_idl_partial_update_map_column, OVS_RO },
     { "idl-partial-update-set-column", NULL, 1, INT_MAX,
         do_idl_partial_update_set_column, OVS_RO },
+    { "idl-injective-exhaustive", NULL, 3, 3, do_idl_injective_exhaustive,
+      OVS_RO },
+    { "idl-injective-random", NULL, 5, 5, do_idl_injective_random, OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { NULL, NULL, 0, 0, NULL, OVS_RO },
 };
