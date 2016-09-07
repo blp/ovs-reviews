@@ -135,7 +135,9 @@ def printCIDLHeader(schemaFile):
 #include "ovsdb-data.h"
 #include "ovsdb-idl-provider.h"
 #include "smap.h"
-#include "uuid.h"''' % {'prefix': prefix.upper()}
+#include "uuid.h"
+%(hDecls)s''' % {'prefix': prefix.upper(),
+                'hDecls': schema.hDecls}
 
     for tableName, table in sorted(schema.tables.iteritems()):
         structName = "%s%s" % (prefix, tableName.lower())
@@ -304,14 +306,17 @@ def printCIDLSource(schemaFile):
 /* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
 
 #include <config.h>
-#include %s
+#include %(header)s
 #include <limits.h>
 #include "ovs-thread.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
 #include "util.h"
 
-''' % schema.idlHeader
+%(cDecls)s
+
+''' % {'header': schema.idlHeader,
+       'cDecls': schema.cDecls}
 
     # Cast functions.
     for tableName, table in sorted(schema.tables.iteritems()):
