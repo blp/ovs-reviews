@@ -888,12 +888,11 @@ bool
 lexer_is_int(const struct lexer *lexer)
 {
     return (lexer->token.type == LEX_T_INTEGER
-            && lexer->token.format == LEX_F_DECIMAL
-            && ntohll(lexer->token.value.integer) <= INT_MAX);
+            && lexer->token.format == LEX_F_DECIMAL);
 }
 
 bool
-lexer_get_int(struct lexer *lexer, int *value)
+lexer_get_int(struct lexer *lexer, int64_t *value)
 {
     if (lexer_is_int(lexer)) {
         *value = ntohll(lexer->token.value.integer);
@@ -906,7 +905,7 @@ lexer_get_int(struct lexer *lexer, int *value)
 }
 
 bool
-lexer_force_int(struct lexer *lexer, int *value)
+lexer_force_int(struct lexer *lexer, int64_t *value)
 {
     bool ok = lexer_get_int(lexer, value);
     if (!ok) {

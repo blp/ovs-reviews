@@ -614,7 +614,7 @@ parse_field(struct expr_context *ctx, struct expr_field *f)
 
     f->symbol = symbol;
     if (lexer_match(ctx->lexer, LEX_T_LSQUARE)) {
-        int low, high;
+        int64_t low, high;
 
         if (!symbol->width) {
             lexer_error(ctx->lexer,
@@ -639,11 +639,14 @@ parse_field(struct expr_context *ctx, struct expr_field *f)
         }
 
         if (low > high) {
-            lexer_error(ctx->lexer, "Invalid bit range %d to %d.", low, high);
+            lexer_error(ctx->lexer,
+                        "Invalid bit range %"PRId64" to %"PRId64".",
+                        low, high);
             return false;
         } else if (high >= symbol->width) {
             lexer_error(ctx->lexer,
-                        "Cannot select bits %d to %d of %d-bit field %s.",
+                        "Cannot select bits %"PRId64" to %"PRId64" "
+                        "of %d-bit field %s.",
                         low, high, symbol->width, symbol->name);
             return false;
         } else if (symbol->level == EXPR_L_NOMINAL

@@ -202,7 +202,7 @@ static bool
 action_parse_port(struct action_context *ctx, uint16_t *port)
 {
     if (lexer_is_int(ctx->lexer)) {
-        int value = ntohll(ctx->lexer->token.value.integer);
+        int64_t value = ntohll(ctx->lexer->token.value.integer);
         if (value <= UINT16_MAX) {
             *port = value;
             lexer_get(ctx->lexer);
@@ -259,7 +259,7 @@ parse_NEXT(struct action_context *ctx)
     if (!ctx->pp->n_tables) {
         lexer_error(ctx->lexer, "\"next\" action not allowed here.");
     } else if (lexer_match(ctx->lexer, LEX_T_LPAREN)) {
-        int ltable;
+        int64_t ltable;
 
         if (!lexer_force_int(ctx->lexer, &ltable) ||
             !lexer_force_match(ctx->lexer, LEX_T_RPAREN)) {
@@ -1618,7 +1618,7 @@ free_PUT_DHCPV6_OPTS(struct ovnact_put_dhcp_opts *pdo)
 static void
 parse_SET_QUEUE(struct action_context *ctx)
 {
-    int queue_id;
+    int64_t queue_id;
 
     if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)
         || !lexer_get_int(ctx->lexer, &queue_id)
@@ -1627,7 +1627,7 @@ parse_SET_QUEUE(struct action_context *ctx)
     }
 
     if (queue_id < QDISC_MIN_QUEUE_ID || queue_id > QDISC_MAX_QUEUE_ID) {
-        lexer_error(ctx->lexer, "Queue ID %d for set_queue is "
+        lexer_error(ctx->lexer, "Queue ID %"PRId64" for set_queue is "
                     "not in valid range %d to %d.",
                     queue_id, QDISC_MIN_QUEUE_ID, QDISC_MAX_QUEUE_ID);
         return;
