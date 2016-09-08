@@ -215,7 +215,7 @@ static bool
 action_parse_port(struct action_context *ctx, uint16_t *port)
 {
     if (lexer_is_int(ctx->lexer)) {
-        int value = ntohll(ctx->lexer->token.value.integer);
+        int64_t value = ntohll(ctx->lexer->token.value.integer);
         if (value <= UINT16_MAX) {
             *port = value;
             lexer_get(ctx->lexer);
@@ -275,7 +275,7 @@ parse_NEXT(struct action_context *ctx)
     }
 
     int pipeline = ctx->pp->pipeline;
-    int table = ctx->pp->cur_ltable + 1;
+    int64_t table = ctx->pp->cur_ltable + 1;
     if (lexer_match(ctx->lexer, LEX_T_LPAREN)) {
         if (lexer_is_int(ctx->lexer)) {
             lexer_get_int(ctx->lexer, &table);
@@ -1721,7 +1721,7 @@ ovnact_put_opts_free(struct ovnact_put_opts *pdo)
 static void
 parse_SET_QUEUE(struct action_context *ctx)
 {
-    int queue_id;
+    int64_t queue_id;
 
     if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)
         || !lexer_get_int(ctx->lexer, &queue_id)
@@ -1730,7 +1730,7 @@ parse_SET_QUEUE(struct action_context *ctx)
     }
 
     if (queue_id < QDISC_MIN_QUEUE_ID || queue_id > QDISC_MAX_QUEUE_ID) {
-        lexer_error(ctx->lexer, "Queue ID %d for set_queue is "
+        lexer_error(ctx->lexer, "Queue ID %"PRId64" for set_queue is "
                     "not in valid range %d to %d.",
                     queue_id, QDISC_MIN_QUEUE_ID, QDISC_MAX_QUEUE_ID);
         return;
