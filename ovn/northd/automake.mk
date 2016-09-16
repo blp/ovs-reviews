@@ -17,7 +17,9 @@ ovn_northd_ovn_northd_SOURCES = \
 	ovn/northd/northd-nb-idl.c \
 	ovn/northd/northd-nb-idl.h \
 	ovn/northd/ovn-northd.c \
-	ovn/northd/ovn-northd.h
+	ovn/northd/ovn-northd.h \
+	ovn/northd/stages.c \
+	ovn/northd/stages.h
 ovn_northd_ovn_northd_LDADD = \
 	ovn/lib/libovn.la \
 	ovsdb/libovsdb.la \
