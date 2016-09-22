@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -137,7 +137,7 @@ process_prestart(char **argv)
 
     /* execvp() will search PATH too, but the error in that case is more
      * obscure, since it is only reported post-fork. */
-    binary = process_search_path(argv[0]);
+    binary = search_path(argv[0], getenv("PATH"));
     if (!binary) {
         VLOG_ERR("%s not found in PATH", argv[0]);
         return ENOENT;
@@ -405,31 +405,6 @@ process_wait(struct process *p)
 #else
     OVS_NOT_REACHED();
 #endif
-}
-
-char *
-process_search_path(const char *name)
-{
-    char *save_ptr = NULL;
-    char *path, *dir;
-    struct stat s;
-
-    if (strchr(name, '/') || !getenv("PATH")) {
-        return stat(name, &s) == 0 ? xstrdup(name) : NULL;
-    }
-
-    path = xstrdup(getenv("PATH"));
-    for (dir = strtok_r(path, ":", &save_ptr); dir;
-         dir = strtok_r(NULL, ":", &save_ptr)) {
-        char *file = xasprintf("%s/%s", dir, name);
-        if (stat(file, &s) == 0) {
-            free(path);
-            return file;
-        }
-        free(file);
-    }
-    free(path);
-    return NULL;
 }
 
 static void

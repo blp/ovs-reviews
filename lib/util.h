@@ -173,7 +173,9 @@ char *get_cwd(void);
 char *dir_name(const char *file_name);
 char *base_name(const char *file_name);
 #endif
+bool file_name_is_absolute(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
+char *search_path(const char *name, const char *path);
 
 char *follow_symlinks(const char *filename);
 

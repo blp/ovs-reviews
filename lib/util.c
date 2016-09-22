@@ -915,6 +915,16 @@ base_name(const char *file_name)
 }
 #endif /* _WIN32 */
 
+bool
+file_name_is_absolute(const char *fn)
+{
+#ifdef _WIN32
+    return fn[0] == '/' || fn[0] == '\\' || strchr(fn, ':');
+#else
+    return fn[0] == '/';
+#endif
+}
+
 /* If 'file_name' starts with '/', returns a copy of 'file_name'.  Otherwise,
  * returns an absolute path to 'file_name' considering it relative to 'dir',
  * which itself must be absolute.  'dir' may be null or the empty string, in
@@ -927,12 +937,8 @@ base_name(const char *file_name)
 char *
 abs_file_name(const char *dir, const char *file_name)
 {
-    if (file_name[0] == '/') {
+    if (file_name_is_absolute(file_name)) {
         return xstrdup(file_name);
-#ifdef _WIN32
-    } else if (strchr(file_name, ':')) {
-        return xstrdup(file_name);
-#endif
     } else if (dir && dir[0]) {
         char *separator = dir[strlen(dir) - 1] == '/' ? "" : "/";
         return xasprintf("%s%s%s", dir, separator, file_name);
@@ -946,6 +952,37 @@ abs_file_name(const char *dir, const char *file_name)
             return NULL;
         }
     }
+}
+
+/* Searches the colon-delimited 'path' for a file named 'name'.  If found,
+ * returns a malloc()'d path to the file name, otherwise NULL.
+ *
+ * The return value might be an absolute name or a relative name, depending on
+ * the directories named in 'path'.
+ *
+ * 'path' may be NULL, to search to current directory only. */
+char *
+search_path(const char *name, const char *path_)
+{
+    if (file_name_is_absolute(name) || !path_) {
+        struct stat s;
+        return stat(name, &s) == 0 ? xstrdup(name) : NULL;
+    }
+
+    char *path = xstrdup(path_);
+    char *save_ptr = NULL;
+    for (char *dir = strtok_r(path, ":", &save_ptr); dir;
+         dir = strtok_r(NULL, ":", &save_ptr)) {
+        char *file = xasprintf("%s/%s", dir, name);
+        struct stat s;
+        if (stat(file, &s) == 0) {
+            free(path);
+            return file;
+        }
+        free(file);
+    }
+    free(path);
+    return NULL;
 }
 
 /* Like readlink(), but returns the link name as a null-terminated string in
