@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2011, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2011, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,6 +56,5 @@ bool get_process_info(pid_t, struct process_info *);
 /* These functions are thread-safe. */
 char *process_status_msg(int);
 char *process_escape_args(char **argv);
-char *process_search_path(const char *);
 
 #endif /* process.h */
