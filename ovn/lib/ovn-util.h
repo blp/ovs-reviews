@@ -18,7 +18,6 @@
 
 #include "lib/packets.h"
 
-struct nbrec_logical_router_port;
 struct uuid;
 
 struct ipv4_netaddr {
@@ -55,7 +54,7 @@ struct lport_addresses {
 
 bool is_dynamic_lsp_address(const char *address);
 bool extract_lsp_addresses(const char *address, struct lport_addresses *);
-bool extract_lrp_networks(const struct nbrec_logical_router_port *,
+bool extract_lrp_networks(const char *mac, char **networks, size_t n_networks,
                           struct lport_addresses *);
 void destroy_lport_addresses(struct lport_addresses *);
 

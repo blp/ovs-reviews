@@ -29,7 +29,7 @@
 #include "openvswitch/json.h"
 #include "ovn/lex.h"
 #include "ovn/lib/ovn-dhcp.h"
-#include "ovn/lib/ovn-nb-idl.h"
+#include "ovn/northd/northd-nb-idl.h"
 #include "ovn/lib/ovn-sb-idl.h"
 #include "ovn/lib/ovn-util.h"
 #include "ovn/actions.h"
@@ -859,7 +859,8 @@ ipam_add_port_addresses(struct ovn_datapath *od, struct ovn_port *op)
         }
     } else if (op->nbrp) {
         struct lport_addresses lrp_networks;
-        if (!extract_lrp_networks(op->nbrp, &lrp_networks)) {
+        if (!extract_lrp_networks(op->nbrp->mac, op->nbrp->networks,
+                                  op->nbrp->n_networks, &lrp_networks)) {
             static struct vlog_rate_limit rl
                 = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "Extract addresses failed.");
@@ -1262,7 +1263,8 @@ join_logical_ports(struct northd_context *ctx,
                     = od->nbr->ports[i];
 
                 struct lport_addresses lrp_networks;
-                if (!extract_lrp_networks(nbrp, &lrp_networks)) {
+                if (!extract_lrp_networks(nbrp->mac, nbrp->networks,
+                                          nbrp->n_networks, &lrp_networks)) {
                     static struct vlog_rate_limit rl
                         = VLOG_RATE_LIMIT_INIT(5, 1);
                     VLOG_WARN_RL(&rl, "bad 'mac' %s", nbrp->mac);

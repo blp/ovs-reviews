@@ -151,29 +151,29 @@ extract_lsp_addresses(const char *address, struct lport_addresses *laddrs)
  *
  * The caller must call destroy_lport_addresses(). */
 bool
-extract_lrp_networks(const struct nbrec_logical_router_port *lrp,
+extract_lrp_networks(const char *mac, char **networks, size_t n_networks,
                      struct lport_addresses *laddrs)
 {
     memset(laddrs, 0, sizeof *laddrs);
 
-    if (!eth_addr_from_string(lrp->mac, &laddrs->ea)) {
+    if (!eth_addr_from_string(mac, &laddrs->ea)) {
         laddrs->ea = eth_addr_zero;
         return false;
     }
     snprintf(laddrs->ea_s, sizeof laddrs->ea_s, ETH_ADDR_FMT,
              ETH_ADDR_ARGS(laddrs->ea));
 
-    for (int i = 0; i < lrp->n_networks; i++) {
+    for (int i = 0; i < n_networks; i++) {
         ovs_be32 ip4;
         struct in6_addr ip6;
         unsigned int plen;
         char *error;
 
-        error = ip_parse_cidr(lrp->networks[i], &ip4, &plen);
+        error = ip_parse_cidr(networks[i], &ip4, &plen);
         if (!error) {
             if (!ip4 || plen == 32) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_WARN_RL(&rl, "bad 'networks' %s", lrp->networks[i]);
+                VLOG_WARN_RL(&rl, "bad 'networks' %s", networks[i]);
                 continue;
             }
 
@@ -182,18 +182,18 @@ extract_lrp_networks(const struct nbrec_logical_router_port *lrp,
         }
         free(error);
 
-        error = ipv6_parse_cidr(lrp->networks[i], &ip6, &plen);
+        error = ipv6_parse_cidr(networks[i], &ip6, &plen);
         if (!error) {
             if (plen == 128) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_WARN_RL(&rl, "bad 'networks' %s", lrp->networks[i]);
+                VLOG_WARN_RL(&rl, "bad 'networks' %s", networks[i]);
                 continue;
             }
             add_ipv6_netaddr(laddrs, ip6, plen);
         } else {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_INFO_RL(&rl, "invalid syntax '%s' in networks",
-                         lrp->networks[i]);
+                         networks[i]);
             free(error);
         }
     }
