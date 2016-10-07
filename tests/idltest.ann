@@ -11,3 +11,45 @@ s["idlHeader"] = "\"tests/idltest.h\""
 s["tables"]["Parent"]["columns"]["children"]["extensions"] = {
     "injective": "up"
 }
+
+s["tables"]["Natural"]["columns"]["values"]["extensions"] = {}
+s["tables"]["Natural"]["columns"]["values"]["extensions"]["members"] = """\
+        int64_t *values;
+        size_t n_values;
+        struct idltest_synthetic **value_rows;
+""";
+s["tables"]["Natural"]["columns"]["values"]["extensions"]["parse"] = """\
+    row->values = NULL;
+    row->value_rows = NULL;
+    row->n_values = 0;
+    for (size_t i = 0; i < datum->n; i++) {
+        struct idltest_synthetic *s = idltest_synthetic_cast(insert_dependent_row(row->header_.table->idl, &idltest_table_synthetic));
+        s->natural = row;
+        s->value = datum->keys[i].integer;
+
+        if (!row->n_values) {
+            row->values = xmalloc(datum->n * sizeof *row->values);
+            row->value_rows = xmalloc(datum->n * sizeof *row->value_rows);
+        }
+        row->values[row->n_values] = datum->keys[i].integer;
+        row->value_rows[row->n_values] = s;
+        row->n_values++;
+    }
+"""
+s["tables"]["Natural"]["columns"]["values"]["extensions"]["unparse"] = """\
+    for (size_t i = 0; i < row->n_values; i++) {
+        remove_dependent_row(&row->value_rows[i]->header_);
+    }
+    free(row->values);
+    free(row->value_rows);
+"""
+
+s["tables"]["Synthetic"] = {
+    "columns": {
+        "natural": {"type": {"key": {"type": "uuid", "refTable": "Natural"}}},
+        "value": {"type": "integer"}
+    },
+    "extensions": {
+        "synthetic": True
+    }
+}

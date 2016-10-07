@@ -708,7 +708,8 @@ ovsdb_idl_check_consistency(const struct ovsdb_idl *idl)
 
         const struct ovsdb_idl_row *row;
         HMAP_FOR_EACH (row, hmap_node, &table->rows) {
-            if (!idl->txn && row->old != row->new) {
+            if (!idl->txn && row->old != row->new
+                && !row->table->class->synthetic) {
                 VLOG_ERR("row->old != row->new outside transaction");
                 ok = false;
             }
@@ -1408,7 +1409,13 @@ ovsdb_idl_send_monitor_request__(struct ovsdb_idl *idl,
         }
 
         if (columns) {
-            if (schema && !table_schema) {
+            if (tc->synthetic) {
+                if (table_schema) {
+                    VLOG_WARN("%s database has synthetic table %s",
+                              idl->class->database, tc->name);
+                }
+                continue;
+            } else if (schema && !table_schema) {
                 VLOG_WARN("%s database lacks %s table "
                           "(database needs upgrade?)",
                           idl->class->database, table->class->name);
@@ -4492,4 +4499,26 @@ unparse_injective_set(struct ovsdb_idl_row *row,
                                &best->reparse_node);
         }
     }
+}
+
+struct ovsdb_idl_row *
+insert_dependent_row(struct ovsdb_idl *idl,
+                     const struct ovsdb_idl_table_class *class)
+{
+    struct ovsdb_idl_row *row = ovsdb_idl_row_create__(class);
+    uuid_generate(&row->uuid);
+
+    row->table = ovsdb_idl_table_from_class(idl, class);
+    row->new = xmalloc(class->n_columns * sizeof *row->new);
+    hmap_insert(&row->table->rows, &row->hmap_node, uuid_hash(&row->uuid));
+    /* XXX tracking */
+    return row;
+}
+
+void
+remove_dependent_row(struct ovsdb_idl_row *row)
+{
+    ovsdb_idl_row_clear_new(row);
+    hmap_remove(&row->table->rows, &row->hmap_node);
+    /* XXX tracking */
 }

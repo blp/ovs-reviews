@@ -1380,7 +1380,11 @@ void
             is_root = "true"
         else:
             is_root = "false"
-        print "    {\"%s\", %s," % (tableName, is_root)
+        if table.extensions.get('synthetic', False):
+            synthetic = "true"
+        else:
+            synthetic = "false"
+        print "    {\"%s\", %s, %s," % (tableName, is_root, synthetic)
         print "     %s_columns, ARRAY_SIZE(%s_columns)," % (
             structName, structName)
         print "     sizeof(struct %s), %s_init__}," % (structName, structName)

@@ -3055,6 +3055,137 @@ do_idl_injective_random(struct ovs_cmdl_context *cmdl_ctx)
     ovsdb_idl_destroy(ctx.idl);
 }
 
+/* idl-synthetic test. */
+
+enum { MAX_ROWS = 5 };
+enum { MAX_VALUES = 6 };
+
+/* A bitmask of rows*values must fit in an unsigned int. */
+BUILD_ASSERT_DECL(MAX_ROWS * MAX_VALUES <= 8 * sizeof(unsigned int));
+
+struct synthetic_ctx {
+    struct ovsdb_idl *idl;
+    int n_rows, n_values;
+    unsigned int old_state;
+};
+
+static void
+synthetic_transition(struct synthetic_ctx *ctx, const unsigned int state)
+{
+    const int NV = ctx->n_values;
+
+    /* Transition all the rows to the new state. */
+    struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(ctx->idl);
+    const struct idltest_natural *natural;
+    IDLTEST_NATURAL_FOR_EACH (natural, ctx->idl) {
+        int id = natural->id;
+        unsigned int shift = NV * id;
+        unsigned int mask = (1u << NV) - 1;
+        unsigned int values = (state >> shift) & mask;
+        unsigned int old_values = (ctx->old_state >> shift) & mask;
+        if (values != old_values) {
+            int64_t v[MAX_VALUES];
+            int n = 0;
+            for (int i = 0; i < NV; i++) {
+                if (values & (1u << i)) {
+                    v[n++] = i;
+                }
+            }
+            idltest_natural_set_values(natural, v, n);
+            ovsdb_idl_check_consistency(ctx->idl);
+        }
+    }
+    enum ovsdb_idl_txn_status txn_status = ovsdb_idl_txn_commit_block(txn);
+    ovsdb_idl_check_consistency(ctx->idl);
+    if (txn_status != TXN_SUCCESS && txn_status != TXN_UNCHANGED) {
+        ovs_fatal(0, "transaction failed (%s)",
+                  ovsdb_idl_txn_status_to_string(txn_status));
+    }
+    ovsdb_idl_txn_destroy(txn);
+    ovsdb_idl_check_consistency(ctx->idl);
+
+    /* Verify that the IDL correctly represents the new state.
+     *
+     * XXX Should check that the Natural table is also correct. */
+    unsigned int actual_state = 0;
+    const struct idltest_synthetic *s;
+    IDLTEST_SYNTHETIC_FOR_EACH (s, ctx->idl) {
+        ovs_assert(s->value >= 0 && s->value < NV);
+        int id = s->natural->id;
+        unsigned int bit = 1u << (NV * id + s->value);
+        if (actual_state & bit) {
+            ovs_fatal(0, "duplicate state");
+        }
+        actual_state |= bit;
+    }
+    if (actual_state != state) {
+        ovs_fatal(0, "state mismatch (%u != %u)", state, actual_state);
+    }
+
+    /* XXX Check for change tracking correctness. */
+    ctx->old_state = state;
+}
+
+static void
+do_idl_synthetic_exhaustive(struct ovs_cmdl_context *cmdl_ctx)
+{
+    struct synthetic_ctx ctx;
+
+    ctx.n_rows = atoi(cmdl_ctx->argv[2]);
+    if (ctx.n_rows <= 0 || ctx.n_rows > MAX_ROWS) {
+        ovs_fatal(0, "number of rows must be between 1 and %d", MAX_ROWS);
+    }
+
+    ctx.n_values = atoi(cmdl_ctx->argv[3]);
+    if (ctx.n_values <= 0 || ctx.n_values > MAX_VALUES) {
+        ovs_fatal(0, "number of values must be between 1 and %d", MAX_VALUES);
+    }
+
+    /* Create IDL and wait to connect to database. */
+    ctx.idl = ovsdb_idl_create(cmdl_ctx->argv[1], &idltest_idl_class,
+                               true, true);
+    for (;;) {
+        ovsdb_idl_run(ctx.idl);
+        if (ovsdb_idl_get_seqno(ctx.idl)) {
+            break;
+        }
+        ovsdb_idl_wait(ctx.idl);
+        poll_block();
+    }
+
+    /* Delete all existing rows from Natural, then create correct number of
+     * records. */
+    struct ovsdb_idl_txn *txn = ovsdb_idl_txn_create(ctx.idl);
+    const struct idltest_natural *natural, *next_natural;
+    IDLTEST_NATURAL_FOR_EACH_SAFE (natural, next_natural, ctx.idl) {
+        idltest_natural_delete(natural);
+    }
+    for (int i = 0; i < ctx.n_rows; i++) {
+        natural = idltest_natural_insert(txn);
+        idltest_natural_set_id(natural, i);
+    }
+    enum ovsdb_idl_txn_status txn_status = ovsdb_idl_txn_commit_block(txn);
+    if (txn_status != TXN_SUCCESS) {
+        ovs_fatal(0, "transaction failed (%s)",
+                  ovsdb_idl_txn_status_to_string(txn_status));
+    }
+    ovsdb_idl_txn_destroy(txn);
+    ovsdb_idl_track_clear(ctx.idl);
+
+    ovsdb_idl_check_consistency(ctx.idl);
+
+    const unsigned int n_states = 1u << (ctx.n_rows * ctx.n_values);
+    ctx.old_state = 0;
+    for (unsigned int state1 = 0; state1 < n_states; state1++) {
+        synthetic_transition(&ctx, state1);
+        for (unsigned int state2 = state1 + 1; state2 < n_states; state2++) {
+            synthetic_transition(&ctx, state2);
+            synthetic_transition(&ctx, state1);
+        }
+    }
+    ovsdb_idl_destroy(ctx.idl);
+}
+
 static void
 print_idl_row_simple2(const struct idltest_simple2 *s, int step)
 {
@@ -3320,6 +3451,8 @@ static struct ovs_cmdl_command all_commands[] = {
     { "idl-injective-exhaustive", NULL, 3, 3, do_idl_injective_exhaustive,
       OVS_RO },
     { "idl-injective-random", NULL, 5, 5, do_idl_injective_random, OVS_RO },
+    { "idl-synthetic-exhaustive", NULL, 3, 3, do_idl_synthetic_exhaustive,
+      OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { NULL, NULL, 0, 0, NULL, OVS_RO },
 };

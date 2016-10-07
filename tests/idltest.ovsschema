@@ -182,6 +182,18 @@
       "columns": {
 	"dummy": {"type": "integer"}
       }
+    },
+    "Natural": {
+      "columns": {
+        "values": {
+	  "type": {
+	    "key": "integer",
+	    "min": 0,
+	    "max": "unlimited"
+	  }
+	},
+	"id": {"type": "integer"}
+      }
     }
   }
 }

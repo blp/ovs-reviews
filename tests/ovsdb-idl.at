@@ -1324,3 +1324,14 @@ for np in 1 2 3 4; do
 done
 OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
+
+AT_SETUP([ovsdb-idl synthetic tables - exhaustive])
+AT_KEYWORDS([ovsdb server idl positive])
+AT_CHECK([ovsdb_start_idltest])
+AT_CHECK([test-ovsdb -vwarn idl-synthetic-exhaustive unix:socket 2 3])
+AT_CHECK([test-ovsdb -vwarn idl-synthetic-exhaustive unix:socket 3 2])
+# Uncommenting the following yields a more thorough test but
+# extends the test runtime from less than 1s to over 30s.
+AT_CHECK([test-ovsdb -vwarn idl-synthetic-exhaustive unix:socket 3 3])
+OVSDB_SERVER_SHUTDOWN
+AT_CLEANUP

@@ -99,6 +99,7 @@ struct ovsdb_idl_column {
 struct ovsdb_idl_table_class {
     char *name;
     bool is_root;
+    bool synthetic;
     const struct ovsdb_idl_column *columns;
     size_t n_columns;
     size_t allocation_size;
@@ -149,6 +150,10 @@ void parse_injective_up(const struct ovsdb_datum *, struct ovsdb_idl_row *,
                         const struct ovsdb_idl_table_class *src_table_class,
                         size_t column_idx, size_t up_ofs);
 void read_injective_up(const struct ovsdb_idl_row *, struct ovsdb_datum *);
+
+struct ovsdb_idl_row *insert_dependent_row(
+    struct ovsdb_idl *, const struct ovsdb_idl_table_class *);
+void remove_dependent_row(struct ovsdb_idl_row *);
 
 void ovsdb_idl_txn_verify(const struct ovsdb_idl_row *,
                           const struct ovsdb_idl_column *);
