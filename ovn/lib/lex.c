@@ -80,6 +80,18 @@ lex_token_swap(struct lex_token *a, struct lex_token *b)
     }
 }
 
+/* Initializes 'dst' with the same contents as 'src'. */
+void
+lex_token_clone(struct lex_token *dst, const struct lex_token *src)
+{
+    lex_token_init(dst);
+    if (src->s) {
+        lex_token_strcpy(dst, src->s, strlen(src->s));
+    }
+    dst->type = src->type;
+    dst->format = src->format;
+}
+
 /* The string 's' need not be null-terminated at 'length'. */
 void
 lex_token_strcpy(struct lex_token *token, const char *s, size_t length)
@@ -815,6 +827,13 @@ lexer_init(struct lexer *lexer, const char *input, const char *file_name)
     lexer->file_name = file_name;
     lexer->line_number = 1;
     lexer->error = NULL;
+}
+
+void
+lexer_clone(struct lexer *dst, const struct lexer *src)
+{
+    *dst = *src;
+    lex_token_clone(&dst->token, &src->token);
 }
 
 /* Frees storage associated with 'lexer'. */

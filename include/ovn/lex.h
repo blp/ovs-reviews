@@ -110,6 +110,7 @@ struct lex_token {
 
 void lex_token_init(struct lex_token *);
 void lex_token_destroy(struct lex_token *);
+void lex_token_clone(struct lex_token *, const struct lex_token *);
 void lex_token_swap(struct lex_token *, struct lex_token *);
 void lex_token_strcpy(struct lex_token *, const char *s, size_t length);
 void lex_token_strset(struct lex_token *, char *s);
@@ -132,6 +133,7 @@ struct lexer {
 };
 
 void lexer_init(struct lexer *, const char *input, const char *file_name);
+void lexer_clone(struct lexer *, const struct lexer *);
 void lexer_destroy(struct lexer *);
 
 enum lex_type lexer_get(struct lexer *);
