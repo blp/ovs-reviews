@@ -96,6 +96,8 @@ struct ovsdb_idl_column {
     void (*read)(const struct ovsdb_idl_row *, struct ovsdb_datum *);
 };
 
+const struct ovsdb_idl_column *ovsdb_idl_table_lookup_column(
+    const struct ovsdb_idl_table *, const char *column_name);
 struct ovsdb_idl_table_class {
     char *name;
     bool is_root;
@@ -124,6 +126,9 @@ struct ovsdb_idl_table {
     struct ovsdb_idl_condition condition;
     bool cond_changed;
 };
+
+const struct ovsdb_idl_table *ovsdb_idl_lookup_table(
+    const struct ovsdb_idl *, const char *table_name);
 
 struct ovsdb_idl_class {
     const char *database;       /* <db-name> for this database. */

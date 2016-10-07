@@ -800,6 +800,19 @@ add_ref_table(struct ovsdb_idl *idl, const struct ovsdb_base_type *base)
     }
 }
 
+const struct ovsdb_idl_table *
+ovsdb_idl_lookup_table(const struct ovsdb_idl *idl, const char *table_name)
+{
+    return shash_find_data(&idl->table_by_name, table_name);
+}
+
+const struct ovsdb_idl_column *
+ovsdb_idl_table_lookup_column(const struct ovsdb_idl_table *table,
+                              const char *column_name)
+{
+    return shash_find_data(&table->columns, column_name);
+}
+
 /* Turns on OVSDB_IDL_MONITOR and OVSDB_IDL_ALERT for 'column' in 'idl'.  Also
  * ensures that any tables referenced by 'column' will be replicated, even if
  * no columns in that table are selected for replication (see
