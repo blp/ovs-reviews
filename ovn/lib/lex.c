@@ -960,6 +960,16 @@ lexer_force_int(struct lexer *lexer, int64_t *value)
 }
 
 bool
+lexer_force_string(struct lexer *lexer)
+{
+    if (lexer->token.type != LEX_T_STRING) {
+        lexer_syntax_error(lexer, "expecting quoted string");
+        return false;
+    }
+    return true;
+}
+
+bool
 lexer_force_end(struct lexer *lexer)
 {
     if (lexer->token.type == LEX_T_END) {
