@@ -145,6 +145,7 @@ bool lexer_force_match_id(struct lexer *, const char *id);
 bool lexer_is_int(const struct lexer *);
 bool lexer_get_int(struct lexer *, int64_t *value);
 bool lexer_force_int(struct lexer *, int64_t *value);
+bool lexer_force_string(struct lexer *);
 
 void lexer_force_end(struct lexer *);
 
