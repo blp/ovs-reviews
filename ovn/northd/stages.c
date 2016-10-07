@@ -31,6 +31,21 @@ ovn_stage_to_str(enum ovn_stage stage)
     }
 }
 
+/* Attempts to parse 'string' as the name of an OVN stage.  If successful,
+ * returns true and stores the stage in '*stage', otherwise returns false. */
+bool
+ovn_stage_from_string(const char *string, enum ovn_stage *stage)
+{
+#define PIPELINE_STAGE(DP_TYPE, PIPELINE, STAGE, TABLE, NAME)       \
+    if (!strcasecmp(string, NAME)) {                                \
+        *stage = S_##DP_TYPE##_##PIPELINE##_##STAGE; \
+        return true;                                 \
+    }
+    PIPELINE_STAGES
+#undef PIPELINE_STAGE
+    return false;
+}
+
 /* Returns the type of the datapath to which a flow with the given 'stage' may
  * be added. */
 enum ovn_datapath_type

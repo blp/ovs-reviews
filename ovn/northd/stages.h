@@ -121,6 +121,8 @@ ovn_stage_get_table(enum ovn_stage stage)
 }
 
 const char *ovn_stage_to_str(enum ovn_stage);
+bool ovn_stage_from_string(const char *, enum ovn_stage *);
+
 enum ovn_datapath_type ovn_stage_to_datapath_type(enum ovn_stage);
 
 #endif /* ovn/northd/stages.h */
