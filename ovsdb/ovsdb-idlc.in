@@ -117,8 +117,35 @@ def cMembers(prefix, tableName, columnName, column, const, refTable=True):
 
     return (comment, members)
 
+# This is equivalent to sorted(table.columns.items()), except that the
+# sorting includes a topological component: if column B has a
+# dependency on column A, then A will be sorted before B.
 def sorted_columns(table):
-    return sorted(table.columns.items())
+    input = []
+    for column in table.columns.itervalues():
+        input += [(column, set(column.extensions.get('dependencies', [])))]
+
+    output = []
+    satisfied_dependencies = set()
+    while input:
+        done = []
+        next = []
+        for column, dependencies in input:
+            if dependencies <= satisfied_dependencies:
+                done += [(column.name, column)]
+            else:
+                next += [(column, dependencies)]
+
+        # If this fails, then there's a circular dependency between
+        # columns or a dependency on a column that doesn't actually
+        # exist.
+        assert done
+
+        for column_name, column in done:
+            satisfied_dependencies.add(column_name)
+        output += sorted(done)
+        input = next
+    return output
 
 def printCIDLHeader(schemaFile):
     schema = parseSchema(schemaFile)
@@ -148,6 +175,9 @@ def printCIDLHeader(schemaFile):
         print "\tstruct ovsdb_idl_row header_;"
         for columnName, column in sorted_columns(table):
             print "\n\t/* %s column. */" % columnName
+            if column.extensions.get("members"):
+                print "\t%s" % column.extensions["members"]
+                continue
             comment, members = cMembers(prefix, tableName,
                                         columnName, column, False)
             for member in members:
