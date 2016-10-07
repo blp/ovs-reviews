@@ -499,6 +499,20 @@ static void
     /* Nothing to do. */
 }''' % {'s': structName, 'c': columnName}
 
+        # Read functions.
+        for columnName, column in sorted_columns(table):
+            if 'read' in column.extensions:
+                print '''
+static void
+%(s)s_read_%(c)s(const struct ovsdb_idl_row *row_, struct ovsdb_datum *datum)
+{
+    const struct %(s)s *row = %(s)s_cast(row_);
+%(read)s
+}
+''' % {'s': structName,
+       'c': columnName,
+       'read': column.extensions['read']}
+
         # Generic Row Initialization function.
         print """
 static void
@@ -1231,6 +1245,10 @@ void
                                   for x in column.type.cInitType(prefix,
                                                                  "%s_col_%s" % (tableName, columnName), 
                                                                  prereqs))
+            if column.extensions.get("read"):
+                read_init = "%s_read_%s" % (structName, columnName)
+            else:
+                read_init = "NULL"
             print """\
     [%(P)s%(T)s_COL_%(C)s] = {
          .name = "%(c)s",
@@ -1240,13 +1258,15 @@ void
          .mutable = %(mutable)s,
          .parse = %(s)s_parse_%(c)s,
          .unparse = %(s)s_unparse_%(c)s,
+         .read = %(read)s,
     },\n""" % {'P': prefix.upper(),
                'T': tableName.upper(),
                'c': columnName,
                'C': columnName.upper(),
                's': structName,
                'mutable': mutable,
-               'type': type_init}
+               'type': type_init,
+               'read': read_init}
         print "};"
 
     # Table classes.

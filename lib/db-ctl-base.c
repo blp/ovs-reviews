@@ -285,6 +285,7 @@ get_row_by_id(struct ctl_context *ctx, const struct ctl_table_class *table,
                     referrer = row;
                 }
             }
+            ovsdb_idl_read_free(row, id->name_column, name);
         }
     }
     if (!referrer) {
@@ -302,6 +303,7 @@ get_row_by_id(struct ctl_context *ctx, const struct ctl_table_class *table,
             final = ovsdb_idl_get_row_for_uuid(ctx->idl, table->class,
                                                &uuid->keys[0].uuid);
         }
+        ovsdb_idl_read_free(referrer, id->uuid_column, uuid);
     } else {
         final = referrer;
     }
@@ -714,6 +716,7 @@ is_condition_satisfied(const struct ctl_table_class *table,
         retval = evaluate_relop(have_datum, &want_datum, &type, operator);
         ovsdb_datum_destroy(&want_datum, &column->type);
     }
+    ovsdb_idl_read_free(row, column, have_datum);
 
     free(key_string);
     free(value_string);
@@ -843,6 +846,7 @@ cmd_get(struct ctl_context *ctx)
         } else {
             ovsdb_datum_to_string(datum, &column->type, out);
         }
+        ovsdb_idl_read_free(row, column, datum);
         ds_put_char(out, '\n');
 
         free(key_string);
@@ -978,8 +982,9 @@ list_record(const struct ovsdb_idl_row *row,
             cell->type = &ovsdb_type_uuid;
         } else {
             const struct ovsdb_datum *datum = ovsdb_idl_read(row, column);
-
             cell->json = ovsdb_datum_to_json(datum, &column->type);
+            ovsdb_idl_read_free(row, column, datum);
+
             cell->type = &column->type;
         }
     }
@@ -1129,8 +1134,10 @@ set_column(const struct ctl_table_class *table,
         ovsdb_atom_destroy(&key, column->type.key.type);
         ovsdb_atom_destroy(&value, column->type.value.type);
 
-        ovsdb_datum_union(&datum, ovsdb_idl_read(row, column),
-                          &column->type, false);
+        const struct ovsdb_datum *d = ovsdb_idl_read(row, column);
+        ovsdb_datum_union(&datum, d, &column->type, false);
+        ovsdb_idl_read_free(row, column, d);
+
         ovsdb_idl_txn_verify(row, column);
         ovsdb_idl_txn_write(row, column, &datum);
     } else {
@@ -1216,7 +1223,9 @@ cmd_add(struct ctl_context *ctx)
     check_mutable(row, column);
 
     type = &column->type;
-    ovsdb_datum_clone(&old, ovsdb_idl_read(row, column), &column->type);
+    const struct ovsdb_datum *datum = ovsdb_idl_read(row, column);
+    ovsdb_datum_clone(&old, datum, &column->type);
+    ovsdb_idl_read_free(row, column, datum);
     for (i = 4; i < ctx->argc; i++) {
         struct ovsdb_type add_type;
         struct ovsdb_datum add;
@@ -1277,7 +1286,9 @@ cmd_remove(struct ctl_context *ctx)
     check_mutable(row, column);
 
     type = &column->type;
-    ovsdb_datum_clone(&old, ovsdb_idl_read(row, column), &column->type);
+    const struct ovsdb_datum *datum = ovsdb_idl_read(row, column);
+    ovsdb_datum_clone(&old, datum, &column->type);
+    ovsdb_idl_read_free(row, column, datum);
     for (i = 4; i < ctx->argc; i++) {
         struct ovsdb_type rm_type;
         struct ovsdb_datum rm;
@@ -1699,8 +1710,11 @@ cmd_show_weak_ref(struct ctl_context *ctx, const struct cmd_show_table *show,
             ds_put_char_multiple(&ctx->output, ' ', (level + 1) * 4);
             ds_put_format(&ctx->output, "%s ", table->name);
             ovsdb_datum_to_string(name_datum, &name_column->type, &ctx->output);
+            ovsdb_idl_read_free(row_wref, name_column, name_datum);
+
             ds_put_char(&ctx->output, '\n');
         }
+        ovsdb_idl_read_free(row_wref, wref_column, wref_datum);
     }
 }
 
@@ -1721,6 +1735,7 @@ cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
         ds_put_format(&ctx->output, "%s ", show->table->name);
         datum = ovsdb_idl_read(row, show->name_column);
         ovsdb_datum_to_string(datum, &show->name_column->type, &ctx->output);
+        ovsdb_idl_read_free(row, show->name_column, datum);
     } else {
         ds_put_format(&ctx->output, UUID_FMT, UUID_ARGS(&row->uuid));
     }
@@ -1758,7 +1773,7 @@ cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
                         cmd_show_row(ctx, ref_row, level + 1, shown);
                     }
                 }
-                continue;
+                goto next;
             }
         } else if (ovsdb_type_is_map(&column->type) &&
                    column->type.value.type == OVSDB_TYPE_UUID &&
@@ -1792,12 +1807,14 @@ cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
                         ovsdb_datum_to_string(ref_datum,
                                               &ref_show->name_column->type,
                                               &ctx->output);
+                        ovsdb_idl_read_free(ref_row, ref_show->name_column,
+                                            datum);
                     } else {
                         ds_put_cstr(&ctx->output, "\"<null>\"");
                     }
                     ds_put_char(&ctx->output, '\n');
                 }
-                continue;
+                goto next;
             }
         }
 
@@ -1807,6 +1824,9 @@ cmd_show_row(struct ctl_context *ctx, const struct ovsdb_idl_row *row,
             ovsdb_datum_to_string(datum, &column->type, &ctx->output);
             ds_put_char(&ctx->output, '\n');
         }
+
+    next:
+        ovsdb_idl_read_free(row, column, datum);
     }
     cmd_show_weak_ref(ctx, show, row, level);
     sset_find_and_delete_assert(shown, show->table->name);

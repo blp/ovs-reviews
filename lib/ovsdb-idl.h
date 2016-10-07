@@ -174,6 +174,10 @@ const struct ovsdb_datum *ovsdb_idl_get(const struct ovsdb_idl_row *,
                                         const struct ovsdb_idl_column *,
                                         enum ovsdb_atomic_type key_type,
                                         enum ovsdb_atomic_type value_type);
+void ovsdb_idl_read_free(const struct ovsdb_idl_row *,
+                         const struct ovsdb_idl_column *,
+                         const struct ovsdb_datum *);
+
 bool ovsdb_idl_is_mutable(const struct ovsdb_idl_row *,
                           const struct ovsdb_idl_column *);
 

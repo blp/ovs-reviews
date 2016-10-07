@@ -92,6 +92,7 @@ struct ovsdb_idl_column {
     bool mutable;
     void (*parse)(struct ovsdb_idl_row *, const struct ovsdb_datum *);
     void (*unparse)(struct ovsdb_idl_row *);
+    void (*read)(const struct ovsdb_idl_row *, struct ovsdb_datum *);
 };
 
 struct ovsdb_idl_table_class {

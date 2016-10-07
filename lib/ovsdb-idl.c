@@ -2343,8 +2343,8 @@ ovsdb_idl_next_row(const struct ovsdb_idl_row *row)
  * (e.g. with ovsdb_idl_txn_commit() or ovsdb_idl_txn_abort()).  If the
  * returned value is needed for a long time, it is best to make a copy of it
  * with ovsdb_datum_clone(). */
-const struct ovsdb_datum *
-ovsdb_idl_read(const struct ovsdb_idl_row *row,
+static const struct ovsdb_datum *
+ovsdb_idl_read__(const struct ovsdb_idl_row *row,
                const struct ovsdb_idl_column *column)
 {
     const struct ovsdb_idl_table_class *class;
@@ -2365,6 +2365,40 @@ ovsdb_idl_read(const struct ovsdb_idl_row *row,
     } else {
         return ovsdb_datum_default(&column->type);
     }
+}
+
+const struct ovsdb_datum *
+ovsdb_idl_read(const struct ovsdb_idl_row *row,
+               const struct ovsdb_idl_column *column)
+{
+    if (column->read) {
+        struct ovsdb_datum *datum = xzalloc(sizeof *datum);
+        column->read(row, datum);
+        return datum;
+    } else {
+        return ovsdb_idl_read__(row, column);
+    }
+}
+
+void
+ovsdb_idl_read_free(const struct ovsdb_idl_row *row,
+                    const struct ovsdb_idl_column *column,
+                    const struct ovsdb_datum *datum_)
+{
+    struct ovsdb_datum *datum = CONST_CAST(struct ovsdb_datum *, datum_);
+    size_t n_columns = row->table->class->n_columns;
+
+    /* If the datum is part of 'row', or if it's the default datum for this
+     * type of column, there's nothing to free. */
+    if ((row->old && datum >= row->old && datum < &row->old[n_columns])
+        || (row->new && datum >= row->new && datum < &row->new[n_columns])
+        || (datum == ovsdb_datum_default(&column->type))) {
+        return;
+    }
+
+    /* Free the datum. */
+    ovsdb_datum_destroy(datum, &column->type);
+    free(datum);
 }
 
 /* Same as ovsdb_idl_read(), except that it also asserts that 'column' has key
@@ -3351,7 +3385,7 @@ ovsdb_idl_txn_write__(const struct ovsdb_idl_row *row_,
      * transaction only does writes of existing values, without making any real
      * changes, we will drop the whole transaction later in
      * ovsdb_idl_txn_commit().) */
-    if (write_only && ovsdb_datum_equals(ovsdb_idl_read(row, column),
+    if (write_only && ovsdb_datum_equals(ovsdb_idl_read__(row, column),
                                          datum, &column->type)) {
         goto discard_datum;
     }
@@ -4110,7 +4144,7 @@ ovsdb_idl_txn_write_partial_map(const struct ovsdb_idl_row *row_,
 
     /* Find out if this is an insert or an update. */
     key_type = column->type.key.type;
-    old_datum = ovsdb_idl_read(row, column);
+    old_datum = ovsdb_idl_read__(row, column);
     pos = ovsdb_datum_find_key(old_datum, &datum->keys[0], key_type);
     op_type = pos == UINT_MAX ? MAP_OP_INSERT : MAP_OP_UPDATE;
 
