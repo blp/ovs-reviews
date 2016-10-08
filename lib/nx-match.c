@@ -37,6 +37,9 @@
 #include "unaligned.h"
 #include "util.h"
 
+// @P4:
+#include "p4/src/lib/nx-match.c.h"
+
 VLOG_DEFINE_THIS_MODULE(nx_match);
 
 /* OXM headers.
@@ -1082,6 +1085,9 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     /* OpenFlow 1.1+ Metadata. */
     nxm_put_64m(b, MFF_METADATA, oxm,
                 flow->metadata, match->wc.masks.metadata);
+
+    // @P4:
+    OVS_MATCH_PUT_RAW
 
     /* Cookie. */
     if (cookie_mask) {

@@ -20,6 +20,9 @@
 #include "openvswitch/packets.h"
 #include "openvswitch/util.h"
 
+// @P4:
+#include "p4/src/include/openvswitch/flow.h.h"
+
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
@@ -127,12 +130,17 @@ struct flow {
     ovs_be16 tp_dst;            /* TCP/UDP/SCTP destination port/ICMP code. */
     ovs_be32 igmp_group_ip4;    /* IGMP group IPv4 address.
                                  * Keep last for BUILD_ASSERT_DECL below. */
+
+    // @P4:
+    OVS_FIELDS
 };
 BUILD_ASSERT_DECL(sizeof(struct flow) % sizeof(uint64_t) == 0);
 BUILD_ASSERT_DECL(sizeof(struct flow_tnl) % sizeof(uint64_t) == 0);
 
 #define FLOW_U64S (sizeof(struct flow) / sizeof(uint64_t))
 
+// @P4:
+// TODO: update the assertion logic for FLOW_WC_SEQ.
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
 BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
                   == sizeof(struct flow_tnl) + 248

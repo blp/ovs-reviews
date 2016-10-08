@@ -1,5 +1,6 @@
 #! /usr/bin/python
 
+import getopt
 import sys
 import os.path
 import re
@@ -21,6 +22,10 @@ TYPES = {"u8":       (1,   False),
          "be64":     (8,   False),
          "be128":    (16,  False),
          "tunnelMD": (124, True)}
+
+# @P4:
+for i in xrange(128):
+    TYPES["be"+str(8*i)] = (i, False)
 
 FORMATTING = {"decimal":            ("MFS_DECIMAL",      1,   8),
               "hexadecimal":        ("MFS_HEXADECIMAL",  1, 127),
@@ -118,8 +123,9 @@ def usage():
     argv0 = os.path.basename(sys.argv[0])
     print('''\
 %(argv0)s, for extracting OpenFlow field properties from meta-flow.h
-usage: %(argv0)s INPUT [--meta-flow | --nx-match]
-  where INPUT points to lib/meta-flow.h in the source directory.
+usage: %(argv0)s [--meta-flow | --nx-match] INPUT...
+  where the first INPUT points to lib/meta-flow.h in the source directory
+        and additional INPUTs may point elsewhere.
 Depending on the option given, the output written to stdout is intended to be
 saved either as lib/meta-flow.inc or lib/nx-match.inc for the respective C
 file to #include.\
@@ -389,29 +395,32 @@ def make_nx_match(fields):
     print("};")
     return output
 
-
-def extract_ofp_fields(mode):
+# @P4:
+def extract_ofp_fields(search_start_enum):
     global line
 
     fields = []
 
-    while True:
-        get_line()
-        if re.match('enum.*mf_field_id', line):
-            break
+    # @P4:
+    if search_start_enum:
+        while True:
+            get_line()
+            if re.match('enum.*mf_field_id', line):
+                break
 
     while True:
         get_line()
         first_line_number = line_number
         here = '%s:%d' % (file_name, line_number)
-        if (line.startswith('/*')
+        # @P4:
+        if re.match('}', line) or re.match('(\s+)(// )?MFF_N_IDS', line):
+            break
+        elif (line.startswith('/*')
             or line.startswith(' *')
             or line.startswith('#')
             or not line
             or line.isspace()):
             continue
-        elif re.match('}', line) or re.match('\s+MFF_N_IDS', line):
-            break
 
         # Parse the comment preceding an MFF_ constant into 'comment',
         # one line to an array element.
@@ -495,6 +504,49 @@ def extract_ofp_fields(mode):
     if n_errors:
         sys.exit(1)
 
+    # @P4:
+    return fields
+
+
+if __name__ == '__main__':
+    try:
+        options, args = getopt.gnu_getopt(sys.argv[1:], 'h',
+                                          ['help', 'meta-flow', 'nx-match'])
+    except getopt.GetoptError, geo:
+        sys.stderr.write("%s: %s\n" % (argv0, geo.msg))
+        sys.exit(1)
+
+    mode = None
+    for key, value in options:
+        if key in ['-h', '--help']:
+            usage()
+        elif key in ['--meta-flow', '--nx-match']:
+            mode = key
+        else:
+            sys.stderr.write('key="%s"\n' % key)
+    if mode is None:
+        sys.stderr.write("either --meta-flow or --nx-match is required; "
+                         "use --help for help\n")
+        sys.exit(1)
+
+    if not args:
+        sys.stderr.write("at least one nonoption argument is required; "
+                         "use --help for help\n")
+        sys.exit(1)
+
+    global file_name
+    global input_file
+    global line_number
+
+    fields = []
+
+    search_start_enum = True
+    for file_name in args:
+        input_file = open(file_name)
+        line_number = 0
+        fields += extract_ofp_fields(search_start_enum)
+        search_start_enum = False
+
     print("""\
 /* Generated automatically; do not modify!    "-*- buffer-read-only: t -*- */
 """)
@@ -506,26 +558,5 @@ def extract_ofp_fields(mode):
     else:
         assert False
 
-    return output
-
-
-if __name__ == '__main__':
-    if '--help' in sys.argv:
-        usage()
-    elif len(sys.argv) != 3:
-        sys.stderr.write("exactly two arguments required; "
-                         "use --help for help\n")
-        sys.exit(1)
-    elif sys.argv[2] in ('--meta-flow', '--nx-match'):
-        global file_name
-        global input_file
-        global line_number
-        file_name = sys.argv[1]
-        input_file = open(file_name)
-        line_number = 0
-
-        for oline in extract_ofp_fields(sys.argv[2]):
-            print(oline)
-    else:
-        sys.stderr.write("invalid arguments; use --help for help\n")
-        sys.exit(1)
+    for oline in output:
+        print(oline)

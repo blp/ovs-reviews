@@ -38,6 +38,9 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/vlog.h"
 
+// @P4:
+#include "p4/src/lib/meta-flow.c.h"
+
 VLOG_DEFINE_THIS_MODULE(meta_flow);
 
 #define FLOW_U32OFS(FIELD)                                              \
@@ -329,6 +332,9 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_TCP_FLAGS:
         return !wc->masks.tcp_flags;
 
+    // @P4:
+    OVS_IS_ALL_WILD_CASES
+
     case MFF_N_IDS:
     default:
         OVS_NOT_REACHED();
@@ -474,6 +480,9 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_ND_SLL:
     case MFF_ND_TLL:
         return true;
+
+    // @P4:
+    OVS_IS_VALUE_VALID_CASES
 
     case MFF_IN_PORT_OXM:
     case MFF_ACTSET_OUTPUT: {
@@ -768,6 +777,9 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         value->ipv6 = flow->nd_target;
         break;
 
+    // @P4:
+    OVS_GET_VALUE_CASES
+
     case MFF_N_IDS:
     default:
         OVS_NOT_REACHED();
@@ -1029,6 +1041,9 @@ mf_set_value(const struct mf_field *mf,
     case MFF_ND_TARGET:
         match_set_nd_target(match, &value->ipv6);
         break;
+
+    // @P4:
+    OVS_SET_VALUE_CASES
 
     case MFF_N_IDS:
     default:
@@ -1364,6 +1379,9 @@ mf_set_flow_value(const struct mf_field *mf,
         flow->nd_target = value->ipv6;
         break;
 
+    // @P4:
+    OVS_SET_FLOW_VALUE_CASES
+
     case MFF_N_IDS:
     default:
         OVS_NOT_REACHED();
@@ -1694,6 +1712,9 @@ mf_set_wild(const struct mf_field *mf, struct match *match, char **err_str)
         memset(&match->flow.nd_target, 0, sizeof match->flow.nd_target);
         break;
 
+    // @P4:
+    OVS_SET_WILD_CASES
+
     case MFF_N_IDS:
     default:
         OVS_NOT_REACHED();
@@ -1922,6 +1943,9 @@ mf_set(const struct mf_field *mf,
     case MFF_TCP_FLAGS:
         match_set_tcp_flags_masked(match, value->be16, mask->be16);
         break;
+
+    // @P4:
+    OVS_SET_CASES
 
     case MFF_N_IDS:
     default:

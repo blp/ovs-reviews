@@ -287,6 +287,20 @@ AC_DEFUN([OVS_CHECK_DPDK], [
   AM_CONDITIONAL([DPDK_NETDEV], test "$DPDKLIB_FOUND" = true)
 ])
 
+AC_DEFUN([OVS_CHECK_P4], [
+  AC_ARG_VAR([p4inputfile], [Specify the p4 input file])
+  AS_IF([test -z "$p4inputfile"],
+        [AC_MSG_ERROR([missing arguments for p4 input file])])
+  AS_IF([test ! -e "$p4inputfile"],
+        [AC_MSG_ERROR([p4 input file does not exist])])
+
+  export PYTHONPATH="${PYTHONPATH}:include/p4/plugin"
+  rm -rf include/p4/src/datapath include/p4/src/include include/p4/src/lib include/p4/src/ofproto
+  p4c-behavioral $p4inputfile --gen-dir include/p4/src/temp --plugin-path include/p4/plugin --plugin ovs
+  mv include/p4/src/temp/plugin/ovs/* include/p4/src/
+  rm -rf include/p4/src/temp
+])
+
 dnl OVS_GREP_IFELSE(FILE, REGEX, [IF-MATCH], [IF-NO-MATCH])
 dnl
 dnl Greps FILE for REGEX.  If it matches, runs IF-MATCH, otherwise IF-NO-MATCH.

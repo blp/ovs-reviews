@@ -21,6 +21,9 @@
 #include <stdint.h>
 #include "openvswitch/compiler.h"
 
+// @P4:
+#include "p4/src/include/openvswitch/types.h.h"
+
 #ifdef __CHECKER__
 #define OVS_BITWISE __attribute__((bitwise))
 #define OVS_FORCE __attribute__((force))

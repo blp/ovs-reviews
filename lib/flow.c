@@ -41,6 +41,9 @@
 #include "unaligned.h"
 #include "util.h"
 
+// @P4:
+#include "p4/src/lib/flow.c.h"
+
 COVERAGE_DEFINE(flow_extract);
 COVERAGE_DEFINE(miniflow_malloc);
 
@@ -262,6 +265,15 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
     MF.data += (N_WORDS);                                       \
 }
 
+/* @P4: Data in 'valuep' may be unaligned. */
+#define miniflow_push_bytes_word_aligned_64_(MF, OFS, VALUEP, N_BYTES, N_WORDS) \
+{                                                                                \
+    MINIFLOW_ASSERT((OFS) % 8 == 0);                                             \
+    miniflow_set_maps(MF, (OFS) / 8, (N_WORDS));                                 \
+    memcpy(MF.data, (VALUEP), N_BYTES);                                          \
+    MF.data += (N_WORDS);                                                        \
+}
+
 /* Push 32-bit words padded to 64-bits. */
 #define miniflow_push_words_32_(MF, OFS, VALUEP, N_WORDS)               \
 {                                                                       \
@@ -305,6 +317,10 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
 
 #define miniflow_push_words(MF, FIELD, VALUEP, N_WORDS)                 \
     miniflow_push_words_(MF, offsetof(struct flow, FIELD), VALUEP, N_WORDS)
+
+// @P4:
+#define miniflow_push_bytes_word_aligned_64(MF, FIELD, VALUEP, N_BYTES, N_WORDS)              \
+    miniflow_push_bytes_word_aligned_64_(MF, offsetof(struct flow, FIELD), VALUEP, N_BYTES, N_WORDS)
 
 #define miniflow_push_words_32(MF, FIELD, VALUEP, N_WORDS)              \
     miniflow_push_words_32_(MF, offsetof(struct flow, FIELD), VALUEP, N_WORDS)
@@ -559,6 +575,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     struct mf_ctx mf = { FLOWMAP_EMPTY_INITIALIZER, values,
                          values + FLOW_U64S };
     const char *l2;
+
     ovs_be16 dl_type;
     uint8_t nw_frag, nw_tos, nw_ttl, nw_proto;
 
@@ -823,7 +840,17 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             }
         }
     }
- out:
+
+out:
+    // P4:
+    data = dp_packet_data(packet);
+    size = dp_packet_size(packet);
+    l2 = data;
+    OVS_HDR_RESET_ATTRS
+    OVS_MINIFLOW_EXTRACT_METADATA_DEFS /* TODO: see if these can be moved outside the extract function. */
+    OVS_MINIFLOW_EXTRACT
+
+out_:
     dst->map = mf.map;
 }
 
@@ -1321,6 +1348,9 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
     WC_MASK_FIELD(wc, dp_hash);
     WC_MASK_FIELD(wc, in_port);
 
+    // @P4:
+    OVS_FLOW_WC_MASK
+
     /* actset_output wildcarded. */
 
     WC_MASK_FIELD(wc, dl_dst);
@@ -1424,6 +1454,9 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
     FLOWMAP_SET(map, ct_zone);
     FLOWMAP_SET(map, ct_mark);
     FLOWMAP_SET(map, ct_label);
+
+    // @P4:
+    OVS_FLOW_WC_MAP
 
     /* Ethertype-dependent fields. */
     if (OVS_LIKELY(flow->dl_type == htons(ETH_TYPE_IP))) {

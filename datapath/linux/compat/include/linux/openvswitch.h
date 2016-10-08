@@ -43,6 +43,9 @@
 #include <linux/types.h>
 #include <linux/if_ether.h>
 
+// @P4:
+#include "p4/src/datapath/linux/compat/include/linux/openvswitch.h.h"
+
 /**
  * struct ovs_header - header for OVS Generic Netlink messages.
  * @dp_ifindex: ifindex of local port for datapath (0 to make a request not
@@ -361,6 +364,10 @@ enum ovs_key_attr {
 	/* Only used within kernel data path. */
 	OVS_KEY_ATTR_TUNNEL_INFO,  /* struct ovs_tunnel_info */
 #endif
+
+	// @P4:
+	OVS_KEY_ATTRS
+
 	__OVS_KEY_ATTR_MAX
 };
 

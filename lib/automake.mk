@@ -489,10 +489,10 @@ lib/dirs.c: lib/dirs.c.in Makefile
 	     > lib/dirs.c.tmp && \
 	mv lib/dirs.c.tmp lib/dirs.c
 
-lib/meta-flow.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h
+lib/meta-flow.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h include/p4/src/include/openvswitch/meta-flow.h.h
 	$(AM_V_GEN)$(run_python) $^ --meta-flow > $@.tmp && mv $@.tmp $@
 lib/meta-flow.lo: lib/meta-flow.inc
-lib/nx-match.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h
+lib/nx-match.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h include/p4/src/include/openvswitch/meta-flow.h.h
 	$(AM_V_GEN)$(run_python) $^ --nx-match > $@.tmp && mv $@.tmp $@
 lib/nx-match.lo: lib/nx-match.inc
 CLEANFILES += lib/meta-flow.inc lib/nx-match.inc

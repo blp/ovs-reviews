@@ -30,6 +30,9 @@
 #include "packets.h"
 #include "util.h"
 
+// @P4:
+#include "p4/src/lib/dp-packet.h.h"
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -59,6 +62,7 @@ struct dp_packet {
     bool rss_hash_valid;        /* Is the 'rss_hash' valid? */
 #endif
     enum dp_packet_source source;  /* Source of memory allocated as 'base'. */
+
     uint8_t l2_pad_size;           /* Detected l2 padding size.
                                     * Padding is non-pullable. */
     uint16_t l2_5_ofs;             /* MPLS label stack offset, or UINT16_MAX */
@@ -71,6 +75,9 @@ struct dp_packet {
         struct pkt_metadata md;
         uint64_t data[DP_PACKET_CONTEXT_SIZE / 8];
     };
+
+    // @P4:
+    OVS_HDR_ATTRS
 };
 
 static inline void *dp_packet_data(const struct dp_packet *);
@@ -280,6 +287,9 @@ dp_packet_reset_offsets(struct dp_packet *b)
     b->l3_ofs = UINT16_MAX;
     b->l4_ofs = UINT16_MAX;
 }
+
+// @P4:
+OVS_HDR_GET_DP_PACKET_OFS
 
 static inline uint8_t
 dp_packet_l2_pad_size(const struct dp_packet *b)

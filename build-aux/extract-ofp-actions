@@ -268,8 +268,8 @@ def extract_ofp_actions(fn, definitions):
             assert v["arg_len"] == versions[0]["arg_len"]
             assert v["base_argtype"] == versions[0]["base_argtype"]
             if (v["min_length"] != versions[0]["min_length"] or
-                v["arg_ofs"] != versions[0]["arg_ofs"] or
-                v["type"] != versions[0]["type"]):
+                        v["arg_ofs"] != versions[0]["arg_ofs"] or
+                        v["type"] != versions[0]["type"]):
                 need_ofp_version = True
         base_argtype = versions[0]["base_argtype"]
 

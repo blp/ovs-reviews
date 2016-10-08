@@ -35,6 +35,9 @@
 struct dp_packet;
 struct ds;
 
+// @P4:
+#include "p4/src/lib/packets.h.h"
+
 /* Purely internal to OVS userspace. These flags should never be exposed to
  * the outside world and so aren't included in the flags mask. */
 

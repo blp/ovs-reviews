@@ -25,6 +25,9 @@
 #include "packets.h"
 #include "tun-metadata.h"
 
+// @P4:
+#include "p4/src/lib/match.c.h"
+
 /* Converts the flow in 'flow' into a match in 'match', with the given
  * 'wildcards'. */
 void
@@ -946,6 +949,46 @@ format_uint16_masked(struct ds *s, const char *name,
     }
 }
 
+// @P4:
+static void OVS_UNUSED
+format_bex_masked(struct ds *s, const char *name,
+                  const uint8_t *value, const uint8_t *mask, size_t n_bytes)
+{
+    if (!is_all_zeros(mask, n_bytes)) {
+        ds_put_format(s, "%s%s=%s", colors.param, name, colors.end);
+
+        int i;
+
+        ds_put_format(s, "0x""%02"PRIx8, value[0]);
+        for (i = 1; i < n_bytes; i++) {
+            ds_put_format(s, "%02"PRIx8, value[i]);
+        }
+        ds_put_format(s, "/0x""%02"PRIx8, mask[0]);
+        for (i = 1; i < n_bytes; i++) {
+            ds_put_format(s, "%02"PRIx8, mask[i]);
+        }
+
+        ds_put_char(s, ',');
+    }
+}
+
+// @P4:
+static void OVS_UNUSED
+format_be8_masked(struct ds *s, const char *name,
+                  uint8_t value, uint8_t mask)
+{
+    if (mask != 0) {
+        ds_put_format(s, "%s%s=%s", colors.param, name, colors.end);
+        if (mask == 0xff) {
+            ds_put_format(s, "%"PRIu8, value);
+        } else {
+            ds_put_format(s, "0x%"PRIx8"/0x%"PRIx8,
+                          value, mask);
+        }
+        ds_put_char(s, ',');
+    }
+}
+
 static void
 format_be16_masked(struct ds *s, const char *name,
                    ovs_be16 value, ovs_be16 mask)
@@ -1136,6 +1179,9 @@ match_format(const struct match *match, struct ds *s, int priority)
     if (!ovs_u128_is_zero(wc->masks.ct_label)) {
         format_ct_label_masked(s, &f->ct_label, &wc->masks.ct_label);
     }
+
+    // @P4:
+    OVS_MATCH_FORMAT
 
     if (wc->masks.dl_type) {
         skip_type = true;

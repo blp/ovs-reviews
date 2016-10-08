@@ -44,6 +44,9 @@
 #include "ofproto-provider.h"
 #include "lacp.h"
 
+// @P4:
+#include "p4/src/ofproto/ofproto-dpif-sflow.c.h"
+
 VLOG_DEFINE_THIS_MODULE(sflow);
 
 static struct ovs_mutex mutex;
@@ -1012,6 +1015,9 @@ sflow_read_set_action(const struct nlattr *attr,
             }
         }
         break;
+
+    // @P4:
+	OVS_SFLOW_READ_SET_ACTION_CASES
 
     case OVS_KEY_ATTR_TCP_FLAGS:
     case OVS_KEY_ATTR_ICMP:

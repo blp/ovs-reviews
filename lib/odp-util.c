@@ -44,6 +44,14 @@
 
 VLOG_DEFINE_THIS_MODULE(odp_util);
 
+static bool
+commit(enum ovs_key_attr attr, bool use_masked_set,
+       const void *key, void *base, void *mask, size_t size,
+       struct ofpbuf *odp_actions);
+
+// @P4:
+#include "p4/src/lib/odp-util.c.h"
+
 /* The interface between userspace and kernel uses an "OVS_*" prefix.
  * Since this is fairly non-specific for the OVS userspace components,
  * "ODP_*" (Open vSwitch Datapath) is used as the prefix for
@@ -164,6 +172,9 @@ ovs_key_attr_to_string(enum ovs_key_attr attr, char *namebuf, size_t bufsize)
     case OVS_KEY_ATTR_MPLS: return "mpls";
     case OVS_KEY_ATTR_DP_HASH: return "dp_hash";
     case OVS_KEY_ATTR_RECIRC_ID: return "recirc_id";
+
+    // @P4:
+    OVS_KEY_ATTRS_TO_STRING_CASES
 
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -1804,6 +1815,9 @@ static const struct attr_len_tbl ovs_flow_key_attr_lens[OVS_KEY_ATTR_MAX + 1] = 
     [OVS_KEY_ATTR_CT_ZONE]   = { .len = 2 },
     [OVS_KEY_ATTR_CT_MARK]   = { .len = 4 },
     [OVS_KEY_ATTR_CT_LABELS] = { .len = sizeof(struct ovs_key_ct_labels) },
+
+    // @P4:
+    OVS_FLOW_KEY_ATTR_LENS
 };
 
 /* Returns the correct length of the payload for a flow key attribute of the
@@ -2135,6 +2149,69 @@ format_eth(struct ds *ds, const char *name, const struct eth_addr key,
 static void
 format_be64(struct ds *ds, const char *name, ovs_be64 key,
             const ovs_be64 *mask, bool verbose)
+{
+    bool mask_empty = mask && !*mask;
+
+    if (verbose || !mask_empty) {
+        bool mask_full = !mask || *mask == OVS_BE64_MAX;
+
+        ds_put_format(ds, "%s=0x%"PRIx64, name, ntohll(key));
+        if (!mask_full) { /* Partially masked. */
+            ds_put_format(ds, "/%#"PRIx64, ntohll(*mask));
+        }
+        ds_put_char(ds, ',');
+    }
+}
+
+// @P4:
+static void OVS_UNUSED
+format_bex(struct ds *ds, const char *name, const uint8_t *key,
+           const uint8_t (*mask)[], size_t n_bytes, bool verbose)
+{
+    bool mask_empty = mask && is_all_zeros(*mask, n_bytes);
+
+    if (verbose || !mask_empty) {
+        int i;
+        bool mask_is_exact = mask && is_all_ones(*mask, n_bytes);
+        bool mask_full = !mask || mask_is_exact;
+
+        ds_put_format(ds, "%s=0x""%02"PRIx8, name, key[0]);
+        for (i = 1; i < n_bytes; i++) {
+            ds_put_format(ds, "%02"PRIx8, key[i]);
+        }
+
+        if (!mask_full) {
+            ds_put_format(ds, "/0x""%02"PRIx8, (*mask)[0]);
+            for (i = 1; i < n_bytes; i++) {
+                ds_put_format(ds, "%02"PRIx8, (*mask)[i]);
+            }
+        }
+        ds_put_char(ds, ',');
+    }
+}
+
+// @P4:
+static void OVS_UNUSED
+format_be32x(struct ds *ds, const char *name, ovs_be32 key,
+             const ovs_be32 *mask, bool verbose)
+{
+    bool mask_empty = mask && !*mask;
+
+    if (verbose || !mask_empty) {
+        bool mask_full = !mask || *mask == OVS_BE32_MAX;
+
+        ds_put_format(ds, "%s=%"PRIx32, name, ntohl(key));
+        if (!mask_full) { /* Partially masked. */
+            ds_put_format(ds, "/%#"PRIx32, ntohl(*mask));
+        }
+        ds_put_char(ds, ',');
+    }
+}
+
+// @P4:
+static void OVS_UNUSED
+format_be64x(struct ds *ds, const char *name, ovs_be64 key,
+             const ovs_be64 *mask, bool verbose)
 {
     bool mask_empty = mask && !*mask;
 
@@ -2928,6 +3005,10 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
         ds_chomp(ds, ',');
         break;
     }
+
+    // @P4:
+    OVS_FORMAT_ODP_KEY_ATTR_CASES
+
     case OVS_KEY_ATTR_UNSPEC:
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -4067,6 +4148,9 @@ parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
 
     SCAN_SINGLE_PORT("in_port(", uint32_t, OVS_KEY_ATTR_IN_PORT);
 
+    // @P4:
+    // TODO: add logic for scanning here. (Ask Ben)
+
     SCAN_BEGIN("eth(", struct ovs_key_ethernet) {
         SCAN_FIELD("src=", eth, eth_src);
         SCAN_FIELD("dst=", eth, eth_dst);
@@ -4309,6 +4393,9 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
     if (export_mask || flow->in_port.odp_port != ODPP_NONE) {
         nl_msg_put_odp_port(buf, OVS_KEY_ATTR_IN_PORT, data->in_port.odp_port);
     }
+
+    // @P4:
+    OVS_FLOW_KEY_FROM_FLOW
 
     eth_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ETHERNET,
                                        sizeof *eth_key);
@@ -5159,6 +5246,9 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         flow->in_port.odp_port = ODPP_NONE;
     }
 
+    // @P4:
+    OVS_FLOW_KEY_TO_FLOW
+
     /* Ethernet header. */
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ETHERNET)) {
         const struct ovs_key_ethernet *eth_key;
@@ -5904,6 +5994,9 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
     commit_vlan_action(flow->vlan_tci, base, odp_actions, wc);
     commit_set_priority_action(flow, base, odp_actions, wc, use_masked);
     commit_set_pkt_mark_action(flow, base, odp_actions, wc, use_masked);
+
+    // @P4:
+    OVS_COMMIT_ODP_ACTIONS_FUNCS
 
     return slow1 ? slow1 : slow2;
 }

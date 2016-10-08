@@ -33,6 +33,9 @@
 #include "dp-packet.h"
 #include "unaligned.h"
 
+// @P4:
+#include "p4/src/lib/packets.c.h"
+
 const struct in6_addr in6addr_exact = IN6ADDR_EXACT_INIT;
 const struct in6_addr in6addr_all_hosts = IN6ADDR_ALL_HOSTS_INIT;
 
