@@ -1,0 +1,8 @@
+//:: import helpers
+//::
+//:: aligned_field_info = helpers.get_align_field_info(
+//::     field_info, header_info, ordered_header_instances_all)
+//:: ordered_header_instances_metadata = helpers.get_ordered_header_instances_metadata(ordered_header_instances_metadata)
+//:: ordered_header_instances_non_virtual = helpers.get_ordered_header_instances_non_virtual(ordered_header_instances_non_virtual)
+//:: (_, ohinvafnw) = helpers.get_ordered_header_and_aligned_field_instances_non_virtual__name_width(
+//::         ordered_header_instances_non_virtual, header_info, aligned_field_info)

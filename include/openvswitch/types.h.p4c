@@ -21,9 +21,6 @@
 #include <stdint.h>
 #include "openvswitch/compiler.h"
 
-// @P4:
-#include "p4/src/include/openvswitch/types.h.h"
-
 #ifdef __CHECKER__
 #define OVS_BITWISE __attribute__((bitwise))
 #define OVS_FORCE __attribute__((force))
@@ -154,5 +151,16 @@ struct eth_addr {
         ovs_be16 be16[3];
     };
 };
+
+/* P4 field types. */
+//::  for header_name in ordered_header_instances_non_virtual:
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+//::      if bit_width not in [8, 16, 32, 64]:
+struct ${field_name}_t {
+    uint8_t data[${bit_width}/8];
+};
+//::      #endif
+//::    #endfor
+//::  #endfor
 
 #endif /* openvswitch/types.h */

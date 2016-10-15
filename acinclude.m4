@@ -1,6 +1,6 @@
 # -*- autoconf -*-
 
-# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+# Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -287,18 +287,14 @@ AC_DEFUN([OVS_CHECK_DPDK], [
   AM_CONDITIONAL([DPDK_NETDEV], test "$DPDKLIB_FOUND" = true)
 ])
 
+dnl OVS_CHECK_P4
+dnl
+dnl Finds the p4c-behavioral preprocessor and sets it as P4C_BEHAVIORAL.
 AC_DEFUN([OVS_CHECK_P4], [
-  AC_ARG_VAR([p4inputfile], [Specify the p4 input file])
-  AS_IF([test -z "$p4inputfile"],
-        [AC_MSG_ERROR([missing arguments for p4 input file])])
-  AS_IF([test ! -e "$p4inputfile"],
-        [AC_MSG_ERROR([p4 input file does not exist])])
-
-  export PYTHONPATH="${PYTHONPATH}:include/p4/plugin"
-  rm -rf include/p4/src/datapath include/p4/src/include include/p4/src/lib include/p4/src/ofproto
-  p4c-behavioral $p4inputfile --gen-dir include/p4/src/temp --plugin-path include/p4/plugin --plugin ovs
-  mv include/p4/src/temp/plugin/ovs/* include/p4/src/
-  rm -rf include/p4/src/temp
+  AC_PATH_PROGS([P4C_BEHAVIORAL], [p4c-behavioral], [no])
+  if test "$P4C_BEHAVIORAL" = no; then
+      AC_MSG_ERROR([p4c-behavioral not found.  Please install it from https://github.com/p4lang/p4c-behavioral or, if it is already installed, make it available in $PATH or as $P4C_BEHAVIORAL.])
+  fi
 ])
 
 dnl OVS_GREP_IFELSE(FILE, REGEX, [IF-MATCH], [IF-NO-MATCH])

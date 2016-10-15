@@ -1773,7 +1773,49 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_ND_TLL,
 
-#include "p4/src/include/openvswitch/meta-flow.h.h" // @P4:
+/* P4 fields.
+ *
+ * XXX For now prerequisites are not handled and all fields are maskable. */
+
+//::  base_oxm_offset = 1 # We use 1 as the base line offset. If new NXOXM_ET_* fixed fields are added in OVS
+//::                      # this number will have to be updated accordingly.
+//::  for header_name in ordered_header_instances_non_virtual:
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+    /* "${field_name}".
+     *
+     * ${field_name} field.
+     *
+     * Type: be${bit_width}.
+     * Formatting: hexadecimal.
+     * Maskable: bitwise.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: NXOXM_ET_${field_name.upper()}(${base_oxm_offset}) since OF1.5 and v2.5.
+     */
+    MFF_${field_name.upper()},
+//::      base_oxm_offset += 1
+
+//::    #endfor
+//::  #endfor
+//::
+//::  for header_name in ordered_header_instances_regular:
+    /* "${header_name}_valid".
+     *
+     * ${header_name}_valid field.
+     *
+     * Type: u${8}.
+     * Formatting: hexadecimal.
+     * Maskable: bitwise.
+     * Prerequisites: none.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: NXOXM_ET_${header_name.upper()}_VALID(${base_oxm_offset}) since OF1.5 and v2.5.
+     */
+    MFF_${header_name.upper()}_VALID,
+//::      base_oxm_offset += 1
+
+//::  #endfor
 
     MFF_N_IDS
 };

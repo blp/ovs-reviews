@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,9 +29,6 @@
 #include "openvswitch/list.h"
 #include "packets.h"
 #include "util.h"
-
-// @P4:
-#include "p4/src/lib/dp-packet.h.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -76,8 +73,11 @@ struct dp_packet {
         uint64_t data[DP_PACKET_CONTEXT_SIZE / 8];
     };
 
-    // @P4:
-    OVS_HDR_ATTRS
+    /* P4 headers. */
+//::  for header_name in ordered_header_instances_regular:
+    uint16_t ${header_name}_ofs;
+    uint8_t ${header_name}_valid;
+//::  #endfor
 };
 
 static inline void *dp_packet_data(const struct dp_packet *);
@@ -288,8 +288,16 @@ dp_packet_reset_offsets(struct dp_packet *b)
     b->l4_ofs = UINT16_MAX;
 }
 
-// @P4:
-OVS_HDR_GET_DP_PACKET_OFS
+/* dp_packet_<header>() functions, one for each P4 header. */
+//::  for header_name in ordered_header_instances_regular:
+static inline void *
+dp_packet_${header_name}(const struct dp_packet *b)
+{
+    return (b->${header_name}_ofs != UINT16_MAX
+            ? (char *) dp_packet_data(b) + b->${header_name}_ofs
+            : NULL);
+}
+//::  #endfor
 
 static inline uint8_t
 dp_packet_l2_pad_size(const struct dp_packet *b)

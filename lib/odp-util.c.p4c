@@ -49,9 +49,6 @@ commit(enum ovs_key_attr attr, bool use_masked_set,
        const void *key, void *base, void *mask, size_t size,
        struct ofpbuf *odp_actions);
 
-// @P4:
-#include "p4/src/lib/odp-util.c.h"
-
 /* The interface between userspace and kernel uses an "OVS_*" prefix.
  * Since this is fairly non-specific for the OVS userspace components,
  * "ODP_*" (Open vSwitch Datapath) is used as the prefix for
@@ -173,8 +170,11 @@ ovs_key_attr_to_string(enum ovs_key_attr attr, char *namebuf, size_t bufsize)
     case OVS_KEY_ATTR_DP_HASH: return "dp_hash";
     case OVS_KEY_ATTR_RECIRC_ID: return "recirc_id";
 
-    // @P4:
-    OVS_KEY_ATTRS_TO_STRING_CASES
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+    case OVS_KEY_ATTR_${header_name.upper()}: return "${header_name}";
+//::  #endfor
+    case OVS_KEY_ATTR_VALID: return "valid";
 
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -1816,8 +1816,12 @@ static const struct attr_len_tbl ovs_flow_key_attr_lens[OVS_KEY_ATTR_MAX + 1] = 
     [OVS_KEY_ATTR_CT_MARK]   = { .len = 4 },
     [OVS_KEY_ATTR_CT_LABELS] = { .len = sizeof(struct ovs_key_ct_labels) },
 
-    // @P4:
-    OVS_FLOW_KEY_ATTR_LENS
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+    [OVS_KEY_ATTR_${header_name.upper()}] = { .len = sizeof(struct ovs_key_${header_name}) },
+//::  #endfor
+
+    [OVS_KEY_ATTR_VALID] = { .len = sizeof(struct ovs_key_valid) },
 };
 
 /* Returns the correct length of the payload for a flow key attribute of the
@@ -3006,8 +3010,13 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
         break;
     }
 
-    // @P4:
-    OVS_FORMAT_ODP_KEY_ATTR_CASES
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+    case OVS_KEY_ATTR_${header_name.upper()}:
+        break;
+//::  #endfor
+    case OVS_KEY_ATTR_VALID:
+        break;
 
     case OVS_KEY_ATTR_UNSPEC:
     case __OVS_KEY_ATTR_MAX:
@@ -4341,6 +4350,15 @@ static void put_arp_key(const struct ovs_key_arp *, struct flow *);
 static void get_nd_key(const struct flow *, struct ovs_key_nd *);
 static void put_nd_key(const struct ovs_key_nd *, struct flow *);
 
+//::  for header_name in ordered_header_instances_non_virtual:
+static void get_${header_name}_key(const struct flow *, struct ovs_key_${header_name} *);
+static void put_${header_name}_key(const struct ovs_key_${header_name} *, struct flow *);
+
+//::  #endfor
+//::
+static void get_valid_key(const struct flow *, struct ovs_key_valid *);
+static void put_valid_key(const struct ovs_key_valid *, struct flow *);
+
 /* These share the same layout. */
 union ovs_key_tp {
     struct ovs_key_tcp tcp;
@@ -4394,8 +4412,17 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
         nl_msg_put_odp_port(buf, OVS_KEY_ATTR_IN_PORT, data->in_port.odp_port);
     }
 
-    // @P4:
-    OVS_FLOW_KEY_FROM_FLOW
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+    struct ovs_key_${header_name} *${header_name}
+        = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_${header_name.upper()},
+                                   sizeof *${header_name});
+    get_${header_name}_key(data, ${header_name});
+
+//::  #endfor
+    struct ovs_key_valid *valid;
+    valid = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_VALID, sizeof *valid);
+    get_valid_key(data, valid);
 
     eth_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ETHERNET,
                                        sizeof *eth_key);
@@ -5246,8 +5273,32 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         flow->in_port.odp_port = ODPP_NONE;
     }
 
-    // @P4:
-    OVS_FLOW_KEY_TO_FLOW
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+    if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_${header_name.upper()})) {
+        const struct ovs_key_${header_name} *${header_name}
+            = nl_attr_get(attrs[OVS_KEY_ATTR_${header_name.upper()}]);
+        put_${header_name}_key(${header_name}, flow);
+        if (is_mask) {
+            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_${header_name.upper()};
+        }
+    }
+    if (!is_mask) {
+        expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_${header_name.upper()};
+    }
+
+//::  #endfor
+    if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VALID)) {
+        const struct ovs_key_valid *valid
+            = nl_attr_get(attrs[OVS_KEY_ATTR_VALID]);
+        put_valid_key(valid, flow);
+        if (is_mask) {
+            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_VALID;
+        }
+    }
+    if (!is_mask) {
+        expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_VALID;
+    }
 
     /* Ethernet header. */
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ETHERNET)) {
@@ -5970,6 +6021,85 @@ commit_set_pkt_mark_action(const struct flow *flow, struct flow *base_flow,
     }
 }
 
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+static void
+get_${header_name}_key(const struct flow *flow,
+                       struct ovs_key_${header_name} *${header_name})
+{
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+    ${header_name}->${field_name} = flow->${header_name}.hdr.${field_name};
+//::    #endfor
+}
+static void
+put_${header_name}_key(const struct ovs_key_${header_name} *${header_name},
+                       struct flow *flow)
+{
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+    flow->${header_name}.hdr.${field_name} = ${header_name}->${field_name};
+//::    #endfor
+}
+
+//::  #endfor
+//::
+static void
+get_valid_key(const struct flow *flow, struct ovs_key_valid *valid)
+{
+//::  for header_name in ordered_header_instances_regular:
+    valid->${header_name}_valid = flow->valid.hdr.${header_name}_valid;
+//::  #endfor
+}
+static void
+put_valid_key(const struct ovs_key_valid *valid, struct flow *flow)
+{
+//::  for header_name in ordered_header_instances_regular:
+    flow->valid.hdr.${header_name}_valid = valid->${header_name}_valid;
+//::  #endfor
+}
+
+//::  for header_name in ordered_header_instances_regular:
+static void
+commit_set_${header_name}_action(const struct flow *flow,
+                                 struct flow *base_flow,
+                                 struct ofpbuf *odp_actions,
+                                 struct flow_wildcards *wc,
+                                 bool use_masked)
+{
+    struct ovs_key_${header_name} key, base, mask;
+
+    get_${header_name}_key(flow, &key);
+    get_${header_name}_key(base_flow, &base);
+    get_${header_name}_key(&wc->masks, &mask);
+
+    if (commit(OVS_KEY_ATTR_${header_name.upper()}, use_masked,
+               &key, &base, &mask, sizeof key, odp_actions)) {
+        put_${header_name}_key(&base, base_flow);
+        put_${header_name}_key(&mask, &wc->masks);
+    }
+}
+
+//::  #endfor
+//::
+static void
+commit_set_valid_action(const struct flow *flow,
+                        struct flow *base_flow,
+                        struct ofpbuf *odp_actions,
+                        struct flow_wildcards *wc,
+                        bool use_masked)
+{
+    struct ovs_key_valid key, base, mask;
+
+    get_valid_key(flow, &key);
+    get_valid_key(base_flow, &base);
+    get_valid_key(&wc->masks, &mask);
+
+    if (commit(OVS_KEY_ATTR_VALID, use_masked,
+               &key, &base, &mask, sizeof key, odp_actions)) {
+        put_valid_key(&base, base_flow);
+        put_valid_key(&mask, &wc->masks);
+    }
+}
+
 /* If any of the flow key data that ODP actions can modify are different in
  * 'base' and 'flow', appends ODP actions to 'odp_actions' that change the flow
  * key from 'base' into 'flow', and then changes 'base' the same way.  Does not
@@ -5995,8 +6125,11 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
     commit_set_priority_action(flow, base, odp_actions, wc, use_masked);
     commit_set_pkt_mark_action(flow, base, odp_actions, wc, use_masked);
 
-    // @P4:
-    OVS_COMMIT_ODP_ACTIONS_FUNCS
+//::  for header_name in ordered_header_instances_regular:
+    commit_set_${header_name}_action(flow, base, odp_actions, wc, use_masked);
+//::  #endfor
+    commit_set_valid_action(flow, base, odp_actions, wc, use_masked);
 
     return slow1 ? slow1 : slow2;
 }
+

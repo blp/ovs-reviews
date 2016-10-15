@@ -51,6 +51,7 @@ ofproto_libofproto_la_SOURCES = \
 	ofproto/tunnel.h \
 	ofproto/bundles.c \
 	ofproto/bundles.h
+P4C_FILES += ofproto/ofproto-dpif-sflow.c.p4c
 
 ofproto_libofproto_la_CPPFLAGS = $(AM_CPPFLAGS)
 ofproto_libofproto_la_CFLAGS = $(AM_CFLAGS)

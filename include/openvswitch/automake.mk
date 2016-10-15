@@ -3,7 +3,6 @@ openvswitchinclude_HEADERS = \
 	include/openvswitch/compiler.h \
 	include/openvswitch/dynamic-string.h \
 	include/openvswitch/hmap.h \
-	include/openvswitch/flow.h \
 	include/openvswitch/geneve.h \
 	include/openvswitch/json.h \
 	include/openvswitch/list.h \
@@ -18,7 +17,6 @@ openvswitchinclude_HEADERS = \
 	include/openvswitch/ofp-print.h \
 	include/openvswitch/ofp-prop.h \
 	include/openvswitch/ofp-util.h \
-	include/openvswitch/packets.h \
 	include/openvswitch/shash.h \
 	include/openvswitch/thread.h \
 	include/openvswitch/token-bucket.h \
@@ -30,4 +28,8 @@ openvswitchinclude_HEADERS = \
 	include/openvswitch/version.h \
 	include/openvswitch/vconn.h \
 	include/openvswitch/vlog.h
-
+P4C_FILES += \
+	include/openvswitch/flow.h.p4c \
+	include/openvswitch/meta-flow.h.p4c \
+	include/openvswitch/packets.h.p4c \
+	include/openvswitch/types.h.p4c

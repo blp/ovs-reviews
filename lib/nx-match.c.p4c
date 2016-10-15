@@ -37,9 +37,6 @@
 #include "unaligned.h"
 #include "util.h"
 
-// @P4:
-#include "p4/src/lib/nx-match.c.h"
-
 VLOG_DEFINE_THIS_MODULE(nx_match);
 
 /* OXM headers.
@@ -1086,8 +1083,27 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     nxm_put_64m(b, MFF_METADATA, oxm,
                 flow->metadata, match->wc.masks.metadata);
 
-    // @P4:
-    OVS_MATCH_PUT_RAW
+    /* P4 fields. */
+//::  for header_name in ordered_header_instances_non_virtual:
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+//::      if bit_width in [8, 16, 32, 64]:
+    nxm_put_${bit_width}m(b, MFF_${field_name.upper()}, oxm,
+               flow->${header_name}.hdr.${field_name},
+               match->wc.masks.${header_name}.hdr.${field_name});
+//::      else:
+//::        # We assume that all fields are, at least, byte aligned.
+    nxm_put(b, MFF_${field_name.upper()}, oxm,
+            &flow->${header_name}.hdr.${field_name},
+            &match->wc.masks.${header_name}.hdr.${field_name},
+            sizeof flow->${header_name}.hdr.${field_name});
+//::      #endif
+//::    #endfor
+//::  #endfor
+//::  for header_name in ordered_header_instances_regular:
+    nxm_put_8m(b, MFF_${header_name.upper()}_VALID, oxm,
+               flow->valid.hdr.${header_name}_valid,
+               match->wc.masks.valid.hdr.${header_name}_valid);
+//::  #endfor
 
     /* Cookie. */
     if (cookie_mask) {

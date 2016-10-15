@@ -16,36 +16,33 @@
  */
 
 #include <config.h>
-#include "ofproto-dpif-sflow.h"
+#include "ofproto/ofproto-dpif-sflow.h"
 #include <inttypes.h>
-#include <sys/resource.h>
-#include <sys/socket.h>
 #include <net/if.h>
 #include <stdlib.h>
-#include "collectors.h"
+#include <sys/resource.h>
+#include <sys/socket.h>
 #include "compiler.h"
 #include "dpif.h"
 #include "hash.h"
-#include "openvswitch/hmap.h"
+#include "lacp.h"
+#include "lib/odp-util.h"
+#include "lib/unaligned.h"
 #include "netdev.h"
 #include "netlink.h"
+#include "ofproto/collectors.h"
+#include "ofproto/ofproto-provider.h"
+#include "ofproto/ofproto.h"
+#include "openvswitch/hmap.h"
 #include "openvswitch/ofpbuf.h"
-#include "ofproto.h"
+#include "openvswitch/vlog.h"
+#include "ovs-router.h"
 #include "packets.h"
 #include "poll-loop.h"
-#include "ovs-router.h"
 #include "route-table.h"
 #include "sflow_api.h"
 #include "socket-util.h"
 #include "timeval.h"
-#include "openvswitch/vlog.h"
-#include "lib/odp-util.h"
-#include "lib/unaligned.h"
-#include "ofproto-provider.h"
-#include "lacp.h"
-
-// @P4:
-#include "p4/src/ofproto/ofproto-dpif-sflow.c.h"
 
 VLOG_DEFINE_THIS_MODULE(sflow);
 
@@ -1016,8 +1013,14 @@ sflow_read_set_action(const struct nlattr *attr,
         }
         break;
 
-    // @P4:
-	OVS_SFLOW_READ_SET_ACTION_CASES
+    /* P4 fields. */
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in helpers.get_ordered_header_instances_non_virtual(ordered_header_instances_non_virtual):
+    case OVS_KEY_ATTR_${header_name.upper()}:
+        break;
+//::  #endfor
+    case OVS_KEY_ATTR_VALID:
+        break;
 
     case OVS_KEY_ATTR_TCP_FLAGS:
     case OVS_KEY_ATTR_ICMP:

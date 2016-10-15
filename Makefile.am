@@ -109,6 +109,7 @@ EXTRA_DIST = \
 	build-aux/cksum-schema-check \
 	build-aux/calculate-schema-cksum \
 	build-aux/dist-docs \
+	build-aux/preprocess-p4 \
 	build-aux/sodepends.pl \
 	build-aux/soexpand.pl \
 	build-aux/xml2nroff \
@@ -209,6 +210,22 @@ SUFFIXES += .xml
 clean-pycov:
 	cd $(srcdir) && rm -f $(PYCOV_CLEAN_FILES)
 CLEAN_LOCAL += clean-pycov
+
+P4C_FILES =
+P4C_FILES += datapath/linux/compat/include/linux/openvswitch.h.p4c
+BUILT_SOURCES += $(P4C_FILES:.p4c=)
+CLEANFILES += $(P4C_FILES:.p4c=)
+EXTRA_DIST += $(P4C_FILES)
+
+SUFFIXES += .h.p4c .c.p4c .inc.p4c
+p4inputfile = $(srcdir)/include/p4/examples/l2-switch.p4
+run_p4c = $(AM_V_GEN)AM_V_P='$(AM_V_P)' P4C_BEHAVIORAL='$(P4C_BEHAVIORAL)' $(srcdir)/build-aux/preprocess-p4 $(srcdir) $(p4inputfile) $< > $@.tmp && mv $@.tmp $@
+%.h: %.h.p4c $(p4inputfile) include/p4/header.p4c
+	$(run_p4c)
+%.c: %.c.p4c $(p4inputfile) include/p4/header.p4c
+	$(run_p4c)
+%.inc: %.inc.p4c $(p4inputfile) include/p4/header.p4c
+	$(run_p4c)
 
 # If we're checked out from a Git repository, make sure that every
 # file that is in Git is distributed.

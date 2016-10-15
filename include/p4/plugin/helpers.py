@@ -2,7 +2,6 @@
 import math
 ceil = math.ceil
 
-
 def byte_array_to_int(byte_array):
     result = 0
     length = len(byte_array)

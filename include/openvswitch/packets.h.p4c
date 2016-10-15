@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,9 +19,7 @@
 
 #include <netinet/in.h>
 #include "openvswitch/tun-metadata.h"
-
-// @P4:
-#include "p4/src/include/openvswitch/packets.h.h"
+#include "openvswitch/util.h"
 
 /* Tunnel information used in flow key and metadata. */
 struct flow_tnl {
@@ -62,6 +60,47 @@ struct flow_tnl {
 union flow_in_port {
     odp_port_t odp_port;
     ofp_port_t ofp_port;
+};
+
+//::  for header_name in ordered_header_instances_non_virtual:
+//::    header_len = sum([bit_width for _, bit_width in ohinvafnw[header_name]])/8
+#define ${header_name.upper()}_HEADER_LEN ${header_len}
+#define ${header_name.upper()}_PADDED_LEN ROUND_UP(${header_len}, 8)
+//::  #endfor
+#define VALID_HEADER_LEN ${len(ordered_header_instances_regular)}
+
+//::  for header_name in ordered_header_instances_non_virtual:
+//::    run_bit_width = 0
+OVS_PACKED(
+struct ${header_name}_header {
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+//::      if bit_width in [8, 16, 32, 64]:
+    uint${bit_width}_t ${field_name};
+//::      else:
+//::        # We assume that all fields are, at least, byte aligned.
+    struct ${field_name}_t ${field_name};
+//::      #endif
+//::      run_bit_width += bit_width
+//::    #endfor
+});
+BUILD_ASSERT_DECL(${header_name.upper()}_HEADER_LEN == sizeof(struct ${header_name}_header));
+
+struct ${header_name}_padded_header {
+    PADDED_MEMBERS(8, struct ${header_name}_header hdr;);
+};
+BUILD_ASSERT_DECL(${header_name.upper()}_PADDED_LEN == sizeof(struct ${header_name}_padded_header));
+
+//::  #endfor
+//::
+struct valid_header {
+//::  for header_name in ordered_header_instances_regular:
+    uint8_t ${header_name}_valid;
+//::  #endfor
+};
+BUILD_ASSERT_DECL(VALID_HEADER_LEN == sizeof(struct valid_header));
+
+struct valid_padded_header {
+    PADDED_MEMBERS(8, struct valid_header hdr;);
 };
 
 #endif /* packets.h */

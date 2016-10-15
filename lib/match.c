@@ -25,9 +25,6 @@
 #include "packets.h"
 #include "tun-metadata.h"
 
-// @P4:
-#include "p4/src/lib/match.c.h"
-
 /* Converts the flow in 'flow' into a match in 'match', with the given
  * 'wildcards'. */
 void
@@ -1180,8 +1177,7 @@ match_format(const struct match *match, struct ds *s, int priority)
         format_ct_label_masked(s, &f->ct_label, &wc->masks.ct_label);
     }
 
-    // @P4:
-    OVS_MATCH_FORMAT
+    /* XXX p4 */
 
     if (wc->masks.dl_type) {
         skip_type = true;

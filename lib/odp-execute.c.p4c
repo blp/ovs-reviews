@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  * Copyright (c) 2013 Simon Horman
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,9 +33,6 @@
 #include "flow.h"
 #include "unaligned.h"
 #include "util.h"
-
-// @P4:
-#include "p4/src/lib/odp-execute.c.h"
 
 /* Masked copy of an ethernet address. 'src' is already properly masked. */
 static void
@@ -155,6 +152,52 @@ odp_set_tunnel_action(const struct nlattr *a, struct flow_tnl *tun_key)
 
     fitness = odp_tun_key_from_attr(a, tun_key);
     ovs_assert(fitness != ODP_FIT_ERROR);
+}
+
+//::  for header_name in ordered_header_instances_regular:
+static void
+odp_set_${header_name}(struct dp_packet *packet,
+                       const struct ovs_key_${header_name} *key,
+                       const struct ovs_key_${header_name} *mask)
+{
+    struct ${header_name}_header *${header_name} = dp_packet_${header_name}(packet);
+
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+//::      if bit_width in [8, 16, 32, 64]:
+    uint${bit_width}_t ${field_name} = key->${field_name} | (${header_name}->${field_name} & ~mask->${field_name});
+//::      else:
+    struct ${field_name}_t ${field_name};
+    for (size_t i = 0; i < sizeof ${field_name}; i++) {
+        ((uint8_t *) &${field_name})[i] = ((const uint8_t *) &key->${field_name})[i] |
+            (((const uint8_t *) &${header_name}->${field_name})[i] &
+            ~((const uint8_t *) &mask->${field_name})[i]);
+    }
+//::      #endif
+//::    #endfor
+
+    packet_set_${header_name}(
+//::    for field_name, _ in ohinvafnw[header_name]:
+        ${field_name},
+//::    #endfor
+        packet);
+}
+
+//::  #endfor
+
+//::
+static void
+odp_set_valid(struct dp_packet *packet, const struct ovs_key_valid *key,
+              const struct ovs_key_valid *mask)
+{
+//::  for header_name in ordered_header_instances_regular:
+    uint8_t ${header_name}_valid = key->${header_name}_valid | (packet->${header_name}_valid & ~mask->${header_name}_valid);
+//::  #endfor
+
+    packet_set_valid(
+//::  for header_name in ordered_header_instances_regular:
+        ${header_name}_valid,
+//::  #endfor
+        packet);
 }
 
 static void
@@ -329,8 +372,38 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
         md->recirc_id = nl_attr_get_u32(a);
         break;
 
-    // @P4:
-    OVS_ODP_EXECUTE_SET_ACTION_CASES
+    /* P4 metadata fields. */
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_metadata:
+    case OVS_KEY_ATTR_${header_name.upper()}:
+        break;
+//::  #endfor
+
+    /* P4 data fields. */
+//::  for header_name in ordered_header_instances_regular:
+    case OVS_KEY_ATTR_${header_name.upper()}: {
+        const struct ovs_key_${header_name} *${header_name}_key
+            = nl_attr_get_unspec(a, sizeof *${header_name}_key);
+        packet_set_${header_name}(
+//::    for field_name, _ in ohinvafnw[header_name]:
+            ${header_name}_key->${field_name},
+//::    #endfor
+            packet);
+        break;
+    }
+//::  #endfor
+
+    /* P4 valid "header". */
+    case OVS_KEY_ATTR_VALID: {
+        const struct ovs_key_valid *valid =
+            nl_attr_get_unspec(a, sizeof *valid);
+        packet_set_valid(
+//::  for header_name in ordered_header_instances_regular:
+            valid->${header_name}_valid,
+//::  #endfor
+            packet);
+        break;
+    }
 
     case OVS_KEY_ATTR_UNSPEC:
     case OVS_KEY_ATTR_ENCAP:
@@ -428,8 +501,23 @@ odp_execute_masked_set_action(struct dp_packet *packet,
             | (md->recirc_id & ~*get_mask(a, uint32_t));
         break;
 
-    // @P4:
-    OVS_ODP_EXECUTE_MASKED_SET_ACTION_CASES
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_metadata:
+    case OVS_KEY_ATTR_${header_name.upper()}:
+        break;
+//::  #endfor
+
+//::  for header_name in ordered_header_instances_regular:
+    case OVS_KEY_ATTR_${header_name.upper()}:
+        odp_set_${header_name}(packet, nl_attr_get(a),
+                get_mask(a, struct ovs_key_${header_name}));
+        break;
+//::  #endfor
+
+    case OVS_KEY_ATTR_VALID:
+        odp_set_valid(packet, nl_attr_get(a),
+                      get_mask(a, struct ovs_key_valid));
+        break;
 
     case OVS_KEY_ATTR_TUNNEL:    /* Masked data not supported for tunnel. */
     case OVS_KEY_ATTR_UNSPEC:

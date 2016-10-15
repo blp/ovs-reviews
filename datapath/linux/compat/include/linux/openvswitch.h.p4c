@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2014 Nicira, Inc.
+ * Copyright (c) 2007-2014, 2016 Nicira, Inc.
  *
  * This file is offered under your choice of two licenses: Apache 2.0 or GNU
  * GPL 2.0 or later.  The permission statements for each of these licenses is
@@ -42,9 +42,6 @@
 
 #include <linux/types.h>
 #include <linux/if_ether.h>
-
-// @P4:
-#include "p4/src/datapath/linux/compat/include/linux/openvswitch.h.h"
 
 /**
  * struct ovs_header - header for OVS Generic Netlink messages.
@@ -360,13 +357,17 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_CT_MARK,	/* u32 connection tracking mark */
 	OVS_KEY_ATTR_CT_LABELS,	/* 16-octet connection tracking labels */
 
+	/* P4 fields. */
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+	OVS_KEY_ATTR_${header_name.upper()},
+//::  #endfor
+	OVS_KEY_ATTR_VALID,
+
 #ifdef __KERNEL__
 	/* Only used within kernel data path. */
 	OVS_KEY_ATTR_TUNNEL_INFO,  /* struct ovs_tunnel_info */
 #endif
-
-	// @P4:
-	OVS_KEY_ATTRS
 
 	__OVS_KEY_ATTR_MAX
 };
@@ -482,6 +483,25 @@ struct ovs_key_nd {
 #define OVS_CT_LABELS_LEN	16
 struct ovs_key_ct_labels {
 	__u8	ct_labels[OVS_CT_LABELS_LEN];
+};
+
+//::  # TODO: remove metadata that is not touched in the parser.
+//::  for header_name in ordered_header_instances_non_virtual:
+struct ovs_key_${header_name} {
+//::    for field_name, bit_width in ohinvafnw[header_name]:
+//::      if bit_width in [8, 16, 32, 64]:
+	uint${bit_width}_t ${field_name};
+//::      else:
+	struct ${field_name}_t ${field_name};
+//::      #endif
+//::    #endfor
+};
+
+//::  #endfor
+struct ovs_key_valid {
+//::  for header_name in ordered_header_instances_regular:
+	uint8_t ${header_name}_valid;
+//::  #endfor
 };
 
 /* OVS_KEY_ATTR_CT_STATE flags */

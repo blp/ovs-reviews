@@ -13,15 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+//::
+//:: import helpers
 #ifndef OPENVSWITCH_FLOW_H
 #define OPENVSWITCH_FLOW_H 1
 
 #include "openflow/nicira-ext.h"
 #include "openvswitch/packets.h"
 #include "openvswitch/util.h"
-
-// @P4:
-#include "p4/src/include/openvswitch/flow.h.h"
 
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
@@ -131,8 +130,10 @@ struct flow {
     ovs_be32 igmp_group_ip4;    /* IGMP group IPv4 address.
                                  * Keep last for BUILD_ASSERT_DECL below. */
 
-    // @P4:
-    OVS_FIELDS
+//::  for header_name in helpers.get_ordered_header_instances_non_virtual(ordered_header_instances_non_virtual):
+    struct ${header_name}_padded_header ${header_name};
+//::  #endfor
+    struct valid_padded_header valid;
 };
 BUILD_ASSERT_DECL(sizeof(struct flow) % sizeof(uint64_t) == 0);
 BUILD_ASSERT_DECL(sizeof(struct flow_tnl) % sizeof(uint64_t) == 0);
