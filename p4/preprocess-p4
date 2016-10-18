@@ -1,0 +1,133 @@
+#! /bin/sh
+
+srcdir=.
+p4=
+input=
+dst=
+delete_temps=:
+p4c_behavioral=p4c-behavioral
+for option; do
+    # This option-parsing mechanism borrowed from a Autoconf-generated
+    # configure script under the following license:
+
+    # Copyright (C) 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001,
+    # 2002, 2003, 2004, 2005, 2006, 2009 Free Software Foundation, Inc.
+    # This configure script is free software; the Free Software Foundation
+    # gives unlimited permission to copy, distribute and modify it.
+
+    # If the previous option needs an argument, assign it.
+    if test -n "$prev"; then
+        eval $prev=\$option
+        prev=
+        continue
+    fi
+    case $option in
+        *=*) optarg=`expr "X$option" : '[^=]*=\(.*\)'` ;;
+        *) optarg=yes ;;
+    esac
+
+    case $dashdash$option in
+        --)
+            dashdash=yes ;;
+        -h|--help)
+            cat <<EOF
+$0: preprocesses input through p4c-behavioral given a particular P4 program
+usage: $0 [OPTIONS] P4 INPUT
+where P4 is the P4 program and INPUT is the file to preprocess.
+
+Options:
+  -s, --srcdir=SRCDIR  location of OVS source directory (default: .)
+  -o, --output=OUTPUT  output file destination (default: stdout)
+  -p, --p4c=P4C        use P4C as p4c-behavioral (default: p4c-behavioral)
+  -k, --keep-temps     preserve the temporary directory (for debugging).
+  -h, --help           print this usage message.
+EOF
+            exit 0
+            ;;
+	--srcdir=*)
+	    srcdir=$optarg
+	    ;;
+	-s|--srcdir)
+	    prev=srcdir
+	    ;;
+	--output=*)
+	    dst=$optarg
+	    ;;
+	-o|--output)
+	    prev=dst
+	    ;;
+	--p4c*=*)
+	    p4c_behavioral=$optarg
+	    ;;
+	-p|--p4c*)
+	    prev=p4c_behavioral
+	    ;;
+	-k|--keep-temps)
+	    delete_temps=false
+	    ;;
+        -*)
+            echo "unrecognized option $option" >&2
+            exit 1
+            ;;
+        *)
+            if test -z "$p4"; then
+                p4=$option
+            elif test -z "$input"; then
+                input=$option
+            else
+                echo "$option: only two arguments may be specified" >&2
+                exit 1
+            fi
+            ;;
+    esac
+    shift
+done
+if test -n "$prev"; then
+    option=--`echo $prev | sed 's/_/-/g'`
+    { echo "$as_me: error: missing argument to $option" >&2
+        { (exit 1); exit 1; }; }
+fi
+
+if test -z "$input"; then
+    echo "$0: exactly two non-option arguments expected; use --help for help" >&2
+    exit 1
+fi
+
+input_base=$(basename "$input")
+
+rm -rf tmp$$
+if $delete_temps; then
+    trap "rm -rf tmp$$" 0 1 2 3 13 14 15
+fi
+
+mkdir tmp$$ tmp$$/ovs || exit $?
+cp "$srcdir"/p4/helpers.py tmp$$ || exit $?
+header="$srcdir"/p4/helpers.p4c
+{ echo '/* -*- mode: c; buffer-read-only: t -*- */'
+  echo "#line 1 \"$header\"" && cat "$header" &&
+  echo "#line 1 \"$input\"" && cat "$input"
+} > tmp$$/ovs/"$input_base" || exit $?
+
+# p4c-behavioral spews a lot of crap on stdout by default, which we
+# suppress if Automake is in non-verbose mode (which can be the
+# default if OVS was configured with --enable-silent-rules).
+export PYTHONPATH=$srcdir/p4:$PYTHONPATH
+set $p4c_behavioral $p4 --gen-dir tmp$$/output --plugin-path tmp$$ --plugin ovs
+if ${AM_V_P-:}; then
+    # Verbose mode (e.g. V=1).
+    "$@" >&2
+else
+    # Non-verbose mode (e.g. V=0).
+    #
+    # We save the output anyway, then dump it to stderr if there was a real
+    # error.
+    "$@" >tmp$$/stdout 2>&1 || { rc=$?; cat >&2 tmp$$/stdout; exit $rc; }
+fi
+
+output=tmp$$/output/plugin/ovs/"${input_base%.h}"
+if test -z "$dst"; then
+    cat "$output"
+else
+    rm -f "$dst"
+    cp "$output" "$dst"
+fi

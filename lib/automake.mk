@@ -75,7 +75,6 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/dirs.h \
 	lib/dpctl.c \
 	lib/dpctl.h \
-	lib/dp-packet.h \
 	lib/dp-packet.c \
 	lib/dpdk.h \
 	lib/dpif-netdev.c \
@@ -92,7 +91,6 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/fat-rwlock.h \
 	lib/fatal-signal.c \
 	lib/fatal-signal.h \
-	lib/flow.c \
 	lib/flow.h \
 	lib/guarded-list.c \
 	lib/guarded-list.h \
@@ -126,7 +124,6 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/mcast-snooping.h \
 	lib/memory.c \
 	lib/memory.h \
-	lib/meta-flow.c \
 	lib/multipath.c \
 	lib/multipath.h \
 	lib/netdev-dpdk.h \
@@ -140,13 +137,10 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/netflow.h \
 	lib/netlink.c \
 	lib/netlink.h \
-	lib/nx-match.c \
 	lib/nx-match.h \
 	lib/object-collection.c \
 	lib/object-collection.h \
-	lib/odp-execute.c \
 	lib/odp-execute.h \
-	lib/odp-util.c \
 	lib/odp-util.h \
 	lib/ofp-actions.c \
 	lib/ofp-errors.c \
@@ -197,8 +191,6 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ovsdb-parser.h \
 	lib/ovsdb-types.c \
 	lib/ovsdb-types.h \
-	lib/packets.c \
-	lib/packets.h \
 	lib/pcap-file.c \
 	lib/pcap-file.h \
 	lib/perf-counter.h \
@@ -295,6 +287,15 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/lldp/lldpd.h \
 	lib/lldp/lldpd-structs.c \
 	lib/lldp/lldpd-structs.h
+nodist_lib_libopenvswitch_la_SOURCES = \
+	lib/dp-packet.h \
+	lib/flow.c \
+	lib/meta-flow.c \
+	lib/nx-match.c \
+	lib/odp-execute.c \
+	lib/odp-util.c \
+	lib/packets.c \
+	lib/packets.h
 P4C_FILES += \
 	lib/dp-packet.h.p4c \
 	lib/flow.c.p4c \
@@ -329,7 +330,7 @@ EXTRA_DIST += \
 	lib/stdio.h.in \
 	lib/string.h.in
 
-nodist_lib_libopenvswitch_la_SOURCES = \
+nodist_lib_libopenvswitch_la_SOURCES += \
 	lib/dirs.c \
 	lib/vswitch-idl.c \
 	lib/vswitch-idl.h

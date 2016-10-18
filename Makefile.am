@@ -109,7 +109,6 @@ EXTRA_DIST = \
 	build-aux/cksum-schema-check \
 	build-aux/calculate-schema-cksum \
 	build-aux/dist-docs \
-	build-aux/preprocess-p4 \
 	build-aux/sodepends.pl \
 	build-aux/soexpand.pl \
 	build-aux/xml2nroff \
@@ -218,13 +217,13 @@ CLEANFILES += $(P4C_FILES:.p4c=)
 EXTRA_DIST += $(P4C_FILES)
 
 SUFFIXES += .h.p4c .c.p4c .inc.p4c
-p4inputfile = $(srcdir)/include/p4/examples/l2-switch.p4
-run_p4c = $(AM_V_GEN)AM_V_P='$(AM_V_P)' P4C_BEHAVIORAL='$(P4C_BEHAVIORAL)' $(srcdir)/build-aux/preprocess-p4 $(srcdir) $(p4inputfile) $< > $@.tmp && mv $@.tmp $@
-%.h: %.h.p4c $(p4inputfile) include/p4/header.p4c
+p4inputfile = $(srcdir)/p4/examples/l2-switch.p4
+run_p4c = $(AM_V_GEN)AM_V_P='$(AM_V_P)'  $(srcdir)/p4/preprocess-p4 --p4c='$(P4C_BEHAVIORAL)' --srcdir='$(srcdir)' -o '$@' $(p4inputfile) '$<'
+%.h: %.h.p4c $(p4inputfile) p4/helpers.p4c
 	$(run_p4c)
-%.c: %.c.p4c $(p4inputfile) include/p4/header.p4c
+%.c: %.c.p4c $(p4inputfile) p4/helpers.p4c
 	$(run_p4c)
-%.inc: %.inc.p4c $(p4inputfile) include/p4/header.p4c
+%.inc: %.inc.p4c $(p4inputfile) p4/helpers.p4c
 	$(run_p4c)
 
 # If we're checked out from a Git repository, make sure that every
@@ -462,3 +461,4 @@ include datapath-windows/include/automake.mk
 include windows/automake.mk
 include ovn/automake.mk
 include selinux/automake.mk
+include p4/automake.mk
