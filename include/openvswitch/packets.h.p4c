@@ -74,8 +74,10 @@ union flow_in_port {
 OVS_PACKED(
 struct ${header_name}_header {
 //::    for field_name, bit_width in ohinvafnw[header_name]:
-//::      if bit_width in [8, 16, 32, 64]:
+//::      if bit_width == 8:
     uint${bit_width}_t ${field_name};
+//::      elif bit_width in [16, 32, 64]:
+    ovs_be${bit_width} ${field_name};
 //::      else:
 //::        # We assume that all fields are, at least, byte aligned.
     struct ${field_name}_t ${field_name};

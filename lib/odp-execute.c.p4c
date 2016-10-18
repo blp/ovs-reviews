@@ -163,8 +163,10 @@ odp_set_${header_name}(struct dp_packet *packet,
     struct ${header_name}_header *${header_name} = dp_packet_${header_name}(packet);
 
 //::    for field_name, bit_width in ohinvafnw[header_name]:
-//::      if bit_width in [8, 16, 32, 64]:
+//::      if bit_width == 8:
     uint${bit_width}_t ${field_name} = key->${field_name} | (${header_name}->${field_name} & ~mask->${field_name});
+//::      elif bit_width in [16, 32, 64]:
+    ovs_be${bit_width} ${field_name} = key->${field_name} | (${header_name}->${field_name} & ~mask->${field_name});
 //::      else:
     struct ${field_name}_t ${field_name};
     for (size_t i = 0; i < sizeof ${field_name}; i++) {
