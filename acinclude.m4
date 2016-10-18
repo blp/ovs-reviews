@@ -290,11 +290,23 @@ AC_DEFUN([OVS_CHECK_DPDK], [
 dnl OVS_CHECK_P4
 dnl
 dnl Finds the p4c-behavioral preprocessor and sets it as P4C_BEHAVIORAL.
+dnl Finds the P4 program preferred by the user and sets it as P4INPUTFILE.
 AC_DEFUN([OVS_CHECK_P4], [
   AC_PATH_PROGS([P4C_BEHAVIORAL], [p4c-behavioral], [no])
   if test "$P4C_BEHAVIORAL" = no; then
       AC_MSG_ERROR([p4c-behavioral not found.  Please install it from https://github.com/p4lang/p4c-behavioral or, if it is already installed, make it available in $PATH or as $P4C_BEHAVIORAL.])
   fi
+
+  AC_ARG_WITH(
+    [p4],
+    [AC_HELP_STRING([--with-p4=myprogram.p4],
+                    [Specify P4 input file to use (default: SRCDIR/p4/default.p4)])],
+    [P4INPUTFILE=$withval],
+    [P4INPUTFILE=$srcdir/p4/default.p4])
+  if test ! -e $P4INPUTFILE; then
+    AC_MSG_ERROR([$P4INPUTFILE: not found])
+  fi
+  AC_SUBST([P4INPUTFILE])
 ])
 
 dnl OVS_GREP_IFELSE(FILE, REGEX, [IF-MATCH], [IF-NO-MATCH])

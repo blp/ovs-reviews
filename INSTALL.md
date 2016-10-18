@@ -36,6 +36,10 @@ you will need the following software:
     support for atomic operations may be missing, making OVS very
     slow (see lib/ovs-atomic.h).
 
+  - p4c-behavioral, from https://github.com/p4lang/p4c-behavioral.  As
+    a dependency, this will also require you to install p4c-hlir, from
+    https://github.com/p4lang/p4-hlir.
+
   - libssl, from OpenSSL, is optional but recommended if you plan to
     connect the Open vSwitch to an OpenFlow controller.  libssl is
     required to establish confidentiality and authenticity in the
@@ -289,6 +293,16 @@ memory allocator.
 If you wish to link with jemalloc add it to LIBS:
 
       `% ./configure LIBS=-ljemalloc`
+
+If you want to build with a custom P4 program, instead of the default,
+use --with-p4:
+
+      `% ./configure --with-p4=p4/examples/l2-switch.p4`
+
+If you installed p4c-behavioral somewhere not in your default $PATH,
+you can tell the build to use it with P4C_BEHAVIORAL, e.g.:
+
+      `% ./configure P4C_BEHAVIORAL=$HOME/.local/bin/p4c-behavioral`
 
 Building the Sources
 --------------------
