@@ -24,6 +24,7 @@
 #include "dirs.h"
 #include "openvswitch/dynamic-string.h"
 #include "fatal-signal.h"
+#include "flow-template.h"
 #include "hash.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
@@ -58,6 +59,14 @@ struct northd_context {
     struct ovsdb_idl_txn *ovnsb_txn;
 };
 
+/* --check-syntax: Check the .ftl input syntax and exit. */
+static bool check_syntax;
+
+/* -I, --include: Path to search for .ftl source files. */
+static struct ds include_path;
+
+/* --ovnnb-db, --ovnsb-db: Remotes for connecting to northbound and southbound
+ * databases. */
 static const char *ovnnb_db;
 static const char *ovnsb_db;
 
@@ -275,8 +284,6 @@ struct ovn_datapath {
     struct hmap port_tnlids;
     uint32_t port_key_hint;
 
-    bool has_unknown;
-
     /* IPAM data. */
     struct ipam_info *ipam_info;
 
@@ -347,7 +354,7 @@ ovn_datapath_get_type(const struct ovn_datapath *od)
     return od->nbs ? DP_SWITCH : DP_ROUTER;
 }
 
-static struct ovn_datapath *
+struct ovn_datapath *
 ovn_datapath_find(struct hmap *datapaths, const struct uuid *uuid)
 {
     struct ovn_datapath *od;
@@ -2167,7 +2174,7 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
 }
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
-static void
+void
 ovn_lflow_add_at(struct hmap *lflow_map, struct ovn_datapath *od,
                  enum ovn_stage stage, uint16_t priority,
                  const char *match, const char *actions,
@@ -2332,7 +2339,13 @@ build_port_security_ipv6_flow(
 static void
 build_port_security_nd(struct ovn_port *op, struct hmap *lflows)
 {
+    if (!n_ps_addrs) {
+        return xstrdup("1");
+    }
+
     struct ds match = DS_EMPTY_INITIALIZER;
+    for (size_t i = 0; i < n_ps_addrs; i++) {
+        struct lport_addresses *ps = &ps_addrs[i];
 
     for (size_t i = 0; i < op->n_ps_addrs; i++) {
         struct lport_addresses *ps = &op->ps_addrs[i];
@@ -2403,9 +2416,9 @@ build_port_security_nd(struct ovn_port *op, struct hmap *lflows)
  *   - If the port security has IPv4 addresses or IPv6 addresses or both
  *     - Priority 80 flow to drop all IPv4 and IPv6 traffic
  */
-static void
-build_port_security_ip(enum ovn_pipeline pipeline, struct ovn_port *op,
-                       struct hmap *lflows)
+char *
+build_port_security_ip(enum ovn_pipeline pipeline,
+                       struct lport_addresses *ps_addrs, size_t n_ps_addrs)
 {
     char *port_direction;
     enum ovn_stage stage;
@@ -2605,29 +2618,23 @@ build_dhcpv4_action(struct ovn_port *op, ovs_be32 offer_ip,
     return true;
 }
 
-static bool
-build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
-                    struct ds *options_action, struct ds *response_action)
+char *
+build_dhcp_netmask(const char *cidr)
 {
-    if (!op->nbsp->dhcpv6_options) {
-        /* CMS has disabled native DHCPv6 for this lport. */
-        return false;
-    }
+    ovs_be32 ip, mask;
+    char *error = ip_parse_masked(cidr, &ip, &mask);
+    return error ? xstrdup("<error>") : xasprintf(IP_FMT, IP_ARGS(mask));
+}
 
-    struct in6_addr host_ip, mask;
+char *
+build_dhcp_server_mac(const struct smap *dhcp_options)
+{
+    struct eth_addr ea;
 
-    char *error = ipv6_parse_masked(op->nbsp->dhcpv6_options->cidr, &host_ip,
-                                        &mask);
-    if (error) {
-        free(error);
-        return false;
-    }
-    struct in6_addr ip6_mask = ipv6_addr_bitxor(offer_ip, &host_ip);
-    ip6_mask = ipv6_addr_bitand(&ip6_mask, &mask);
-    if (!ipv6_mask_is_any(&ip6_mask)) {
-        /* offer_ip doesn't belongs to the cidr defined in lport's DHCPv6
-         * options.*/
-        return false;
+    /* Get the server MAC for DHCPv4 options. */
+    const char *mac = smap_get(dhcp_options, "server_mac");
+    if (mac && eth_addr_from_string(mac, &ea)) {
+        return xstrdup(mac);
     }
 
     const struct smap *options_map = &op->nbsp->dhcpv6_options->options;
@@ -2642,18 +2649,19 @@ build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
         return false;
     }
 
-    /* Get the link local IP of the DHCPv6 server from the server MAC. */
-    struct in6_addr lla;
-    in6_generate_lla(ea, &lla);
+    return xstrdup("<missing>");
+}
 
-    char server_ip[INET6_ADDRSTRLEN + 1];
-    ipv6_string_mapped(server_ip, &lla);
-
-    char ia_addr[INET6_ADDRSTRLEN + 1];
-    ipv6_string_mapped(ia_addr, offer_ip);
-
-    ds_put_format(options_action,
-                  REGBIT_DHCP_OPTS_RESULT" = put_dhcpv6_opts(");
+char *
+build_dhcp_server_ip(const struct smap *dhcp_options)
+{
+    const char *id = smap_get(dhcp_options, "server_id");
+    if (id) {
+        /* Get server IP for DHCPv4 options. */
+        ovs_be32 ip;
+        if (ip_parse(id, &ip)) {
+            return xstrdup(id);
+        }
 
     /* Check whether the dhcpv6 options should be configured as stateful.
      * Only reply with ia_addr option for dhcpv6 stateful address mode. */
@@ -2677,13 +2685,13 @@ build_dhcpv6_action(struct ovn_port *op, struct in6_addr *offer_ip,
     ds_chomp(options_action, ',');
     ds_put_cstr(options_action, "); next;");
 
-    ds_put_format(response_action, "eth.dst = eth.src; eth.src = %s; "
-                  "ip6.dst = ip6.src; ip6.src = %s; udp.src = 547; "
-                  "udp.dst = 546; outport = inport; flags.loopback = 1; "
-                  "output;",
-                  server_mac, server_ip);
+    return xstrdup("<missing>");
+}
 
-    return true;
+bool
+build_dhcp_stateful(const struct smap *dhcp_options)
+{
+    return !smap_get_bool(dhcp_options, "dhcpv6_stateless", false);
 }
 
 static bool
@@ -2703,11 +2711,6 @@ static void
 build_pre_acls(struct ovn_datapath *od, struct hmap *lflows)
 {
     bool has_stateful = has_stateful_acl(od);
-
-    /* Ingress and Egress Pre-ACL Table (Priority 0): Packets are
-     * allowed by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_ACL, 0, "1", "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_PRE_ACL, 0, "1", "next;");
 
     /* If there are any stateful ACL rules in this datapath, we must
      * send all IP packets through the conntrack action, which handles
@@ -2832,8 +2835,8 @@ ls_has_dns_records(const struct nbrec_logical_switch *nbs)
     return false;
 }
 
-static void
-build_pre_lb(struct ovn_datapath *od, struct hmap *lflows)
+char *
+build_load_balancer_ip_addresses(const struct smap *vips)
 {
     /* Allow all packets to go to next tables by default. */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_PRE_LB, 0, "1", "next;");
@@ -2950,100 +2953,6 @@ static void
 build_acls(struct ovn_datapath *od, struct hmap *lflows)
 {
     bool has_stateful = has_stateful_acl(od);
-
-    /* Ingress and Egress ACL Table (Priority 0): Packets are allowed by
-     * default.  A related rule at priority 1 is added below if there
-     * are any stateful ACLs in this datapath. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 0, "1", "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 0, "1", "next;");
-
-    if (has_stateful) {
-        /* Ingress and Egress ACL Table (Priority 1).
-         *
-         * By default, traffic is allowed.  This is partially handled by
-         * the Priority 0 ACL flows added earlier, but we also need to
-         * commit IP flows.  This is because, while the initiater's
-         * direction may not have any stateful rules, the server's may
-         * and then its return traffic would not have an associated
-         * conntrack entry and would return "+invalid".
-         *
-         * We use "ct_commit" for a connection that is not already known
-         * by the connection tracker.  Once a connection is committed,
-         * subsequent packets will hit the flow at priority 0 that just
-         * uses "next;"
-         *
-         * We also check for established connections that have ct_label.blocked
-         * set on them.  That's a connection that was disallowed, but is
-         * now allowed by policy again since it hit this default-allow flow.
-         * We need to set ct_label.blocked=0 to let the connection continue,
-         * which will be done by ct_commit() in the "stateful" stage.
-         * Subsequent packets will hit the flow at priority 0 that just
-         * uses "next;". */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, 1,
-                      "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
-                       REGBIT_CONNTRACK_COMMIT" = 1; next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, 1,
-                      "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
-                       REGBIT_CONNTRACK_COMMIT" = 1; next;");
-
-        /* Ingress and Egress ACL Table (Priority 65535).
-         *
-         * Always drop traffic that's in an invalid state.  Also drop
-         * reply direction packets for connections that have been marked
-         * for deletion (bit 0 of ct_label is set).
-         *
-         * This is enforced at a higher priority than ACLs can be defined. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
-                      "drop;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
-                      "drop;");
-
-        /* Ingress and Egress ACL Table (Priority 65535).
-         *
-         * Allow reply traffic that is part of an established
-         * conntrack entry that has not been marked for deletion
-         * (bit 0 of ct_label).  We only match traffic in the
-         * reply direction because we want traffic in the request
-         * direction to hit the currently defined policy from ACLs.
-         *
-         * This is enforced at a higher priority than ACLs can be defined. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
-                      "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv "
-                      "&& ct.rpl && ct_label.blocked == 0",
-                      "next;");
-
-        /* Ingress and Egress ACL Table (Priority 65535).
-         *
-         * Allow traffic that is related to an existing conntrack entry that
-         * has not been marked for deletion (bit 0 of ct_label).
-         *
-         * This is enforced at a higher priority than ACLs can be defined.
-         *
-         * NOTE: This does not support related data sessions (eg,
-         * a dynamically negotiated FTP data channel), but will allow
-         * related traffic such as an ICMP Port Unreachable through
-         * that's generated from a non-listening UDP port.  */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
-                      "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX,
-                      "!ct.est && ct.rel && !ct.new && !ct.inv "
-                      "&& ct_label.blocked == 0",
-                      "next;");
-
-        /* Ingress and Egress ACL Table (Priority 65535).
-         *
-         * Not to do conntrack on ND packets. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_ACL, UINT16_MAX, "nd", "next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_ACL, UINT16_MAX, "nd", "next;");
-    }
 
     /* Ingress or Egress ACL Table (Various priorities). */
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
@@ -3313,55 +3222,8 @@ build_qos(struct ovn_datapath *od, struct hmap *lflows) {
 }
 
 static void
-build_lb(struct ovn_datapath *od, struct hmap *lflows)
-{
-    /* Ingress and Egress LB Table (Priority 0): Packets are allowed by
-     * default.  */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, 0, "1", "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_LB, 0, "1", "next;");
-
-    if (od->nbs->load_balancer) {
-        /* Ingress and Egress LB Table (Priority 65535).
-         *
-         * Send established traffic through conntrack for just NAT. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_LB, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv",
-                      REGBIT_CONNTRACK_NAT" = 1; next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_LB, UINT16_MAX,
-                      "ct.est && !ct.rel && !ct.new && !ct.inv",
-                      REGBIT_CONNTRACK_NAT" = 1; next;");
-    }
-}
-
-static void
 build_stateful(struct ovn_datapath *od, struct hmap *lflows)
 {
-    /* Ingress and Egress stateful Table (Priority 0): Packets are
-     * allowed by default. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 0, "1", "next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 0, "1", "next;");
-
-    /* If REGBIT_CONNTRACK_COMMIT is set as 1, then the packets should be
-     * committed to conntrack. We always set ct_label.blocked to 0 here as
-     * any packet that makes it this far is part of a connection we
-     * want to allow to continue. */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
-                  REGBIT_CONNTRACK_COMMIT" == 1", "ct_commit(ct_label=0/1); next;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 100,
-                  REGBIT_CONNTRACK_COMMIT" == 1", "ct_commit(ct_label=0/1); next;");
-
-    /* If REGBIT_CONNTRACK_NAT is set as 1, then packets should just be sent
-     * through nat (without committing).
-     *
-     * REGBIT_CONNTRACK_COMMIT is set for new connections and
-     * REGBIT_CONNTRACK_NAT is set for established connections. So they
-     * don't overlap.
-     */
-    ovn_lflow_add(lflows, od, S_SWITCH_IN_STATEFUL, 100,
-                  REGBIT_CONNTRACK_NAT" == 1", "ct_lb;");
-    ovn_lflow_add(lflows, od, S_SWITCH_OUT_STATEFUL, 100,
-                  REGBIT_CONNTRACK_NAT" == 1", "ct_lb;");
-
     /* Load balancing rules for new connections get committed to conntrack
      * table.  So even if REGBIT_CONNTRACK_COMMIT is set in a previous table
      * a higher priority rule for load balancing below also commits the
@@ -3431,38 +3293,12 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         }
 
         build_pre_acls(od, lflows);
-        build_pre_lb(od, lflows);
-        build_pre_stateful(od, lflows);
         build_acls(od, lflows);
         build_qos(od, lflows);
-        build_lb(od, lflows);
         build_stateful(od, lflows);
     }
 
-    /* Logical switch ingress table 0: Admission control framework (priority
-     * 100). */
-    HMAP_FOR_EACH (od, key_node, datapaths) {
-        if (!od->nbs) {
-            continue;
-        }
-
-        /* Logical VLANs not supported. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_L2, 100, "vlan.present",
-                      "drop;");
-
-        /* Broadcast/multicast source address is invalid. */
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_PORT_SEC_L2, 100, "eth.src[40]",
-                      "drop;");
-
-        /* Port security flows have priority 50 (see below) and will continue
-         * to the next table if packet source is acceptable. */
-    }
-
-    /* Logical switch ingress table 0: Ingress port security - L2
-     *  (priority 50).
-     *  Ingress table 1: Ingress port security - IP (priority 90 and 80)
-     *  Ingress table 2: Ingress port security - ND (priority 90 and 80)
-     */
+    /* Broadcast/multicast and unknown handling. */
     struct ovn_port *op;
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
@@ -3956,12 +3792,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
     ds_destroy(&match);
     ds_destroy(&actions);
-}
-
-static bool
-lrport_is_enabled(const struct nbrec_logical_router_port *lrport)
-{
-    return !lrport->enabled || *lrport->enabled;
 }
 
 /* Returns a string of the IP address of the router port 'op' that
@@ -4538,6 +4368,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
     }
 
     /* Logical router ingress table 1: IP Input for IPv4. */
+    struct ovn_port *op;
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbrp) {
             continue;
@@ -5606,10 +5437,10 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
              * connects) and if the address in question is reachable from the
              * router port, add an ARP/ND entry in that router's pipeline. */
 
-            for (size_t i = 0; i < op->n_lsp_addrs; i++) {
-                const char *ea_s = op->lsp_addrs[i].ea_s;
-                for (size_t j = 0; j < op->lsp_addrs[i].n_ipv4_addrs; j++) {
-                    const char *ip_s = op->lsp_addrs[i].ipv4_addrs[j].addr_s;
+            for (size_t i = 0; i < op->nbsp->n_lsp_addrs; i++) {
+                const char *ea_s = op->nbsp->lsp_addrs[i].ea_s;
+                for (size_t j = 0; j < op->nbsp->lsp_addrs[i].n_ipv4_addrs; j++) {
+                    const char *ip_s = op->nbsp->lsp_addrs[i].ipv4_addrs[j].addr_s;
                     for (size_t k = 0; k < op->od->n_router_ports; k++) {
                         /* Get the Logical_Router_Port that the
                          * Logical_Switch_Port is connected to, as
@@ -5642,8 +5473,8 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     }
                 }
 
-                for (size_t j = 0; j < op->lsp_addrs[i].n_ipv6_addrs; j++) {
-                    const char *ip_s = op->lsp_addrs[i].ipv6_addrs[j].addr_s;
+                for (size_t j = 0; j < op->nbsp->lsp_addrs[i].n_ipv6_addrs; j++) {
+                    const char *ip_s = op->nbsp->lsp_addrs[i].ipv6_addrs[j].addr_s;
                     for (size_t k = 0; k < op->od->n_router_ports; k++) {
                         /* Get the Logical_Router_Port that the
                          * Logical_Switch_Port is connected to, as
@@ -5854,14 +5685,15 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 /* Updates the Logical_Flow and Multicast_Group tables in the OVN_SB database,
  * constructing their contents based on the OVN_NB database. */
 static void
-build_lflows(struct northd_context *ctx, struct hmap *datapaths,
-             struct hmap *ports)
+build_lflows(struct northd_context *ctx, struct ftl *ftl,
+             struct hmap *datapaths, struct hmap *ports)
 {
     struct hmap lflows = HMAP_INITIALIZER(&lflows);
     struct hmap mcgroups = HMAP_INITIALIZER(&mcgroups);
 
     build_lswitch_flows(datapaths, ports, &lflows, &mcgroups);
     build_lrouter_flows(datapaths, ports, &lflows);
+    ftl_run(ftl, ctx->ovnnb_idl, &lflows, datapaths);
 
     /* Push changes to the Logical_Flow table to database. */
     const struct sbrec_logical_flow *sbflow, *next_sbflow;
@@ -6097,7 +5929,7 @@ sync_dns_entries(struct northd_context *ctx, struct hmap *datapaths)
 
 static void
 ovnnb_db_run(struct northd_context *ctx, struct chassis_index *chassis_index,
-             struct ovsdb_idl_loop *sb_loop)
+             struct ftl *ftl, struct ovsdb_idl_loop *sb_loop)
 {
     if (!ctx->ovnsb_txn || !ctx->ovnnb_txn) {
         return;
@@ -6106,7 +5938,7 @@ ovnnb_db_run(struct northd_context *ctx, struct chassis_index *chassis_index,
     build_datapaths(ctx, &datapaths);
     build_ports(ctx, &datapaths, chassis_index, &ports);
     build_ipam(&datapaths, &ports);
-    build_lflows(ctx, &datapaths, &ports);
+    build_lflows(ctx, ftl, &datapaths, &ports);
 
     sync_address_sets(ctx);
     sync_dns_entries(ctx, &datapaths);
@@ -6522,11 +6354,16 @@ static void
 parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
     enum {
+        OPT_CLEAR_INCLUDES,
+        OPT_CHECK_SYNTAX,
         DAEMON_OPTION_ENUMS,
         VLOG_OPTION_ENUMS,
         SSL_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
+        {"include", required_argument, NULL, 'I'},
+        {"clear-includes", no_argument, NULL, OPT_CLEAR_INCLUDES},
+        {"check-syntax", no_argument, NULL, OPT_CHECK_SYNTAX},
         {"ovnsb-db", required_argument, NULL, 'd'},
         {"ovnnb-db", required_argument, NULL, 'D'},
         {"help", no_argument, NULL, 'h'},
@@ -6539,6 +6376,8 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
 
+    ds_init(&include_path);
+    ds_put_cstr(&include_path, ovs_pkgdatadir());
     for (;;) {
         int c;
 
@@ -6551,6 +6390,21 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         DAEMON_OPTION_HANDLERS;
         VLOG_OPTION_HANDLERS;
         STREAM_SSL_OPTION_HANDLERS;
+
+        case 'I':
+            if (include_path.length) {
+                ds_put_cstr(&include_path, PATH_SEPARATOR);
+            }
+            ds_put_cstr(&include_path, optarg);
+            break;
+
+        case OPT_CLEAR_INCLUDES:
+            ds_clear(&include_path);
+            break;
+
+        case OPT_CHECK_SYNTAX:
+            check_syntax = true;
+            break;
 
         case 'd':
             ovnsb_db = optarg;
@@ -6586,6 +6440,11 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     }
 
     free(short_options);
+
+    if (optind != argc) {
+        ovs_fatal(0, "non-option arguments not supported "
+                  "(use --help for help)");
+    }
 }
 
 static void
@@ -6612,9 +6471,11 @@ main(int argc, char *argv[])
 
     daemonize_start(false);
 
-    retval = unixctl_server_create(NULL, &unixctl);
-    if (retval) {
-        exit(EXIT_FAILURE);
+    if (!check_syntax) {
+        retval = unixctl_server_create(NULL, &unixctl);
+        if (retval) {
+            exit(EXIT_FAILURE);
+        }
     }
     unixctl_command_register("exit", "", 0, 0, ovn_northd_exit, &exiting);
 
@@ -6625,6 +6486,20 @@ main(int argc, char *argv[])
         ovsdb_idl_create(ovnnb_db, &nbrec_idl_class, true, true));
     ovsdb_idl_omit_alert(ovnnb_idl_loop.idl, &nbrec_nb_global_col_sb_cfg);
     ovsdb_idl_omit_alert(ovnnb_idl_loop.idl, &nbrec_nb_global_col_hv_cfg);
+
+    struct ftl *ftl;
+    char *error = ftl_read("ovn.ftl", ds_cstr(&include_path),
+                           ovnnb_idl_loop.idl, &ftl);
+    if (check_syntax) {
+        if (error) {
+            ovs_fatal(0, "%s", error);
+        } else{
+            exit(0);
+        }
+    }
+    if (error) {
+        VLOG_FATAL("%s", error);
+    }
 
     /* We want to detect only selected changes to the ovn-sb db. */
     struct ovsdb_idl_loop ovnsb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
@@ -6756,7 +6631,7 @@ main(int argc, char *argv[])
             chassis_index_init(&chassis_index, ctx.ovnsb_idl);
             destroy_chassis_index = true;
 
-            ovnnb_db_run(&ctx, &chassis_index, &ovnsb_idl_loop);
+            ovnnb_db_run(&ctx, &chassis_index, ftl, &ovnsb_idl_loop);
             ovnsb_db_run(&ctx, &ovnsb_idl_loop);
             if (ctx.ovnsb_txn) {
                 check_and_add_supported_dhcp_opts_to_sb_db(&ctx);
