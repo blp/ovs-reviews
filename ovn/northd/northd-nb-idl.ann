@@ -7,3 +7,48 @@
 
 s["idlPrefix"] = "nbrec_"
 s["idlHeader"] = "\"ovn/northd/northd-nb-idl.h\""
+
+s["cDecls"] = "#include \"ovn/northd/ovn-northd.h\"";
+
+s["tables"]["Logical_Switch_Port"]["columns"]["ps_addrs"] = {
+    "type": "integer",
+    "extensions": {
+        "dependencies": ["port_security"],
+        "members": """struct lport_addresses *ps_addrs;
+        unsigned int n_ps_addrs;""",
+        "parse": """\
+build_ps_addrs(row->port_security, row->n_port_security,
+               &row->ps_addrs, &row->n_ps_addrs);""",
+        "unparse": "free_ps_addrs(row->ps_addrs, row->n_ps_addrs);",
+        "synthetic": True,
+    }
+}
+
+s["tables"]["Logical_Switch_Port"]["columns"]["port_security_l2_ingress"] = {
+    "type": "string",
+    "extensions": {
+        "dependencies": ["name", "ps_addrs"],
+        "parse": """row->port_security_l2_ingress = build_port_security_l2("inport", row->name, "eth.src", row->ps_addrs, row->n_ps_addrs);""",
+        "unparse": "free(row->port_security_l2_ingress);",
+        "synthetic": True,
+    }
+}
+s["tables"]["Logical_Switch_Port"]["columns"]["port_security_l2_egress"] = {
+    "type": "string",
+    "extensions": {
+        "dependencies": ["name", "ps_addrs"],
+        "parse": """row->port_security_l2_egress = build_port_security_l2("outport", row->name, "eth.dst", row->ps_addrs, row->n_ps_addrs);""",
+        "unparse": "free(row->port_security_l2_egress);",
+        "synthetic": True,
+    }
+}
+
+s["tables"]["Logical_Switch_Port"]["columns"]["port_security_nd"] = {
+    "type": "string",
+    "extensions": {
+        "dependencies": ["name", "ps_addrs"],
+        "parse": """row->port_security_nd = build_port_security_nd(row->name, row->ps_addrs, row->n_ps_addrs);""",
+        "unparse": "free(row->port_security_nd);",
+        "synthetic": True,
+    }
+}
