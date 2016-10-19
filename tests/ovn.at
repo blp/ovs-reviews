@@ -3966,7 +3966,7 @@ ovn-sbctl list logical_flow
 echo "---------------------"
 
 echo "---------------------"
-ovn-sbctl dump-flows
+ovn-sbctl dump-flows > flows
 echo "---------------------"
 
 echo "------ hv1 dump ----------"
@@ -5280,6 +5280,7 @@ dnl Restart northd to see that the same allocation remains.
 as northd
 OVS_APP_EXIT_AND_WAIT([ovn-northd])
 start_daemon ovn-northd \
+    --clear-includes -I"$abs_top_srcdir"/ovn/northd \
     --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
     --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 

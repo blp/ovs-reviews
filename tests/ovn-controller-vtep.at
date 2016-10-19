@@ -60,7 +60,7 @@ m4_define([OVN_CONTROLLER_VTEP_START],
 
    dnl Start ovn-northd.
    AT_CHECK([ovn-nbctl ls-add br-test])
-   AT_CHECK([ovn-northd --detach --pidfile --log-file], [0], [], [stderr])
+   AT_CHECK([ovn-northd --detach --pidfile --log-file --clear-includes -I"$abs_top_srcdir"/ovn/northd], [0], [], [stderr])
    on_exit "kill `cat ovn-northd.pid`"
    AT_CHECK([[sed < stderr '
 /vlog|INFO|opened log file/d']])

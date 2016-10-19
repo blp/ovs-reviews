@@ -8,7 +8,146 @@
 s["idlPrefix"] = "nbrec_"
 s["idlHeader"] = "\"ovn/northd/northd-nb-idl.h\""
 
-s["cDecls"] = "#include \"ovn/northd/ovn-northd.h\"";
+s["cDecls"] = """\
+#include "ovn/northd/ovn-northd.h"
+#include "ovn/lib/ovn-util.h"
+""";
+
+# This function affects column C1 in table T1, which must contain
+# references to rows in a distinct table T2.  It makes the IDL do two things:
+#
+#   1. Ensure that the references in C1 from every row in T1 refer to
+#      any given row in T2 at most once.  That is, this feature
+#      ensures that C1 is an injective ("one-to-one") mapping from
+#      rows in T1 to rows in T2.
+#
+#      OVSDB strong references and garbage collection can constrain
+#      such a mapping to be surjective ("onto"), so that taken
+#      together these features ensure a bijective (one-to-one and
+#      onto) relationship between table rows.
+#
+#   2. Add to T2 a column with name C2 (which must not exist in the
+#      original schema) and type "strong reference to T1" and
+#      automatically maintain it at runtime so that it always points
+#      back to the instance of T1 that refers to it.
+#
+#      The injectivity constraint guarantees that this is a unique
+#      relationship; if the mapping is also constrained to be
+#      surjective, then the pointer will also always be nonnull.
+#
+# For more information, see ovsdb-idlc(1).
+def add_injective_column(s, t1, c1, c2):
+    s["tables"][t1]["columns"][c1]["extensions"] = {
+        "injective": c2
+    }
+
+add_injective_column(s, "Logical_Switch", "ports", "ls")
+add_injective_column(s, "Logical_Switch", "load_balancer", "ls")
+add_injective_column(s, "Logical_Router", "ports", "lr")
+
+def synthesize_string_column(s, table, column, dependencies, expression):
+    s["tables"][table]["columns"][column] = {
+        "type": "string",
+        "extensions": {
+            "dependencies": dependencies,
+            "parse": "row->%s = %s;" % (column, expression),
+            "unparse": "free(row->%s);" % column,
+            "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].string = xstrdup(row->%s);
+""" % column,
+            "synthetic": True
+        }
+    }
+def synthesize_boolean_column(s, table, column, dependencies, expression):
+    s["tables"][table]["columns"][column] = {
+        "type": "boolean",
+        "extensions": {
+            "dependencies": dependencies,
+            "parse": "row->%s = %s;" % (column, expression),
+            "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].boolean = row->%s;
+""" % column,
+            "synthetic": True
+        }
+    }
+
+synthesize_string_column(s, "Load_Balancer", "ip_addresses", ["vips"],
+                         "build_load_balancer_ip_addresses(&row->vips)");
+synthesize_string_column(s, "Logical_Switch_Port", "macs",
+                         ["addresses", "dynamic_addresses"],
+                         "build_lsp_macs(row->lsp_addrs, row->n_lsp_addrs);")
+
+# XXX This doesn't properly express the dependency on the type.
+s["tables"]["Logical_Switch_Port"]["columns"]["up"]["extensions"] = {
+    "read": """
+/* Logical router ports are always up. */
+datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].boolean =  !strcmp(row->type, "router") || (row->up && *row->up);
+"""
+}
+
+# XXX This is just wrong.
+synthesize_boolean_column(s, "Logical_Switch", "has_stateful_acl", [], "false")
+
+s["tables"]["Logical_Switch_Port"]["columns"]["lsp_addrs"] = {
+    "type": "integer",
+    "extensions": {
+        "dependencies": ["addresses"],
+        "members": """struct lport_addresses *lsp_addrs;
+        unsigned int n_lsp_addrs;
+        bool has_unknown;
+        struct nbrec_logical_switch_port_ip **lspip_rows;
+        size_t n_lspip_rows;
+""",
+        "parse": """\
+build_lsp_addrs(row->addresses, row->n_addresses, row->dynamic_addresses,
+                &row->lsp_addrs, &row->n_lsp_addrs, &row->has_unknown);
+row->lspip_rows = NULL;
+row->n_lspip_rows = 0;
+for (size_t i = 0; i < row->n_lsp_addrs; i++) {
+    row->n_lspip_rows += row->lsp_addrs[i].n_ipv4_addrs;
+    row->n_lspip_rows += row->lsp_addrs[i].n_ipv6_addrs;
+}
+if (row->n_lspip_rows) {
+    row->lspip_rows = xmalloc(row->n_lspip_rows * sizeof *row->lspip_rows);
+    size_t n = 0;
+    for (size_t i = 0; i < row->n_lsp_addrs; i++) {
+        for (size_t j = 0; j < row->lsp_addrs[i].n_ipv4_addrs; j++) {
+            struct nbrec_logical_switch_port_ip *lspip = nbrec_logical_switch_port_ip_cast(insert_dependent_row(row->header_.table->idl, &nbrec_table_logical_switch_port_ip));
+            lspip->lsp = row;
+            lspip->ip_version = 4;
+            lspip->mac = row->lsp_addrs[i].ea_s;
+            lspip->ip = row->lsp_addrs[i].ipv4_addrs[j].addr_s;
+            lspip->sn_ip = NULL;
+            row->lspip_rows[n++] = lspip;
+        }
+        for (size_t j = 0; j < row->lsp_addrs[i].n_ipv6_addrs; j++) {
+            struct nbrec_logical_switch_port_ip *lspip = nbrec_logical_switch_port_ip_cast(insert_dependent_row(row->header_.table->idl, &nbrec_table_logical_switch_port_ip));
+            lspip->lsp = row;
+            lspip->ip_version = 6;
+            lspip->mac = row->lsp_addrs[i].ea_s;
+            lspip->ip = row->lsp_addrs[i].ipv6_addrs[j].addr_s;
+            lspip->sn_ip = row->lsp_addrs[i].ipv6_addrs[j].sn_addr_s;
+            row->lspip_rows[n++] = lspip;
+        }
+    }
+    ovs_assert(n == row->n_lspip_rows);
+}
+""",
+        "unparse": """\
+free_lp_addrs(row->lsp_addrs, row->n_lsp_addrs);
+for (size_t i = 0; i < row->n_lspip_rows; i++) {
+    remove_dependent_row(&row->lspip_rows[i]->header_);
+}
+free(row->lspip_rows);
+""",
+        "synthetic": True,
+    }
+}
+
 
 s["tables"]["Logical_Switch_Port"]["columns"]["ps_addrs"] = {
     "type": "integer",
@@ -19,36 +158,84 @@ s["tables"]["Logical_Switch_Port"]["columns"]["ps_addrs"] = {
         "parse": """\
 build_ps_addrs(row->port_security, row->n_port_security,
                &row->ps_addrs, &row->n_ps_addrs);""",
-        "unparse": "free_ps_addrs(row->ps_addrs, row->n_ps_addrs);",
+        "unparse": "free_lp_addrs(row->ps_addrs, row->n_ps_addrs);",
         "synthetic": True,
     }
 }
 
-s["tables"]["Logical_Switch_Port"]["columns"]["port_security_l2_ingress"] = {
-    "type": "string",
+synthesize_string_column(
+    s, "Logical_Switch_Port", "port_security_l2", ["ps_addrs"],
+    "build_port_security_l2(row->ps_addrs, row->n_ps_addrs)")
+synthesize_string_column(
+    s, "Logical_Switch_Port", "port_security_ip_ingress", ["ps_addrs"],
+    "build_port_security_ip(P_IN, row->ps_addrs, row->n_ps_addrs)")
+synthesize_string_column(
+    s, "Logical_Switch_Port", "port_security_ip_egress", ["ps_addrs"],
+    "build_port_security_ip(P_OUT, row->ps_addrs, row->n_ps_addrs)")
+synthesize_string_column(
+    s, "Logical_Switch_Port", "port_security_nd", ["ps_addrs"],
+    "build_port_security_nd(row->ps_addrs, row->n_ps_addrs)")
+
+s["tables"]["Logical_Switch_Port_IP"] = {
+    "columns": {
+        "lsp": {
+            "type": {"key": {"type": "uuid", "refTable": "Logical_Switch_Port"}},
+            "extensions": {
+                "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].uuid = row->lsp->header_.uuid;
+"""
+            }
+        },
+        "ip_version": {
+            "type": "integer", # 4 or 6
+            "extensions": {
+                "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].integer = row->ip_version;
+"""
+            }
+        }, 
+        "mac": {
+            "type": "string",
+            "extensions": {
+                "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].string = xstrdup(row->mac);
+"""
+            }
+        },
+        "ip": {
+            "type": "string",
+            "extensions": {
+                "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].string = xstrdup(row->ip);
+"""
+            }
+        },
+        "sn_ip": {
+            "type": "string",
+            "extensions": {
+                "read": """datum->n = 1;
+datum->keys = xmalloc(sizeof *datum->keys);
+datum->keys[0].string = xstrdup(row->sn_ip);
+"""
+            }
+        }
+    },
     "extensions": {
-        "dependencies": ["name", "ps_addrs"],
-        "parse": """row->port_security_l2_ingress = build_port_security_l2("inport", row->name, "eth.src", row->ps_addrs, row->n_ps_addrs);""",
-        "unparse": "free(row->port_security_l2_ingress);",
-        "synthetic": True,
-    }
-}
-s["tables"]["Logical_Switch_Port"]["columns"]["port_security_l2_egress"] = {
-    "type": "string",
-    "extensions": {
-        "dependencies": ["name", "ps_addrs"],
-        "parse": """row->port_security_l2_egress = build_port_security_l2("outport", row->name, "eth.dst", row->ps_addrs, row->n_ps_addrs);""",
-        "unparse": "free(row->port_security_l2_egress);",
-        "synthetic": True,
+        "synthetic": True
     }
 }
 
-s["tables"]["Logical_Switch_Port"]["columns"]["port_security_nd"] = {
-    "type": "string",
-    "extensions": {
-        "dependencies": ["name", "ps_addrs"],
-        "parse": """row->port_security_nd = build_port_security_nd(row->name, row->ps_addrs, row->n_ps_addrs);""",
-        "unparse": "free(row->port_security_nd);",
-        "synthetic": True,
-    }
-}
+synthesize_string_column(s, "DHCP_Options", "option_args", ["options"],
+                         "build_dhcp_option_args(&row->options)")
+synthesize_string_column(s, "DHCP_Options", "netmask", ["cidr"],
+                         "build_dhcp_netmask(row->cidr)")
+synthesize_string_column(s, "DHCP_Options", "server_mac", ["options"],
+                         "build_dhcp_server_mac(&row->options)")
+synthesize_string_column(s, "DHCP_Options", "server_ip", ["options"],
+                         "build_dhcp_server_ip(&row->options)")
+synthesize_boolean_column(s, "DHCP_Options", "stateful", ["options"],
+                          "build_dhcp_stateful(&row->options)")

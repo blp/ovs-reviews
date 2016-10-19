@@ -191,6 +191,7 @@ ovn_start () {
     echo "starting ovn-northd"
     mkdir "$ovs_base"/northd
     as northd start_daemon ovn-northd \
+               --clear-includes -I"$abs_top_srcdir"/ovn/northd \
                --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
                --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 }
