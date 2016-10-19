@@ -57,6 +57,13 @@ describes extensions to the OVSDB schema language, for the purpose of
 specifying interpretation by the IDL.
 No extensions are supported yet.
 .
+.IP "\fB""\fBsynthetic\fR"" member of \fBextensions\fR object"
+If this optional member is set to \fBtrue\fR, then it indicates that
+the column is not expected to be found in the actual database.
+Instead, code supplied by the IDL's client fills in the desired
+structure members based on the value of one or more other database
+columns.  This can be used to cache the result of a calculation, for
+example.
 .SS "Commands"
 .IP "\fBannotate\fI schema annotations\fR"
 Reads \fIschema\fR, which should be a file in JSON format (ordinarily
