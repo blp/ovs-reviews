@@ -960,20 +960,21 @@ abs_file_name(const char *dir, const char *file_name)
  * The return value might be an absolute name or a relative name, depending on
  * the directories named in 'path'.
  *
- * 'path' may be NULL, to search to current directory only. */
+ * 'path' may be NULL or the empty string, to search the current directory
+ * only. */
 char *
 search_path(const char *name, const char *path_)
 {
-    if (file_name_is_absolute(name) || !path_) {
+    if (file_name_is_absolute(name) || !path_ || !path_[0]) {
         struct stat s;
         return stat(name, &s) == 0 ? xstrdup(name) : NULL;
     }
 
     char *path = xstrdup(path_);
-    char *save_ptr = NULL;
-    for (char *dir = strtok_r(path, PATH_SEPARATOR, &save_ptr); dir;
-         dir = strtok_r(NULL, PATH_SEPARATOR, &save_ptr)) {
-        char *file = xasprintf("%s/%s", dir, name);
+    char *p = path;
+    for (char *dir = strsep(&p, PATH_SEPARATOR); dir;
+         dir = strsep(&p, PATH_SEPARATOR)) {
+        char *file = dir[0] ? xasprintf("%s/%s", dir, name) : xstrdup(name);
         struct stat s;
         if (stat(file, &s) == 0) {
             free(path);
