@@ -971,8 +971,8 @@ search_path(const char *name, const char *path_)
 
     char *path = xstrdup(path_);
     char *save_ptr = NULL;
-    for (char *dir = strtok_r(path, ":", &save_ptr); dir;
-         dir = strtok_r(NULL, ":", &save_ptr)) {
+    for (char *dir = strtok_r(path, PATH_SEPARATOR, &save_ptr); dir;
+         dir = strtok_r(NULL, PATH_SEPARATOR, &save_ptr)) {
         char *file = xasprintf("%s/%s", dir, name);
         struct stat s;
         if (stat(file, &s) == 0) {

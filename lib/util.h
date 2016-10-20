@@ -175,6 +175,12 @@ char *base_name(const char *file_name);
 #endif
 bool file_name_is_absolute(const char *file_name);
 char *abs_file_name(const char *dir, const char *file_name);
+
+#ifndef _WIN32
+#define PATH_SEPARATOR ":"
+#else
+#define PATH_SEPARATOR ";"
+#endif
 char *search_path(const char *name, const char *path);
 
 char *follow_symlinks(const char *filename);
