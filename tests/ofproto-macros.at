@@ -440,6 +440,19 @@ add_pmd_of_ports () {
     add_of_ports__ dummy-pmd $@
 }
 
+ovs_vsctl () {
+    ovs-vsctl --timeout=10 "$@"
+    if test $? -gt 128; then
+        exit 77
+    fi
+}
+m4_define([AT_ingroup])
+ovn_nbctl () {
+    ovn-nbctl --timeout=10 "$@"
+    AT_FAIL_IF([if test $? -gt 128])
+}
+m4_undefine([AT_ingroup])
+
 m4_divert_pop([PREPARE_TESTS])
 
 # OVS_VSWITCHD_STOP([WHITELIST])
