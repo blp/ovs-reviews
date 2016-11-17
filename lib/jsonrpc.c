@@ -795,6 +795,10 @@ jsonrpc_session_open(const char *name, bool retry)
     if (!pstream_verify_name(name)) {
         reconnect_set_passive(s->reconnect, true, time_msec());
     } else if (!retry) {
+        /* This is slightly different from jsonrpc_session_disable_reconnect()
+         * because we have not yet tried to connect at all, whereas that
+         * function assumes that we've tried once already and should not try
+         * again. */
         reconnect_set_max_tries(s->reconnect, 1);
         reconnect_set_backoff(s->reconnect, INT_MAX, INT_MAX);
     }
@@ -1111,6 +1115,14 @@ jsonrpc_session_get_reconnect_stats(const struct jsonrpc_session *s,
                                     struct reconnect_stats *stats)
 {
     reconnect_get_stats(s->reconnect, time_msec(), stats);
+}
+
+/* Disables 's' reconnecting to the peer if the connection drops. */
+void
+jsonrpc_session_disable_reconnect(struct jsonrpc_session *s)
+{
+    reconnect_set_max_tries(s->reconnect, 0);
+    reconnect_set_backoff(s->reconnect, INT_MAX, INT_MAX);
 }
 
 /* Enables 's' to reconnect to the peer if the connection drops. */
