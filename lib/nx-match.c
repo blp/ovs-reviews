@@ -1740,30 +1740,21 @@ nxm_execute_stack_push(const struct ofpact_stack *push,
     nx_stack_push(stack, &dst_value);
 }
 
-void
+bool
 nxm_execute_stack_pop(const struct ofpact_stack *pop,
                       struct flow *flow, struct flow_wildcards *wc,
                       struct ofpbuf *stack)
 {
-    union mf_subvalue *src_value;
-
-    src_value = nx_stack_pop(stack);
-
-    /* Only pop if stack is not empty. Otherwise, give warning. */
-    if (src_value) {
-        union mf_subvalue mask_value;
-
-        memset(&mask_value, 0xff, sizeof mask_value);
-        mf_write_subfield_flow(&pop->subfield, &mask_value, &wc->masks);
-        mf_write_subfield_flow(&pop->subfield, src_value, flow);
-    } else {
-        if (!VLOG_DROP_WARN(&rl)) {
-            char *flow_str = flow_to_string(flow);
-            VLOG_WARN_RL(&rl, "Failed to pop from an empty stack. On flow\n"
-                           " %s", flow_str);
-            free(flow_str);
-        }
+    union mf_subvalue *src_value = nx_stack_pop(stack);
+    if (!src_value) {
+        return false;
     }
+
+    union mf_subvalue mask_value;
+    memset(&mask_value, 0xff, sizeof mask_value);
+    mf_write_subfield_flow(&pop->subfield, &mask_value, &wc->masks);
+    mf_write_subfield_flow(&pop->subfield, src_value, flow);
+    return true;
 }
 
 /* Formats 'sf' into 's' in a format normally acceptable to

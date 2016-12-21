@@ -15,6 +15,31 @@
 #ifndef OFPROTO_DPIF_TRACE_H
 #define OFPROTO_DPIF_TRACE_H 1
 
+#include "openvswitch/compiler.h"
+#include "openvswitch/list.h"
+
+enum oftrace_node_type {
+    OFT_BRIDGE,                 /* Packet travel through an OpenFlow switch. */
+    OFT_TABLE,                  /* Packet travel through a flow table. */
+    OFT_THAW,                   /* Thawing a frozen state. */
+    OFT_ACTION,                 /* An action. */
+    OFT_DETAIL,                 /* Some detail of an action. */
+    OFT_WARN,                   /* A worrisome situation. */
+    OFT_ERROR,                  /* An erroneous situation, worth logging. */
+};
+
+struct oftrace_node {
+    struct ovs_list node;       /* In parent. */
+
+    enum oftrace_node_type type;
+    const char *name;
+    bool always_indent;
+    struct ovs_list subs;       /* List of "struct oftrace_node" children. */
+};
+
 void ofproto_dpif_trace_init(void);
+
+struct oftrace_node *oftrace_report(struct ovs_list *, enum oftrace_node_type,
+                                    const char *text);
 
 #endif /* ofproto-dpif-trace.h */
