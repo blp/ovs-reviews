@@ -928,7 +928,9 @@ output;
           </li>
           <li>
             <code>ip4.src</code> or <code>ip6.src</code> is any IP
-            address owned by the router.
+            address owned by the router, unless the packet was recirculated
+            due to egress loopback as indicated by
+            <code>flags.egress_loopback_occurred</code>
           </li>
           <li>
             <code>ip4.src</code> is the broadcast address of any IP network

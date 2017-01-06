@@ -1131,23 +1131,42 @@ execute_output(const struct ovntrace_datapath *dp, struct flow *uflow,
                              key);
     }
 
+    uint32_t flags = uflow->regs[MFF_LOG_FLAGS - MFF_REG0];
+
     if (pipeline == P_EGRESS) {
-        ovntrace_node_append(super, OVNTRACE_NODE_OUTPUT,
-                             "/* output to \"%s\", type \"%s\" */",
-                             out_name, port ? port->type : "");
-        if (port && port->peer) {
-            const struct ovntrace_port *peer = port->peer;
+        bool force_egress_loopback = (flags & MLF_FORCE_EGRESS_LOOPBACK) != 0;
+        if (port && (port->peer || force_egress_loopback)) {
+            const struct ovntrace_port *new_inport = force_egress_loopback ?
+                                                     port : port->peer;
+            if (force_egress_loopback) {
+                ovntrace_node_append(super, OVNTRACE_NODE_OUTPUT,
+                             "/* force egress loopback at output to \"%s\" */",
+                             out_name);
+            } else {
+                ovntrace_node_append(super, OVNTRACE_NODE_OUTPUT,
+                                     "/* output to \"%s\", type \"%s\" */",
+                                     out_name, port ? port->type : "");
+            }
 
             struct ovntrace_node *node = ovntrace_node_append(
                 super, OVNTRACE_NODE_PIPELINE,
                 "ingress(dp=\"%s\", inport=\"%s\")",
-                peer->dp->name, peer->name);
+                new_inport->dp->name, new_inport->name);
 
             struct flow new_uflow = *uflow;
-            new_uflow.regs[MFF_LOG_INPORT - MFF_REG0] = peer->tunnel_key;
-            new_uflow.regs[MFF_LOG_OUTPORT - MFF_REG0] = 0;
-            trace__(peer->dp, &new_uflow, 0, P_INGRESS, &node->subs);
+            for (int i = 0; i < FLOW_N_REGS; i++) {
+                    new_uflow.regs[i] = 0;
+            }
+            new_uflow.regs[MFF_LOG_INPORT - MFF_REG0] = new_inport->tunnel_key;
+            if (force_egress_loopback) {
+                new_uflow.regs[MFF_LOG_FLAGS - MFF_REG0]
+                                               = MLF_EGRESS_LOOPBACK_OCCURRED;
+            }
+            trace__(new_inport->dp, &new_uflow, 0, P_INGRESS, &node->subs);
         } else {
+            ovntrace_node_append(super, OVNTRACE_NODE_OUTPUT,
+                                 "/* output to \"%s\", type \"%s\" */",
+                                 out_name, port ? port->type : "");
             ovntrace_node_append(super, OVNTRACE_NODE_MODIFY,
                                  "output(\"%s\")", out_name);
 
@@ -1158,7 +1177,8 @@ execute_output(const struct ovntrace_datapath *dp, struct flow *uflow,
     struct flow egress_uflow = *uflow;
     for (int i = 0; i < FLOW_N_REGS; i++) {
         if (i != MFF_LOG_INPORT - MFF_REG0 &&
-            i != MFF_LOG_OUTPORT - MFF_REG0) {
+            i != MFF_LOG_OUTPORT - MFF_REG0 &&
+            i != MFF_LOG_FLAGS - MFF_REG0) {
             egress_uflow.regs[i] = 0;
         }
     }
@@ -1166,7 +1186,6 @@ execute_output(const struct ovntrace_datapath *dp, struct flow *uflow,
     uint16_t in_key = uflow->regs[MFF_LOG_INPORT - MFF_REG0];
     const struct ovntrace_port *inport = ovntrace_port_find_by_key(dp, in_key);
     const char *inport_name = !in_key ? "" : inport ? inport->name : "(unnamed)";
-    uint32_t flags = uflow->regs[MFF_LOG_FLAGS - MFF_REG0];
     bool allow_loopback = (flags & MLF_ALLOW_LOOPBACK) != 0;
 
     if (mcgroup) {

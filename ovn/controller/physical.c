@@ -183,7 +183,7 @@ get_zone_ids(const struct sbrec_port_binding *binding,
 }
 
 static void
-put_local_common_flows(uint32_t dp_key, uint32_t port_key,
+put_local_common_flows(uint32_t dp_key, uint32_t port_key, ofp_port_t ofport,
                        bool nested_container, const struct zone_ids *zone_ids,
                        struct ofpbuf *ofpacts_p, struct hmap *flow_table)
 {
@@ -259,6 +259,36 @@ put_local_common_flows(uint32_t dp_key, uint32_t port_key,
     put_stack(MFF_IN_PORT, ofpact_put_STACK_POP(ofpacts_p));
     ofctrl_add_flow(flow_table, OFTABLE_SAVE_INPORT, 100, 0,
                     &match, ofpacts_p);
+
+    /* Table 65, Priority 150.
+     * =======================
+     *
+     * Send packets with MLF_FORCE_EGRESS_LOOPBACK flag back to the
+     * ingress pipeline with inport = outport. */
+
+    match_init_catchall(&match);
+    ofpbuf_clear(ofpacts_p);
+    match_set_metadata(&match, htonll(dp_key));
+    match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
+    match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
+                         MLF_FORCE_EGRESS_LOOPBACK, MLF_FORCE_EGRESS_LOOPBACK);
+
+    size_t clone_ofs = ofpacts_p->size;
+    struct ofpact_nest *clone = ofpact_put_CLONE(ofpacts_p);
+    put_load(ofport, MFF_IN_PORT, 0, 16, ofpacts_p);
+    put_load(port_key, MFF_LOG_INPORT, 0, 32, ofpacts_p);
+    put_load(0, MFF_LOG_OUTPORT, 0, 32, ofpacts_p);
+    put_load(MLF_EGRESS_LOOPBACK_OCCURRED, MFF_LOG_FLAGS, 0, 32, ofpacts_p);
+    for (int i = 0; i < MFF_N_LOG_REGS; i++) {
+        put_load(0, MFF_LOG_REG0 + i, 0, 32, ofpacts_p);
+    }
+    put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, ofpacts_p);
+    clone = ofpbuf_at_assert(ofpacts_p, clone_ofs, sizeof *clone);
+    ofpacts_p->header = clone;
+    ofpact_finish_CLONE(ofpacts_p, &clone);
+
+    ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 150, 0,
+                    &match, ofpacts_p);
 }
 
 static void
@@ -321,7 +351,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
         }
 
         struct zone_ids binding_zones = get_zone_ids(binding, ct_zones);
-        put_local_common_flows(dp_key, port_key, false, &binding_zones,
+        put_local_common_flows(dp_key, port_key, 0, false, &binding_zones,
                                ofpacts_p, flow_table);
 
         match_init_catchall(&match);
@@ -490,8 +520,8 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
          */
 
         struct zone_ids zone_ids = get_zone_ids(binding, ct_zones);
-        put_local_common_flows(dp_key, port_key, nested_container, &zone_ids,
-                               ofpacts_p, flow_table);
+        put_local_common_flows(dp_key, port_key, ofport, nested_container,
+                               &zone_ids, ofpacts_p, flow_table);
 
         /* Table 0, Priority 150 and 100.
          * ==============================

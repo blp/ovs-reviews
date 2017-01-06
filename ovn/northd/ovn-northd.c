@@ -3765,6 +3765,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_clear(&match);
             ds_put_cstr(&match, "ip4.src == ");
             op_put_v4_networks(&match, op, true);
+            ds_put_cstr(&match, " && flags.egress_loopback_occurred == 0");
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
                           ds_cstr(&match), "drop;");
 
@@ -4004,6 +4005,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
             ds_clear(&match);
             ds_put_cstr(&match, "ip6.src == ");
             op_put_v6_networks(&match, op);
+            ds_put_cstr(&match, " && flags.egress_loopback_occurred == 0");
             ovn_lflow_add(lflows, op->od, S_ROUTER_IN_IP_INPUT, 100,
                           ds_cstr(&match), "drop;");
 

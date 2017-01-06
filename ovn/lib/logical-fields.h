@@ -49,6 +49,8 @@ enum mff_log_flags_bits {
     MLF_RCV_FROM_VXLAN_BIT = 1,
     MLF_FORCE_SNAT_FOR_DNAT_BIT = 2,
     MLF_FORCE_SNAT_FOR_LB_BIT = 3,
+    MLF_FORCE_EGRESS_LOOPBACK_BIT = 4,
+    MLF_EGRESS_LOOPBACK_OCCURRED_BIT = 5,
 };
 
 /* MFF_LOG_FLAGS_REG flag assignments */
@@ -69,6 +71,18 @@ enum mff_log_flags {
     /* Indicate that a packet needs a force SNAT in the gateway router when
      * load-balancing has taken place. */
     MLF_FORCE_SNAT_FOR_LB = (1 << MLF_FORCE_SNAT_FOR_LB_BIT),
+
+    /* Indicate that at the end of the egress pipeline in table
+     * OFTABLE_LOG_TO_PHY, instead of being sent to the peer patch port or
+     * out the outport, the packet should be forced back to the beginning
+     * of the ingress pipeline with inport = outport. */
+    MLF_FORCE_EGRESS_LOOPBACK = (1 << MLF_FORCE_EGRESS_LOOPBACK_BIT),
+
+    /* Indicate that this packet has been recirculated using egress
+     * loopback.  This allows certain checks to be bypassed, such as a
+     * logical router dropping packets with source IP address equals
+     * one of the logical router's own IP addresses. */
+    MLF_EGRESS_LOOPBACK_OCCURRED = (1 << MLF_EGRESS_LOOPBACK_OCCURRED_BIT),
 };
 
 #endif /* ovn/lib/logical-fields.h */
