@@ -19,6 +19,7 @@ import os
 
 def build_docs():
     os.system("""
+./boot.sh
 mkdir _rtd
 cd _rtd
 ../configure
