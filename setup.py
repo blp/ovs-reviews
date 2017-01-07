@@ -26,7 +26,8 @@ make dist-docs
 """)
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['install'] and os.environ['READTHEDOCS'] == 'True':
+    if (sys.argv[1:] == ['install', '--force'] and
+        os.environ['READTHEDOCS'] == 'True'):
         build_docs()
     else:
         sys.stderr.write('This program is only a hook for readthedocs.\n')
