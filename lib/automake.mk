@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -543,6 +543,6 @@ lib/ovs-fields.7: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/met
 	$(AM_V_GEN)PYTHONIOENCODING=utf8 $(run_python) $< \
             --ovs-version=$(VERSION) ovs-fields \
 	    $(srcdir)/include/openvswitch/meta-flow.h \
-            $(srcdir)/lib/meta-flow.xml > $@.tmp
+            $(srcdir)/lib/meta-flow.xml | preconv -e utf-8 > $@.tmp
 	$(AM_V_at)mv $@.tmp $@
 EXTRA_DIST += lib/meta-flow.xml
