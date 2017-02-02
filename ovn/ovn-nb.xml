@@ -120,7 +120,23 @@
         logical port.
       </p>
     </column>
-
+    <column name="port_chains">
+      <p>
+        The logical port-chains connected to the logical switch.
+      </p>
+      <p>
+        It is an error for multiple logical switches to include the same
+        logical port.
+      </p>
+    </column>
+    <column name="port_pairs">
+      <p>
+        The logical chains that define the service path.
+      </p>
+      <p>
+        Logical chains cannot currently cross logical switch boundaries.
+      </p>
+    </column>
     <column name="load_balancer">
       Load balance a virtual ipv4 address to a set of logical port endpoint
       ipv4 addresses.
@@ -155,7 +171,98 @@
       </column>
     </group>
   </table>
+  <table name="Logical_Port_Chain" title="Logical port chain">
+    <p>
+      Each row represents one logical port chain
+    </p>
 
+    <column name="name">
+      <p>
+        A name for the logical chain.  This name has no special meaning or purpose
+        other than to provide convenience for human interaction with the ovn-nb
+        database.  There is no requirement for the name to be unique.  The
+        logical chains's UUID should be used as the unique identifier.
+      </p>
+    </column>
+
+    <column name="port_pair_groups">
+      <p>
+        The logical list of port pairs that the flow goes through.
+      </p>
+
+      <p>
+        It is an error for a port pair group to be empty.
+      </p>
+    </column>
+    <column name="last_hop_port">
+      The <ref table="Logical_Switch_Port"/> to be used once packet reaches the end
+      of the chain.
+    </column>
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
+  <table name="Logical_Port_Pair_Group" title="logical port pair groups">
+    <p>
+      An ordered port pair list
+    </p>
+
+    <column name="name">
+      <p>
+        Logical port pair group name
+      </p>
+    </column>
+
+    <column name="port_pairs">
+      <p>
+        port pair for this group
+      </p>
+    </column>
+
+    <column name="sortkey">
+      <p>
+        An integer used for ordering instances of <ref table="Logical_Port_Pair_Group"/>
+        in the <ref column="port_pairs" table="Logical_Port_Chain"/> column
+        of <ref table="Logical_Port_Chain"/>.
+      </p>
+    </column>
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
+
+  <table name="Logical_Port_Pair" title="logical port pairs">
+    <p>
+      Ports pairs defining the service
+    </p>
+
+    <column name="name">
+      <p>
+        Logical port pair
+      </p>
+    </column>
+
+    <column name="outport">
+      <p>
+        Out logical port for this port pair. Can be the same value as inport.
+      </p>
+    </column>
+
+    <column name="inport">
+      <p>
+        In logical port for this port pair.
+      </p>
+    </column>
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
   <table name="Logical_Switch_Port" title="L2 logical switch port">
     <p>
       A port within an L2 logical switch.
@@ -884,6 +991,13 @@
           ICMP unreachable message for other IP-based protocols.
           <code>Not implemented--currently treated as drop</code>
         </li>
+
+        <li>
+          <code>sfc</code>: Forward the packet into a logical port chain.
+          The chain to be used -- as well as any other attributes that determine
+          the behavior of the packet while in the chain -- are provided
+          via <ref column="options"/>.
+        </li>
       </ul>
     </column>
 
@@ -898,6 +1012,40 @@
         Logging is not yet implemented.
       </p>
     </column>
+
+    <group title="Options">
+      <column name = "options">
+        This column provides key/value settings specific to the ACL
+        <ref column="action"/>. The type-specific options are described
+        individually below.
+      </column>
+
+      <group title="Options for action sfc">
+        <p>
+          These options apply when <ref column="action"/> is <code>sfc</code>.
+        </p>
+
+        <column name="options" key="sfc-port-chain">
+          Required when <ref column="action"/> is <code>sfc</code>.
+          The uuid (or name) of the <ref table="Logical_Port_Chain"/> to be used.
+        </column>
+
+        <column name="options" key="sfc-bidirectional">
+          Optional and only applicable when <ref column="action"/> is <code>sfc</code>.
+          When set with value <code>true</code>, the implementation will also add rules to make packets
+          go through the chain in reverse direction. A restriction on making bidirectional chains is
+          that the inport parameter must be present in <ref column="match"/>, as it will be used as the
+          <ref table="Logical_Port_Chain" column="last_hop_port"/>. As expected, all <code>src*</code>
+          fields in <ref column="match"/> will be converted to <code>dst*</code> in order to derive the
+          reverse ACL.
+
+          <p>
+            sfc-bidirectional option is not yet implemented.
+          </p>
+        </column>
+      </group>
+
+    </group>
 
     <group title="Common Columns">
       <column name="external_ids">
