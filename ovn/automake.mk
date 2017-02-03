@@ -10,9 +10,8 @@ if HAVE_PYTHON
 if HAVE_DOT
 ovn/ovn-sb.gv: ovsdb/ovsdb-dot.in ovn/ovn-sb.ovsschema
 	$(AM_V_GEN)$(OVSDB_DOT) --no-arrows $(srcdir)/ovn/ovn-sb.ovsschema > $@
-ovn/ovn-sb.pic: ovn/ovn-sb.gv ovsdb/dot2pic
-	$(AM_V_GEN)(dot -T plain < ovn/ovn-sb.gv | $(PERL) $(srcdir)/ovsdb/dot2pic -f 3) > $@.tmp && \
-	mv $@.tmp $@
+ovn/ovn-sb.pic: ovn/ovn-sb.gv
+	$(AM_V_GEN)dot -T pic < $@ > $@
 OVN_SB_PIC = ovn/ovn-sb.pic
 OVN_SB_DOT_DIAGRAM_ARG = --er-diagram=$(OVN_SB_PIC)
 DISTCLEANFILES += ovn/ovn-sb.gv ovn/ovn-sb.pic
@@ -44,9 +43,8 @@ if HAVE_PYTHON
 if HAVE_DOT
 ovn/ovn-nb.gv: ovsdb/ovsdb-dot.in ovn/ovn-nb.ovsschema
 	$(AM_V_GEN)$(OVSDB_DOT) --no-arrows $(srcdir)/ovn/ovn-nb.ovsschema > $@
-ovn/ovn-nb.pic: ovn/ovn-nb.gv ovsdb/dot2pic
-	$(AM_V_GEN)(dot -T plain < ovn/ovn-nb.gv | $(PERL) $(srcdir)/ovsdb/dot2pic -f 3) > $@.tmp && \
-	mv $@.tmp $@
+ovn/ovn-nb.pic: ovn/ovn-nb.gv
+	$(AM_V_GEN)dot -T pic < $< > $@
 OVN_NB_PIC = ovn/ovn-nb.pic
 OVN_NB_DOT_DIAGRAM_ARG = --er-diagram=$(OVN_NB_PIC)
 DISTCLEANFILES += ovn/ovn-nb.gv ovn/ovn-nb.pic

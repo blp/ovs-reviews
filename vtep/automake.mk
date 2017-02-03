@@ -56,9 +56,8 @@ if HAVE_PYTHON
 if HAVE_DOT
 vtep/vtep.gv: ovsdb/ovsdb-dot.in vtep/vtep.ovsschema
 	$(AM_V_GEN)$(OVSDB_DOT) --no-arrows $(srcdir)/vtep/vtep.ovsschema > $@
-vtep/vtep.pic: vtep/vtep.gv ovsdb/dot2pic
-	$(AM_V_GEN)(dot -T plain < vtep/vtep.gv | $(PERL) $(srcdir)/ovsdb/dot2pic -f 3) > $@.tmp && \
-	mv $@.tmp $@
+vtep/vtep.pic: vtep/vtep.gv
+	$(AM_V_GEN)dot -T pic < $< > $@
 VTEP_PIC = vtep/vtep.pic
 VTEP_DOT_DIAGRAM_ARG = --er-diagram=$(VTEP_PIC)
 DISTCLEANFILES += vtep/vtep.gv vtep/vtep.pic
