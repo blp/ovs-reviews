@@ -994,9 +994,7 @@
 
         <li>
           <code>sfc</code>: Forward the packet into a logical port chain.
-          The chain to be used -- as well as any other attributes that determine
-          the behavior of the packet while in the chain -- are provided
-          via <ref column="options"/>.
+          The <ref column="options"/> column provides details.
         </li>
       </ul>
     </column>
@@ -1014,7 +1012,7 @@
     </column>
 
     <group title="Options">
-      <column name = "options">
+      <column name="options">
         This column provides key/value settings specific to the ACL
         <ref column="action"/>. The type-specific options are described
         individually below.
