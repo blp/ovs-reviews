@@ -28,6 +28,8 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/monitor.h \
 	ovsdb/query.c \
 	ovsdb/query.h \
+	ovsdb/raft.c \
+	ovsdb/raft.h \
 	ovsdb/replication.c \
 	ovsdb/replication.h \
 	ovsdb/row.c \

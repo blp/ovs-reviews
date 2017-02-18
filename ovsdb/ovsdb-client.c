@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -256,8 +256,11 @@ usage(void)
            "\n  list-columns [SERVER] [DATABASE] [TABLE]\n"
            "    list columns in TABLE (or all tables) in DATABASE on SERVER\n"
            "\n  transact [SERVER] TRANSACTION\n"
-           "    run TRANSACTION (a JSON array of operations) on SERVER\n"
+           "    run TRANSACTION (params for \"transact\" request) on SERVER\n"
            "    and print the results as JSON on stdout\n"
+           "\n  query [SERVER] TRANSACTION\n"
+           "    run TRANSACTION (params for \"transact\" request) on SERVER,\n"
+           "    as read-only, and print the results as JSON on stdout\n"
            "\n  monitor [SERVER] [DATABASE] TABLE [COLUMN,...]...\n"
            "    monitor contents of COLUMNs in TABLE in DATABASE on SERVER.\n"
            "    COLUMNs may include !initial, !insert, !delete, !modify\n"
@@ -514,19 +517,45 @@ do_list_columns(struct jsonrpc *rpc, const char *database,
 }
 
 static void
-do_transact(struct jsonrpc *rpc, const char *database OVS_UNUSED,
-            int argc OVS_UNUSED, char *argv[])
+do_transact__(struct jsonrpc *rpc, struct json *transaction)
 {
     struct jsonrpc_msg *request, *reply;
-    struct json *transaction;
-
-    transaction = parse_json(argv[0]);
 
     request = jsonrpc_create_request("transact", transaction, NULL);
     check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
     print_json(reply->result);
     putchar('\n');
     jsonrpc_msg_destroy(reply);
+}
+
+static void
+do_transact(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+            int argc OVS_UNUSED, char *argv[])
+{
+    do_transact__(rpc, parse_json(argv[0]));
+}
+
+static void
+do_query(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+         int argc OVS_UNUSED, char *argv[])
+{
+    struct json *transaction = parse_json(argv[0]);
+
+    /* Ensure that 'transaction' is a 2-element array, whose second element is
+     * also an array.  The second element is the array of operations in the
+     * query. */
+    if (transaction->type != JSON_ARRAY
+        || transaction->u.array.n != 2
+        || transaction->u.array.elems[1]->type != JSON_ARRAY) {
+        ovs_fatal(0, "not a valid OVSDB query");
+    }
+
+    /* Append an "abort" operation to the query. */
+    struct json *abort_op = json_object_create();
+    json_object_put_string(abort_op, "op", "abort");
+    json_array_add(transaction->u.array.elems[1], abort_op);
+
+    do_transact__(rpc, transaction);
 }
 
 /* "monitor" command. */
@@ -1583,6 +1612,7 @@ static const struct ovsdb_client_command all_commands[] = {
     { "list-tables",        NEED_DATABASE, 0, 0,       do_list_tables },
     { "list-columns",       NEED_DATABASE, 0, 1,       do_list_columns },
     { "transact",           NEED_RPC,      1, 1,       do_transact },
+    { "query",              NEED_RPC,      1, 1,       do_query },
     { "monitor",            NEED_DATABASE, 1, INT_MAX, do_monitor },
     { "monitor-cond",       NEED_DATABASE, 2, 3,       do_monitor_cond },
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },

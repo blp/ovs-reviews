@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,8 +24,11 @@ struct ovsdb;
 struct ovsdb_file;
 struct ovsdb_schema;
 
-struct ovsdb_error *ovsdb_file_open(const char *file_name, bool read_only,
-                                    struct ovsdb **, struct ovsdb_file **)
+struct ovsdb_error *
+ovsdb_file_open(const char *file_name,
+                const struct ovsdb_schema *alternate_schema,
+                bool read_only, int locking, struct ovsdb **dbp,
+                struct ovsdb_file **filep)
     OVS_WARN_UNUSED_RESULT;
 
 struct ovsdb_error *ovsdb_file_open_as_schema(const char *file_name,
@@ -33,7 +36,7 @@ struct ovsdb_error *ovsdb_file_open_as_schema(const char *file_name,
                                               struct ovsdb **)
     OVS_WARN_UNUSED_RESULT;
 
-struct ovsdb_error *ovsdb_file_save_copy(const char *file_name, int locking,
+struct ovsdb_error *ovsdb_file_save_copy(const char *file_name,
                                          const char *comment,
                                          const struct ovsdb *)
     OVS_WARN_UNUSED_RESULT;

@@ -35,6 +35,7 @@
 #include "ovsdb.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
+#include "raft.h"
 #include "socket-util.h"
 #include "table.h"
 #include "timeval.h"
@@ -59,6 +60,7 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_options(argc, argv);
     fatal_ignore_sigpipe();
+    fatal_signal_init();
     ctx.argc = argc - optind;
     ctx.argv = argv + optind;
     ovs_cmdl_run_command(&ctx, get_all_commands());
@@ -122,6 +124,8 @@ usage(void)
     printf("%s: Open vSwitch database management utility\n"
            "usage: %s [OPTIONS] COMMAND [ARG...]\n"
            "  create [DB [SCHEMA]]    create DB with the given SCHEMA\n"
+           "  create-cluster DB SCHEMA ADDRESS\n"
+           "    create clustered DB with given SCHEMA and local ADDRESS\n"
            "  compact [DB [DST]]      compact DB in-place (or to DST)\n"
            "  convert [DB [SCHEMA [DST]]]   convert DB to SCHEMA (to DST)\n"
            "  db-version [DB]         report version of schema used by DB\n"
@@ -205,7 +209,7 @@ do_create(struct ovs_cmdl_context *ctx)
 
     /* Create database file. */
     check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_MAGIC,
-                                     OVSDB_LOG_CREATE, -1, &log));
+                                     OVSDB_LOG_CREATE_EXCL, -1, &log));
     check_ovsdb_error(ovsdb_log_write(log, json));
     check_ovsdb_error(ovsdb_log_commit(log));
     ovsdb_log_close(log);
@@ -214,64 +218,61 @@ do_create(struct ovs_cmdl_context *ctx)
 }
 
 static void
+do_create_cluster(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argv[1];
+    const char *schema_file_name = ctx->argv[2];
+    const char *address = ctx->argv[3];
+
+    /* Read schema from file and convert to JSON. */
+    struct ovsdb_schema *schema;
+    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
+    struct json *schema_json = ovsdb_schema_to_json(schema);
+    ovsdb_schema_destroy(schema);
+
+    /* Generate snapshot and convert to string. */
+    struct json *data_json = json_object_create();
+    struct json *snapshot_json = json_array_create_2(schema_json, data_json);
+    char *snapshot_string = json_to_string(snapshot_json, 0);
+    json_destroy(snapshot_json);
+
+    /* Create database file. */
+    check_ovsdb_error(raft_create(db_file_name, address, snapshot_string));
+    free(snapshot_string);
+
+    struct raft *raft;
+    check_ovsdb_error(raft_open(db_file_name, &raft));
+    raft_close(raft);
+}
+
+static void
 compact_or_convert(const char *src_name_, const char *dst_name_,
                    const struct ovsdb_schema *new_schema,
                    const char *comment)
 {
-    char *src_name, *dst_name;
-    struct lockfile *src_lock;
-    struct lockfile *dst_lock;
-    bool in_place = dst_name_ == NULL;
+
+    struct ovsdb_file *file;
     struct ovsdb *db;
-    int retval;
 
-    /* Dereference symlinks for source and destination names.  In the in-place
-     * case this ensures that, if the source name is a symlink, we replace its
-     * target instead of replacing the symlink by a regular file.  In the
-     * non-in-place, this has the same effect for the destination name. */
-    src_name = follow_symlinks(src_name_);
-    dst_name = (in_place
-                ? xasprintf("%s.tmp", src_name)
-                : follow_symlinks(dst_name_));
+    /* We dereference symlinks for source and destination names.  In the
+     * in-place case this ensures that, if the source name is a symlink, we
+     * replace its target instead of replacing the symlink by a regular file.
+     * In the non-in-place, this has the same effect for the destination
+     * name. */
+    char *src_name = follow_symlinks(src_name_);
+    check_ovsdb_error(ovsdb_file_open(src_name, new_schema, true,
+                                      dst_name_ == NULL, &db, &file));
 
-    /* Lock the source, if we will be replacing it. */
-    if (in_place) {
-        retval = lockfile_lock(src_name, &src_lock);
-        if (retval) {
-            ovs_fatal(retval, "%s: failed to lock lockfile", src_name);
-        }
+    if (!dst_name_) {
+        check_ovsdb_error(ovsdb_file_compact(file));
+    } else {
+        char *dst_name = follow_symlinks(dst_name_);
+        check_ovsdb_error(ovsdb_file_save_copy(dst_name, comment, db));
+        free(dst_name);
     }
 
-    /* Get (temporary) destination and lock it. */
-    retval = lockfile_lock(dst_name, &dst_lock);
-    if (retval) {
-        ovs_fatal(retval, "%s: failed to lock lockfile", dst_name);
-    }
-
-    /* Save a copy. */
-    check_ovsdb_error(new_schema
-                      ? ovsdb_file_open_as_schema(src_name, new_schema, &db)
-                      : ovsdb_file_open(src_name, true, &db, NULL));
-    check_ovsdb_error(ovsdb_file_save_copy(dst_name, false, comment, db));
     ovsdb_destroy(db);
-
-    /* Replace source. */
-    if (in_place) {
-#ifdef _WIN32
-        unlink(src_name);
-#endif
-        if (rename(dst_name, src_name)) {
-            ovs_fatal(errno, "failed to rename \"%s\" to \"%s\"",
-                      dst_name, src_name);
-        }
-        fsync_parent_dir(dst_name);
-        lockfile_unlock(src_lock);
-    }
-
-    lockfile_unlock(dst_lock);
-
     free(src_name);
-    free(dst_name);
 }
 
 static void
@@ -363,7 +364,9 @@ transact(bool read_only, int argc, char *argv[])
     struct json *request, *result;
     struct ovsdb *db;
 
-    check_ovsdb_error(ovsdb_file_open(db_file_name, read_only, &db, NULL));
+    struct ovsdb_file *file;
+    check_ovsdb_error(ovsdb_file_open(db_file_name, NULL, read_only,
+                                      !read_only, &db, &file));
 
     request = parse_json(transaction);
     result = ovsdb_execute(db, NULL, request, false, 0, NULL);
@@ -574,6 +577,7 @@ do_list_commands(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
 static const struct ovs_cmdl_command all_commands[] = {
     { "create", "[db [schema]]", 0, 2, do_create, OVS_RW },
+    { "create-cluster", "db schema address", 3, 3, do_create_cluster, OVS_RW },
     { "compact", "[db [dst]]", 0, 2, do_compact, OVS_RW },
     { "convert", "[db [schema [dst]]]", 0, 3, do_convert, OVS_RW },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion, OVS_RO },

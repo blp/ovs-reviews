@@ -67,4 +67,6 @@ const char *ovsdb_error_get_tag(const struct ovsdb_error *);
 
 void ovsdb_error_assert(struct ovsdb_error *);
 
+int ovsdb_error_get_errno(const struct ovsdb_error *);
+
 #endif /* ovsdb-error.h */

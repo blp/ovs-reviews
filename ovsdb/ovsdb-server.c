@@ -516,7 +516,8 @@ open_db(struct server_config *config, const char *filename)
     db = xzalloc(sizeof *db);
     db->filename = xstrdup(filename);
 
-    db_error = ovsdb_file_open(db->filename, false, &db->db, &db->file);
+    db_error = ovsdb_file_open(db->filename, NULL, false, true,
+                               &db->db, &db->file);
     if (db_error) {
         error = ovsdb_error_to_string(db_error);
     } else if (!ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db)) {
