@@ -1,3 +1,7 @@
+# overview
+man_MANS += ovsdb/ovsdb.7
+EXTRA_DIST += ovsdb/ovsdb.7.xml
+
 # libovsdb
 lib_LTLIBRARIES += ovsdb/libovsdb.la
 ovsdb_libovsdb_la_LDFLAGS = \
@@ -43,8 +47,7 @@ pkgconfig_DATA += \
 	ovsdb/libovsdb.pc
 
 MAN_FRAGMENTS += \
-	ovsdb/remote-active.man \
-	ovsdb/remote-passive.man \
+	ovsdb/ovsdb-schemas.man \
 	ovsdb/replication.man \
 	ovsdb/replication-syn.man
 

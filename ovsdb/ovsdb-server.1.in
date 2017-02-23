@@ -19,7 +19,10 @@ ovsdb\-server \- Open vSwitch database server
 .so lib/daemon-syn.man
 .so lib/service-syn.man
 .so lib/vlog-syn.man
-.so ovsdb/replication-syn.man
+.IP "Active-backup options:"
+[\fB\-\-sync\-from=\fIserver\fR]
+[\fB\-\-sync\-exclude-tables=\fIdb\fB:\fItable\fR[\fB,\fIdb\fB:\fItable\fR]...\fR]
+[\fB\-\-active\fR] 
 .so lib/ssl-syn.man
 .so lib/ssl-bootstrap-syn.man
 .so lib/ssl-peer-ca-cert-syn.man
@@ -31,39 +34,26 @@ ovsdb\-server \- Open vSwitch database server
 The \fBovsdb\-server\fR program provides RPC interfaces to one or more
 Open vSwitch databases (OVSDBs).  It supports JSON-RPC client
 connections over active or passive TCP/IP or Unix domain sockets.
+For an introduction to OVSDB and its implementation in Open vSwitch,
+see \fBovsdb\fR(7).
 .PP
 Each OVSDB file may be specified on the command line as \fIdatabase\fR.
 If none is specified, the default is \fB@DBDIR@/conf.db\fR.  The database
 files must already have been created and initialized using, for
 example, \fBovsdb\-tool create\fR.
-.
-.SH "ACTIVE and BACKUP"
-\fBovsdb\-server\fR runs either as a backup server, or as an active server.
-When  \fBovsdb\-server\fR is running as a backup server, all transactions that
-can modify the database content, including the lock commands are rejected.
-Active server, on the other hand, accepts all ovsdb server transactions.
-When \fBovsdb\-server\fR role changes, all existing client connection are
-reset, requiring clients to reconnect to the server.
 .PP
-By default, \fBovsdb\-server\fR runs as an active server, except when the
-\fB\-\-sync\-from=\fIserver\fR command line option is specified and without
-the \fB\-\-no\-sync option\fR.  During runtime, \fBovsdb\-server\fR role can be switch by using appctl commands.
-.PP
-\fBovsdb-server/connect\-active\-ovsdb\-server\fR switches
-\fBovsdb\-server\fR into a backup server, Conversely,
-\fBovsdb-server/disconnect\-active\-ovsdb\-server\fR switches server into
-an active one.
-.
+This OVSDB implementation supports standalone, active-backup, and
+clustered database service models, as well as database replication.
+See the Service Models section of \fBovsdb\fR(7) for more information.
 .SH OPTIONS
 .
 .IP "\fB\-\-remote=\fIremote\fR"
 Adds \fIremote\fR as a connection method used by \fBovsdb\-server\fR.
-\fIremote\fR must take one of the following forms:
+The \fIremote\fR may be an OVSDB active or passive connection method,
+e.g. \fBpssl:6640\fR, as described in \fBovsdb\fR(7).  The following
+additional form is also supported:
 .
 .RS
-.so ovsdb/remote-passive.man
-.so ovsdb/remote-active.man
-.
 .IP "\fBdb:\fIdb\fB,\fItable\fB,\fIcolumn\fR"
 Reads additional connection methods from \fIcolumn\fR in all of the
 rows in \fItable\fR within \fIdb\fR.  As the contents of \fIcolumn\fR changes,
@@ -121,8 +111,52 @@ configured remotes.
 .so lib/service.man
 .SS "Logging Options"
 .so lib/vlog.man
-.SS "Syncing Options"
-.so ovsdb/replication.man
+.SS "Active-Backup Options"
+These options support the \fBovsdb\-server\fR active-backup service
+model and database replication.  These options apply only to databases
+in the format used for standalone and active-backup databases, which
+is the database format created by \fBovsdb\-tool create\fR.  By
+default, when it serves a database in this format, \fBovsdb\-server\fR
+runs as a standalone server.  These options can configure it for
+active-backup use:
+.IP \(bu
+Use \fB\-\-sync\-from=\fIserver\fR to start the server in the backup
+role, replicating data from \fIserver\fR.  When \fBovsdb\-server\fR is
+running as a backup server, it rejects all transactions that can
+modify the database content, including lock commands.  The same form
+can be used to configure the local database as a replica of
+\fIserver\fR.
+.IP \(bu
+Use \fB\-\-sync\-from=\fIserver\fB \-\-active\fR to start the server
+in the active role, but prepared to switch to the backup role in which
+it would replicate data from \fIserver\fR.  When \fBovsdb\-server\fR
+runs in active mode, it allows all transactions, including those that
+modify the database.
+.PP
+At runtime, management commands can change a server's role and otherwise
+manage active-backup features.  See \fBActive-Backup Commands\fR, below,
+for more information.
+.TP
+\fB\-\-sync\-from=\fIserver\fR
+Sets up \fBovsdb\-server\fR to synchronize its databases with the
+databases in \fIserver\fR, which must be an active connection method
+in one of the forms documented in \fBovsdb\-client\fR(1).  Every
+transaction committed by \fIserver\fR will be replicated to
+\fBovsdb\-server\fR.  This option makes \fBovsdb\-server\fR start
+as a backup server; add \fB\-\-active\fR to make it start as an
+active server.
+.TP
+\fB\-\-sync\-exclude-tables=\fIdb\fB:\fItable\fR[\fB,\fIdb\fB:\fItable\fR]...\fR
+Causes the specified tables to be excluded from replication.
+.TP
+\fB\-\-active\fR
+By default, \fB\-\-sync\-from\fR makes \fBovsdb\-server\fR start up as
+a backup for \fIserver\fR.  With \fB\-\-active\fR, however,
+\fBovsdb\-server\fR starts as an active server.  Use this option to
+allow the syncing options to be specified using command line options,
+yet start the server, as the default, active server.  To switch the
+running server to backup mode, use \fBovs-appctl(1)\fR to execute the
+\fBovsdb\-server/connect\-active\-ovsdb\-server\fR command.
 .SS "Public Key Infrastructure Options"
 The options described below for configuring the SSL public key
 infrastructure accept a special syntax for obtaining their
@@ -145,7 +179,7 @@ one row in \fItable\fR.)
 \fBovs\-appctl\fR(8) can send commands to a running
 \fBovsdb\-server\fR process.  The currently supported commands are
 described below.
-.SS "OVSDB\-SERVER COMMANDS"
+.SS "\fBovsdb\-server\fR Commands"
 These commands are specific to \fBovsdb\-server\fR.
 .IP "\fBexit\fR"
 Causes \fBovsdb\-server\fR to gracefully terminate.
@@ -210,23 +244,37 @@ again (with \fBovsdb\-server/add\-db\fR).
 Outputs a list of the currently configured databases added either through
 the command line or through the \fBovsdb\-server/add\-db\fR command.
 .
+.SS "Active-Backup Commands"
+.PP
+These commands query and update the role of \fBovsdb\-server\fR within
+an active-backup pair of servers.  See \fBActive-Backup Options\fR,
+above, and \fBActive-Backup Database Service Model\fR in
+\fBovsdb\fR(7) for more information.
+.
 .IP "\fBovsdb\-server/set\-active\-ovsdb\-server \fIserver"
 Sets  the active \fIserver\fR from which \fBovsdb\-server\fR connects through
 \fBovsdb\-server/connect\-active\-ovsdb\-server\fR.
+This overrides the \fB\-\-sync\-from\fR command-line option.
 .
 .IP "\fBovsdb\-server/get\-active\-ovsdb\-server"
 Gets the active server from which \fBovsdb\-server\fR is currently synchronizing
 its databases.
 .
 .IP "\fBovsdb\-server/connect\-active\-ovsdb\-server"
-Causes \fBovsdb\-server\fR to synchronize its databases with the server
-specified by \fBovsdb\-server/set\-active\-ovsdb\-server\fR.
+Switches the server to a backup role.  The server starts synchronizing
+its databases with the active server specified by
+\fBovsdb\-server/set\-active\-ovsdb\-server\fR (or the
+\fB\-\-sync\-from\fR command-line option) and closes all existing
+client connections, which requires clients to reconnect.
 .
 .IP "\fBovsdb\-server/disconnect\-active\-ovsdb\-server"
-Causes \fBovsdb\-server\fR to  stop  synchronizing  its  databases with a active server.
+Switches the server to an active role.  The server stops synchronizing
+its databases with an active server and closes all existing client
+connections, which requires clients to reconnect.
 .
 .IP "\fBovsdb\-server/set\-sync\-exclude\-tables \fIdb\fB:\fItable\fR[\fB,\fIdb\fB:\fItable\fR]..."
-Sets the \fItable\fR whitin \fIdb\fR that will be excluded from synchronization.
+Sets the \fItable\fR within \fIdb\fR that will be excluded from synchronization.
+This overrides the \fB\-\-sync\-exclude-tables\fR command-line option.
 .
 .IP "\fBovsdb\-server/get\-sync\-exclude\-tables"
 Gets  the  tables  that are currently excluded from synchronization.
@@ -240,6 +288,64 @@ can be either \fIconnecting\fR, \fIreplicating\fR or \fIerror\fR, are shown.
 When the connection is in \fIreplicating\fR state, further output shows
 the list of databases currently replicating, and the tables that are
 excluded.
+.
+.SS "Cluster Commands"
+These commands support the \fBovsdb\-server\fR clustered service model.
+They apply only to databases in the format used for clustered databases,
+which is the database format created by \fBovsdb\-tool create\-cluster\fR
+and \fBovsdb\-tool join\-cluster\fR.
+.
+.IP "\fBcluster/cid \fIdb\fR"
+Prints the cluster ID for \fIdb\fR, which is a UUID that identifies
+the cluster.  If \fIdb\fR is a database newly created by
+\fBovsdb\-tool cluster\-join\fR, that has not yet successfully joined
+its cluster, and \fB\-\-cid\fR was not specified on the
+\fBcluster\-join\fR command line, then this command will report an
+error because the cluster ID is not yet known.
+.
+.IP "\fBcluster/sid \fIdb\fR"
+Prints the server ID for \fIdb\fR, which is a UUID that identifies
+this server within the cluster.
+.
+.IP "\fBcluster/status \fIdb\fR"
+Prints this server's status within the cluster and the status of its
+connections to other servers in the cluster.
+.
+.IP "\fBcluster/leave \fR[\fB\-\-force\fR] \fIdb\fR"
+Causes this server to remove itself from the cluster that contains
+\fIdb\fR.
+.IP
+Without \fB\-\-force\fR, this command implements a graceful removal
+that succeeds only if the cluster contains at least two servers and it
+is healthy, that is, over half its servers are up.  This command waits
+for leaving the cluster to succeed or fail.  If it is successful, the
+response is empty; if it fails, it outputs an error message.  Given
+server failures, leaving a cluster takes an unbounded amount of time,
+so it is a good idea to use \fBovs\-appctl\fR's \fB\-\-timeout\fR
+option to limit its runtime.  When a timeout occurs, leaving the
+cluster may ultimately succeed.
+.IP
+With \fB\-\-force\fR, this command forces the server to leave its
+cluster and form a new single-node cluster that contains only itself.
+The data in the new cluster may be inconsistent with the former
+cluster: transactions not yet replicated to the server will be lost,
+and transactions not yet applied to the cluster may be committed.
+Afterward, any servers in its former cluster will regard the server to
+have failed.
+.IP
+When the server successfully leaves the cluster, it stops serving
+\fIdb\fR, as if \fBovsdb\-server/remove\-db \fIdb\fR had been
+executed.
+.
+.IP "\fBcluster/kick \fIdb server\fR"
+Gracefully removes \fIserver\fR from \fIdb\fR's cluster, like
+\fBcluster/leave\fR (without \fB\-\-force\fR) except that it can
+remove any server, not just this one.
+.IP
+\fIserver\fR may be a server ID, as printed by \fBcluster/sid\fR, or
+the server's local network address as passed to \fBovsdb-tool\fR's
+\fBcreate\-cluster\fR or \fBjoin\-cluster\fR command.  Use
+\fBcluster/status\fR to see a list of cluster members.
 .
 .so lib/vlog-unixctl.man
 .so lib/memory-unixctl.man
@@ -650,5 +756,5 @@ treat a \fBmonitor\fR response with a \fBresult\fR that contains an
 being monitored does not contain a table named \fBerror\fR).
 .
 .SH "SEE ALSO"
-.
-.BR ovsdb\-tool (1).
+\fBovsdb\fR(7),
+\fBovsdb\-tool\fR(1).
