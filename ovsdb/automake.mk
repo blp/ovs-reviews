@@ -1,6 +1,6 @@
-# overview
-man_MANS += ovsdb/ovsdb.7
-EXTRA_DIST += ovsdb/ovsdb.7.xml
+# general documentation
+man_MANS += ovsdb/ovsdb.5 ovsdb/ovsdb.7
+EXTRA_DIST += ovsdb/ovsdb.5.xml ovsdb/ovsdb.7.xml
 
 # libovsdb
 lib_LTLIBRARIES += ovsdb/libovsdb.la

@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manpage program="ovsdb" section="5" title="OVSDB">
+  <h1>Name</h1>
+  <p>ovsdb -- Open vSwitch Database (File Formats)</p>
+
+  <h1>Description</h1>
+  <p>
+    OVSDB, the Open vSwitch Database, is a database system whose network
+    protocol is specified by RFC 7047.  The RFC does not specify an on-disk
+    storage format.  The OVSDB implementation in Open vSwitch implements two
+    storage formats: one for standalone (and active-backup) databases, and the
+    other for clustered databases.  This manpage documents both of these
+    formats.
+  </p>
+
+  <p>
+    Most users do not need to be concerned with this specification.  Instead,
+    to manipulate OVSDB files, refer to <code>ovsdb-tool</code>(1).  For an
+    introduction to OVSDB as a whole, read <code>ovsdb</code>(7).
+  </p>
+
+  <p>
+    OVSDB files explicitly record changes that are implied by the database
+    schema.  For example, the OVSDB ``garbage collection'' feature means that
+    when a client removes the last reference to a garbage-collected row, the
+    database server automatically removes that row.  The database file
+    explicitly records the deletion of the garbage-collected row, so that the
+    reader does not need to infer it.
+  </p>
+
+  <p>
+    OVSDB files do not include the values of ephemeral columns.
+  </p>
+
+  <h2>Common Features</h2>
+
+  <p>
+    Standalone and clustered database files share the common structure
+    described here.  They are text files encoded in UTF-8 with LF (U+000A) line
+    ends, organized as append-only series of records.  Each record consists of
+    2 lines of text.
+  </p>
+
+  <p>
+    The first line in each record has the format <code>OVSDB <var>magic</var>
+    <var>length</var> <var>hash</var></code>, where <var>magic</var> is
+    <code>JSON</code> for standalone databases or <code>CLUSTER</code> for
+    clustered databases, <var>length</var> is a positive decimal integer, and
+    <var>hash</var> is a SHA-1 checksum expressed as 40 hexadecimal digits.
+    Words in the first line must be separated by exactly one space.
+  </p>
+
+  <p>
+    The second line must be exactly <var>length</var> bytes long (including the
+    LF) and its SHA-1 checksum (including the LF) must match <var>hash</var>
+    exactly.  The line's contents must be a valid JSON object as specified by
+    RFC 4627.  Strings in the JSON object must be valid UTF-8.  To ensure that
+    the second line is exactly one line of text, the OVSDB implementation
+    expresses any LF characters within a JSON string as <code>\n</code>.  For
+    the same reason, and to save space, the OVSDB implementation does not
+    ``pretty print'' the JSON object with spaces and LFs.  (The OVSDB
+    implementation tolerates LFs when reading an OVSDB database file, as long
+    as <var>length</var> and <var>hash</var> are correct.)
+  </p>
+
+  <h2>Standalone Format</h2>
+
+  <p>
+    The first record in a standalone database contains the JSON schema for the
+    database, as specified in RFC 7047.
+  </p>
+
+  <p>
+    The second and subsequent records in a standalone database are transaction
+    records.  Each record may have the following optional special members,
+    which do not have any semantics but are often useful to administrators
+    looking through a database log with <code>ovsdb-tool show-log</code>:
+  </p>
+
+  <dl>
+    <dt><code>_date</code></dt>
+    <dd>
+      <p>
+        The time at which the transaction was committed, as an integer number
+        of milliseconds since the Unix epoch.  Early versions of OVSDB counted
+        seconds instead of milliseconds; these can be detected by noticing that
+        their values are less than 2**32.
+      </p>
+
+      <p>
+        OVSDB always writes a <code>_date</code> member.
+      </p>
+    </dd>
+
+    <dt><code>_comment</code></dt>
+    <dd>
+      <p>
+        A JSON string that specifies the comment provided in a transaction
+        <code>comment</code> operation.  If a transaction has multiple
+        <code>comment</code> operations, OVSDB concatenates them into a single
+        <code>_comment</code> member, separated by a new-line.
+      </p>
+
+      <p>
+        OVSDB only writes a <code>_comment</code> member if it would be
+        nonempty.
+      </p>
+    </dd>
+  </dl>
+
+  <p>
+    Each record has one or more additional members, each of which maps from the
+    name of a database table to a &lt;table-txn&gt; that describes the effects
+    of a transaction on the named database table.  A &lt;table-txn&gt; is a
+    JSON object whose names are 36-character strings representing a UUID in the
+    format described by RFC 4122.  Each member of a &lt;table-txn&gt; describes
+    the effects of the transaction on the row whose UUID is named.  A
+    <code>null</code> value indicates that the transaction deleted the row.
+    Otherwise, the value is a &lt;row-txn&gt; object that describes how the
+    transaction inserted or modified the row.  Each member of a &lt;row-txn&gt;
+    object maps from the name of a column to the column's new value as a
+    &lt;value&gt; defined in RFC 7047.  For new rows, the OVSDB implementation
+    omits columns whose values have the default values for their types defined
+    in RFC 7047 section 5.2.1; for modified rows, the OVSDB implementation
+    omits columns whose values are unchanged.
+  </p>
+
+</manpage>

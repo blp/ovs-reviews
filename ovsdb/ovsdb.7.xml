@@ -59,7 +59,7 @@
   <p>
     RFC 7047 specifies the OVSDB protocol but it does not specify an on-disk
     storage format.  Open vSwitch includes <code>ovsdb-tool</code>(1) for
-    working with its own on-disk database format.  The most notable feature of
+    working with its own on-disk database formats.  The most notable feature of
     this format is that <code>ovsdb-tool</code>(1) makes it easy for users to
     print the transactions that have changed a database since the last time it
     was compacted.  This feature is often useful for troubleshooting.
@@ -131,6 +131,7 @@
     and in terms of performance.  The standalone and active-backup database
     service models share one on-disk format, and clustered databases use a
     different format, but the OVSDB programs work with both formats.
+    <code>ovsdb</code>(5) documents these file formats.
   </p>
 
   <p>

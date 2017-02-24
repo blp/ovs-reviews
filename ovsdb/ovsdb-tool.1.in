@@ -56,7 +56,8 @@ This OVSDB implementation supports standalone and active-backup
 database service models with one on-disk format and a clustered
 database service model with a different format.  \fBovsdb\-tool\fR
 supports both formats, but some commands are appropriate for only one
-format, as documented for individual commands below.  For more
+format, as documented for individual commands below.  For a
+specification of these formats, see \fBovsdb\fR(5).  For more
 information on OVSDB service models, see the \fBService Models\fR
 section in \fBovsdb\fR(7).
 .
