@@ -174,6 +174,10 @@ to convert them online.
 Reads the schema embedded in \fIdb\fR and the JSON schema from
 \fIschema\fR and compares them.  If the schemas are the same, prints
 \fBno\fR on stdout; if they differ, prints \fByes\fR.
+.IP
+This command is for standalone and active-backup databases only.  For
+clustered databases, use \fBovsdb\-client\fR's \fBneeds-conversion\fR
+command instead.
 .
 .IP "\fBdb\-version\fI db\fR"
 .IQ "\fBschema\-version\fI schema\fR"
@@ -182,6 +186,10 @@ Prints the version number in the schema embedded within the database
 If \fIschema\fR or \fIdb\fR was created before schema versioning was
 introduced, then it will not have a version number and this command
 will print a blank line.
+.IP
+The \fBschema\-version\fR command is for standalone and active-backup
+databases only.  For clustered databases, use \fBovsdb\-client\fR's
+\fBschema\-version\fR command instead.
 .
 .IP "\fBdb\-cksum\fI db\fR"
 .IQ "\fBschema\-cksum\fI schema\fR"
@@ -190,6 +198,10 @@ Prints the checksum in the schema embedded within the database
 If \fIschema\fR or \fIdb\fR was created before schema checksums were
 introduced, then it will not have a checksum and this command
 will print a blank line.
+.IP
+The \fBschema\-cksum\fR command is for standalone and active-backup
+databases only.  For clustered databases, use \fBovsdb\-client\fR's
+\fBschema\-cksum\fR command instead.
 .
 .SS "Other Commands"
 .
@@ -255,7 +267,18 @@ Prints the name of the schema embedded within the database \fIdb\fR or
 in the JSON schema \fIschema\fR on stdout.
 .
 .IP "\fBdb\-cid\fI db\fR"
-Prints the cluster ID for the clustered database \fIdb\fR.
+Prints the cluster ID, which is a UUID that identifies the cluster,
+for \fIdb\fR.  If \fIdb\fR is a database newly created by
+\fBovsdb\-tool cluster\-join\fR, that has not yet successfully joined
+its cluster, and \fB\-\-cid\fR was not specified on the
+\fBcluster\-join\fR command line, then this command will report an
+error because the cluster ID is not yet known.  This command works
+only with clustered databases.
+.
+.IP "\fBdb\-sid\fI db\fR"
+Prints the server ID, which is a UUID that identifies the server, for
+\fIdb\fR.  This command works only with clustered databases.  It works
+regardless of whether \fIdb\fR has joined the cluster.
 .
 .SH OPTIONS
 .SS "Logging Options"

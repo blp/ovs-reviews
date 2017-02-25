@@ -243,6 +243,8 @@ do_create_cluster(struct ovs_cmdl_context *ctx)
     const char *local = ctx->argv[3];
 
     /* Read schema from file and convert to JSON. */
+    /* XXX add support for creating from a standalone database
+     * rather than a schema */
     struct ovsdb_schema *schema;
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
     char *name = xstrdup(schema->name);
@@ -269,8 +271,8 @@ do_join_cluster(struct ovs_cmdl_context *ctx)
 
     /* Check for a plausible 'name'. */
     if (!ovsdb_parser_is_id(name)) {
-        ovs_fatal(0, "%s: not a valid schema name (use \"schema-name\" or "
-                  "\"db-name\" command to find the correct name)", name);
+        ovs_fatal(0, "%s: not a valid schema name (use \"schema-name\" "
+                  "command to find the correct name)", name);
     }
 
     /* Create database file. */
@@ -647,6 +649,10 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum, OVS_RO },
     { "query", "[db] trns", 1, 2, do_query, OVS_RO },
     { "transact", "[db] trns", 1, 2, do_transact, OVS_RO },
+#if 0
+    { "db-cid", "db", 1, 1, do_db_cid, OVS_RO },
+    { "db-sid", "db", 1, 1, do_db_sid, OVS_RO },
+#endif
     { "show-log", "[db]", 0, 1, do_show_log, OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { "list-commands", NULL, 0, INT_MAX, do_list_commands, OVS_RO },

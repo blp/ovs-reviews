@@ -26,9 +26,9 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 .br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBneeds\-conversion \fR[\fIserver\fR] \fIschema\fR
 .br
-\fBovsdb\-client \fR[\fIoptions\fR] \fBget\-schema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
+\fBovsdb\-client \fR[\fIoptions\fR] \fBschema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
 .br
-\fBovsdb\-client \fR[\fIoptions\fR] \fBget\-schema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
+\fBovsdb\-client \fR[\fIoptions\fR] \fBschema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
 .IP "Data Management Commands:"
 \fBovsdb\-client \fR[\fIoptions\fR] \fBtransact\fI \fR[\fIserver\fR] \fItransaction\fR
 .br
@@ -157,14 +157,14 @@ requests the schema from the database whose name is specified in
 \fIschema\fR.  If the two schemas are the same, prints \fBno\fR on
 stdout; if they differ, prints \fByes\fR.
 .
-.IP "\fBget\-schema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
+.IP "\fBschema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
 Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
 prints its version number on stdout.
 If \fIdatabase\fR was created before schema versioning was introduced,
 then it will not have a version number and this command will print a
 blank line.
 .
-.IP "\fBget\-schema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
+.IP "\fBschema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
 Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
 prints its checksum on stdout.  If \fIdatabase\fR does not include a
 checksum, prints a blank line.

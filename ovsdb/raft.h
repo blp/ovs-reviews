@@ -67,11 +67,9 @@ struct ovsdb_error *raft_open(const char *file_name, struct raft **)
     OVS_WARN_UNUSED_RESULT;
 void raft_close(struct raft *);
 
-/* Joining a cluster. */
-struct ovsdb_error *raft_join(const char *file_name, const char *local_address,
-                              char *remote_addresses[], size_t n_remotes,
-                              const struct uuid *cid, struct raft **)
-    OVS_WARN_UNUSED_RESULT;
+/* Information. */
+const struct uuid *raft_get_cid(const struct raft *);
+const struct uuid *raft_get_sid(const struct raft *);
 bool raft_is_joining(const struct raft *);
 
 /* Leaving a cluster */
