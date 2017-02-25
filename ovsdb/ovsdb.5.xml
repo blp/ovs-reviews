@@ -109,12 +109,13 @@
   </dl>
 
   <p>
-    Each record has one or more additional members, each of which maps from the
-    name of a database table to a &lt;table-txn&gt; that describes the effects
-    of a transaction on the named database table.  A &lt;table-txn&gt; is a
-    JSON object whose names are 36-character strings representing a UUID in the
-    format described by RFC 4122.  Each member of a &lt;table-txn&gt; describes
-    the effects of the transaction on the row whose UUID is named.  A
+    Each of these records also has one or more additional members, each of
+    which maps from the name of a database table to a &lt;table-txn&gt; that
+    describes the effects of a transaction on the named database table.  A
+    &lt;table-txn&gt; is a JSON object whose names are &lt;raw-uuid&gt;
+    strings, that is, 36-character strings representing a UUID in the format
+    described by RFC 4122.  Each member of a &lt;table-txn&gt; describes the
+    effects of the transaction on the row whose UUID is named.  A
     <code>null</code> value indicates that the transaction deleted the row.
     Otherwise, the value is a &lt;row-txn&gt; object that describes how the
     transaction inserted or modified the row.  Each member of a &lt;row-txn&gt;
@@ -124,5 +125,91 @@
     in RFC 7047 section 5.2.1; for modified rows, the OVSDB implementation
     omits columns whose values are unchanged.
   </p>
+
+  <h2>Clustered Format</h2>
+
+  <p>
+    The first record in a clustered database contains the following members:
+  </p>
+
+  <dl>
+    <dt>"server_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      Always present.  This is the server's own UUID, which must be unique
+      within the cluster.
+    </dd>
+
+    <dt>"prev_servers": &lt;servers&gt;</dt>
+    <dd>
+      Always present.  This is the set of servers in the cluster as of the
+      beginning of the log.  In a database file freshly created by
+      <code>ovsdb-tool join-cluster</code>, this member might include just this
+      server and one other server in the cluster, since the user is not
+      required to list all of the cluster members.  In a database file for a
+      server that has completed joined the cluster, the set of servers is
+      complete (as of the beginning of the log).
+    </dd>
+
+    <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      The cluster's UUID.  This member is always present if the server has
+      completed joining the cluster.  In a database file freshly created by
+      <code>ovsdb-tool join-cluster</code>, this member is present only if
+      the user specified the <code>--cid</code> option.
+    </dd>
+
+    <dt>"prev_term": &lt;integer&gt;</dt>
+    <dt>"prev_index": &lt;integer&gt;</dt>
+    <dd>
+      The Raft term and index preceding the beginning of the log.  These
+      members are present if and only if the server has completed joining the
+      cluster.
+    </dd>
+
+    <dt>"data": &lt;json-value&gt;</dt>
+    <dd>
+      A snapshot of the data in the database as of the beginning of the log.
+      This member is present if and only if the server has completed joining
+      the cluster.
+    </dd>
+  </dl>
+
+  <p>
+    The second and subsequent records in a clustered database represent changes
+    to the database, to the cluster state, or both.  They have the following
+    members:
+  </p>
+
+  <dl>
+    <dt>"term": &lt;integer&gt;</dt>
+    <dd>
+      Always present.
+    </dd>
+
+    <dt>"index": &lt;integer&gt;</dt>
+    <dd>
+      Optional.  If this member is present, exactly one of <code>data</code> or
+      <code>servers</code> is also present, and <code>vote</code> must be
+      omitted.
+    </dd>
+
+    <dt>"data": &lt;json-value&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code> must also be
+      present.
+    </dd>
+
+    <dt>"servers": &lt;servers&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code> must also be
+      present.
+    </dd>
+
+    <dt>"vote": &lt;raw-uuid&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code>,
+      <code>data</code>, and <code>servers</code> must be omitted.
+    </dd>
+  </dl>
 
 </manpage>
