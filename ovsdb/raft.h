@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2016 Nicira, Inc.
+ * Copyright (c) 2014, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@
 #include <stdint.h>
 #include "compiler.h"
 
+struct json;
 struct raft;
 struct uuid;
 
@@ -50,9 +51,15 @@ struct uuid;
 #define RAFT_PORT 6641
 
 /* Setting up a new cluster. */
-struct ovsdb_error *raft_create(const char *file_name,
-                                const char *local_address,
-                                const char *data)
+struct ovsdb_error *raft_create_cluster(const char *file_name,
+                                        const char *name,
+                                        const char *local,
+                                        const struct json *snapshot)
+    OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *raft_join_cluster(const char *file_name,
+                                      const char *name, const char *local,
+                                      char *remotes[], size_t n_remotes,
+                                      const struct uuid *cid)
     OVS_WARN_UNUSED_RESULT;
 
 /* Starting up or shutting down a server within a cluster. */

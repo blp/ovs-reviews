@@ -748,8 +748,8 @@ raft_write_header(struct ovsdb_log *storage,
  * Returns null if successful, otherwise an ovsdb_error describing the
  * problem. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_create(const char *file_name, const char *local_address,
-            const char *data)
+raft_create_cluster(const char *file_name, const char *local_address,
+                    const struct json *data)
 {
     /* Parse and verify validity of the local address. */
     struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);

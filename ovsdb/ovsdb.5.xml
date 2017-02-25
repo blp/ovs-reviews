@@ -145,9 +145,10 @@
       beginning of the log.  In a database file freshly created by
       <code>ovsdb-tool join-cluster</code>, this member might include just this
       server and one other server in the cluster, since the user is not
-      required to list all of the cluster members.  In a database file for a
-      server that has completed joined the cluster, the set of servers is
-      complete (as of the beginning of the log).
+      required to list all of the cluster members, and the UUIDs for servers
+      other than this server will be wrong.  In a database file for a server
+      that has completed joined the cluster, the set of servers is complete and
+      correct (as of the beginning of the log).
     </dd>
 
     <dt>"cluster_id": &lt;raw-uuid&gt;</dt>

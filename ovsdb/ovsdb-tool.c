@@ -35,6 +35,7 @@
 #include "ovsdb.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
+#include "ovsdb-parser.h"
 #include "raft.h"
 #include "socket-util.h"
 #include "table.h"
@@ -44,6 +45,9 @@
 
 /* -m, --more: Verbosity level for "show-log" command output. */
 static int show_log_verbosity;
+
+/* --cid: Cluster ID for "join-cluster" command. */
+static struct uuid cid;
 
 static const struct ovs_cmdl_command *get_all_commands(void);
 
@@ -70,8 +74,12 @@ main(int argc, char *argv[])
 static void
 parse_options(int argc, char *argv[])
 {
+    enum {
+        OPT_CID = UCHAR_MAX + 1,
+    };
     static const struct option long_options[] = {
         {"more", no_argument, NULL, 'm'},
+        {"cid", required_argument, NULL, OPT_CID},
         {"verbose", optional_argument, NULL, 'v'},
         {"help", no_argument, NULL, 'h'},
         {"option", no_argument, NULL, 'o'},
@@ -91,6 +99,12 @@ parse_options(int argc, char *argv[])
         switch (c) {
         case 'm':
             show_log_verbosity++;
+            break;
+
+        case OPT_CID:
+            if (!uuid_from_string(&cid, optarg) || uuid_is_zero(&cid)) {
+                ovs_fatal(0, "%s: not a valid UUID", optarg);
+            }
             break;
 
         case 'h':
@@ -124,12 +138,16 @@ usage(void)
     printf("%s: Open vSwitch database management utility\n"
            "usage: %s [OPTIONS] COMMAND [ARG...]\n"
            "  create [DB [SCHEMA]]    create DB with the given SCHEMA\n"
-           "  create-cluster DB SCHEMA ADDRESS\n"
-           "    create clustered DB with given SCHEMA and local ADDRESS\n"
+           "  create-cluster DB CONTENTS LOCAL\n"
+           "    create clustered DB with given CONTENTS and LOCAL address\n"
+           "  [--cid=UUID] join-cluster DB NAME LOCAL REMOTE...\n"
+           "    join clustered DB with given NAME and LOCAL and REMOTE addrs\n"
            "  compact [DB [DST]]      compact DB in-place (or to DST)\n"
            "  convert [DB [SCHEMA [DST]]]   convert DB to SCHEMA (to DST)\n"
+           "  db-name [DB]            report name of schema used by DB\n"
            "  db-version [DB]         report version of schema used by DB\n"
            "  db-cksum [DB]           report checksum of schema used by DB\n"
+           "  schema-name [SCHEMA]    report SCHEMA's name\n"
            "  schema-version [SCHEMA] report SCHEMA's schema version\n"
            "  schema-cksum [SCHEMA]   report SCHEMA's checksum\n"
            "  query [DB] TRNS         execute read-only transaction on DB\n"
@@ -222,27 +240,43 @@ do_create_cluster(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argv[1];
     const char *schema_file_name = ctx->argv[2];
-    const char *address = ctx->argv[3];
+    const char *local = ctx->argv[3];
 
     /* Read schema from file and convert to JSON. */
     struct ovsdb_schema *schema;
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
+    char *name = xstrdup(schema->name);
     struct json *schema_json = ovsdb_schema_to_json(schema);
     ovsdb_schema_destroy(schema);
 
     /* Generate snapshot and convert to string. */
-    struct json *data_json = json_object_create();
-    struct json *snapshot_json = json_array_create_2(schema_json, data_json);
-    char *snapshot_string = json_to_string(snapshot_json, 0);
-    json_destroy(snapshot_json);
+    struct json *data = json_object_create();
+    struct json *snapshot = json_array_create_2(schema_json, data);
 
     /* Create database file. */
-    check_ovsdb_error(raft_create(db_file_name, address, snapshot_string));
-    free(snapshot_string);
+    check_ovsdb_error(raft_create_cluster(db_file_name, name,
+                                          local, snapshot));
+    free(name);
+    json_destroy(snapshot);
+}
 
-    struct raft *raft;
-    check_ovsdb_error(raft_open(db_file_name, &raft));
-    raft_close(raft);
+static void
+do_join_cluster(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argv[1];
+    const char *name = ctx->argv[2];
+    const char *local = ctx->argv[3];
+
+    /* Check for a plausible 'name'. */
+    if (!ovsdb_parser_is_id(name)) {
+        ovs_fatal(0, "%s: not a valid schema name (use \"schema-name\" or "
+                  "\"db-name\" command to find the correct name)", name);
+    }
+
+    /* Create database file. */
+    check_ovsdb_error(raft_join_cluster(db_file_name, name, local,
+                                        &ctx->argv[4], ctx->argc - 4,
+                                        uuid_is_zero(&cid) ? NULL : &cid));
 }
 
 static void
@@ -313,6 +347,17 @@ do_needs_conversion(struct ovs_cmdl_context *ctx)
 }
 
 static void
+do_db_name(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    struct ovsdb_schema *schema;
+
+    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
+    puts(schema->name);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
 do_db_version(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
@@ -331,6 +376,17 @@ do_db_cksum(struct ovs_cmdl_context *ctx)
 
     check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
     puts(schema->cksum);
+    ovsdb_schema_destroy(schema);
+}
+
+static void
+do_schema_name(struct ovs_cmdl_context *ctx)
+{
+    const char *schema_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_schema();
+    struct ovsdb_schema *schema;
+
+    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
+    puts(schema->name);
     ovsdb_schema_destroy(schema);
 }
 
@@ -577,12 +633,16 @@ do_list_commands(struct ovs_cmdl_context *ctx OVS_UNUSED)
 
 static const struct ovs_cmdl_command all_commands[] = {
     { "create", "[db [schema]]", 0, 2, do_create, OVS_RW },
-    { "create-cluster", "db schema address", 3, 3, do_create_cluster, OVS_RW },
+    { "create-cluster", "db contents local", 3, 3, do_create_cluster, OVS_RW },
+    { "join-cluster", "db name local remote...", 4, INT_MAX, do_join_cluster,
+      OVS_RW },
     { "compact", "[db [dst]]", 0, 2, do_compact, OVS_RW },
     { "convert", "[db [schema [dst]]]", 0, 3, do_convert, OVS_RW },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion, OVS_RO },
+    { "db-name", "[db]",  0, 1, do_db_name, OVS_RO },
     { "db-version", "[db]",  0, 1, do_db_version, OVS_RO },
     { "db-cksum", "[db]", 0, 1, do_db_cksum, OVS_RO },
+    { "schema-name", "[schema]", 0, 1, do_schema_name, OVS_RO },
     { "schema-version", "[schema]", 0, 1, do_schema_version, OVS_RO },
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum, OVS_RO },
     { "query", "[db] trns", 1, 2, do_query, OVS_RO },

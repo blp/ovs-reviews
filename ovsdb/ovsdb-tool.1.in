@@ -15,9 +15,9 @@ ovsdb\-tool \- Open vSwitch database management utility
 .IP "Database Creation Commands:"
 \fBovsdb\-tool \fR[\fIoptions\fR] \fBcreate \fR[\fIdb\fR [\fIschema\fR]]
 .br
-\fBovsdb\-tool \fR[\fIoptions\fR] \fBcreate\-cluster \fIdb schema address\fR
+\fBovsdb\-tool \fR[\fIoptions\fR] \fBcreate\-cluster \fIdb contents address\fR
 .br
-\fBovsdb\-tool [\fB\-\-cid=\fIuuid\fR] \fBjoin\-cluster\fI db schema local remote\fR...
+\fBovsdb\-tool [\fB\-\-cid=\fIuuid\fR] \fBjoin\-cluster\fI db name local remote\fR...
 .IP "Version Management Commands:"
 \fBovsdb\-tool \fR[\fIoptions\fR] \fBconvert \fR[\fIdb\fR [\fIschema
 \fR[\fItarget\fR]]]
@@ -39,6 +39,10 @@ ovsdb\-tool \- Open vSwitch database management utility
 \fBovsdb\-tool \fR[\fIoptions\fR] \fBtransact \fR[\fIdb\fR] \fItransaction\fR
 .br
 \fBovsdb\-tool \fR[\fIoptions\fR] [\fB\-m\fR | \fB\-\-more\fR]... \fBshow\-log \fR[\fIdb\fR]
+.br
+\fBovsdb\-tool \fR[\fIoptions\fR] \fBdb\-name \fR[\fIdb\fR]
+.br
+\fBovsdb\-tool \fR[\fIoptions\fR] \fBschema\-name \fR[\fIschema\fR]
 .br
 \fBovsdb\-tool help\fR
 .so lib/vlog-syn.man
@@ -245,8 +249,8 @@ modified by each transaction.  With two \fB\-m\fRs, \fBshow\-log\fR
 also prints the values of the columns modified by each change to a
 record.
 .
-.IP "\fBdb\-name\fI db\fR"
-.IQ "\fBschema\-name\fI schema\fR"
+.IP "\fBdb\-name \fR[\fIdb\fR]"
+.IQ "\fBschema\-name\fR[\fIschema\fR]"
 Prints the name of the schema embedded within the database \fIdb\fR or
 in the JSON schema \fIschema\fR on stdout.
 .
