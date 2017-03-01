@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Nicira, Inc.
+ * Copyright (c) 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include "command-line.h"
 #include "daemon.h"
 #include "fatal-signal.h"
+#include "openvswitch/json.h"
 #include "ovsdb-error.h"
 #include "poll-loop.h"
 #include "unixctl.h"
@@ -48,9 +49,6 @@ static unixctl_cb_func test_raft_leave;
 static unixctl_cb_func test_raft_take_leadership;
 static unixctl_cb_func test_raft_transfer_leadership;
 static unixctl_cb_func test_raft_store_snapshot;
-
-/* --cluster: UUID of cluster to open or join. */
-static struct uuid cluster_id;
 
 static void
 check_ovsdb_error(struct ovsdb_error *error)
@@ -82,19 +80,7 @@ main(int argc, char *argv[])
 
     struct raft *raft;
     const char *file_name = argv[0];
-    if (argc == 1) {
-        check_ovsdb_error(raft_open(file_name, &raft));
-    } else {
-        const char *local_address = argv[1];
-        char **remote_addresses = &argv[2];
-        size_t n_remotes = argc - 2;
-        const struct uuid *cid = (uuid_is_zero(&cluster_id)
-                                  ? NULL : &cluster_id);
-
-        check_ovsdb_error(raft_join(file_name, local_address,
-                                    remote_addresses, n_remotes,
-                                    cid, &raft));
-    }
+    check_ovsdb_error(raft_open(file_name, &raft));
 
     struct unixctl_server *server;
     int error = unixctl_server_create(unixctl_pathp, &server);
@@ -126,15 +112,17 @@ main(int argc, char *argv[])
             break;
         }
         while (raft_has_next_entry(raft)) {
-            const char *entry;
+            const struct json *entry;
             bool snapshot;
 
             entry = raft_next_entry(raft, &snapshot);
+            char *entry_s = json_to_string(entry, JSSF_SORT);
             if (snapshot) {
-                printf("new snapshot \"%s\"\n", entry);
+                printf("new snapshot \"%s\"\n", entry_s);
             } else {
-                printf("applying entry \"%s\"\n", entry);
+                printf("applying entry \"%s\"\n", entry_s);
             }
+            free(entry_s);
         }
 
         if (exiting) {
@@ -192,12 +180,6 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
         }
 
         switch (c) {
-        case OPT_CLUSTER:
-            if (!uuid_from_string(&cluster_id, optarg)) {
-                ovs_fatal(0, "\"%s\" is not a valid UUID", optarg);
-            }
-            break;
-
         case OPT_UNIXCTL:
             *unixctl_pathp = optarg;
             break;
@@ -249,11 +231,17 @@ test_raft_execute(struct unixctl_conn *conn,
                   int argc OVS_UNUSED, const char *argv[],
                   void *ctx_)
 {
-    struct execute_ctx *ctx = ctx_;
-    struct execute_command *command = xmalloc(sizeof *command);
-    ovs_list_push_back(&ctx->commands, &command->list_node);
-    command->cmd = raft_command_execute(ctx->raft, argv[1]);
-    command->conn = conn;
+    struct json *data = json_from_string(argv[1]);
+    if (data->type == JSON_STRING) {
+        unixctl_command_reply_error(conn, json_string(data));
+    } else {
+        struct execute_ctx *ctx = ctx_;
+        struct execute_command *command = xmalloc(sizeof *command);
+        ovs_list_push_back(&ctx->commands, &command->list_node);
+        command->cmd = raft_command_execute(ctx->raft, data);
+        command->conn = conn;
+    }
+    json_destroy(data);
 }
 
 
@@ -281,9 +269,15 @@ test_raft_store_snapshot(struct unixctl_conn *conn,
                          int argc OVS_UNUSED, const char *argv[],
                          void *raft_)
 {
-    struct raft *raft = raft_;
-    raft_store_snapshot(raft, argv[1]);
-    unixctl_command_reply(conn, NULL);
+    struct json *data = json_from_string(argv[1]);
+    if (data->type == JSON_STRING) {
+        unixctl_command_reply_error(conn, json_string(data));
+    } else {
+        struct raft *raft = raft_;
+        raft_store_snapshot(raft, data);
+        unixctl_command_reply(conn, NULL);
+    }
+    json_destroy(data);
 }
 
 static void

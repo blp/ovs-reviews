@@ -382,6 +382,43 @@ do_db_cksum(struct ovs_cmdl_context *ctx)
 }
 
 static void
+do_db_cid(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argv[1];
+    struct raft_metadata md;
+
+    check_ovsdb_error(raft_read_metadata(db_file_name, &md));
+    if (uuid_is_zero(&md.cid)) {
+        fprintf(stderr, "%s: cluster ID not yet known\n", db_file_name);
+        exit(2);
+    }
+    printf(UUID_FMT"\n", UUID_ARGS(&md.cid));
+    raft_metadata_destroy(&md);
+}
+
+static void
+do_db_sid(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argv[1];
+    struct raft_metadata md;
+
+    check_ovsdb_error(raft_read_metadata(db_file_name, &md));
+    printf(UUID_FMT"\n", UUID_ARGS(&md.sid));
+    raft_metadata_destroy(&md);
+}
+
+static void
+do_db_local_address(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argv[1];
+    struct raft_metadata md;
+
+    check_ovsdb_error(raft_read_metadata(db_file_name, &md));
+    puts(md.local);
+    raft_metadata_destroy(&md);
+}
+
+static void
 do_schema_name(struct ovs_cmdl_context *ctx)
 {
     const char *schema_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_schema();
@@ -559,16 +596,12 @@ print_db_changes(struct shash *tables, struct shash *names,
 }
 
 static void
-do_show_log(struct ovs_cmdl_context *ctx)
+do_show_log_standalone(struct ovsdb_log *log)
 {
-    const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
     struct shash names;
-    struct ovsdb_log *log;
     struct ovsdb_schema *schema;
     unsigned int i;
 
-    check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_MAGIC,
-                                     OVSDB_LOG_READ_ONLY, -1, &log));
     shash_init(&names);
     schema = NULL;
     for (i = 0; ; i++) {
@@ -616,9 +649,107 @@ do_show_log(struct ovs_cmdl_context *ctx)
         putchar('\n');
     }
 
-    ovsdb_log_close(log);
     ovsdb_schema_destroy(schema);
     /* XXX free 'names'. */
+}
+
+static void
+print_member(const struct shash *object, const char *name)
+{
+    const struct json *value = shash_find_data(object, name);
+    if (!value) {
+        return;
+    }
+
+    char *s = json_to_string(value, JSSF_SORT);
+    printf("\t%s: %s\n", name, s);
+    free(s);
+}
+
+static void
+print_data(const struct shash *object)
+{
+    const struct json *data = shash_find_data(object, "data");
+    if (!data) {
+        return;
+    }
+
+    if (data->type != JSON_ARRAY || json_array(data)->n != 2) {
+        printf("\t***invalid data***\n");
+        return;
+    }
+
+    const struct json *schema_json = json_array(data)->elems[0];
+    if (schema_json->type != JSON_NULL) {
+        struct ovsdb_schema *schema;
+
+        check_ovsdb_error(ovsdb_schema_from_json(schema_json, &schema));
+        printf("\tschema: \"%s\", version=\"%s\", cksum=\"%s\"\n",
+               schema->name, schema->version, schema->cksum);
+        ovsdb_schema_destroy(schema);
+    }
+
+    char *s = json_to_string(json_array(data)->elems[1], JSSF_SORT);
+    printf("\tdata: %s\n", s);
+    free(s);
+}
+
+static void
+do_show_log_cluster(struct ovsdb_log *log)
+{
+    struct shash names;
+    struct ovsdb_schema *schema;
+    unsigned int i;
+
+    shash_init(&names);
+    schema = NULL;
+    for (i = 0; ; i++) {
+        struct json *json;
+        check_ovsdb_error(ovsdb_log_read(log, &json));
+        if (!json) {
+            break;
+        }
+
+        struct shash *object = json_object(json);
+
+        printf("record %u:\n", i);
+        if (i == 0) {
+            print_member(object, "name");
+            print_member(object, "server_id");
+            print_member(object, "cluster_id");
+            print_member(object, "prev_servers");
+            print_member(object, "prev_term");
+            print_member(object, "prev_index");
+            print_data(object);
+        } else {
+            print_member(object, "term");
+            print_member(object, "index");
+            print_data(object);
+            print_member(object, "servers");
+            print_member(object, "vote");
+        }
+        json_destroy(json);
+        putchar('\n');
+    }
+
+    ovsdb_schema_destroy(schema);
+    /* XXX free 'names'. */
+}
+
+static void
+do_show_log(struct ovs_cmdl_context *ctx)
+{
+    const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    struct ovsdb_log *log;
+
+    check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_MAGIC"|"RAFT_MAGIC,
+                                     OVSDB_LOG_READ_ONLY, -1, &log));
+    if (!strcmp(ovsdb_log_get_magic(log), OVSDB_MAGIC)) {
+        do_show_log_standalone(log);
+    } else {
+        do_show_log_cluster(log);
+    }
+    ovsdb_log_close(log);
 }
 
 static void
@@ -644,15 +775,14 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "db-name", "[db]",  0, 1, do_db_name, OVS_RO },
     { "db-version", "[db]",  0, 1, do_db_version, OVS_RO },
     { "db-cksum", "[db]", 0, 1, do_db_cksum, OVS_RO },
+    { "db-cid", "db", 1, 1, do_db_cid, OVS_RO },
+    { "db-sid", "db", 1, 1, do_db_sid, OVS_RO },
+    { "db-local-address", "db", 1, 1, do_db_local_address, OVS_RO },
     { "schema-name", "[schema]", 0, 1, do_schema_name, OVS_RO },
     { "schema-version", "[schema]", 0, 1, do_schema_version, OVS_RO },
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum, OVS_RO },
     { "query", "[db] trns", 1, 2, do_query, OVS_RO },
     { "transact", "[db] trns", 1, 2, do_transact, OVS_RO },
-#if 0
-    { "db-cid", "db", 1, 1, do_db_cid, OVS_RO },
-    { "db-sid", "db", 1, 1, do_db_sid, OVS_RO },
-#endif
     { "show-log", "[db]", 0, 1, do_show_log, OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { "list-commands", NULL, 0, INT_MAX, do_list_commands, OVS_RO },

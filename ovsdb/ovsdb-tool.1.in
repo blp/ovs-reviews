@@ -271,14 +271,21 @@ Prints the cluster ID, which is a UUID that identifies the cluster,
 for \fIdb\fR.  If \fIdb\fR is a database newly created by
 \fBovsdb\-tool cluster\-join\fR, that has not yet successfully joined
 its cluster, and \fB\-\-cid\fR was not specified on the
-\fBcluster\-join\fR command line, then this command will report an
-error because the cluster ID is not yet known.  This command works
-only with clustered databases.
+\fBcluster\-join\fR command line, then this command will output an
+error, and exit with status 2, because the cluster ID is not yet
+known.  This command works only with clustered databases.
+.IP
+The all-zeros UUID is not a valid cluster ID.
 .
 .IP "\fBdb\-sid\fI db\fR"
 Prints the server ID, which is a UUID that identifies the server, for
 \fIdb\fR.  This command works only with clustered databases.  It works
 regardless of whether \fIdb\fR has joined the cluster.
+.
+.IP "\fBdb\-local\-address db\fR"
+Prints the address used for database clustering for \fIdb\fR, in the
+same \fIprotocol\fB:\fIip\fB:\fIport\fR form used on
+\fBcreate\-cluster\fR and \fBjoin\-cluster\fR.
 .
 .SH OPTIONS
 .SS "Logging Options"

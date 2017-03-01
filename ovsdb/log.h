@@ -30,7 +30,7 @@ enum ovsdb_log_open_mode {
     OVSDB_LOG_CREATE            /* Create or open file, read/write. */
 };
 
-#define OVSDB_MAGIC "OVSDB JSON"
+#define OVSDB_MAGIC "JSON"
 
 struct ovsdb_error *ovsdb_log_open(const char *name, const char *magic,
                                    enum ovsdb_log_open_mode,
@@ -39,6 +39,7 @@ struct ovsdb_error *ovsdb_log_open(const char *name, const char *magic,
 void ovsdb_log_close(struct ovsdb_log *);
 
 const char *ovsdb_log_get_name(const struct ovsdb_log *);
+const char *ovsdb_log_get_magic(const struct ovsdb_log *);
 
 struct ovsdb_error *ovsdb_log_read(struct ovsdb_log *, struct json **)
     OVS_WARN_UNUSED_RESULT;

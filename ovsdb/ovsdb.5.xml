@@ -78,7 +78,7 @@
   </p>
 
   <dl>
-    <dt><code>_date</code></dt>
+    <dt>"_date": &lt;integer&gt;</dt>
     <dd>
       <p>
         The time at which the transaction was committed, as an integer number
@@ -92,7 +92,7 @@
       </p>
     </dd>
 
-    <dt><code>_comment</code></dt>
+    <dt>"_comment": &lt;string&gt;</dt>
     <dd>
       <p>
         A JSON string that specifies the comment provided in a transaction
@@ -103,7 +103,7 @@
 
       <p>
         OVSDB only writes a <code>_comment</code> member if it would be
-        nonempty.
+        a nonempty string.
       </p>
     </dd>
   </dl>
@@ -139,6 +139,14 @@
       within the cluster.
     </dd>
 
+    <dt>"name": &lt;id&gt;</dt>
+    <dd>
+      Always present.  This is the database schema name.  It is only used when
+      a server is in the process of a joining a cluster: a server will only
+      join a cluster if the name matches.  (If the database schema name were
+      unique, then we would not also need a cluster ID.)
+    </dd>
+
     <dt>"prev_servers": &lt;servers&gt;</dt>
     <dd>
       Always present.  This is the set of servers in the cluster as of the
@@ -155,8 +163,9 @@
     <dd>
       The cluster's UUID.  This member is always present if the server has
       completed joining the cluster.  In a database file freshly created by
-      <code>ovsdb-tool join-cluster</code>, this member is present only if
-      the user specified the <code>--cid</code> option.
+      <code>ovsdb-tool join-cluster</code>, this member is present only if the
+      user specified the <code>--cid</code> option.  The all-zeros UUID is not
+      a valid cluster ID.
     </dd>
 
     <dt>"prev_term": &lt;integer&gt;</dt>
@@ -177,7 +186,8 @@
 
   <p>
     The second and subsequent records in a clustered database represent changes
-    to the database, to the cluster state, or both.  They have the following
+    to the database, to the cluster state, or both.  They are present if and
+    only if the server has joined the cluster.  They have the following
     members:
   </p>
 

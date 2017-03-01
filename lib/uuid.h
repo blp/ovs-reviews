@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2016 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2010, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,6 +55,18 @@ uuid_equals(const struct uuid *a, const struct uuid *b)
             && a->parts[1] == b->parts[1]
             && a->parts[2] == b->parts[2]
             && a->parts[3] == b->parts[3]);
+}
+
+/* Returns the first 'n' hex digits of 'uuid', for 0 < 'n' <= 8.
+ *
+ * This is useful for displaying a few leading digits of the uuid, e.g. to
+ * display 4 digits:
+ *     printf("%04x", uuid_prefix(uuid, 4));
+ */
+static inline unsigned int
+uuid_prefix(const struct uuid *uuid, int digits)
+{
+    return (uuid->parts[0] >> (32 - 4 * digits));
 }
 
 void uuid_init(void);

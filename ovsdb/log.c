@@ -51,13 +51,19 @@ struct ovsdb_log {
     enum ovsdb_log_mode mode;
 };
 
+static bool parse_header(char *header, const char **magicp,
+                         unsigned long int *length,
+                         uint8_t sha1[SHA1_DIGEST_SIZE]);
+static bool is_magic_ok(const char *needle, const char *haystack);
+
 /* Attempts to open 'name' with the specified 'open_mode'.  On success, stores
  * the new log into '*filep' and returns NULL; otherwise returns NULL and
  * stores NULL into '*filep'.
  *
  * 'magic' is a short text string put at the beginning of every record and used
  * to distinguish one kind of log file from another.  For a conventional OVSDB
- * log file, use OVSDB_MAGIC.
+ * log file, use OVSDB_MAGIC.  To accept more than one magic string, separate
+ * them with "|", e.g. "MAGIC 1|MAGIC 2".
  *
  * Whether the file will be locked using lockfile_lock() depends on 'locking':
  * use true to lock it, false not to lock it, or -1 to lock it only if
@@ -70,12 +76,16 @@ ovsdb_log_open(const char *name, const char *magic,
 {
     struct lockfile *lockfile;
     struct ovsdb_error *error;
-    struct ovsdb_log *file;
     char *abs_name;
-    struct stat s;
     FILE *stream;
     int flags;
     int fd;
+
+    /* If we can create a new file, we need to know what kind of magic to
+     * use, so there must be only one kind. */
+    if (open_mode == OVSDB_LOG_CREATE_EXCL || open_mode == OVSDB_LOG_CREATE) {
+        ovs_assert(!strchr(magic, '|'));
+    }
 
     *filep = NULL;
 
@@ -137,42 +147,53 @@ ovsdb_log_open(const char *name, const char *magic,
         goto error_unlock;
     }
 
-    if (!fstat(fd, &s)) {
-        if (s.st_size == 0) {
-            /* It's (probably) a new file so fsync() its parent directory to
-             * ensure that its directory entry is committed to disk. */
-            fsync_parent_dir(abs_name);
-        } else if (s.st_size >= strlen(magic) && S_ISREG(s.st_mode)) {
-            /* Try to read the magic from the first log record.  If it's not
-             * the magic we expect, this is the wrong kind of file, so reject
-             * it immediately. */
-            size_t magic_len = strlen(magic);
-            char *buf = xzalloc(magic_len + 1);
-            bool err = (read(fd, buf, magic_len) == magic_len
-                        && strcmp(buf, magic));
-            free(buf);
-            if (err) {
-                error = ovsdb_error(NULL, "%s: bad magic (unexpected "
-                                    "kind of file)", name);
-                goto error_close;
-            }
-            if (lseek(fd, 0, SEEK_SET)) {
-                error = ovsdb_io_error(errno, "%s: seek failed", name);
-                goto error_close;
-            }
-        }
-    }
-
     stream = fdopen(fd, open_mode == OVSDB_LOG_READ_ONLY ? "rb" : "w+b");
     if (!stream) {
         error = ovsdb_io_error(errno, "%s: fdopen failed", name);
-        goto error_close;
+        close(fd);
+        goto error_unlock;
     }
 
-    file = xmalloc(sizeof *file);
+    /* Read the magic from the first log record. */
+    char header[128];
+    const char *actual_magic;
+    if (!fgets(header, sizeof header, stream)) {
+        if (ferror(stream)) {
+            error = ovsdb_io_error(errno, "%s: read error", name);
+            goto error_fclose;
+        }
+
+        /* We need to be able to report what kind of file this is but we can't
+         * if it's empty and we accept more than one. */
+        if (strchr(magic, '|')) {
+            error = ovsdb_error(NULL, "%s: unexpected end of file", name);
+            goto error_fclose;
+        }
+        actual_magic = magic;
+
+        /* It's an empty file and therefore probably a new file, so fsync()
+         * its parent directory to ensure that its directory entry is
+         * committed to disk. */
+        fsync_parent_dir(abs_name);
+    } else {
+        unsigned long int length;
+        uint8_t sha1[SHA1_DIGEST_SIZE];
+        if (!parse_header(header, &actual_magic, &length, sha1)
+            || !is_magic_ok(actual_magic, magic)) {
+            error = ovsdb_error(NULL, "%s: unexpected file format", name);
+            goto error_fclose;
+        }
+    }
+
+    if (fseek(stream, 0, SEEK_SET)) {
+        error = ovsdb_io_error(errno, "%s: seek failed", name);
+        goto error_fclose;
+    }
+
+    struct ovsdb_log *file = xmalloc(sizeof *file);
     file->name = abs_name;
     file->rel_name = xstrdup(name);
-    file->magic = xstrdup(magic);
+    file->magic = xstrdup(actual_magic);
     file->lockfile = lockfile;
     file->stream = stream;
     file->prev_offset = 0;
@@ -183,13 +204,35 @@ ovsdb_log_open(const char *name, const char *magic,
     *filep = file;
     return NULL;
 
-error_close:
-    close(fd);
+error_fclose:
+    fclose(stream);
 error_unlock:
     lockfile_unlock(lockfile);
 error:
     free(abs_name);
     return error;
+}
+
+/* Returns true if 'needle' is one of the |-delimited words in 'haystack'. */
+static bool
+is_magic_ok(const char *needle, const char *haystack)
+{
+    /* 'needle' can't be multiple words. */
+    if (strchr(needle, '|')) {
+        return false;
+    }
+
+    size_t n = strlen(needle);
+    for (;;) {
+        if (!strncmp(needle, haystack, n) && strchr("|", haystack[n])) {
+            return true;
+        }
+        haystack = strchr(haystack, '|');
+        if (!haystack) {
+            return false;
+        }
+        haystack++;
+    }
 }
 
 void
@@ -214,20 +257,34 @@ ovsdb_log_get_name(const struct ovsdb_log *log)
     return log->rel_name;
 }
 
-static bool
-parse_header(const char *magic, char *header, unsigned long int *length,
-             uint8_t sha1[SHA1_DIGEST_SIZE])
+const char *
+ovsdb_log_get_magic(const struct ovsdb_log *log)
 {
-    char *p;
+    return log->magic;
+}
 
-    /* 'header' must consist of a magic string... */
-    size_t magic_len = strlen(magic);
-    if (strncmp(header, magic, magic_len) || header[magic_len] != ' ') {
+static bool
+parse_header(char *header, const char **magicp,
+             unsigned long int *length, uint8_t sha1[SHA1_DIGEST_SIZE])
+{
+    /* 'header' must consist of "OVSDB "... */
+    const char lead[] = "OVSDB ";
+    if (strncmp(lead, header, strlen(lead))) {
         return false;
     }
 
+    /* ...followed by a magic string... */
+    char *magic = header + strlen(lead);
+    size_t magic_len = strcspn(magic, " ");
+    if (magic[magic_len] != ' ') {
+        return false;
+    }
+    magic[magic_len] = '\0';
+    *magicp = magic;
+
     /* ...followed by a length in bytes... */
-    *length = strtoul(header + magic_len + 1, &p, 10);
+    char *p;
+    *length = strtoul(magic + magic_len + 1, &p, 10);
     if (!*length || *length == ULONG_MAX || *p != ' ') {
         return false;
     }
@@ -285,7 +342,6 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
     uint8_t expected_sha1[SHA1_DIGEST_SIZE];
     uint8_t actual_sha1[SHA1_DIGEST_SIZE];
     struct ovsdb_error *error;
-    off_t data_offset;
     unsigned long data_length;
     struct json *json;
     char header[128];
@@ -306,8 +362,11 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         }
         goto error;
     }
+    off_t data_offset = file->offset + strlen(header);
 
-    if (!parse_header(file->magic, header, &data_length, expected_sha1)) {
+    const char *magic;
+    if (!parse_header(header, &magic, &data_length, expected_sha1)
+        || strcmp(magic, file->magic)) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: parse error at offset "
                                    "%lld in header line \"%.*s\"",
                                    file->rel_name,
@@ -316,7 +375,6 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         goto error;
     }
 
-    data_offset = file->offset + strlen(header);
     error = parse_body(file, data_offset, data_length, actual_sha1, &json);
     if (error) {
         goto error;
@@ -339,6 +397,13 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
                                    file->rel_name, data_length,
                                    (long long int) data_offset,
                                    json->u.string);
+        goto error;
+    }
+    if (json->type != JSON_OBJECT) {
+        error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
+                                   "offset %lld are not a JSON object",
+                                   file->rel_name, data_length,
+                                   (long long int) data_offset);
         goto error;
     }
 
@@ -417,7 +482,7 @@ ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
 
     /* Compose header. */
     sha1_bytes(json_string, length, sha1);
-    snprintf(header, sizeof header, "%s %"PRIuSIZE" "SHA1_FMT"\n",
+    snprintf(header, sizeof header, "OVSDB %s %"PRIuSIZE" "SHA1_FMT"\n",
              file->magic, length, SHA1_ARGS(sha1));
 
     /* Write. */
