@@ -260,9 +260,12 @@ one or more times to the command line.  With one \fB\-m\fR,
 modified by each transaction.  With two \fB\-m\fRs, \fBshow\-log\fR
 also prints the values of the columns modified by each change to a
 record.
+.IP
+This command works with standalone and active-backup databases and
+with clustered databases, but the output formats are different.
 .
 .IP "\fBdb\-name \fR[\fIdb\fR]"
-.IQ "\fBschema\-name\fR[\fIschema\fR]"
+.IQ "\fBschema\-name \fR[\fIschema\fR]"
 Prints the name of the schema embedded within the database \fIdb\fR or
 in the JSON schema \fIschema\fR on stdout.
 .
