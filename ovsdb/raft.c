@@ -1054,6 +1054,7 @@ static void
 raft_servers_clone(struct hmap *dst, const struct hmap *src)
 {
     struct raft_server *s;
+    hmap_init(dst);
     HMAP_FOR_EACH (s, hmap_node, src) {
         struct raft_server *s2 = raft_server_clone(s);
         hmap_insert(dst, &s2->hmap_node, uuid_hash(&s2->sid));
@@ -2711,14 +2712,6 @@ static void
 raft_send_server_reply(struct raft *raft, bool add,
                        const struct uuid *sid, enum raft_server_status status)
 {
-    if (status == RAFT_SERVER_OK) {
-        VLOG_INFO("server %04x %s successfully",
-                  uuid_prefix(sid, 4), add ? "added" : "removed");
-    } else {
-        VLOG_INFO("server %04x: %s failed (%s)",
-                  uuid_prefix(sid, 4), add ? "add" : "remove",
-                  raft_server_status_to_string(status));
-    }
     const struct raft_server *leader = raft_find_server(raft,
                                                         &raft->leader_sid);
     union raft_rpc rpy = {
@@ -3977,6 +3970,7 @@ raft_handle_install_snapshot_request__(
     }
 
     raft->prev_term = rq->last_term;
+    raft_servers_destroy(&raft->prev_servers);
     raft_servers_clone(&raft->prev_servers, &rq->last_servers);
 
     /* install snapshot */

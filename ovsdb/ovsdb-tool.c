@@ -667,6 +667,55 @@ print_member(const struct shash *object, const char *name)
 }
 
 static void
+print_uuid(const struct shash *object, const char *name)
+{
+    const struct json *value = shash_find_data(object, name);
+    if (!value) {
+        return;
+    }
+
+    printf("\t%s: ", name);
+    if (value->type == JSON_STRING) {
+        printf("%.4s\n", value->u.string);
+    } else {
+        printf("***invalid*\n");
+    }
+}
+
+static void
+print_servers(const struct shash *object, const char *name)
+{
+    const struct json *value = shash_find_data(object, name);
+    if (!value) {
+        return;
+    }
+
+    printf("\t%s: ", name);
+    if (value->type != JSON_OBJECT) {
+        printf("***invalid %s***\n", name);
+    }
+
+    const struct shash_node *node;
+    int i = 0;
+    SHASH_FOR_EACH (node, json_object(value)) {
+        if (i++ > 0) {
+            printf(", ");
+        }
+        printf("%.4s(", node->name);
+
+        const struct json *address = node->data;
+        if (address->type != JSON_STRING) {
+            printf("***invalid***");
+        } else {
+            fputs(address->u.string, stdout);
+        }
+
+        printf(")");
+    }
+    printf("\n");
+}
+
+static void
 print_data(const struct shash *object)
 {
     const struct json *data = shash_find_data(object, "data");
@@ -715,9 +764,9 @@ do_show_log_cluster(struct ovsdb_log *log)
         printf("record %u:\n", i);
         if (i == 0) {
             print_member(object, "name");
-            print_member(object, "server_id");
-            print_member(object, "cluster_id");
-            print_member(object, "prev_servers");
+            print_uuid(object, "server_id");
+            print_uuid(object, "cluster_id");
+            print_servers(object, "prev_servers");
             print_member(object, "prev_term");
             print_member(object, "prev_index");
             print_data(object);
@@ -725,8 +774,8 @@ do_show_log_cluster(struct ovsdb_log *log)
             print_member(object, "term");
             print_member(object, "index");
             print_data(object);
-            print_member(object, "servers");
-            print_member(object, "vote");
+            print_servers(object, "servers");
+            print_uuid(object, "vote");
         }
         json_destroy(json);
         putchar('\n');
