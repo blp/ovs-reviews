@@ -440,90 +440,53 @@ struct raft_server_request {
     char *address;              /* For adding server only. */
 };
 
-#define RAFT_SERVER_STATUS_LIST                                         \
-    /* The operation could not be initiated because this server is not  \
-     * the current leader.  Only the leader can add or remove           \
-     * servers. */                                                      \
-    RSS(RAFT_SERVER_NOT_LEADER, "not-leader")                           \
-                                                                        \
-    /* The operation could not be initiated because there was nothing   \
-     * to do.  For adding a new server, this means that the server is   \
-     * already part of the cluster, and for removing a server, the      \
-     * server to be removed was not part of the cluster. */             \
-    RSS(RAFT_SERVER_NO_OP, "no-op")                                     \
-                                                                        \
-    /* The operation could not be initiated because an identical        \
-     * operation was already in progress. */                            \
-    RSS(RAFT_SERVER_IN_PROGRESS, "in-progress")                         \
-                                                                        \
-    /* Adding a server failed because of a timeout.  This could mean    \
-     * that the server was entirely unreachable, or that it became      \
-     * unreachable partway through populating it with an initial copy   \
-     * of the log.  In the latter case, retrying the operation should   \
-     * resume where it left off. */                                     \
-    RSS(RAFT_SERVER_TIMEOUT, "timeout")                                 \
-                                                                        \
-    /* The operation was initiated but it later failed because this     \
-     * server lost cluster leadership.  The operation may be retried    \
-     * against the new cluster leader.  For adding a server, if the log \
-     * was already partially copied to the new server, retrying the     \
-     * operation should resume where it left off. */                    \
-    RSS(RAFT_SERVER_LOST_LEADERSHIP, "lost-leadership")                 \
-                                                                        \
-    /* Adding a server was canceled by submission of an operation to    \
-     * remove the same server, or removing a server was canceled by     \
-     * submission of an operation to add the same server. */            \
-    RSS(RAFT_SERVER_CANCELED, "canceled")                               \
-                                                                        \
-    /* Adding or removing a server could not be initiated because the   \
-     * operation to remove or add the server, respectively, has been    \
-     * logged but not committed.  The new operation may be retried once \
-     * the former operation commits. */                                 \
-    RSS(RAFT_SERVER_COMMITTING, "committing")                           \
-                                                                        \
-    /* Removing a server could not be initiated because, taken together \
-     * with any other scheduled server removals, the cluster would be   \
-     * empty.  (This calculation ignores scheduled or uncommitted add   \
-     * server operations because of the possibility that they could     \
-     * fail.)  */                                                       \
-    RSS(RAFT_SERVER_EMPTY, "empty")                                     \
-                                                                        \
-    /* Success. */                                                      \
-    RSS(RAFT_SERVER_OK, "success")
+/* The operation could not be initiated because this server is not the current
+ * leader.  Only the leader can add or remove servers. */
+#define RAFT_SERVER_NOT_LEADER "not leader"
 
-enum raft_server_status {
-#define RSS(ENUM, NAME) ENUM,
-    RAFT_SERVER_STATUS_LIST
-#undef RSS
-};
+/* An operation to add a server succeeded without any change because the server
+ * was already part of the cluster. */
+#define RAFT_SERVER_ALREADY_PRESENT "already in cluster"
 
-static const char *
-raft_server_status_to_string(enum raft_server_status status)
-{
-    switch (status) {
-#define RSS(ENUM, NAME) case ENUM: return NAME;
-        RAFT_SERVER_STATUS_LIST
-#undef RSS
-            }
-    return "<unknown>";
-}
+/* An operation to remove a server succeeded without any change because the
+ * server was not part of the cluster. */
+#define RAFT_SERVER_ALREADY_GONE "already not in cluster"
 
-static bool
-raft_server_status_from_string(const char *s, enum raft_server_status *status)
-{
-#define RSS(ENUM, NAME)                         \
-    if (!strcmp(s, NAME)) {                     \
-        *status = ENUM;                         \
-        return true;                            \
-    }
-    RAFT_SERVER_STATUS_LIST
-#undef RSS
-    return false;
-}
+/* The operation could not be initiated because an identical
+ * operation was already in progress. */
+#define RAFT_SERVER_IN_PROGRESS "in progress"
+
+/* Adding a server failed because of a timeout.  This could mean that the
+ * server was entirely unreachable, or that it became unreachable partway
+ * through populating it with an initial copy of the log.  In the latter case,
+ * retrying the operation should resume where it left off. */
+#define RAFT_SERVER_TIMEOUT "timeout"
+
+/* The operation was initiated but it later failed because this server lost
+ * cluster leadership.  The operation may be retried against the new cluster
+ * leader.  For adding a server, if the log was already partially copied to the
+ * new server, retrying the operation should resume where it left off. */
+#define RAFT_SERVER_LOST_LEADERSHIP "lost leadership"
+
+/* Adding a server was canceled by submission of an operation to remove the
+ * same server, or removing a server was canceled by submission of an operation
+ * to add the same server. */
+#define RAFT_SERVER_CANCELED "canceled"
+
+/* Adding or removing a server could not be initiated because the operation to
+ * remove or add the server, respectively, has been logged but not committed.
+ * The new operation may be retried once the former operation commits. */
+#define RAFT_SERVER_COMMITTING "committing"
+
+/* Removing a server could not be initiated because, taken together with any
+ * other scheduled server removals, the cluster would be empty.  (This
+ * calculation ignores scheduled or uncommitted add server operations because
+ * of the possibility that they could fail.)  */
+#define RAFT_SERVER_EMPTY "empty"
 
 struct raft_server_reply {
     struct raft_rpc_common common;
-    enum raft_server_status status;
+    bool success;
     char *leader_address;
     struct uuid leader_sid;
 };
@@ -2461,8 +2424,7 @@ static void
 raft_server_reply_to_jsonrpc(const struct raft_server_reply *rpy,
                              struct json *args)
 {
-    json_object_put_string(args, "status",
-                           raft_server_status_to_string(rpy->status));
+    json_object_put(args, "success", json_boolean_create(rpy->success));
     if (rpy->leader_address) {
         json_object_put_string(args, "leader_address", rpy->leader_address);
         json_object_put_format(args, "leader", UUID_FMT,
@@ -2474,11 +2436,7 @@ static void
 raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
                                struct raft_server_reply *rpy)
 {
-    const char *status = parse_required_string(p, "status");
-    if (status && !raft_server_status_from_string(status, &rpy->status)) {
-        ovsdb_parser_raise_error(p, "unknown server status \"%s\"",
-                                 status);
-    }
+    rpy->success = parse_boolean(p, "success");
 
     const char *leader_address = parse_optional_string(p, "leader_address");
     rpy->leader_address = leader_address ? xstrdup(leader_address) : NULL;
@@ -2710,20 +2668,20 @@ raft_rpc_from_jsonrpc(struct raft *raft,
 }
 
 static void
-raft_send_server_reply(struct raft *raft, bool add,
-                       const struct uuid *sid, enum raft_server_status status)
+raft_send_server_reply__(struct raft *raft, enum raft_rpc_type type,
+                         const struct uuid *sid,
+                         bool success, const char *comment)
 {
     const struct raft_server *leader = raft_find_server(raft,
                                                         &raft->leader_sid);
     union raft_rpc rpy = {
         .server_reply = {
             .common = {
-                .type = (add
-                         ? RAFT_RPC_ADD_SERVER_REPLY
-                         : RAFT_RPC_REMOVE_SERVER_REPLY),
+                .type = type,
                 .sid = *sid,
+                .comment = CONST_CAST(char *, comment),
             },
-            .status = status,
+            .success = success,
 
             .leader_address = leader ? leader->address : NULL,
             .leader_sid = leader ? leader->sid : UUID_ZERO,
@@ -2733,17 +2691,14 @@ raft_send_server_reply(struct raft *raft, bool add,
 }
 
 static void
-raft_send_add_server_reply(struct raft *raft, const struct uuid *sid,
-                           enum raft_server_status status)
+raft_send_server_reply(struct raft *raft, const struct raft_server_request *rq,
+                       bool success, const char *comment)
 {
-    return raft_send_server_reply(raft, true, sid, status);
-}
-
-static void
-raft_send_remove_server_reply(struct raft *raft, const struct uuid *sid,
-                              enum raft_server_status status)
-{
-    return raft_send_server_reply(raft, false, sid, status);
+    enum raft_rpc_type type = (rq->common.type == RAFT_RPC_ADD_SERVER_REQUEST
+                               ? RAFT_RPC_ADD_SERVER_REPLY
+                               : RAFT_RPC_REMOVE_SERVER_REPLY);
+    return raft_send_server_reply__(raft, type, &rq->common.sid,
+                                    success, comment);
 }
 
 static void
@@ -2766,11 +2721,14 @@ raft_become_follower(struct raft *raft)
      * the server configuration later, if necessary. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->add_servers) {
-        raft_send_add_server_reply(raft, &s->sid, RAFT_SERVER_LOST_LEADERSHIP);
+        raft_send_server_reply__(raft, RAFT_RPC_ADD_SERVER_REPLY,
+                                 &s->sid, false,
+                                 RAFT_SERVER_LOST_LEADERSHIP);
     }
     if (raft->remove_server) {
-        raft_send_remove_server_reply(raft, &raft->remove_server->reply_sid,
-                                      RAFT_SERVER_LOST_LEADERSHIP);
+        raft_send_server_reply__(raft, RAFT_RPC_REMOVE_SERVER_REPLY,
+                                 &raft->remove_server->reply_sid,
+                                 false, RAFT_SERVER_LOST_LEADERSHIP);
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
     }
@@ -3659,13 +3617,14 @@ raft_run_reconfigure(struct raft *raft)
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s->phase == RAFT_PHASE_COMMITTING) {
-            raft_send_add_server_reply(raft, &s->reply_sid, RAFT_SERVER_OK);
+            raft_send_server_reply__(raft, RAFT_RPC_ADD_SERVER_REPLY,
+                                     &s->reply_sid, true, NULL);
             s->phase = RAFT_PHASE_STABLE;
         }
     }
     if (raft->remove_server) {
-        raft_send_remove_server_reply(raft, &raft->remove_server->reply_sid,
-                                      RAFT_SERVER_OK);
+        raft_send_server_reply__(raft, RAFT_RPC_REMOVE_SERVER_REPLY,
+                                 &raft->remove_server->reply_sid, true, NULL);
         raft_server_destroy(raft->remove_server);
         raft->remove_server = NULL;
     }
@@ -3702,13 +3661,14 @@ raft_run_reconfigure(struct raft *raft)
     }
 }
 
-static int
-raft_handle_add_server_request__(struct raft *raft,
-                                 const struct raft_server_request *rq)
+static void
+raft_handle_add_server_request(struct raft *raft,
+                               const struct raft_server_request *rq)
 {
     /* Figure 4.1: "1. Reply NOT_LEADER if not leader (section 6.2)." */
     if (raft->role != RAFT_LEADER) {
-        return RAFT_SERVER_NOT_LEADER;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_NOT_LEADER);
+        return;
     }
 
     /* Check for an existing server. */
@@ -3717,29 +3677,31 @@ raft_handle_add_server_request__(struct raft *raft,
         /* If the server is scheduled to be removed, cancel it. */
         if (s->phase == RAFT_PHASE_REMOVE) {
             s->phase = RAFT_PHASE_STABLE;
-            raft_send_remove_server_reply(raft, &s->reply_sid,
-                                          RAFT_SERVER_CANCELED);
-            return RAFT_SERVER_OK;
+            raft_send_server_reply(raft, rq, false, RAFT_SERVER_CANCELED);
+            return;
         }
 
         /* If the server is being added, then it's in progress. */
         if (s->phase != RAFT_PHASE_STABLE) {
-            return RAFT_SERVER_IN_PROGRESS;
+            raft_send_server_reply(raft, rq, false, RAFT_SERVER_IN_PROGRESS);
         }
 
-        /* Cannot add a server that is already part of the configuration. */
-        return RAFT_SERVER_NO_OP;
+        /* Nothing to do--server is already part of the configuration. */
+        raft_send_server_reply(raft, rq, true, RAFT_SERVER_ALREADY_PRESENT);
+        return;
     }
 
     /* Check for a server being removed. */
     if (raft->remove_server
         && uuid_equals(&rq->sid, &raft->remove_server->sid)) {
-        return RAFT_SERVER_COMMITTING;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_COMMITTING);
+        return;
     }
 
     /* Check for a server already being added. */
     if (raft_find_new_server(raft, &rq->sid)) {
-        return RAFT_SERVER_IN_PROGRESS;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_IN_PROGRESS);
+        return;
     }
 
     /* Add server to 'add_servers'. */
@@ -3760,26 +3722,14 @@ raft_handle_add_server_request__(struct raft *raft,
      * See the last few paragraphs of section 4.2.1 for further insight. */
     raft_send_append_request(raft, s, 0);
 
-    return -1;
-}
-
-static void
-raft_handle_add_server_request(struct raft *raft,
-                               const struct raft_server_request *rq)
-{
-    int status = raft_handle_add_server_request__(raft, rq);
-    if (status >= 0) {
-        raft_send_add_server_reply(raft, &rq->common.sid, status);
-    } else {
-        /* Operation in progress, reply will be sent later. */
-    }
+    /* Reply will be sent later following waiter completion. */
 }
 
 static void
 raft_handle_add_server_reply(struct raft *raft,
                              const struct raft_server_reply *rpc)
 {
-    if (rpc->status == RAFT_SERVER_OK || rpc->status == RAFT_SERVER_NO_OP) {
+    if (rpc->success) {
         if (raft->me) {
             raft->joining = false;
 
@@ -3795,39 +3745,44 @@ raft_handle_add_server_reply(struct raft *raft,
     }
 }
 
-static int
-raft_handle_remove_server_request__(struct raft *raft,
-                                    const struct raft_server_request *rq)
+static void
+raft_handle_remove_server_request(struct raft *raft,
+                                  const struct raft_server_request *rq)
 {
     /* Figure 4.1: "1. Reply NOT_LEADER if not leader (section 6.2)." */
     if (raft->role != RAFT_LEADER) {
-        return RAFT_SERVER_NOT_LEADER;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_NOT_LEADER);
+        return;
     }
 
     /* If the server to remove is currently waiting to be added, cancel it. */
     struct raft_server *target = raft_find_new_server(raft, &rq->sid);
     if (target) {
-        raft_send_remove_server_reply(raft, &target->reply_sid,
-                                      RAFT_SERVER_CANCELED);
+        raft_send_server_reply__(raft, RAFT_RPC_ADD_SERVER_REPLY,
+                                 &target->reply_sid,
+                                 false, RAFT_SERVER_CANCELED);
         hmap_remove(&raft->add_servers, &target->hmap_node);
         raft_server_destroy(target);
-        return RAFT_SERVER_OK;
+        return;
     }
 
     /* If the server isn't configured, report that. */
     target = raft_find_server(raft, &rq->sid);
     if (!target) {
-        return RAFT_SERVER_NO_OP;
+        raft_send_server_reply(raft, rq, true, RAFT_SERVER_ALREADY_GONE);
+        return;
     }
 
     /* Check whether we're waiting for the addition of the server to commit. */
     if (target->phase == RAFT_PHASE_COMMITTING) {
-        return RAFT_SERVER_COMMITTING;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_COMMITTING);
+        return;
     }
 
     /* Check whether the server is already scheduled for removal. */
     if (target->phase == RAFT_PHASE_REMOVE) {
-        return RAFT_SERVER_IN_PROGRESS;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_IN_PROGRESS);
+        return;
     }
 
     /* Make sure that if we remove this server then that at least one other
@@ -3841,7 +3796,8 @@ raft_handle_remove_server_request__(struct raft *raft,
         }
     }
     if (!n) {
-        return RAFT_SERVER_EMPTY;
+        raft_send_server_reply(raft, rq, false, RAFT_SERVER_EMPTY);
+        return;
     }
 
     /* Mark the server for removal. */
@@ -3849,26 +3805,14 @@ raft_handle_remove_server_request__(struct raft *raft,
     target->reply_sid = rq->common.sid;
 
     raft_run_reconfigure(raft);
-    return -1;
-}
-
-static void
-raft_handle_remove_server_request(struct raft *raft,
-                                  const struct raft_server_request *rq)
-{
-    int status = raft_handle_remove_server_request__(raft, rq);
-    if (status >= 0) {
-        raft_send_remove_server_reply(raft, &rq->common.sid, status);
-    } else {
-        /* Operation in progress, reply will be sent later. */
-    }
+    /* Operation in progress, reply will be sent later. */
 }
 
 static void
 raft_handle_remove_server_reply(struct raft *raft OVS_UNUSED,
                                 const struct raft_server_reply *rpc OVS_UNUSED)
 {
-    if (rpc->status == RAFT_SERVER_OK || rpc->status == RAFT_SERVER_NO_OP) {
+    if (rpc->success) {
         VLOG_INFO("left cluster");
         raft->leaving = false;
         raft->left = true;
@@ -4242,7 +4186,7 @@ raft_format_add_server_request(const struct raft_server_request *rq,
 static void
 raft_format_server_reply(const struct raft_server_reply *rpy, struct ds *s)
 {
-    ds_put_format(s, " status=%s", raft_server_status_to_string(rpy->status));
+    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
     if (rpy->leader_address) {
         ds_put_format(s, " leader=%04x(%s)",
                       uuid_prefix(&rpy->leader_sid, 4), rpy->leader_address);
