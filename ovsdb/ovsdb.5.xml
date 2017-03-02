@@ -176,73 +176,59 @@
   </dl>
 
   <p>
-    The first record in a clustered database contains the following members:
+    The first record in a clustered database contains the following members,
+    all of which are required:
   </p>
 
   <dl>
     <dt>"server_id": &lt;raw-uuid&gt;</dt>
     <dd>
-      Always present.  This is the server's own UUID, which must be unique
-      within the cluster.
+      The server's own UUID, which must be unique within the cluster.
     </dd>
 
     <dt>"address": &lt;address&gt;</dt>
     <dd>
-      Always present.  This is the address on which the server listens for
-      connections from other servers in the cluster.
+      The address on which the server listens for connections from other
+      servers in the cluster.
     </dd>
 
     <dt>"name": &lt;id&gt;</dt>
     <dd>
-      Always present.  This is the database schema name.  It is only used when
-      a server is in the process of a joining a cluster: a server will only
-      join a cluster if the name matches.  (If the database schema name were
-      unique, then we would not also need a cluster ID.)
-    </dd>
-
-    <dt>"prev_servers": &lt;servers&gt;</dt>
-    <dd>
-      Always present.  This is the set of servers in the cluster as of the
-      beginning of the log.  It might not include this server, if it was not
-      the initial server in the cluster, and it will not if the database file
-      was freshly created by <code>ovsdb-tool join-cluster</code>.  In the
-      latter case, the list of servers might be incomplete, since the user is
-      not required to list all of the cluster members, and the UUIDs for
-      servers other than this server will be wrong.  In a database file for a
-      server that has completed joined the cluster, the set of servers is
-      complete and correct (as of the beginning of the log).
+      The database schema name.  It is only important when a server is in the
+      process of a joining a cluster: a server will only join a cluster if the
+      name matches.  (If the database schema name were unique, then we would
+      not also need a cluster ID.)
     </dd>
 
     <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
     <dd>
-      The cluster's UUID.  This member is always present if the server has
-      completed joining the cluster.  In a database file freshly created by
-      <code>ovsdb-tool join-cluster</code>, this member is present only if the
-      user specified the <code>--cid</code> option.  The all-zeros UUID is not
-      a valid cluster ID.
+      The cluster's UUID.  The all-zeros UUID is not a valid cluster ID.
     </dd>
 
     <dt>"prev_term": &lt;integer&gt;</dt>
     <dt>"prev_index": &lt;integer&gt;</dt>
     <dd>
-      The Raft term and index preceding the beginning of the log.  These
-      members are present if and only if the server has completed joining the
-      cluster.
+      The Raft term and index just before the beginning of the log.
     </dd>
 
-    <dt>"data": &lt;json-value&gt;</dt>
+    <dt>"prev_servers": &lt;servers&gt;</dt>
     <dd>
-      A snapshot of the data in the database during the term "prev_term" and
-      index "prev_index".  This member is present if and only if the server has
-      completed joining the cluster.
+      The set of one or more servers in the cluster at index "prev_index" and
+      term "prev_term".  It might not include this server, if it was not the
+      initial server in the cluster.
+    </dd>
+
+    <dt>"prev_data": &lt;json-value&gt;</dt>
+    <dd>
+      A snapshot of the data in the database at index "prev_index" and term
+      "prev_term".
     </dd>
   </dl>
 
   <p>
-    The second and subsequent records in a clustered database represent changes
-    to the database, to the cluster state, or both.  They are present if and
-    only if the server has joined the cluster.  They have the following
-    members:
+    The second and subsequent records, if present, in a clustered database
+    represent changes to the database, to the cluster state, or both.  They
+    have the following members:
   </p>
 
   <dl>
@@ -276,5 +262,41 @@
       <code>data</code>, and <code>servers</code> must be omitted.
     </dd>
   </dl>
+
+  <h3>Joining a Cluster</h3>
+
+  <p>
+    In addition to general format for a clustered database, there is also a
+    special case for a database file created by <code>ovsdb-tool
+    join-cluster</code>.  Such a file contains exactly one record, which
+    conveys the information passed to the <code>join-cluster</code> command.
+    It has the following members:
+  </p>
+
+  <dl>
+    <dt>"server_id": &lt;raw-uuid&gt;</dt>
+    <dt>"address": &lt;address&gt;</dt>
+    <dt>"name": &lt;id&gt;</dt>
+    <dd>
+      These have the same semantics described above in the general description
+      of the format.
+    </dd>
+
+    <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      This is provided only if the user gave the <code>--cid</code> option to
+      <code>join-cluster</code>.  It has the same semantics described above.
+    </dd>
+
+    <dt>"remotes"; [&lt;address&gt;*]</dt>
+    <dd>
+      One or more remote servers to contact for joining the cluster.
+    </dd>
+  </dl>
+
+  <p>
+    When the server successfully joins the cluster, the database file is
+    replaced by one in the general format described earlier.
+  </p>
 
 </manpage>

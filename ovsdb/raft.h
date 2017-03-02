@@ -62,10 +62,10 @@ struct ovsdb_error *raft_join_cluster(const char *file_name,
     OVS_WARN_UNUSED_RESULT;
 
 struct raft_metadata {
-    struct uuid sid;
-    char *name;
-    char *local;
-    struct uuid cid;            /* All-zeros if not yet known. */
+    struct uuid sid;            /* Server ID. */
+    struct uuid cid;            /* Cluster ID.  All-zeros if not yet known. */
+    char *name;                 /* Schema name. */
+    char *local;                /* Local address. */
 };
 struct ovsdb_error *raft_read_metadata(const char *file_name,
                                        struct raft_metadata *);

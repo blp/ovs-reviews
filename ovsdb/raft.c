@@ -169,6 +169,7 @@ struct raft {
 
     struct uuid cid;            /* Cluster ID (immutable for the cluster). */
     struct uuid sid;            /* Server ID (immutable for the server). */
+    char *local_address;        /* Local address (immutable for the server). */
     char *name;                 /* Cluster name (immutable for the cluster). */
 
     struct hmap servers;        /* Contains "struct raft_server"s. */
@@ -233,9 +234,9 @@ struct raft {
     long long int ping_timeout;
 
     /* Used for joining a cluster. */
-    bool joining;               /* Attempting to join the cluster? */
+    bool joining;                 /* Attempting to join the cluster? */
+    struct sset remote_addresses;
     long long int join_timeout;
-    char *local_address;
 
     /* Used for leaving a cluster. */
     bool leaving;
@@ -375,6 +376,7 @@ raft_rpc_type_from_string(const char *s, enum raft_rpc_type *status)
 struct raft_rpc_common {
     enum raft_rpc_type type;    /* One of RAFT_RPC_*. */
     struct uuid sid;            /* SID of peer server. */
+    char *comment;
 };
 
 struct raft_append_request {
@@ -410,7 +412,7 @@ struct raft_append_reply {
 
 static void raft_send_append_reply(struct raft *,
                                    const struct raft_append_request *,
-                                   bool success);
+                                   bool success, const char *comment);
 static void raft_update_match_index(struct raft *, struct raft_server *,
                                     uint64_t min_index);
 
@@ -622,7 +624,7 @@ raft_find_server(const struct raft *raft, const struct uuid *sid)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_parse_address(const char *address,
+raft_address_parse(const char *address,
                    const char **classp, struct sockaddr_storage *ssp)
 {
     const char *class;
@@ -647,6 +649,16 @@ raft_parse_address(const char *address,
         *ssp = ss;
     }
     return NULL;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_address_validate_json(const struct json *address)
+{
+    if (address->type != JSON_STRING) {
+        return ovsdb_syntax_error(address, NULL,
+                                  "server address is not string");
+    }
+    return raft_address_parse(json_string(address), NULL, NULL);
 }
 
 static char *
@@ -686,21 +698,24 @@ raft_alloc(const char *file_name)
 {
     struct raft *raft = xzalloc(sizeof *raft);
     raft->file_name = xstrdup(file_name);
-    raft->role = RAFT_FOLLOWER;
-    raft->log_start = raft->log_end = 1;
-    raft_reset_timer(raft);
     hmap_init(&raft->servers);
+    raft->log_start = raft->log_end = 1;
     hmap_init(&raft->prev_servers);
-    hmap_init(&raft->add_servers);
-    hmap_init(&raft->commands);
-    raft->listen_backoff = LLONG_MIN;
-    ovs_list_init(&raft->conns);
+    raft->role = RAFT_FOLLOWER;
+    sset_init(&raft->remote_addresses);
+    raft->join_timeout = LLONG_MAX;
     ovs_mutex_init(&raft->fsync_mutex);
     raft->fsync_request = seq_create();
     raft->fsync_complete = seq_create();
     ovs_list_init(&raft->waiters);
+    raft->listen_backoff = LLONG_MIN;
+    ovs_list_init(&raft->conns);
+    hmap_init(&raft->add_servers);
+    hmap_init(&raft->commands);
+
+    raft_reset_timer(raft);
     raft_schedule_snapshot(raft, false);
-    raft->join_timeout = LLONG_MAX;
+
     return raft;
 }
 
@@ -739,7 +754,7 @@ raft_create_cluster(const char *file_name, const char *name,
                     const char *local_address, const struct json *data)
 {
     /* Parse and verify validity of the local address. */
-    struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
+    struct ovsdb_error *error = raft_address_parse(local_address, NULL, NULL);
     if (error) {
         return error;
     }
@@ -762,6 +777,7 @@ raft_create_cluster(const char *file_name, const char *name,
 
     struct json *snapshot = json_object_create();
     json_object_put_string(snapshot, "server_id", sid_s);
+    json_object_put_string(snapshot, "address", local_address);
     json_object_put_string(snapshot, "name", name);
 
     struct json *prev_servers = json_object_create();
@@ -771,7 +787,7 @@ raft_create_cluster(const char *file_name, const char *name,
     json_object_put_format(snapshot, "cluster_id", UUID_FMT, UUID_ARGS(&cid));
     json_object_put(snapshot, "prev_term", json_integer_create(0));
     json_object_put(snapshot, "prev_index", json_integer_create(1));
-    json_object_put(snapshot, "data", json_clone(data));
+    json_object_put(snapshot, "prev_data", json_clone(data));
 
     error = ovsdb_log_write(storage, snapshot);
     json_destroy(snapshot);
@@ -820,12 +836,12 @@ raft_join_cluster(const char *file_name,
     ovs_assert(n_remotes > 0);
 
     /* Parse and verify validity of the addresses. */
-    struct ovsdb_error *error = raft_parse_address(local_address, NULL, NULL);
+    struct ovsdb_error *error = raft_address_parse(local_address, NULL, NULL);
     if (error) {
         return error;
     }
     for (size_t i = 0; i < n_remotes; i++) {
-        error = raft_parse_address(remotes[i], NULL, NULL);
+        error = raft_address_parse(remotes[i], NULL, NULL);
         if (error) {
             return error;
         }
@@ -851,21 +867,16 @@ raft_join_cluster(const char *file_name,
     char sid_s[UUID_LEN + 1];
     sprintf(sid_s, UUID_FMT, UUID_ARGS(&sid));
 
+    struct json *remotes_json = json_array_create_empty();
+    for (size_t i = 0; i < n_remotes; i++) {
+        json_array_add(remotes_json, json_string_create(remotes[i]));
+    }
+
     struct json *snapshot = json_object_create();
     json_object_put_string(snapshot, "server_id", sid_s);
+    json_object_put_string(snapshot, "address", local_address);
     json_object_put_string(snapshot, "name", name);
-
-    struct json *prev_servers = json_object_create();
-    json_object_put_string(prev_servers, sid_s, local_address);
-    for (size_t i = 0; i < n_remotes; i++) {
-        struct uuid server_id = { { 0, 0, 0, i + 1 } };
-        char server_id_s[UUID_LEN + 1];
-        sprintf(server_id_s, UUID_FMT, UUID_ARGS(&server_id));
-
-        json_object_put_string(prev_servers, server_id_s, remotes[i]);
-    }
-    json_object_put(snapshot, "prev_servers", prev_servers);
-
+    json_object_put(snapshot, "remotes", remotes_json);
     if (cid) {
         json_object_put_format(snapshot, "cluster_id",
                                UUID_FMT, UUID_ARGS(cid));
@@ -897,16 +908,9 @@ raft_read_metadata(const char *file_name, struct raft_metadata *md)
         goto exit;
     }
 
-    raft_set_servers(raft, &raft->prev_servers, VLL_DBG);
-    raft->me = raft_find_server(raft, &raft->sid);
-    if (!raft->me) {
-        error = ovsdb_error(NULL, "server does not belong to cluster");
-        goto exit;
-    }
-
     md->sid = raft->sid;
     md->name = xstrdup(raft->name);
-    md->local = xstrdup(raft->me->address);
+    md->local = xstrdup(raft->local_address);
     md->cid = raft->cid;
 
 exit:
@@ -1080,19 +1084,13 @@ raft_servers_from_json__(const struct json *json, struct hmap *servers)
                                       node->name);
         }
 
-        /* Parse server address. */
-        const struct json *address_json = node->data;
-        if (address_json->type != JSON_STRING) {
-            return ovsdb_syntax_error(json, NULL, "%s value is not string",
-                                      node->name);
-        }
-        const char *address = json_string(address_json);
-        struct ovsdb_error *error = raft_parse_address(address, NULL, NULL);
+        const struct json *address = node->data;
+        struct ovsdb_error *error = raft_address_validate_json(address);
         if (error) {
             return error;
         }
 
-        raft_server_add(servers, &sid, address);
+        raft_server_add(servers, &sid, json_string(address));
     }
 
     return NULL;
@@ -1107,6 +1105,27 @@ raft_servers_from_json(const struct json *json, struct hmap *servers)
         raft_servers_destroy(servers);
     }
     return error;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_remotes_from_json(const struct json *json, struct sset *remotes)
+{
+    sset_init(remotes);
+
+    const struct json_array *array = json_array(json);
+    if (!array->n) {
+        return ovsdb_syntax_error(json, NULL,
+                                  "at least one remote address is required");
+    }
+    for (size_t i = 0; i < array->n; i++) {
+        const struct json *address = array->elems[i];
+        struct ovsdb_error *error = raft_address_validate_json(address);
+        if (error) {
+            return error;
+        }
+        sset_add(remotes, json_string(address));
+    }
+    return NULL;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -1406,39 +1425,50 @@ raft_read_header(struct raft *raft)
     struct ovsdb_parser p;
     ovsdb_parser_init(&p, header, "raft header");
 
-    /* Parse required server ID and name. */
+    /* Parse always-required fields. */
     raft->sid = parse_required_uuid(&p, "server_id");
-    const char *name = parse_required_string(&p, "name");
-    if (name) {
-        raft->name = xstrdup(name);
+    raft->name = nullable_xstrdup(parse_required_string(&p, "name"));
+    raft->local_address = nullable_xstrdup(
+        parse_required_string(&p, "address"));
+
+    /* Parse "remotes", if present.
+     *
+     * If this is present, then this database file is for the special case of a
+     * server that was created with "ovsdb-tool join-cluster" and has not yet
+     * joined its cluster, */
+    const struct json *remotes = ovsdb_parser_member(&p, "remotes",
+                                                     OP_ARRAY | OP_OPTIONAL);
+    if (remotes) {
+        raft->joining = true;
+        error = raft_remotes_from_json(remotes, &raft->remote_addresses);
+    } else {
+        /* Parse required set of servers. */
+        const struct json *prev_servers_json = ovsdb_parser_member(
+            &p, "prev_servers", OP_OBJECT);
+        struct hmap prev_servers;
+        error = raft_servers_from_json(prev_servers_json, &prev_servers);
+        if (!error) {
+            hmap_swap(&prev_servers, &raft->prev_servers);
+        }
+        raft_servers_destroy(&prev_servers);
+
+        /* Parse term, index, and snapshot.  If any of these is present, all of
+         * them must be. */
+        const struct json *snapshot = ovsdb_parser_member(&p, "prev_data",
+                                                          OP_ANY | OP_OPTIONAL);
+        if (snapshot) {
+            raft->prev_term = parse_uint(&p, "prev_term");
+            raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
+            raft->commit_index = raft->log_start - 1;
+            raft->last_applied = raft->log_start - 2;
+            raft->snapshot = json_clone(snapshot);
+            raft->snapshot_size = ovsdb_log_get_offset(raft->storage);
+        }
     }
 
-    /* Parse required set of servers. */
-    const struct json *prev_servers_json = ovsdb_parser_member(
-        &p, "prev_servers", OP_OBJECT);
-    struct hmap prev_servers;
-    error = raft_servers_from_json(prev_servers_json, &prev_servers);
-    if (!error) {
-        hmap_swap(&prev_servers, &raft->prev_servers);
-    }
-    raft_servers_destroy(&prev_servers);
-
-    /* Parse term, index, and snapshot.  If any of these is present, all of
-     * them must be. */
-    const struct json *snapshot = ovsdb_parser_member(&p, "data",
-                                                      OP_ANY | OP_OPTIONAL);
-    if (snapshot) {
-        raft->prev_term = parse_uint(&p, "prev_term");
-        raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
-        raft->commit_index = raft->log_start - 1;
-        raft->last_applied = raft->log_start - 2;
-        raft->snapshot = json_clone(snapshot);
-        raft->snapshot_size = ovsdb_log_get_offset(raft->storage);
-    }
-
-    /* Parse cluster ID.  If term, index, and data are present, this is
-     * mandatory, otherwise it is optional. */
-    parse_uuid__(&p, "cluster_id", snapshot == NULL, &raft->cid);
+    /* Parse cluster ID.  If we're joining a cluster, this is optional,
+     * otherwise it is mandatory. */
+    parse_uuid__(&p, "cluster_id", raft->joining, &raft->cid);
 
     error = ovsdb_parser_finish(&p);
     json_destroy(header);
@@ -1495,13 +1525,15 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js)
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
-static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
-            struct raft **raftp)
+/* Starts the local server in an existing Raft cluster, using the local copy of
+ * the cluster's log in 'file_name'. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_open(const char *file_name, struct raft **raftp)
 {
     struct raft *raft = raft_alloc(file_name);
 
-    struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC, mode,
+    struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC,
+                                               OVSDB_LOG_READ_WRITE,
                                                -1, &raft->storage);
     if (error) {
         goto error;
@@ -1516,70 +1548,28 @@ raft_open__(const char *file_name, enum ovsdb_log_open_mode mode,
         goto error;
     }
 
-    if (raft->snapshot) {
+    if (!raft->joining) {
         error = raft_read_log(raft);
         if (error) {
             goto error;
         }
-    } else {
-        /* Connect to all of the servers in parallel.  Send each of them an
-         * AddServer RPC.  For each response:
+
+        /* Find our own server.
          *
-         *     - Adopt the cid in the response, or report an error if we have
-         *       one already and it's different.
-         *
-         *     - addserver reply NOT_LEADER: open connection to leader.
-         *
-         *     - installsnapshot/appendentries: focus on this connection unless
-         *       it dies */
-        raft->joining = true;
-        raft->join_timeout = time_msec() + 1000;
-        const struct raft_server *s;
-        HMAP_FOR_EACH (s, hmap_node, &raft->prev_servers) {
-            if (!uuid_equals(&s->sid, &raft->sid)) {
-                raft_add_conn(raft, jsonrpc_session_open(s->address, true));
-            }
+         * XXX It seems that this could fail if the server is restarted during
+         * the process of removing it but before removal is committed, what to
+         * do about that? */
+        raft->me = raft_find_server__(&raft->servers, &raft->sid);
+        if (!raft->me) {
+            error = ovsdb_error(NULL, "server does not belong to cluster");
+            goto error;
         }
-    }
-
-    *raftp = raft;
-    return NULL;
-
-error:
-    raft_close(raft);
-    *raftp = NULL;
-    return error;
-}
-
-/* Starts the local server in an existing Raft cluster, using the local copy of
- * the cluster's log in 'file_name'. */
-struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_open(const char *file_name, struct raft **raftp)
-{
-    struct raft *raft;
-    struct ovsdb_error *error = raft_open__(file_name, OVSDB_LOG_READ_WRITE,
-                                            &raft);
-    if (error) {
-        goto error;
-    }
-
-    /* Find our own server.
-     *
-     * XXX It seems that this could fail if the server is restarted during the
-     * process of removing it but before removal is committed, what to do about
-     * that? */
-    raft->me = raft_find_server__(raft->joining
-                                  ? &raft->prev_servers
-                                  : &raft->servers,
-                                  &raft->sid);
-    if (!raft->me) {
-        error = ovsdb_error(NULL, "server does not belong to cluster");
-        goto error;
-    }
-    raft->local_address = xstrdup(raft->me->address);
-
-    if (error) {
-        goto error;
+    } else {
+        raft->join_timeout = time_msec() + 1000;
+        const char *remote;
+        SSET_FOR_EACH (remote, &raft->remote_addresses) {
+            raft_add_conn(raft, jsonrpc_session_open(remote, true));
+        }
     }
 
     *raftp = raft;
@@ -1736,8 +1726,11 @@ raft_close(struct raft *raft)
     raft_servers_destroy(&raft->add_servers);
     raft_server_destroy(raft->remove_server);
 
+    sset_destroy(&raft->remote_addresses);
+    free(raft->local_address);
     free(raft->name);
     free(raft->file_name);
+
     free(raft);
 }
 
@@ -1782,6 +1775,7 @@ raft_send_add_server_request(struct raft *raft, struct jsonrpc_session *js)
             .common = {
                 .type = RAFT_RPC_ADD_SERVER_REQUEST,
                 .sid = UUID_ZERO,
+                .comment = NULL,
             },
             .sid = raft->sid,
             .address = raft->local_address,
@@ -1868,7 +1862,7 @@ raft_waiter_complete(struct raft *raft, struct raft_waiter *w)
         break;
 
     case RAFT_W_APPEND:
-        raft_send_append_reply(raft, w->append.rq, true);
+        raft_send_append_reply(raft, w->append.rq, true, "log updated");
         break;
 
     case RAFT_W_VOTE:
@@ -2302,6 +2296,8 @@ raft_rpc_destroy(union raft_rpc *rpc)
         return;
     }
 
+    free(rpc->common.comment);
+
     switch (rpc->common.type) {
     case RAFT_RPC_HELLO_REQUEST:
         break;
@@ -2560,6 +2556,9 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
                                UUID_ARGS(&rpc->common.sid));
     }
     json_object_put_format(args, "from", UUID_FMT, UUID_ARGS(&raft->sid));
+    if (rpc->common.comment) {
+        json_object_put_string(args, "comment", rpc->common.comment);
+    }
 
     switch (rpc->common.type) {
     case RAFT_RPC_HELLO_REQUEST:
@@ -2658,6 +2657,8 @@ raft_rpc_from_jsonrpc(struct raft *raft,
     }
 
     rpc->common.sid = parse_required_uuid(&p, "from");
+    rpc->common.comment = nullable_xstrdup(
+        parse_optional_string(&p, "comment"));
 
     switch (rpc->common.type) {
     case RAFT_RPC_HELLO_REQUEST:
@@ -2789,6 +2790,7 @@ raft_send_append_request(struct raft *raft,
             .common = {
                 .type = RAFT_RPC_APPEND_REQUEST,
                 .sid = peer->sid,
+                .comment = "heartbeat",
             },
             .term = raft->current_term,
             .prev_log_index = peer->next_index - 1,
@@ -2835,7 +2837,7 @@ raft_become_leader(struct raft *raft)
 
     ovs_assert(raft->role != RAFT_LEADER);
     raft->role = RAFT_LEADER;
-    raft->leader_sid = raft->me->sid;
+    raft->leader_sid = raft->sid;
     raft->election_timeout = LLONG_MAX;
     raft->ping_timeout = time_msec() + PING_TIME_MSEC;
 
@@ -2919,294 +2921,6 @@ raft_truncate(struct raft *raft, uint64_t new_end)
     return servers_changed;
 }
 
-/* If 'prev_log_index' exists in 'raft''s log, term 'prev_log_term', returns
- * NULL.  Otherwise, returns an explanation for the mismatch.  */
-static const char *
-match_index_and_term(const struct raft *raft,
-                     uint64_t prev_log_index, uint64_t prev_log_term)
-{
-    if (prev_log_index < raft->log_start - 1) {
-        return "precedes start of log";
-    } else if (prev_log_index == raft->log_start - 1) {
-        if (prev_log_term != raft->prev_term) {
-            return "prev_term mismatch";
-        }
-    } else if (prev_log_index < raft->log_end) {
-        if (raft->log[prev_log_index - raft->log_start].term
-            != prev_log_term) {
-            return "term mismatch";
-        }
-    } else {
-        /* prev_log_index >= raft->log_end */
-        return "past end of log";
-    }
-    return NULL;
-}
-
-/* Returns 1 on success, 0 for failure, -1 for an operation in progress. */
-static int
-raft_handle_append_entries(struct raft *raft,
-                           const struct raft_append_request *rq,
-                           uint64_t prev_log_index, uint64_t prev_log_term,
-                           const struct raft_entry *entries,
-                           unsigned int n_entries)
-{
-    /* Section 3.5: "When sending an AppendEntries RPC, the leader includes
-     * the index and term of the entry in its log that immediately precedes
-     * the new entries. If the follower does not find an entry in its log
-     * with the same index and term, then it refuses the new entries." */
-    const char *mismatch = match_index_and_term(raft, prev_log_index,
-                                                prev_log_term);
-    if (mismatch) {
-        VLOG_INFO("rejecting append_request because previous entry "
-                  "%"PRIu64",%"PRIu64" not in local log (%s)",
-                  prev_log_term, prev_log_index, mismatch);
-        return false;
-    }
-
-    /* Figure 3.1: "If an existing entry conflicts with a new one (same
-     * index but different terms), delete the existing entry and all that
-     * follow it." */
-    unsigned int i;
-    bool servers_changed = false;
-    for (i = 0; ; i++) {
-        if (i >= n_entries) {
-            /* No change. */
-            return true;
-        }
-
-        uint64_t log_index = (prev_log_index + 1) + i;
-        if (log_index >= raft->log_end) {
-            break;
-        }
-        if (raft->log[log_index - raft->log_start].term != entries[i].term) {
-            if (raft_truncate(raft, log_index)) {
-                servers_changed = true;
-            }
-            break;
-        }
-    }
-
-    /* Figure 3.1: "Append any entries not already in the log." */
-    struct ovsdb_error *error = NULL;
-    for (; i < n_entries; i++) {
-        const struct raft_entry *entry = &entries[i];
-        error = raft_write_entry(raft, entry->term, entry->type,
-                                 json_clone(entry->data));
-        if (error) {
-            break;
-        }
-        if (entry->type == RAFT_SERVERS) {
-            servers_changed = true;
-        }
-    }
-
-    if (servers_changed) {
-        raft_get_servers_from_log(raft);
-    }
-
-    if (error) {
-        return false;
-    }
-
-    struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_APPEND);
-    w->append.rq = xmemdup(rq, sizeof *rq);
-    w->append.rq->entries = NULL;
-    return -1;
-}
-
-static bool
-raft_update_leader(struct raft *raft, const struct uuid *sid)
-{
-    if (raft->role == RAFT_LEADER && !uuid_equals(sid, &raft->sid)) {
-        VLOG_ERR("this server is leader but server %04x claims to be",
-                 uuid_prefix(sid, 4));
-        return false;
-    } else if (!uuid_equals(sid, &raft->leader_sid)) {
-        if (!uuid_is_zero(&raft->leader_sid)) {
-            VLOG_ERR("leader for term %"PRIu64" changed "
-                     "from %04x to %04x",
-                     raft->current_term,
-                     uuid_prefix(&raft->leader_sid, 4),
-                     uuid_prefix(sid, 4));
-        } else {
-            VLOG_INFO("server %04x is leader for term %"PRIu64,
-                      uuid_prefix(sid, 4), raft->current_term);
-        }
-        raft->leader_sid = *sid;
-    }
-    return true;
-}
-
-/* Returns 1 on success, 0 for failure, -1 for an operation in progress. */
-static int
-raft_handle_append_request__(struct raft *raft,
-                             const struct raft_append_request *rq)
-{
-    if (!raft_receive_term__(raft, &rq->common, rq->term)) {
-        /* Section 3.3: "If a server receives a request with a stale term
-         * number, it rejects the request." */
-        return false;
-    }
-
-    /* We do not check whether the server that sent the request is part of the
-     * cluster.  As section 4.1 says, "A server accepts AppendEntries requests
-     * from a leader that is not part of the server’s latest configuration.
-     * Otherwise, a new server could never be added to the cluster (it would
-     * never accept any log entries preceding the configuration entry that adds
-     * the server)." */
-    if (!raft_update_leader(raft, &rq->common.sid)) {
-        return false;
-    }
-    raft_reset_timer(raft);
-
-    /* First check for the common case, where the AppendEntries request is
-     * entirely for indexes covered by 'log_start' ... 'log_end - 1', something
-     * like this:
-     *
-     *     rq->prev_log_index
-     *       | first_entry_index
-     *       |   |         nth_entry_index
-     *       |   |           |
-     *       v   v           v
-     *         +---+---+---+---+
-     *       T | T | T | T | T |
-     *         +---+-------+---+
-     *     +---+---+---+---+
-     *   T | T | T | T | T |
-     *     +---+---+---+---+
-     *       ^               ^
-     *       |               |
-     *   log_start        log_end
-     * */
-    uint64_t first_entry_index = rq->prev_log_index + 1;
-    uint64_t nth_entry_index = rq->prev_log_index + rq->n_entries;
-    if (OVS_LIKELY(first_entry_index >= raft->log_start)) {
-        return raft_handle_append_entries(raft, rq,
-                                          rq->prev_log_index,
-                                          rq->prev_log_term,
-                                          rq->entries, rq->n_entries);
-    }
-
-    /* Now a series of checks for odd cases, where the AppendEntries request
-     * extends earlier than the beginning of our log, into the log entries
-     * discarded by the most recent snapshot. */
-
-    /*
-     * Handle the case where the indexes covered by rq->entries[] are entirely
-     * disjoint with 'log_start - 1' ... 'log_end - 1', as shown below.  So,
-     * everything in the AppendEntries request must already have been
-     * committed, and we might as well return true.
-     *
-     *     rq->prev_log_index
-     *       | first_entry_index
-     *       |   |         nth_entry_index
-     *       |   |           |
-     *       v   v           v
-     *         +---+---+---+---+
-     *       T | T | T | T | T |
-     *         +---+-------+---+
-     *                             +---+---+---+---+
-     *                           T | T | T | T | T |
-     *                             +---+---+---+---+
-     *                               ^               ^
-     *                               |               |
-     *                           log_start        log_end
-     */
-    if (nth_entry_index < raft->log_start - 1) {
-        return true;
-    }
-
-    /*
-     * Handle the case where the last entry in rq->entries[] has the same index
-     * as 'log_start - 1', so we can compare their terms:
-     *
-     *     rq->prev_log_index
-     *       | first_entry_index
-     *       |   |         nth_entry_index
-     *       |   |           |
-     *       v   v           v
-     *         +---+---+---+---+
-     *       T | T | T | T | T |
-     *         +---+-------+---+
-     *                         +---+---+---+---+
-     *                       T | T | T | T | T |
-     *                         +---+---+---+---+
-     *                           ^               ^
-     *                           |               |
-     *                       log_start        log_end
-     *
-     * There's actually a sub-case where rq->n_entries == 0, in which we
-     * compare rq->prev_term:
-     *
-     *     rq->prev_log_index
-     *       |
-     *       |
-     *       |
-     *       v
-     *       T
-     *
-     *         +---+---+---+---+
-     *       T | T | T | T | T |
-     *         +---+---+---+---+
-     *           ^               ^
-     *           |               |
-     *       log_start        log_end
-     */
-    if (nth_entry_index == raft->log_start - 1) {
-        bool ok = (rq->n_entries
-                ? raft->prev_term == rq->entries[rq->n_entries - 1].term
-                : raft->prev_term == rq->prev_log_term);
-        return ok;
-    }
-
-    /*
-     * We now know that the data in rq->entries[] overlaps the data in
-     * raft->log[], as shown below, with some positive 'ofs':
-     *
-     *     rq->prev_log_index
-     *       | first_entry_index
-     *       |   |             nth_entry_index
-     *       |   |               |
-     *       v   v               v
-     *         +---+---+---+---+---+
-     *       T | T | T | T | T | T |
-     *         +---+-------+---+---+
-     *                     +---+---+---+---+
-     *                   T | T | T | T | T |
-     *                     +---+---+---+---+
-     *                       ^               ^
-     *                       |               |
-     *                   log_start        log_end
-     *
-     *           |<-- ofs -->|
-     *
-     * We transform this into the following by trimming the first 'ofs'
-     * elements off of rq->entries[], ending up with the following.  Notice how
-     * we retain the term but not the data for rq->entries[ofs - 1]:
-     *
-     *                  first_entry_index + ofs - 1
-     *                   | first_entry_index + ofs
-     *                   |   |  nth_entry_index + ofs
-     *                   |   |   |
-     *                   v   v   v
-     *                     +---+---+
-     *                   T | T | T |
-     *                     +---+---+
-     *                     +---+---+---+---+
-     *                   T | T | T | T | T |
-     *                     +---+---+---+---+
-     *                       ^               ^
-     *                       |               |
-     *                   log_start        log_end
-     */
-    uint64_t ofs = raft->log_start - first_entry_index;
-    return raft_handle_append_entries(
-        raft, rq,
-        raft->log_start - 1, rq->entries[ofs - 1].term,
-        &rq->entries[ofs], rq->n_entries - ofs);
-}
-
 static const struct raft_entry *
 raft_peek_next_entry(struct raft *raft, enum raft_entry_type type)
 {
@@ -3257,6 +2971,343 @@ raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
     raft_commit_servers(raft);
 }
 
+/* This doesn't use rq->entries (but it does use rq->n_entries). */
+static void
+raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
+                       bool success, const char *comment)
+{
+    /* Figure 3.1: "If leaderCommit > commitIndex, set commitIndex =
+     * min(leaderCommit, index of last new entry)" */
+    if (success && rq->leader_commit > raft->commit_index) {
+        raft_update_commit_index(
+            raft, MIN(rq->leader_commit, rq->prev_log_index + rq->n_entries));
+    }
+
+    /* Send reply. */
+    union raft_rpc reply = {
+        .append_reply = {
+            .common = {
+                .type = RAFT_RPC_APPEND_REPLY,
+                .sid = rq->common.sid,
+                .comment = CONST_CAST(char *, comment),
+            },
+            .term = raft->current_term,
+            .log_end = raft->log_end,
+            .prev_log_index = rq->prev_log_index,
+            .prev_log_term = rq->prev_log_term,
+            .n_entries = rq->n_entries,
+            .success = success,
+        }
+    };
+    raft_send(raft, &reply);
+}
+
+/* If 'prev_log_index' exists in 'raft''s log, term 'prev_log_term', returns
+ * NULL.  Otherwise, returns an explanation for the mismatch.  */
+static const char *
+match_index_and_term(const struct raft *raft,
+                     uint64_t prev_log_index, uint64_t prev_log_term)
+{
+    if (prev_log_index < raft->log_start - 1) {
+        return "mismatch before start of log";
+    } else if (prev_log_index == raft->log_start - 1) {
+        if (prev_log_term != raft->prev_term) {
+            return "prev_term mismatch";
+        }
+    } else if (prev_log_index < raft->log_end) {
+        if (raft->log[prev_log_index - raft->log_start].term
+            != prev_log_term) {
+            return "term mismatch";
+        }
+    } else {
+        /* prev_log_index >= raft->log_end */
+        return "mismatch past end of log";
+    }
+    return NULL;
+}
+
+/* Returns NULL on success, RAFT_IN_PROGRESS for an operation in progress,
+ * otherwise a brief comment explaining failure. */
+static void
+raft_handle_append_entries(struct raft *raft,
+                           const struct raft_append_request *rq,
+                           uint64_t prev_log_index, uint64_t prev_log_term,
+                           const struct raft_entry *entries,
+                           unsigned int n_entries)
+{
+    /* Section 3.5: "When sending an AppendEntries RPC, the leader includes
+     * the index and term of the entry in its log that immediately precedes
+     * the new entries. If the follower does not find an entry in its log
+     * with the same index and term, then it refuses the new entries." */
+    const char *mismatch = match_index_and_term(raft, prev_log_index,
+                                                prev_log_term);
+    if (mismatch) {
+        VLOG_INFO("rejecting append_request because previous entry "
+                  "%"PRIu64",%"PRIu64" not in local log (%s)",
+                  prev_log_term, prev_log_index, mismatch);
+        raft_send_append_reply(raft, rq, false, mismatch);
+        return;
+    }
+
+    /* Figure 3.1: "If an existing entry conflicts with a new one (same
+     * index but different terms), delete the existing entry and all that
+     * follow it." */
+    unsigned int i;
+    bool servers_changed = false;
+    for (i = 0; ; i++) {
+        if (i >= n_entries) {
+            /* No change. */
+            if (rq->common.comment
+                && !strcmp(rq->common.comment, "heartbeat")) {
+                raft_send_append_reply(raft, rq, true, "heartbeat");
+            } else {
+                raft_send_append_reply(raft, rq, true, "no change");
+            }
+            return;
+        }
+
+        uint64_t log_index = (prev_log_index + 1) + i;
+        if (log_index >= raft->log_end) {
+            break;
+        }
+        if (raft->log[log_index - raft->log_start].term != entries[i].term) {
+            if (raft_truncate(raft, log_index)) {
+                servers_changed = true;
+            }
+            break;
+        }
+    }
+
+    /* Figure 3.1: "Append any entries not already in the log." */
+    struct ovsdb_error *error = NULL;
+    for (; i < n_entries; i++) {
+        const struct raft_entry *entry = &entries[i];
+        error = raft_write_entry(raft, entry->term, entry->type,
+                                 json_clone(entry->data));
+        if (error) {
+            break;
+        }
+        if (entry->type == RAFT_SERVERS) {
+            servers_changed = true;
+        }
+    }
+
+    if (servers_changed) {
+        raft_get_servers_from_log(raft);
+    }
+
+    if (error) {
+        char *s = ovsdb_error_to_string(error);
+        VLOG_ERR("%s", s);
+        free(s);
+        ovsdb_error_destroy(error);
+        raft_send_append_reply(raft, rq, false, "I/O error");
+        return;
+    }
+
+    struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_APPEND);
+    w->append.rq = xmemdup(rq, sizeof *rq);
+    w->append.rq->entries = NULL;
+    /* Reply will be sent later following waiter completion. */
+}
+
+static bool
+raft_update_leader(struct raft *raft, const struct uuid *sid)
+{
+    if (raft->role == RAFT_LEADER && !uuid_equals(sid, &raft->sid)) {
+        VLOG_ERR("this server is leader but server %04x claims to be",
+                 uuid_prefix(sid, 4));
+        return false;
+    } else if (!uuid_equals(sid, &raft->leader_sid)) {
+        if (!uuid_is_zero(&raft->leader_sid)) {
+            VLOG_ERR("leader for term %"PRIu64" changed "
+                     "from %04x to %04x",
+                     raft->current_term,
+                     uuid_prefix(&raft->leader_sid, 4),
+                     uuid_prefix(sid, 4));
+        } else {
+            VLOG_INFO("server %04x is leader for term %"PRIu64,
+                      uuid_prefix(sid, 4), raft->current_term);
+        }
+        raft->leader_sid = *sid;
+    }
+    return true;
+}
+
+static void
+raft_handle_append_request__(struct raft *raft,
+                             const struct raft_append_request *rq)
+{
+    if (!raft_receive_term__(raft, &rq->common, rq->term)) {
+        /* Section 3.3: "If a server receives a request with a stale term
+         * number, it rejects the request." */
+        raft_send_append_reply(raft, rq, false, "stale term");
+        return;
+    }
+
+    /* We do not check whether the server that sent the request is part of the
+     * cluster.  As section 4.1 says, "A server accepts AppendEntries requests
+     * from a leader that is not part of the server’s latest configuration.
+     * Otherwise, a new server could never be added to the cluster (it would
+     * never accept any log entries preceding the configuration entry that adds
+     * the server)." */
+    if (!raft_update_leader(raft, &rq->common.sid)) {
+        raft_send_append_reply(raft, rq, false, "usurpsed leadership");
+        return;
+    }
+    raft_reset_timer(raft);
+
+    /* First check for the common case, where the AppendEntries request is
+     * entirely for indexes covered by 'log_start' ... 'log_end - 1', something
+     * like this:
+     *
+     *     rq->prev_log_index
+     *       | first_entry_index
+     *       |   |         nth_entry_index
+     *       |   |           |
+     *       v   v           v
+     *         +---+---+---+---+
+     *       T | T | T | T | T |
+     *         +---+-------+---+
+     *     +---+---+---+---+
+     *   T | T | T | T | T |
+     *     +---+---+---+---+
+     *       ^               ^
+     *       |               |
+     *   log_start        log_end
+     * */
+    uint64_t first_entry_index = rq->prev_log_index + 1;
+    uint64_t nth_entry_index = rq->prev_log_index + rq->n_entries;
+    if (OVS_LIKELY(first_entry_index >= raft->log_start)) {
+        raft_handle_append_entries(raft, rq,
+                                   rq->prev_log_index, rq->prev_log_term,
+                                   rq->entries, rq->n_entries);
+        return;
+    }
+
+    /* Now a series of checks for odd cases, where the AppendEntries request
+     * extends earlier than the beginning of our log, into the log entries
+     * discarded by the most recent snapshot. */
+
+    /*
+     * Handle the case where the indexes covered by rq->entries[] are entirely
+     * disjoint with 'log_start - 1' ... 'log_end - 1', as shown below.  So,
+     * everything in the AppendEntries request must already have been
+     * committed, and we might as well return true.
+     *
+     *     rq->prev_log_index
+     *       | first_entry_index
+     *       |   |         nth_entry_index
+     *       |   |           |
+     *       v   v           v
+     *         +---+---+---+---+
+     *       T | T | T | T | T |
+     *         +---+-------+---+
+     *                             +---+---+---+---+
+     *                           T | T | T | T | T |
+     *                             +---+---+---+---+
+     *                               ^               ^
+     *                               |               |
+     *                           log_start        log_end
+     */
+    if (nth_entry_index < raft->log_start - 1) {
+        raft_send_append_reply(raft, rq, true, "append before log start");
+        return;
+    }
+
+    /*
+     * Handle the case where the last entry in rq->entries[] has the same index
+     * as 'log_start - 1', so we can compare their terms:
+     *
+     *     rq->prev_log_index
+     *       | first_entry_index
+     *       |   |         nth_entry_index
+     *       |   |           |
+     *       v   v           v
+     *         +---+---+---+---+
+     *       T | T | T | T | T |
+     *         +---+-------+---+
+     *                         +---+---+---+---+
+     *                       T | T | T | T | T |
+     *                         +---+---+---+---+
+     *                           ^               ^
+     *                           |               |
+     *                       log_start        log_end
+     *
+     * There's actually a sub-case where rq->n_entries == 0, in which we
+     * compare rq->prev_term:
+     *
+     *     rq->prev_log_index
+     *       |
+     *       |
+     *       |
+     *       v
+     *       T
+     *
+     *         +---+---+---+---+
+     *       T | T | T | T | T |
+     *         +---+---+---+---+
+     *           ^               ^
+     *           |               |
+     *       log_start        log_end
+     */
+    if (nth_entry_index == raft->log_start - 1) {
+        if (rq->n_entries
+            ? raft->prev_term == rq->entries[rq->n_entries - 1].term
+            : raft->prev_term == rq->prev_log_term) {
+            raft_send_append_reply(raft, rq, true, "no change");
+        } else {
+            raft_send_append_reply(raft, rq, false, "term mismatch");
+        }
+        return;
+    }
+
+    /*
+     * We now know that the data in rq->entries[] overlaps the data in
+     * raft->log[], as shown below, with some positive 'ofs':
+     *
+     *     rq->prev_log_index
+     *       | first_entry_index
+     *       |   |             nth_entry_index
+     *       |   |               |
+     *       v   v               v
+     *         +---+---+---+---+---+
+     *       T | T | T | T | T | T |
+     *         +---+-------+---+---+
+     *                     +---+---+---+---+
+     *                   T | T | T | T | T |
+     *                     +---+---+---+---+
+     *                       ^               ^
+     *                       |               |
+     *                   log_start        log_end
+     *
+     *           |<-- ofs -->|
+     *
+     * We transform this into the following by trimming the first 'ofs'
+     * elements off of rq->entries[], ending up with the following.  Notice how
+     * we retain the term but not the data for rq->entries[ofs - 1]:
+     *
+     *                  first_entry_index + ofs - 1
+     *                   | first_entry_index + ofs
+     *                   |   |  nth_entry_index + ofs
+     *                   |   |   |
+     *                   v   v   v
+     *                     +---+---+
+     *                   T | T | T |
+     *                     +---+---+
+     *                     +---+---+---+---+
+     *                   T | T | T | T | T |
+     *                     +---+---+---+---+
+     *                       ^               ^
+     *                       |               |
+     *                   log_start        log_end
+     */
+    uint64_t ofs = raft->log_start - first_entry_index;
+    raft_handle_append_entries(raft, rq,
+                               raft->log_start - 1, rq->entries[ofs - 1].term,
+                               &rq->entries[ofs], rq->n_entries - ofs);
+}
+
 bool
 raft_has_next_entry(const struct raft *raft_)
 {
@@ -3300,44 +3351,11 @@ raft_next_entry(struct raft *raft, bool *is_snapshot)
     return e->data;
 }
 
-/* This doesn't use rq->entries (but it does use rq->n_entries). */
-static void
-raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
-                       bool success)
-{
-    /* Figure 3.1: "If leaderCommit > commitIndex, set commitIndex =
-     * min(leaderCommit, index of last new entry)" */
-    if (success && rq->leader_commit > raft->commit_index) {
-        raft_update_commit_index(
-            raft, MIN(rq->leader_commit, rq->prev_log_index + rq->n_entries));
-    }
-
-    /* Send reply. */
-    union raft_rpc reply = {
-        .append_reply = {
-            .common = {
-                .type = RAFT_RPC_APPEND_REPLY,
-                .sid = rq->common.sid,
-            },
-            .term = raft->current_term,
-            .log_end = raft->log_end,
-            .prev_log_index = rq->prev_log_index,
-            .prev_log_term = rq->prev_log_term,
-            .n_entries = rq->n_entries,
-            .success = success,
-        }
-    };
-    raft_send(raft, &reply);
-}
-
 static void
 raft_handle_append_request(struct raft *raft,
                            const struct raft_append_request *rq)
 {
-    int status = raft_handle_append_request__(raft, rq);
-    if (status >= 0) {
-        raft_send_append_reply(raft, rq, status);
-    }
+    raft_handle_append_request__(raft, rq);
 }
 
 static struct raft_server *
@@ -3394,13 +3412,15 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
 
 static void
 raft_send_install_snapshot_request(struct raft *raft,
-                                   const struct raft_server *s)
+                                   const struct raft_server *s,
+                                   const char *comment)
 {
     union raft_rpc rpc = {
         .install_snapshot_request = {
             .common = {
                 .type = RAFT_RPC_INSTALL_SNAPSHOT_REQUEST,
                 .sid = s->sid,
+                .comment = CONST_CAST(char *, comment),
             },
             .term = raft->current_term,
             .last_index = raft->log_start - 1,
@@ -3481,7 +3501,7 @@ raft_handle_append_reply(struct raft *raft,
      */
     if (s->next_index < raft->log_start) {
         /* Case 1. */
-        raft_send_install_snapshot_request(raft, s);
+        raft_send_install_snapshot_request(raft, s, NULL);
     } else if (s->next_index < raft->log_end) {
         /* Case 2. */
         raft_send_append_request(raft, s, 1);
@@ -3886,9 +3906,9 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
         json_object_put(header, "prev_term", json_integer_create(prev_term));
         json_object_put(header, "prev_index",
                         json_integer_create(prev_index));
-        json_object_put(header, "data", json_clone(new_snapshot
-                                                   ? new_snapshot
-                                                   : raft->snapshot));
+        json_object_put(header, "prev_data", json_clone(new_snapshot
+                                                        ? new_snapshot
+                                                        : raft->snapshot));
     }
     struct ovsdb_error *error = ovsdb_log_write(storage, header);
     json_destroy(header);
@@ -4032,7 +4052,8 @@ raft_handle_install_snapshot_reply(
         VLOG_INFO("cluster %04x: server %04x installed "
                   "out-of-date snapshot, starting over",
                   uuid_prefix(&raft->cid, 4), uuid_prefix(&s->sid, 4));
-        raft_send_install_snapshot_request(raft, s);
+        raft_send_install_snapshot_request(raft, s,
+                                           "installed obsolete snapshot");
         return;
     }
 
@@ -4262,8 +4283,13 @@ raft_format_become_leader(const struct raft_become_leader *rq, struct ds *s)
 static void
 raft_rpc_format(const union raft_rpc *rpc, struct ds *s)
 {
-    ds_put_format(s, "%04x %s:", uuid_prefix(&rpc->common.sid, 4),
+    ds_put_format(s, "%04x %s", uuid_prefix(&rpc->common.sid, 4),
                   raft_rpc_type_to_string(rpc->common.type));
+    if (rpc->common.comment) {
+        ds_put_format(s, " \"%s\"", rpc->common.comment);
+    }
+    ds_put_char(s, ':');
+
     switch (rpc->common.type) {
     case RAFT_RPC_HELLO_REQUEST:
         break;
@@ -4310,10 +4336,9 @@ static bool
 raft_rpc_is_heartbeat(const union raft_rpc *rpc)
 {
     return ((rpc->common.type == RAFT_RPC_APPEND_REQUEST
-             && rpc->append_request.n_entries == 0)
-            || (rpc->common.type == RAFT_RPC_APPEND_REPLY
-                && rpc->append_reply.n_entries == 0
-                && rpc->append_reply.success));
+             || rpc->common.type == RAFT_RPC_APPEND_REPLY)
+             && rpc->common.comment
+             && !strcmp(rpc->common.comment, "heartbeat"));
 }
 
 

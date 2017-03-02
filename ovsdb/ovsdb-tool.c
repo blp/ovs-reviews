@@ -716,9 +716,9 @@ print_servers(const struct shash *object, const char *name)
 }
 
 static void
-print_data(const struct shash *object)
+print_data(const struct shash *object, const char *name)
 {
-    const struct json *data = shash_find_data(object, "data");
+    const struct json *data = shash_find_data(object, name);
     if (!data) {
         return;
     }
@@ -739,7 +739,7 @@ print_data(const struct shash *object)
     }
 
     char *s = json_to_string(json_array(data)->elems[1], JSSF_SORT);
-    printf("\tdata: %s\n", s);
+    printf("\t%s: %s\n", name, s);
     free(s);
 }
 
@@ -764,16 +764,20 @@ do_show_log_cluster(struct ovsdb_log *log)
         printf("record %u:\n", i);
         if (i == 0) {
             print_member(object, "name");
+            print_member(object, "address");
             print_uuid(object, "server_id");
             print_uuid(object, "cluster_id");
+
             print_servers(object, "prev_servers");
             print_member(object, "prev_term");
             print_member(object, "prev_index");
-            print_data(object);
+            print_data(object, "prev_data");
+
+            print_member(object, "remotes");
         } else {
             print_member(object, "term");
             print_member(object, "index");
-            print_data(object);
+            print_data(object, "data");
             print_servers(object, "servers");
             print_uuid(object, "vote");
         }
