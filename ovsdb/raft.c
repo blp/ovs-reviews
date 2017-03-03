@@ -487,8 +487,7 @@ struct raft_server_request {
 struct raft_server_reply {
     struct raft_rpc_common common;
     bool success;
-    char *leader_address;
-    struct uuid leader_sid;
+    struct sset remotes;
 };
 
 struct raft_install_snapshot_request {
@@ -1089,6 +1088,19 @@ raft_remotes_from_json(const struct json *json, struct sset *remotes)
         sset_add(remotes, json_string(address));
     }
     return NULL;
+}
+
+static struct json *
+raft_remotes_to_json(const struct sset *sset)
+{
+    struct json *array;
+    const char *s;
+
+    array = json_array_create_empty();
+    SSET_FOR_EACH (s, sset) {
+        json_array_add(array, json_string_create(s));
+    }
+    return array;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -2280,7 +2292,7 @@ raft_rpc_destroy(union raft_rpc *rpc)
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        free(rpc->server_reply.leader_address);
+        sset_destroy(&rpc->server_reply.remotes);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
         raft_servers_destroy(&rpc->install_snapshot_request.last_servers);
@@ -2425,10 +2437,8 @@ raft_server_reply_to_jsonrpc(const struct raft_server_reply *rpy,
                              struct json *args)
 {
     json_object_put(args, "success", json_boolean_create(rpy->success));
-    if (rpy->leader_address) {
-        json_object_put_string(args, "leader_address", rpy->leader_address);
-        json_object_put_format(args, "leader", UUID_FMT,
-                               UUID_ARGS(&rpy->leader_sid));
+    if (!sset_is_empty(&rpy->remotes)) {
+        json_object_put(args, "remotes", raft_remotes_to_json(&rpy->remotes));
     }
 }
 
@@ -2438,10 +2448,15 @@ raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
 {
     rpy->success = parse_boolean(p, "success");
 
-    const char *leader_address = parse_optional_string(p, "leader_address");
-    rpy->leader_address = leader_address ? xstrdup(leader_address) : NULL;
-    if (rpy->leader_address) {
-        rpy->leader_sid = parse_required_uuid(p, "leader");
+    sset_init(&rpy->remotes);
+    const struct json *json = ovsdb_parser_member(p, "remotes",
+                                                  OP_ARRAY | OP_OPTIONAL);
+    if (json) {
+        struct ovsdb_error *error = raft_remotes_from_json(json,
+                                                           &rpy->remotes);
+        if (error) {
+            ovsdb_parser_put_error(p, error);
+        }
     }
 }
 
@@ -2672,8 +2687,6 @@ raft_send_server_reply__(struct raft *raft, enum raft_rpc_type type,
                          const struct uuid *sid,
                          bool success, const char *comment)
 {
-    const struct raft_server *leader = raft_find_server(raft,
-                                                        &raft->leader_sid);
     union raft_rpc rpy = {
         .server_reply = {
             .common = {
@@ -2682,12 +2695,23 @@ raft_send_server_reply__(struct raft *raft, enum raft_rpc_type type,
                 .comment = CONST_CAST(char *, comment),
             },
             .success = success,
-
-            .leader_address = leader ? leader->address : NULL,
-            .leader_sid = leader ? leader->sid : UUID_ZERO,
         }
     };
+
+    struct sset *remotes = &rpy.server_reply.remotes;
+    sset_init(remotes);
+    if (!raft->joining) {
+        struct raft_server *s;
+        HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
+            if (s != raft->me) {
+                sset_add(remotes, s->address);
+            }
+        }
+    }
+
     raft_send(raft, &rpy);
+
+    sset_destroy(remotes);
 }
 
 static void
@@ -3727,9 +3751,15 @@ raft_handle_add_server_request(struct raft *raft,
 
 static void
 raft_handle_add_server_reply(struct raft *raft,
-                             const struct raft_server_reply *rpc)
+                             const struct raft_server_reply *rpy)
 {
-    if (rpc->success) {
+    if (!raft->joining) {
+        VLOG_WARN("received add_server_reply even though we're already "
+                  "part of the cluster");
+        return;
+    }
+
+    if (rpy->success) {
         if (raft->me) {
             raft->joining = false;
 
@@ -3741,6 +3771,16 @@ raft_handle_add_server_reply(struct raft *raft,
             }
         } else {
             /* XXX we're not really part of the cluster? */
+        }
+    } else {
+        /* Connect to any additional servers that we found out about.  (This is
+         * particularly important if the server that we know about is not the
+         * leader.) */
+        const char *remote;
+        SSET_FOR_EACH (remote, &rpy->remotes) {
+            if (sset_add(&raft->remote_addresses, remote)) {
+                raft_add_conn(raft, jsonrpc_session_open(remote, true));
+            }
         }
     }
 }
@@ -4187,9 +4227,18 @@ static void
 raft_format_server_reply(const struct raft_server_reply *rpy, struct ds *s)
 {
     ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
-    if (rpy->leader_address) {
-        ds_put_format(s, " leader=%04x(%s)",
-                      uuid_prefix(&rpy->leader_sid, 4), rpy->leader_address);
+    if (!sset_is_empty(&rpy->remotes)) {
+        ds_put_cstr(s, " remotes=[");
+
+        const char *remote;
+        int i = 0;
+        SSET_FOR_EACH (remote, &rpy->remotes) {
+            if (i++ > 0) {
+                ds_put_cstr(s, ", ");
+            }
+            ds_put_cstr(s, remote);
+        }
+        ds_put_char(s, ']');
     }
 }
 
