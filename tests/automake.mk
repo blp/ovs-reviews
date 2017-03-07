@@ -10,7 +10,8 @@ EXTRA_DIST += \
 	tests/atlocal.in \
 	$(srcdir)/package.m4 \
 	$(srcdir)/tests/testsuite \
-	$(srcdir)/tests/testsuite.patch
+	$(srcdir)/tests/testsuite.patch \
+	tests/test-raft.sh
 
 COMMON_MACROS_AT = \
 	tests/ovsdb-macros.at \
