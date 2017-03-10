@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -253,6 +253,7 @@ ovsdb_file_open__(const char *file_name,
         if (filep) {
             *filep = file;
         }
+        db->file = *filep;
     } else {
         ovsdb_log_close(log);
     }
@@ -503,10 +504,7 @@ ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
     return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemap);
 }
 
-/* Replica implementation. */
-
 struct ovsdb_file {
-    struct ovsdb_replica replica;
     struct ovsdb *db;
     struct ovsdb_log *log;
     char *file_name;
@@ -515,8 +513,6 @@ struct ovsdb_file {
     unsigned int n_transactions;
     off_t snapshot_size;
 };
-
-static const struct ovsdb_replica_class ovsdb_file_class;
 
 static struct ovsdb_error *
 ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
@@ -540,7 +536,6 @@ ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
     }
 
     file = xmalloc(sizeof *file);
-    ovsdb_replica_init(&file->replica, &ovsdb_file_class);
     file->db = db;
     file->log = log;
     file->file_name = abs_name;
@@ -548,17 +543,9 @@ ovsdb_file_create(struct ovsdb *db, struct ovsdb_log *log,
     file->next_compact = file->last_compact + COMPACT_MIN_MSEC;
     file->snapshot_size = snapshot_size;
     file->n_transactions = n_transactions;
-    ovsdb_add_replica(db, &file->replica);
 
     *filep = file;
     return NULL;
-}
-
-static struct ovsdb_file *
-ovsdb_file_cast(struct ovsdb_replica *replica)
-{
-    ovs_assert(replica->class == &ovsdb_file_class);
-    return CONTAINER_OF(replica, struct ovsdb_file, replica);
 }
 
 static bool
@@ -572,11 +559,10 @@ ovsdb_file_change_cb(const struct ovsdb_row *old,
     return true;
 }
 
-static struct ovsdb_error *
-ovsdb_file_commit(struct ovsdb_replica *replica,
+struct ovsdb_error *
+ovsdb_file_commit(struct ovsdb_file *file,
                   const struct ovsdb_txn *txn, bool durable)
 {
-    struct ovsdb_file *file = ovsdb_file_cast(replica);
     struct ovsdb_file_txn ftxn;
     struct ovsdb_error *error;
 
@@ -759,20 +745,13 @@ exit:
     return error;
 }
 
-static void
-ovsdb_file_destroy(struct ovsdb_replica *replica)
+void
+ovsdb_file_destroy(struct ovsdb_file *file)
 {
-    struct ovsdb_file *file = ovsdb_file_cast(replica);
-
     ovsdb_log_close(file->log);
     free(file->file_name);
     free(file);
 }
-
-static const struct ovsdb_replica_class ovsdb_file_class = {
-    ovsdb_file_commit,
-    ovsdb_file_destroy
-};
 
 static void
 ovsdb_file_txn_init(struct ovsdb_file_txn *ftxn)

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 
 #include "bitmap.h"
 #include "openvswitch/dynamic-string.h"
+#include "file.h"
 #include "hash.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
@@ -864,16 +865,15 @@ ovsdb_txn_commit_(struct ovsdb_txn *txn, bool durable)
     }
 
     /* Send the commit to each replica. */
-    LIST_FOR_EACH (replica, node, &txn->db->replicas) {
-        error = (replica->class->commit)(replica, txn, durable);
+    if (txn->db->file) {
+        error = ovsdb_file_commit(txn->db->file, txn, durable);
         if (error) {
-            /* We don't support two-phase commit so only the first replica is
-             * allowed to report an error. */
-            ovs_assert(&replica->node == txn->db->replicas.next);
-
             ovsdb_txn_abort(txn);
             return error;
         }
+    }
+    LIST_FOR_EACH (replica, node, &txn->db->replicas) {
+        replica->class->commit(replica, txn, durable);
     }
 
     /* Finalize commit. */
