@@ -323,7 +323,7 @@ parse_body(struct ovsdb_log *file, off_t offset, unsigned long int length,
             json_parser_abort(parser);
             return ovsdb_io_error(ferror(file->stream) ? errno : EOF,
                                   "%s: error reading %lu bytes "
-                                  "starting at offset %lld", file->name,
+                                  "starting at offset %lld", file->rel_name,
                                   length, (long long int) offset);
         }
         sha1_update(&ctx, input, chunk);
