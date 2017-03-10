@@ -40,16 +40,15 @@ void ovsdb_storage_read_wait(struct ovsdb_storage *);
 
 void ovsdb_storage_unread(struct ovsdb_storage *);
 
-struct ovsdb_completion *ovsdb_storage_write(struct ovsdb_storage *,
+struct ovsdb_write *ovsdb_storage_write(struct ovsdb_storage *,
                                              const struct json *,
                                              const struct uuid *prereq,
                                              bool durable)
     OVS_WARN_UNUSED_RESULT;
-bool ovsdb_completion_get_status(const struct ovsdb_completion *);
-const struct ovsdb_error *ovsdb_completion_get_error(
-    const struct ovsdb_completion *);
-void ovsdb_completion_wait(const struct ovsdb_completion *);
-void ovsdb_completion_destroy(struct ovsdb_completion *);
+bool ovsdb_write_get_status(const struct ovsdb_write *);
+const struct ovsdb_error *ovsdb_write_get_error(const struct ovsdb_write *);
+void ovsdb_write_wait(const struct ovsdb_write *);
+void ovsdb_write_destroy(struct ovsdb_write *);
 
 off_t ovsdb_storage_get_offset(const struct ovsdb_storage *);
 
