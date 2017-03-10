@@ -16,41 +16,44 @@
 #ifndef OVSDB_STORAGE_H
 #define OVSDB_STORAGE_H 1
 
-#include <stdbool.h>
+#include <sys/types.h>
 #include "compiler.h"
-#include "log.h"
 
-struct ovsdb;
+struct json;
 struct ovsdb_storage;
-struct ovsdb_schema;
+struct ovsdb_completion;
 
-struct ovsdb_error *ovsdb_storage_open(const char *file_name,
-                                       bool read_only, int locking,
-                                       struct ovsdb_storage **storagep)
+struct ovsdb_error *ovsdb_storage_open(const char *name, bool rw,
+                                       struct ovsdb_storage **)
     OVS_WARN_UNUSED_RESULT;
-
 void ovsdb_storage_close(struct ovsdb_storage *);
+
+void ovsdb_storage_run(struct ovsdb_storage *);
+void ovsdb_storage_wait(struct ovsdb_storage *);
 
 const char *ovsdb_storage_get_name(const struct ovsdb_storage *);
 
-
-
-struct ovsdb_error *ovsdb_storage_commit(struct ovsdb_storage *,
-                                         struct json *, bool durable);
-
-
-
-
-
-struct ovsdb_error *ovsdb_storage_save_copy(const char *storage_name,
-                                            const char *comment,
-                                            const struct ovsdb *)
+struct ovsdb_error *ovsdb_storage_read(struct ovsdb_storage *, struct json **,
+                                       struct uuid *)
     OVS_WARN_UNUSED_RESULT;
+void ovsdb_storage_read_wait(struct ovsdb_storage *);
 
-struct ovsdb_error *ovsdb_storage_compact(struct ovsdb_storage *);
+void ovsdb_storage_unread(struct ovsdb_storage *);
 
-struct ovsdb_error *ovsdb_storage_read_schema(const char *storage_name,
-                                              struct ovsdb_schema **)
+struct ovsdb_completion *ovsdb_storage_write(struct ovsdb_storage *,
+                                             const struct json *,
+                                             const struct uuid *prereq,
+                                             bool durable)
     OVS_WARN_UNUSED_RESULT;
+bool ovsdb_completion_get_status(const struct ovsdb_completion *);
+const struct ovsdb_error *ovsdb_completion_get_error(
+    const struct ovsdb_completion *);
+void ovsdb_completion_wait(const struct ovsdb_completion *);
+void ovsdb_completion_destroy(struct ovsdb_completion *);
+
+off_t ovsdb_storage_get_offset(const struct ovsdb_storage *);
+
+struct ovsdb_error *ovsdb_storage_replace(struct ovsdb_storage *,
+                                          const struct json **, size_t n);
 
 #endif /* ovsdb/storage.h */
