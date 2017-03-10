@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Nicira, Inc.
+ * Copyright (c) 2015, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1577,7 +1577,7 @@ ovsdb_monitor_destroy(struct ovsdb_monitor *dbmon)
     free(dbmon);
 }
 
-static struct ovsdb_error *
+static void
 ovsdb_monitor_commit(struct ovsdb_replica *replica,
                      const struct ovsdb_txn *txn,
                      bool durable OVS_UNUSED)
@@ -1605,8 +1605,6 @@ ovsdb_monitor_commit(struct ovsdb_replica *replica,
         ovsdb_monitor_json_cache_flush(m);
         break;
     }
-
-    return NULL;
 }
 
 static void

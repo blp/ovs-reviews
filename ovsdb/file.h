@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2016 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 struct ovsdb;
 struct ovsdb_file;
 struct ovsdb_schema;
+struct ovsdb_txn;
 
 struct ovsdb_error *
 ovsdb_file_open(const char *file_name,
@@ -46,5 +47,9 @@ struct ovsdb_error *ovsdb_file_compact(struct ovsdb_file *);
 struct ovsdb_error *ovsdb_file_read_schema(const char *file_name,
                                            struct ovsdb_schema **)
     OVS_WARN_UNUSED_RESULT;
+
+struct ovsdb_error *ovsdb_file_commit(struct ovsdb_file *,
+                                      const struct ovsdb_txn *, bool durable);
+void ovsdb_file_destroy(struct ovsdb_file *);
 
 #endif /* ovsdb/file.h */
