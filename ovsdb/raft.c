@@ -215,9 +215,9 @@ struct raft {
  * client hasn't yet read the latest snapshot, then even the snapshot isn't
  * applied yet.  Thus, the invariants are different for these members:
  *
- *     log_start - 1 <= commit_index < log_end.
- *     log_start - 2 <= last_applied < log_end.
- * */
+ *     log_start - 2 <= last_applied <= commit_index < log_end.
+ *     log_start - 1                 <= commit_index < log_end.
+ */
 
     enum raft_role role;        /* Current role. */
     uint64_t commit_index;      /* Max log index known to be committed. */
@@ -2927,30 +2927,26 @@ raft_get_next_entry(struct raft *raft, enum raft_entry_type type)
 }
 
 static void
-raft_commit_servers(struct raft *raft)
-{
-    for (;;) {
-        const struct raft_entry *e = raft_get_next_entry(raft, RAFT_SERVERS);
-        if (!e) {
-            break;
-        }
-#if 0
-        VLOG_INFO("applying log index %"PRIu64": servers \"%s\"",
-                  raft->last_applied, e->data);
-#endif
-        if (raft->role == RAFT_LEADER) {
-            raft_run_reconfigure(raft);
-        }
-    }
-}
-
-static void
 raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
 {
     ovs_assert(new_commit_index >= raft->commit_index);
-    raft->commit_index = new_commit_index;
+    if (raft->role != RAFT_LEADER) {
+        raft->commit_index = new_commit_index;
+        return;
+    }
 
-    raft_commit_servers(raft);
+    while (raft->commit_index < new_commit_index) {
+        uint64_t index = ++raft->commit_index;
+        const struct raft_entry *e = raft_get_entry(raft, index);
+        if (e->type == RAFT_SERVERS) {
+            raft_run_reconfigure(raft);
+        } else {
+            struct raft_command *cmd = raft_find_command(raft, index);
+            if (cmd) {
+                raft_command_complete(raft, cmd, RAFT_CMD_SUCCESS);
+            }
+        }
+    }
 }
 
 /* This doesn't use rq->entries (but it does use rq->n_entries). */
@@ -3318,16 +3314,6 @@ raft_next_entry(struct raft *raft, bool *is_snapshot)
     VLOG_INFO("applying log index %"PRIu64": data \"%s\"",
               raft->last_applied, s);
     free(s);
-
-    if (raft->role == RAFT_LEADER) {
-        struct raft_command *cmd
-            = raft_find_command(raft, raft->last_applied);
-        if (cmd) {
-            raft_command_complete(raft, cmd, RAFT_CMD_SUCCESS);
-        }
-    }
-
-    raft_commit_servers(raft);
 
     *is_snapshot = false;       /* XXX */
     return e->data;
