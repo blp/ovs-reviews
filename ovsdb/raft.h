@@ -45,6 +45,7 @@
 #include "uuid.h"
 
 struct json;
+struct ovsdb_log;
 struct raft;
 
 #define RAFT_MAGIC "CLUSTER"
@@ -74,9 +75,12 @@ void raft_metadata_destroy(struct raft_metadata *);
 /* Starting up or shutting down a server within a cluster. */
 struct ovsdb_error *raft_open(const char *file_name, struct raft **)
     OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *raft_open__(struct ovsdb_log *, struct raft **)
+    OVS_WARN_UNUSED_RESULT;
 void raft_close(struct raft *);
 
 /* Information. */
+const char *raft_get_name(const struct raft *);
 const struct uuid *raft_get_cid(const struct raft *);
 const struct uuid *raft_get_sid(const struct raft *);
 bool raft_is_joining(const struct raft *);

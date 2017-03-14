@@ -22,6 +22,7 @@
 struct json;
 struct ovsdb_storage;
 struct ovsdb_completion;
+struct uuid;
 
 struct ovsdb_error *ovsdb_storage_open(const char *name, bool rw,
                                        struct ovsdb_storage **)

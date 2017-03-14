@@ -160,7 +160,6 @@ static struct raft_waiter *raft_waiter_create(struct raft *,
 /* The Raft state machine. */
 struct raft {
     struct ovsdb_log *storage;
-    char *file_name;
 
 /* Persistent derived state.
  *
@@ -187,6 +186,9 @@ struct raft {
      * A log entry with index 1 never really exists; the initial snapshot for a
      * Raft is considered to include this index.  The first real log entry has
      * index 2.
+     *
+     * XXX should we start at a slightly higher index to make unsigned
+     * arithmetic safer? or use signed arithmetic?
      *
      * A new Raft instance contains an empty log:  log_start=2, log_end=2.
      * Over time, the log grows:                   log_start=2, log_end=N.
@@ -656,10 +658,9 @@ raft_schedule_snapshot(struct raft *raft, bool quick)
 }
 
 static struct raft *
-raft_alloc(const char *file_name)
+raft_alloc(void)
 {
     struct raft *raft = xzalloc(sizeof *raft);
-    raft->file_name = xstrdup(file_name);
     hmap_init(&raft->servers);
     raft->log_start = raft->log_end = 1;
     hmap_init(&raft->prev_servers);
@@ -857,7 +858,7 @@ raft_join_cluster(const char *file_name,
 struct ovsdb_error *
 raft_read_metadata(const char *file_name, struct raft_metadata *md)
 {
-    struct raft *raft = raft_alloc(file_name);
+    struct raft *raft = raft_alloc();
     struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC,
                                                OVSDB_LOG_READ_ONLY, -1,
                                                &raft->storage);
@@ -1500,25 +1501,33 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js)
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
-/* Starts the local server in an existing Raft cluster, using the local copy of
- * the cluster's log in 'file_name'. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_open(const char *file_name, struct raft **raftp)
 {
-    struct raft *raft = raft_alloc(file_name);
 
-    struct ovsdb_error *error = ovsdb_log_open(file_name, RAFT_MAGIC,
-                                               OVSDB_LOG_READ_WRITE,
-                                               -1, &raft->storage);
-    if (error) {
-        goto error;
-    }
+    struct ovsdb_log *log;
+    struct ovsdb_error *error;
+
+    *raftp = NULL;
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
+                           -1, &log);
+    return error ? error : raft_open__(log, raftp);
+}
+
+/* Starts the local server in an existing Raft cluster, using the local copy of
+ * the cluster's log in 'file_name'.  Takes ownership of 'log', whether
+ * successful or not. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_open__(struct ovsdb_log *log, struct raft **raftp)
+{
+    struct raft *raft = raft_alloc();
+    raft->storage = log;
 
     raft->fsync_thread_running = true;
     raft->fsync_thread = ovs_thread_create("raft_fsync",
                                            raft_fsync_thread, raft);
 
-    error = raft_read_header(raft);
+    struct ovsdb_error *error = raft_read_header(raft);
     if (error) {
         goto error;
     }
@@ -1704,7 +1713,6 @@ raft_close(struct raft *raft)
     sset_destroy(&raft->remote_addresses);
     free(raft->local_address);
     free(raft->name);
-    free(raft->file_name);
 
     free(raft);
 }
@@ -2903,27 +2911,43 @@ raft_truncate(struct raft *raft, uint64_t new_end)
     return servers_changed;
 }
 
-static const struct raft_entry *
-raft_peek_next_entry(struct raft *raft, enum raft_entry_type type)
+static const struct json *
+raft_peek_next_entry(struct raft *raft)
 {
-    if (raft->commit_index > raft->last_applied
-        && raft->last_applied + 1 >= raft->log_start) {
-        const struct raft_entry *e = raft_get_entry(raft, raft->last_applied + 1);
-        if (e->type == type) {
-            return e;
+    /* Invariant: log_start - 2 <= last_applied <= commit_index < log_end. */
+    ovs_assert(raft->log_start <= raft->last_applied + 2);
+    ovs_assert(raft->last_applied <= raft->commit_index);
+    ovs_assert(raft->commit_index < raft->log_end);
+
+    if (raft->joining) {        /* XXX needed? */
+        return NULL;
+    }
+
+    if (raft->log_start == raft->last_applied + 2) {
+        return raft->snapshot;
+    }
+
+    while (raft->last_applied < raft->commit_index) {
+        const struct raft_entry *e = raft_get_entry(raft,
+                                                    raft->last_applied + 1);
+        if (e->type == RAFT_DATA) {
+            return e->data;
         }
+
+        /* Skip RAFT_SERVERS entries. */
+        raft->last_applied++;
     }
     return NULL;
 }
 
-static const struct raft_entry *
-raft_get_next_entry(struct raft *raft, enum raft_entry_type type)
+static const struct json *
+raft_get_next_entry(struct raft *raft)
 {
-    const struct raft_entry *e = raft_peek_next_entry(raft, type);
-    if (e) {
+    const struct json *data = raft_peek_next_entry(raft);
+    if (data) {
         raft->last_applied++;
     }
-    return e;
+    return data;
 }
 
 static void
@@ -3290,33 +3314,15 @@ bool
 raft_has_next_entry(const struct raft *raft_)
 {
     struct raft *raft = CONST_CAST(struct raft *, raft_);
-    if (raft->last_applied + 2 == raft->log_start) {
-        return true;
-    }
-    return raft_peek_next_entry(raft, RAFT_DATA);
+    return raft_peek_next_entry(raft) != NULL;
 }
 
 const struct json *
 raft_next_entry(struct raft *raft, bool *is_snapshot)
 {
-    if (raft->last_applied + 2 == raft->log_start) {
-        raft->last_applied++;
-        *is_snapshot = true;
-        return raft->snapshot;
-    }
-
-    const struct raft_entry *e = raft_get_next_entry(raft, RAFT_DATA);
-    if (!e) {
-        return NULL;
-    }
-
-    char *s = json_to_string(e->data, JSSF_SORT);
-    VLOG_INFO("applying log index %"PRIu64": data \"%s\"",
-              raft->last_applied, s);
-    free(s);
-
-    *is_snapshot = false;       /* XXX */
-    return e->data;
+    const struct json *data = raft_get_next_entry(raft);
+    *is_snapshot = data == raft->snapshot;
+    return data;
 }
 
 static void

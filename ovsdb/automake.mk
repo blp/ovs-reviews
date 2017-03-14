@@ -36,6 +36,7 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/row.h \
 	ovsdb/server.c \
 	ovsdb/server.h \
+	ovsdb/storage.c \
 	ovsdb/storage.h \
 	ovsdb/table.c \
 	ovsdb/table.h \

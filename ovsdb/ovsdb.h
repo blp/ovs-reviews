@@ -54,6 +54,11 @@ bool ovsdb_schema_equal(const struct ovsdb_schema *,
                         const struct ovsdb_schema *);
 
 /* Database. */
+enum ovsdb_state {
+    OVSDB_LOADING,
+    OVSDB_RUNNING
+};
+
 struct ovsdb {
     struct ovsdb_schema *schema;
     struct ovsdb_file *file;    /* If nonnull, log for transactions. */

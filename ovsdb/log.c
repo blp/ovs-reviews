@@ -336,6 +336,16 @@ parse_body(struct ovsdb_log *file, off_t offset, unsigned long int length,
     return NULL;
 }
 
+/* Attempts to read a log record from 'file'.
+ *
+ * If successful, returns NULL and stores in '*jsonp' the JSON object that the
+ * record contains.  The caller owns the data and must eventually free it (with
+ * json_destroy()).
+ *
+ * If a read error occurs, returns the error and stores NULL in '*jsonp'.
+ *
+ * If the read reaches end of file, returns NULL and stores NULL in
+ * '*jsonp'. */
 struct ovsdb_error *
 ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
 {
