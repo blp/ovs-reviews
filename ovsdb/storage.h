@@ -37,7 +37,6 @@ const char *ovsdb_storage_get_name(const struct ovsdb_storage *);
 struct ovsdb_error *ovsdb_storage_read(struct ovsdb_storage *, struct json **,
                                        struct uuid *)
     OVS_WARN_UNUSED_RESULT;
-void ovsdb_storage_read_wait(struct ovsdb_storage *);
 
 void ovsdb_storage_unread(struct ovsdb_storage *);
 

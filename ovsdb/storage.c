@@ -106,9 +106,15 @@ ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
     }
 }
 
-void ovsdb_storage_read_wait(struct ovsdb_storage *);
+void
+ovsdb_storage_unread(struct ovsdb_storage *storage)
+{
+    if (storage->raft) {
+        
 
-void ovsdb_storage_unread(struct ovsdb_storage *);
+    }
+
+}
 
 struct ovsdb_write *ovsdb_storage_write(struct ovsdb_storage *,
                                              const struct json *,
