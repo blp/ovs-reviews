@@ -18,7 +18,9 @@
 #include "storage.h"
 #include <string.h>
 #include "log.h"
+#include "ovsdb-error.h"
 #include "openvswitch/json.h"
+#include "poll-loop.h"
 #include "raft.h"
 #include "util.h"
 
@@ -130,8 +132,8 @@ struct ovsdb_write {
 };
 
 struct ovsdb_write * OVS_WARN_UNUSED_RESULT
-ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *,
-                    const struct uuid *prereq, bool durable)
+ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
+                    const struct uuid *prereq OVS_UNUSED, bool durable)
 {
     struct ovsdb_write *w = xzalloc(sizeof *w);
     if (storage->error) {
@@ -139,8 +141,8 @@ ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *,
     } else if (storage->raft) {
         w->command = raft_command_execute(storage->raft, data);
     } else {
-        w->error = ovsdb_log_write(storage->log, json);
-        if (!error && durable) {
+        w->error = ovsdb_log_write(storage->log, data);
+        if (!w->error && durable) {
             w->error = ovsdb_log_commit(storage->log);
         }
     }
@@ -155,8 +157,9 @@ ovsdb_write_is_complete(const struct ovsdb_write *w)
 }
 
 const struct ovsdb_error *
-ovsdb_write_get_error(const struct ovsdb_write *w)
+ovsdb_write_get_error(const struct ovsdb_write *w_)
 {
+    struct ovsdb_write *w = CONST_CAST(struct ovsdb_write *, w_);
     if (w->command) {
         enum raft_command_status status = raft_command_get_status(w->command);
         ovs_assert(status != RAFT_CMD_INCOMPLETE);
