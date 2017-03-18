@@ -25,6 +25,7 @@
 struct ovsdb_storage {
     struct ovsdb_log *log;
     struct raft *raft;
+    struct ovsdb_error *error;
 };
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -109,24 +110,95 @@ ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
 void
 ovsdb_storage_unread(struct ovsdb_storage *storage)
 {
-    if (storage->raft) {
-        
-
+    if (storage->error) {
+        return;
     }
 
+    if (storage->raft) {
+        if (!storage->error) {
+            storage->error = ovsdb_error(NULL, "inconsistent data");
+        }
+    } else {
+        ovsdb_log_unread(storage->log);
+    }
 }
 
-struct ovsdb_write *ovsdb_storage_write(struct ovsdb_storage *,
-                                             const struct json *,
-                                             const struct uuid *prereq,
-                                             bool durable)
-    OVS_WARN_UNUSED_RESULT;
-bool ovsdb_write_get_status(const struct ovsdb_write *);
-const struct ovsdb_error *ovsdb_write_get_error(const struct ovsdb_write *);
-void ovsdb_write_wait(const struct ovsdb_write *);
-void ovsdb_write_destroy(struct ovsdb_write *);
+struct ovsdb_write {
+    struct ovsdb_error *error;
+    struct raft_command *command;
 
-off_t ovsdb_storage_get_offset(const struct ovsdb_storage *);
+};
+
+struct ovsdb_write * OVS_WARN_UNUSED_RESULT
+ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *,
+                    const struct uuid *prereq, bool durable)
+{
+    struct ovsdb_write *w = xzalloc(sizeof *w);
+    if (storage->error) {
+        w->error = ovsdb_error_clone(storage->error);
+    } else if (storage->raft) {
+        w->command = raft_command_execute(storage->raft, data);
+    } else {
+        w->error = ovsdb_log_write(storage->log, json);
+        if (!error && durable) {
+            w->error = ovsdb_log_commit(storage->log);
+        }
+    }
+    return w;
+}
+
+bool
+ovsdb_write_is_complete(const struct ovsdb_write *w)
+{
+    return (w->error
+            || raft_command_get_status(w->command) != RAFT_CMD_INCOMPLETE);
+}
+
+const struct ovsdb_error *
+ovsdb_write_get_error(const struct ovsdb_write *w)
+{
+    if (w->command) {
+        enum raft_command_status status = raft_command_get_status(w->command);
+        ovs_assert(status != RAFT_CMD_INCOMPLETE);
+        if (status != RAFT_CMD_SUCCESS) {
+            w->error = ovsdb_error(NULL, "%s",
+                                   raft_command_status_to_string(status));
+        }
+        raft_command_unref(w->command);
+        w->command = NULL;
+    }
+
+    return w->error;
+}
+
+void
+ovsdb_write_wait(const struct ovsdb_write *w)
+{
+    if (ovsdb_write_is_complete(w)) {
+        poll_immediate_wake();
+    }
+}
+
+void
+ovsdb_write_destroy(struct ovsdb_write *w)
+{
+    if (w) {
+        raft_command_unref(w->command);
+        ovsdb_error_destroy(w->error);
+        free(w);
+    }
+}
+
+off_t
+ovsdb_storage_get_offset(const struct ovsdb_storage *storage)
+{
+    if (storage->raft) {
+        /* XXX */
+        return 1000000;
+    } else {
+        return ovsdb_log_get_offset(storage->log);
+    }
+}
 
 struct ovsdb_error *ovsdb_storage_replace(struct ovsdb_storage *,
                                           const struct json **, size_t n);

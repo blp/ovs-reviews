@@ -499,27 +499,57 @@ close_db(struct db *db)
     free(db);
 }
 
-static char *
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 open_db(struct server_config *config, const char *filename)
 {
-    struct ovsdb_error *db_error;
     struct db *db;
-    char *error;
 
     /* If we know that the file is already open, return a good error message.
      * Otherwise, if the file is open, we'll fail later on with a harder to
      * interpret file locking error. */
     if (is_already_open(config, filename)) {
-        return xasprintf("%s: already open", filename);
+        return ovsdb_error(NULL, "%s: already open", filename);
+    }
+
+    struct ovsdb_storage *storage;
+    struct ovsdb_error *error;
+
+    error = ovsdb_storage_open(db->filename, NULL, true, &storage);
+    if (error) {
+        return error;
+    }
+
+    error = ovsdb_storage_read(storage, &schema_json, &uuid);
+    if (error) {
+        ovsdb_storage_close(storage);
+        return error;
+    }
+
+    struct ovsdb *ovsdb = NULL;
+    const char *name;
+    if (schema_json) {
+        struct ovsdb_schema *schema;
+        error = ovsdb_schema_from_json(schema_json, &schema);
+        json_destroy(schema_json);
+        if (error) {
+            error = ovsdb_wrap_error(error,
+                                     "failed to parse \"%s\" as ovsdb schema",
+                                     file_name);
+            ovsdb_storage_close(storage);
+            return error;
+        }
+
+        ovsdb = ovsdb_create(schema);
+        name = schema->name;
+    } else {
+        name = ovsdb_storage_get_name(storage);
+        ovs_assert(name);
     }
 
     db = xzalloc(sizeof *db);
     db->filename = xstrdup(filename);
+    db->db
 
-    db_error = ovsdb_file_open(db->filename, NULL, false, true,
-                               &db->db, &db->file);
-    if (db_error) {
-        error = ovsdb_error_to_string(db_error);
     } else if (!ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db)) {
         error = xasprintf("%s: duplicate database name", db->db->schema->name);
     } else {
