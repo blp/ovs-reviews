@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1393,10 +1393,9 @@ ovsdb_idl_send_schema_request(struct ovsdb_idl *idl)
 static void
 log_error(struct ovsdb_error *error)
 {
-    char *s = ovsdb_error_to_string(error);
+    char *s = ovsdb_error_to_string_free(error);
     VLOG_WARN("error parsing database schema: %s", s);
     free(s);
-    ovsdb_error_destroy(error);
 }
 
 /* Frees 'schema', which is in the format returned by parse_schema(). */
@@ -1916,12 +1915,11 @@ ovsdb_idl_row_change__(struct ovsdb_idl_row *row, const struct json *row_json,
 
             ovsdb_datum_destroy(&datum, &column->type);
         } else {
-            char *s = ovsdb_error_to_string(error);
+            char *s = ovsdb_error_to_string_free(error);
             VLOG_WARN_RL(&syntax_rl, "error parsing column %s in row "UUID_FMT
                          " in table %s: %s", column_name,
                          UUID_ARGS(&row->uuid), table->class->name, s);
             free(s);
-            ovsdb_error_destroy(error);
         }
     }
     return changed;
@@ -3691,11 +3689,10 @@ ovsdb_idl_txn_process_insert_reply(struct ovsdb_idl_txn_insert *insert,
 
     error = ovsdb_atom_from_json(&uuid, &uuid_type, json_uuid, NULL);
     if (error) {
-        char *s = ovsdb_error_to_string(error);
+        char *s = ovsdb_error_to_string_free(error);
         VLOG_WARN_RL(&syntax_rl, "\"insert\" reply \"uuid\" is not a JSON "
                      "UUID: %s", s);
         free(s);
-        ovsdb_error_destroy(error);
         return false;
     }
 

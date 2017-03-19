@@ -332,7 +332,9 @@ main(int argc, char *argv[])
     SSET_FOR_EACH (db_filename, &db_filenames) {
         error = open_db(&server_config, db_filename);
         if (error) {
-            ovs_fatal(0, "%s", error);
+            char *s = ovsdb_error_to_string_free(error);
+            ovs_fatal(0, "%s", s);
+            free(s);
         }
     }
 
@@ -1061,10 +1063,9 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
         db = node->data;
         error = ovsdb_txn_commit(db->txn, false);
         if (error) {
-            char *msg = ovsdb_error_to_string(error);
+            char *msg = ovsdb_error_to_string_free(error);
             VLOG_ERR_RL(&rl, "Failed to update remote status: %s", msg);
             free(msg);
-            ovsdb_error_destroy(error);
         }
     }
 }
@@ -1302,10 +1303,9 @@ ovsdb_server_compact(struct unixctl_conn *conn, int argc,
 
             error = ovsdb_file_compact(db->file);
             if (error) {
-                char *s = ovsdb_error_to_string(error);
+                char *s = ovsdb_error_to_string_free(error);
                 ds_put_format(&reply, "%s\n", s);
                 free(s);
-                ovsdb_error_destroy(error);
             }
 
             n++;
