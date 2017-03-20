@@ -59,7 +59,15 @@ ovsdb_storage_open(const char *name, bool rw, struct ovsdb_storage **storagep)
 }
 
 void
-ovsdb_storage_close(struct ovsdb_storage *);
+ovsdb_storage_close(struct ovsdb_storage *storage)
+{
+    if (storage) {
+        ovsdb_log_close(storage->log);
+        raft_close(storage->raft);
+        ovsdb_error_destroy(storage->error);
+        free(storage);
+    }
+}
 
 void
 ovsdb_storage_run(struct ovsdb_storage *storage)
@@ -95,9 +103,9 @@ ovsdb_storage_get_name(const struct ovsdb_storage *storage)
  * '*jsonp'. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
-                   struct uuid *txnid)
+                   struct uuid *txnid OVS_UNUSED)
 {
-    *txnid = UUID_ZERO;         /* XXX */
+    //*txnid = UUID_ZERO;         /* XXX */
 
     if (storage->raft) {
         bool is_snapshot;

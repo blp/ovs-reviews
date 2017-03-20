@@ -305,10 +305,9 @@ raft_fsync_thread(void *raft_)
 
                 seq_change(raft->fsync_complete);
             } else {
-                char *error_string = ovsdb_error_to_string(error);
+                char *error_string = ovsdb_error_to_string_free(error);
                 VLOG_WARN("%s", error_string);
                 free(error_string);
-                ovsdb_error_destroy(error);
             }
         }
 
@@ -1462,10 +1461,9 @@ raft_read_log(struct raft *raft)
                 /* We assume that the error is due to a partial write while
                  * appending to the file before a crash, so log it and
                  * continue. */
-                char *error_string = ovsdb_error_to_string(error);
+                char *error_string = ovsdb_error_to_string_free(error);
                 VLOG_WARN("%s", error_string);
                 free(error_string);
-                ovsdb_error_destroy(error);
                 error = NULL;
             }
             break;
@@ -1563,6 +1561,12 @@ error:
     raft_close(raft);
     *raftp = NULL;
     return error;
+}
+
+const char *
+raft_get_name(const struct raft *raft)
+{
+    return raft->name;
 }
 
 bool
@@ -1728,8 +1732,7 @@ raft_receive_rpc(struct raft *raft, struct jsonrpc_session *js,
 
     struct ovsdb_error *error = raft_rpc_from_jsonrpc(raft, msg, rpc);
     if (error) {
-        char *s = ovsdb_error_to_string(error);
-        ovsdb_error_destroy(error);
+        char *s = ovsdb_error_to_string_free(error);
         VLOG_INFO("%s: %s", jsonrpc_session_get_name(js), s);
         free(s);
         return false;
@@ -2186,10 +2189,9 @@ raft_command_execute__(struct raft *raft, enum raft_entry_type type,
         w->command.index = cmd->index;
     } else {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
-        char *s = ovsdb_error_to_string(error);
+        char *s = ovsdb_error_to_string_free(error);
         VLOG_WARN_RL(&rl, "%s", s);
         free(s);
-        ovsdb_error_destroy(error);
 
         /* XXX make this a hard failure if cluster has <=2 servers. */
     }
@@ -3099,10 +3101,9 @@ raft_handle_append_entries(struct raft *raft,
     }
 
     if (error) {
-        char *s = ovsdb_error_to_string(error);
+        char *s = ovsdb_error_to_string_free(error);
         VLOG_ERR("%s", s);
         free(s);
-        ovsdb_error_destroy(error);
         raft_send_append_reply(raft, rq, false, "I/O error");
         return;
     }
@@ -4077,10 +4078,9 @@ raft_try_store_snapshot(struct raft *raft, const struct json *new_snapshot)
     struct ovsdb_error *error = raft_save_snapshot(raft, new_log_start,
                                                    new_snapshot);
     if (error) {
-        char *error_s = ovsdb_error_to_string(error);
+        char *error_s = ovsdb_error_to_string_free(error);
         VLOG_WARN("saving snapshot failed (%s)", error_s);
         free(error_s);
-        ovsdb_error_destroy(error);
         return false;
     }
 

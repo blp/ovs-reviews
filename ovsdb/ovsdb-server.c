@@ -49,6 +49,7 @@
 #include "stream-ssl.h"
 #include "stream.h"
 #include "sset.h"
+#include "storage.h"
 #include "table.h"
 #include "timeval.h"
 #include "transaction.h"
@@ -62,7 +63,7 @@ VLOG_DEFINE_THIS_MODULE(ovsdb_server);
 
 struct db {
     char *filename;
-    struct ovsdb_file *file;
+    struct ovsdb_storage *storage;
     struct ovsdb *db;
 };
 
@@ -105,7 +106,9 @@ static unixctl_cb_func ovsdb_server_add_database;
 static unixctl_cb_func ovsdb_server_remove_database;
 static unixctl_cb_func ovsdb_server_list_databases;
 
-static char *open_db(struct server_config *config, const char *filename);
+static struct ovsdb_error *open_db(struct server_config *,
+                                   const char *filename)
+    OVS_WARN_UNUSED_RESULT;
 static void close_db(struct db *db);
 
 static void parse_options(int *argc, char **argvp[],
@@ -262,7 +265,6 @@ main(int argc, char *argv[])
     struct server_config server_config;
     struct shash all_dbs;
     struct shash_node *node, *next;
-    char *error;
     int i;
 
     ovs_cmdl_proctitle_init(argc, argv);
@@ -326,7 +328,7 @@ main(int argc, char *argv[])
     perf_counters_init();
 
     SSET_FOR_EACH (db_filename, &db_filenames) {
-        error = open_db(&server_config, db_filename);
+        struct ovsdb_error *error = open_db(&server_config, db_filename);
         if (error) {
             char *s = ovsdb_error_to_string_free(error);
             ovs_fatal(0, "%s", s);
@@ -334,7 +336,7 @@ main(int argc, char *argv[])
         }
     }
 
-    error = reconfigure_remotes(jsonrpc, &all_dbs, &remotes);
+    char *error = reconfigure_remotes(jsonrpc, &all_dbs, &remotes);
     if (!error) {
         error = reconfigure_ssl(&all_dbs);
     }
@@ -509,13 +511,13 @@ open_db(struct server_config *config, const char *filename)
 
     struct ovsdb_storage *storage;
     struct ovsdb_error *error;
-
-    error = ovsdb_storage_open(db->filename, NULL, true, &storage);
+    error = ovsdb_storage_open(filename, true, &storage);
     if (error) {
         return error;
     }
 
-    error = ovsdb_storage_read(storage, &schema_json, &uuid);
+    struct json *schema_json;
+    error = ovsdb_storage_read(storage, &schema_json, NULL);
     if (error) {
         ovsdb_storage_close(storage);
         return error;
@@ -530,7 +532,7 @@ open_db(struct server_config *config, const char *filename)
         if (error) {
             error = ovsdb_wrap_error(error,
                                      "failed to parse \"%s\" as ovsdb schema",
-                                     file_name);
+                                     filename);
             ovsdb_storage_close(storage);
             return error;
         }
@@ -542,20 +544,22 @@ open_db(struct server_config *config, const char *filename)
         ovs_assert(name);
     }
 
-    db = xzalloc(sizeof *db);
-    db->filename = xstrdup(filename);
-    db->db
-
-    } else if (!ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db)) {
-        error = xasprintf("%s: duplicate database name", db->db->schema->name);
-    } else {
-        shash_add_assert(config->all_dbs, db->db->schema->name, db);
-        return NULL;
+    if (shash_find(config->all_dbs, name)) {
+        ovsdb_destroy(ovsdb);
+        ovsdb_storage_close(storage);
+        return ovsdb_error(NULL, "%s: duplicate database name", name);
     }
 
-    ovsdb_error_destroy(db_error);
-    close_db(db);
-    return error;
+    db = xzalloc(sizeof *db);
+    db->filename = xstrdup(filename);
+    db->storage = storage;
+    db->db = ovsdb;
+
+    shash_add_assert(config->all_dbs, name, db);
+    bool ok = ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
+    ovs_assert(ok);
+
+    return NULL;
 }
 
 static char * OVS_WARN_UNUSED_RESULT
@@ -1324,7 +1328,7 @@ ovsdb_server_compact(struct unixctl_conn *conn, int argc,
 
             VLOG_INFO("compacting %s database by user request", node->name);
 
-            error = ovsdb_file_compact(db->file);
+            error = NULL; //XXX ovsdb_file_compact(db->file);
             if (error) {
                 char *s = ovsdb_error_to_string_free(error);
                 ds_put_format(&reply, "%s\n", s);
@@ -1435,9 +1439,8 @@ ovsdb_server_add_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
 {
     struct server_config *config = config_;
     const char *filename = argv[1];
-    char *error;
 
-    error = open_db(config, filename);
+    char *error = ovsdb_error_to_string_free(open_db(config, filename));
     if (!error) {
         save_config(config);
         if (*config->is_backup) {
