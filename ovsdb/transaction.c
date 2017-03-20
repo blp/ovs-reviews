@@ -28,6 +28,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb.h"
 #include "row.h"
+#include "storage.h"
 #include "table.h"
 #include "perf-counter.h"
 #include "uuid.h"
@@ -865,11 +866,17 @@ ovsdb_txn_commit_(struct ovsdb_txn *txn, bool durable)
     }
 
     /* Send the commit to each replica. */
-    if (txn->db->file) {
-        error = ovsdb_file_commit(txn->db->file, txn, durable);
-        if (error) {
-            ovsdb_txn_abort(txn);
-            return error;
+    if (txn->db->storage) {
+        struct json *txn_json = ovsdb_file_txn_to_json(txn);
+        if (txn_json) {
+            txn_json = ovsdb_file_txn_annotate(txn_json,
+                                               ovsdb_txn_get_comment(txn));
+            error = ovsdb_storage_write_block(txn->db->storage, txn_json,
+                                              NULL, durable);
+            if (error) {
+                ovsdb_txn_abort(txn);
+                return error;
+            }
         }
     }
     ovsdb_monitors_commit(txn->db, txn);

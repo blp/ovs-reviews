@@ -76,7 +76,6 @@ static char *ssl_ciphers;
 static bool bootstrap_ca_cert;
 
 static unixctl_cb_func ovsdb_server_exit;
-static unixctl_cb_func ovsdb_server_compact;
 static unixctl_cb_func ovsdb_server_reconnect;
 static unixctl_cb_func ovsdb_server_perf_counters_clear;
 static unixctl_cb_func ovsdb_server_perf_counters_show;
@@ -375,8 +374,6 @@ main(int argc, char *argv[])
     }
 
     unixctl_command_register("exit", "", 0, 0, ovsdb_server_exit, &exiting);
-    unixctl_command_register("ovsdb-server/compact", "", 0, 1,
-                             ovsdb_server_compact, &all_dbs);
     unixctl_command_register("ovsdb-server/reconnect", "", 0, 0,
                              ovsdb_server_reconnect, jsonrpc);
 
@@ -492,9 +489,74 @@ is_already_open(struct server_config *config OVS_UNUSED,
 static void
 close_db(struct db *db)
 {
-    ovsdb_destroy(db->db);
-    free(db->filename);
-    free(db);
+    if (db) {
+        if (db->db) {
+            ovsdb_destroy(db->db);
+            /* ovsdb_destroy() already closed db->storage. */
+        } else {
+            ovsdb_storage_close(db->storage);
+        }
+        free(db->filename);
+        free(db);
+    }
+}
+
+/* XXX how to describe the return value for this function? */
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+read_db(struct db *db)
+{
+    struct ovsdb_error *error;
+    for (;;) {
+        struct json *json;
+
+        error = ovsdb_storage_read(db->storage, &json, NULL);
+        if (error) {
+            break;
+        } else if (!json) {
+            /* End of file. */
+            return NULL;
+        } else if (!db->db) {
+            struct ovsdb_schema *schema;
+            error = ovsdb_schema_from_json(json, &schema);
+            json_destroy(json);
+            if (error) {
+                return ovsdb_wrap_error(error, "%s: invalid ovsdb schema",
+                                        db->filename);
+            }
+
+            const char *storage_name = ovsdb_storage_get_name(db->storage);
+            const char *schema_name = schema->name;
+            if (storage_name && strcmp(storage_name, schema_name)) {
+                ovsdb_schema_destroy(schema);
+                return ovsdb_error(NULL, "%s: name %s in file does not match "
+                                   "name %s in schema", db->filename,
+                                   storage_name, schema_name);
+            }
+
+            db->db = ovsdb_create(schema);
+        } else {
+            struct ovsdb_txn *txn;
+
+            error = ovsdb_file_txn_from_json(db->db, json, false, &txn);
+            json_destroy(json);
+            if (!error) {
+                error = ovsdb_txn_commit(txn, false);
+            }
+            if (error) {
+                ovsdb_storage_unread(db->storage);
+                break;
+            }
+        }
+    };
+
+    /* Log error but otherwise ignore it.  Probably the database just
+     * got truncated due to power failure etc. and we should use its
+     * current contents. */
+    char *msg = ovsdb_error_to_string_free(error);
+    VLOG_ERR("%s", msg);
+    free(msg);
+
+    return NULL;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -516,47 +578,33 @@ open_db(struct server_config *config, const char *filename)
         return error;
     }
 
-    struct json *schema_json;
-    error = ovsdb_storage_read(storage, &schema_json, NULL);
-    if (error) {
-        ovsdb_storage_close(storage);
-        return error;
-    }
-
-    struct ovsdb *ovsdb = NULL;
-    const char *name;
-    if (schema_json) {
-        struct ovsdb_schema *schema;
-        error = ovsdb_schema_from_json(schema_json, &schema);
-        json_destroy(schema_json);
-        if (error) {
-            error = ovsdb_wrap_error(error,
-                                     "failed to parse \"%s\" as ovsdb schema",
-                                     filename);
-            ovsdb_storage_close(storage);
-            return error;
-        }
-
-        ovsdb = ovsdb_create(schema);
-        name = schema->name;
-    } else {
-        name = ovsdb_storage_get_name(storage);
-        ovs_assert(name);
-    }
-
-    if (shash_find(config->all_dbs, name)) {
-        ovsdb_destroy(ovsdb);
-        ovsdb_storage_close(storage);
-        return ovsdb_error(NULL, "%s: duplicate database name", name);
-    }
-
     db = xzalloc(sizeof *db);
     db->filename = xstrdup(filename);
     db->storage = storage;
-    db->db = ovsdb;
+
+    error = read_db(db);
+    if (error) {
+        close_db(db);
+        return error;
+    }
+
+    const char *name = (db->db
+                        ? db->db->schema->name
+                        : ovsdb_storage_get_name(db->storage));
+    if (!name) {
+        close_db(db);
+        return ovsdb_error(NULL, "%s: cannot determine database name",
+                           filename);
+    }
+
+    if (shash_find(config->all_dbs, name)) {
+        error = ovsdb_error(NULL, "%s: duplicate database name", name);
+        close_db(db);
+        return error;
+    }
 
     shash_add_assert(config->all_dbs, name, db);
-    bool ok = ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
+    bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
     ovs_assert(ok);
 
     return NULL;
@@ -1308,45 +1356,6 @@ ovsdb_server_disable_monitor_cond(struct unixctl_conn *conn,
     ovsdb_jsonrpc_disable_monitor_cond();
     ovsdb_jsonrpc_server_reconnect(jsonrpc, read_only);
     unixctl_command_reply(conn, NULL);
-}
-
-static void
-ovsdb_server_compact(struct unixctl_conn *conn, int argc,
-                     const char *argv[], void *dbs_)
-{
-    struct shash *all_dbs = dbs_;
-    struct ds reply;
-    struct db *db;
-    struct shash_node *node;
-    int n = 0;
-
-    ds_init(&reply);
-    SHASH_FOR_EACH(node, all_dbs) {
-        db = node->data;
-        if (argc < 2 || !strcmp(argv[1], node->name)) {
-            struct ovsdb_error *error;
-
-            VLOG_INFO("compacting %s database by user request", node->name);
-
-            error = NULL; //XXX ovsdb_file_compact(db->file);
-            if (error) {
-                char *s = ovsdb_error_to_string_free(error);
-                ds_put_format(&reply, "%s\n", s);
-                free(s);
-            }
-
-            n++;
-        }
-    }
-
-    if (!n) {
-        unixctl_command_reply_error(conn, "no database by that name");
-    } else if (reply.length) {
-        unixctl_command_reply_error(conn, ds_cstr(&reply));
-    } else {
-        unixctl_command_reply(conn, NULL);
-    }
-    ds_destroy(&reply);
 }
 
 /* "ovsdb-server/reconnect": makes ovsdb-server drop all of its JSON-RPC

@@ -157,6 +157,30 @@ ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
     return w;
 }
 
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_storage_write_block(struct ovsdb_storage *storage,
+                          const struct json *data, const struct uuid *prereq,
+                          bool durable)
+{
+    struct ovsdb_write *w = ovsdb_storage_write(storage, data,
+                                                prereq, durable);
+    while (!ovsdb_write_is_complete(w)) {
+        if (storage->raft) {
+            raft_run(storage->raft);
+        }
+
+        ovsdb_write_wait(w);
+        if (storage->raft) {
+            raft_wait(storage->raft);
+        }
+        poll_block();
+    }
+
+    struct ovsdb_error *error = ovsdb_error_clone(ovsdb_write_get_error(w));
+    ovsdb_write_destroy(w);
+    return error;
+}
+
 bool
 ovsdb_write_is_complete(const struct ovsdb_write *w)
 {

@@ -61,7 +61,7 @@ enum ovsdb_state {
 
 struct ovsdb {
     struct ovsdb_schema *schema;
-    struct ovsdb_file *file;    /* If nonnull, log for transactions. */
+    struct ovsdb_storage *storage; /* If nonnull, log for transactions. */
     struct ovs_list monitors;   /* Contains "struct ovsdb_monitor"s. */
     struct shash tables;        /* Contains "struct ovsdb_table *"s. */
 

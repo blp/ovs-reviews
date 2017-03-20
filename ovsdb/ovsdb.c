@@ -25,6 +25,7 @@
 #include "ovsdb-parser.h"
 #include "ovsdb-types.h"
 #include "simap.h"
+#include "storage.h"
 #include "table.h"
 #include "transaction.h"
 
@@ -330,7 +331,7 @@ ovsdb_create(struct ovsdb_schema *schema)
 
     db = xmalloc(sizeof *db);
     db->schema = schema;
-    db->file = NULL;
+    db->storage = NULL;
     ovs_list_init(&db->monitors);
     ovs_list_init(&db->triggers);
     db->run_triggers = false;
@@ -364,9 +365,7 @@ ovsdb_destroy(struct ovsdb *db)
         struct shash_node *node;
 
         /* Close the log. */
-        if (db->file) {
-            ovsdb_file_destroy(db->file);
-        }
+        ovsdb_storage_close(db->storage);
 
         /* Remove all the monitors. */
         ovsdb_monitors_remove(db);

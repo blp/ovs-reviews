@@ -82,7 +82,8 @@
 
   <p>
     The first record in a standalone database contains the JSON schema for the
-    database, as specified in RFC 7047.
+    database, as specified in RFC 7047.  Only this record is mandatory (a
+    standalone file that contains only a schema represents an empty database).
   </p>
 
   <p>
