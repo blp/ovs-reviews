@@ -70,7 +70,7 @@ struct ovsdb {
     bool run_triggers;
 };
 
-struct ovsdb *ovsdb_create(struct ovsdb_schema *);
+struct ovsdb *ovsdb_create(struct ovsdb_schema *, struct ovsdb_storage *);
 void ovsdb_destroy(struct ovsdb *);
 
 void ovsdb_get_memory_usage(const struct ovsdb *, struct simap *usage);

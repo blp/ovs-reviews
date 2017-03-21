@@ -324,14 +324,14 @@ ovsdb_set_ref_table(const struct shash *tables,
 }
 
 struct ovsdb *
-ovsdb_create(struct ovsdb_schema *schema)
+ovsdb_create(struct ovsdb_schema *schema, struct ovsdb_storage *storage)
 {
     struct shash_node *node;
     struct ovsdb *db;
 
     db = xmalloc(sizeof *db);
     db->schema = schema;
-    db->storage = NULL;
+    db->storage = storage;
     ovs_list_init(&db->monitors);
     ovs_list_init(&db->triggers);
     db->run_triggers = false;

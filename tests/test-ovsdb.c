@@ -1433,7 +1433,7 @@ do_execute__(struct ovs_cmdl_context *ctx, bool ro)
     json = parse_json(ctx->argv[1]);
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    db = ovsdb_create(schema);
+    db = ovsdb_create(schema, NULL);
 
     for (i = 2; i < ctx->argc; i++) {
         struct json *params, *result;
@@ -1499,7 +1499,7 @@ do_trigger(struct ovs_cmdl_context *ctx)
     json = parse_json(ctx->argv[1]);
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    db = ovsdb_create(schema);
+    db = ovsdb_create(schema, NULL);
 
     ovsdb_server_init(&server);
     ovsdb_server_add_db(&server, db);
@@ -1725,7 +1725,7 @@ do_transact(struct ovs_cmdl_context *ctx)
                       "       \"j\": {\"type\": \"integer\"}}}}}");
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    do_transact_db = ovsdb_create(schema);
+    do_transact_db = ovsdb_create(schema, NULL);
     do_transact_table = ovsdb_get_table(do_transact_db, "mytable");
     assert(do_transact_table != NULL);
 

@@ -568,6 +568,8 @@ static void raft_start_election(struct raft *);
 static bool raft_truncate(struct raft *, uint64_t new_end);
 static void raft_get_servers_from_log(struct raft *);
 
+static void raft_consider_updating_commit_index(struct raft *);
+
 static struct raft_server *
 raft_find_server__(const struct hmap *servers, const struct uuid *sid)
 {
@@ -1229,7 +1231,8 @@ raft_entry_from_json(struct json *json, struct raft_entry *e)
         e->type = RAFT_SERVERS;
         e->data = json_clone(servers_json);
     } else {
-        const struct json *data = ovsdb_parser_member(&p, "data", OP_STRING);
+        const struct json *data = ovsdb_parser_member(&p, "data",
+                                                      OP_OBJECT | OP_ARRAY);
         if (data) {
             e->type = RAFT_DATA;
             e->data = json_clone(data);
@@ -1377,7 +1380,8 @@ parse_log_record(struct raft *raft, const struct json *entry)
         }
         raft_add_entry(raft, term, RAFT_SERVERS, json_clone(servers_json));
     } else {
-        const struct json *data = ovsdb_parser_member(&p, "data", OP_STRING);
+        const struct json *data = ovsdb_parser_member(&p, "data",
+                                                      OP_OBJECT | OP_ARRAY);
         if (data) {
             raft_add_entry(raft, term, RAFT_DATA, json_clone(data));
         }
@@ -2077,9 +2081,12 @@ raft_run(struct raft *raft)
         raft->join_timeout = time_msec() + 1000;
     }
 
-    if (raft->role == RAFT_LEADER && time_msec() >= raft->ping_timeout) {
-        /* XXX send only if idle */
-        raft_send_heartbeats(raft);
+    if (raft->role == RAFT_LEADER) {
+        if (time_msec() >= raft->ping_timeout) {
+            /* XXX send only if idle */
+            raft_send_heartbeats(raft);
+        }
+        
     }
 }
 
@@ -2500,7 +2507,8 @@ raft_install_snapshot_request_from_jsonrpc(
     rq->last_index = parse_uint(p, "last_index");
     rq->last_term = parse_uint(p, "last_term");
 
-    const struct json *data = ovsdb_parser_member(p, "data", OP_ANY);
+    const struct json *data = ovsdb_parser_member(p, "data",
+                                                  OP_OBJECT | OP_ARRAY);
     if (data) {
         rq->data = json_clone(data);
     }
@@ -2838,7 +2846,11 @@ raft_become_leader(struct raft *raft)
         raft_server_init_leader(raft, s);
     }
 
+    raft_update_match_index(raft, raft->me, raft->log_end - 1);
     raft_send_heartbeats(raft);
+
+    /* XXX Initiate a no-op commit.  Otherwise we might never find out what's
+     * in the log.  See section 6.4 item 1. */
 }
 
 /* Processes term 'term' received as part of RPC 'common'.  Returns true if the
@@ -3346,26 +3358,19 @@ raft_find_new_server(struct raft *raft, const struct uuid *uuid)
     return raft_find_server__(&raft->add_servers, uuid);
 }
 
+/* Figure 3.1: "If there exists an N such that N > commitIndex, a
+ * majority of matchIndex[i] >= N, and log[N].term == currentTerm, set
+ * commitIndex = N (sections 3.5 and 3.6)." */
 static void
-raft_update_match_index(struct raft *raft, struct raft_server *s,
-                        uint64_t min_index)
+raft_consider_updating_commit_index(struct raft *raft)
 {
-    if (s->match_index >= min_index) {
-        return;
-    }
-
-    s->match_index = min_index;
-
-    /* Figure 3.1: "If there exists an N such that N > commitIndex, a
-     * majority of matchIndex[i] >= N, and log[N].term == currentTerm, set
-     * commitIndex = N (sections 3.5 and 3.6)."
-     *
-     * This loop cannot just bail out when it comes across a log entry that
+    /* This loop cannot just bail out when it comes across a log entry that
      * does not match the criteria.  For example, Figure 3.7(d2) shows a
      * case where the log entry for term 2 cannot be committed directly
      * (because it is not for the current term) but it can be committed as
      * a side effect of commit the entry for term 4 (the current term).
      * XXX Is there a more efficient way to do this? */
+    ovs_assert(raft->role == RAFT_LEADER);
     for (uint64_t n = MAX(raft->commit_index + 1, raft->log_start);
          n < raft->log_end; n++) {
         if (raft->log[n - raft->log_start].term == raft->current_term) {
@@ -3377,11 +3382,23 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
                 }
             }
             if (count > hmap_count(&raft->servers) / 2) {
-                VLOG_INFO("%"PRIu64" committed to %"PRIuSIZE" servers, "
+                VLOG_INFO("index %"PRIu64" committed to %"PRIuSIZE" servers, "
                           "applying", n, count);
                 raft_update_commit_index(raft, n);
             }
         }
+    }
+}
+
+static void
+raft_update_match_index(struct raft *raft, struct raft_server *s,
+                        uint64_t min_index)
+{
+    ovs_assert(raft->role == RAFT_LEADER);
+    VLOG_INFO("min_index=%llu match_index=%llu", min_index, s->match_index);
+    if (min_index > s->match_index) {
+        s->match_index = min_index;
+        raft_consider_updating_commit_index(raft);
     }
 }
 

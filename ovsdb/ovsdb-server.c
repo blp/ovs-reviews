@@ -105,6 +105,7 @@ static unixctl_cb_func ovsdb_server_add_database;
 static unixctl_cb_func ovsdb_server_remove_database;
 static unixctl_cb_func ovsdb_server_list_databases;
 
+static struct ovsdb_error *read_db(struct db *) OVS_WARN_UNUSED_RESULT;
 static struct ovsdb_error *open_db(struct server_config *,
                                    const char *filename)
     OVS_WARN_UNUSED_RESULT;
@@ -205,6 +206,13 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
         SHASH_FOR_EACH(node, all_dbs) {
             struct db *db = node->data;
             ovsdb_trigger_run(db->db, time_msec());
+            ovsdb_storage_run(db->storage);
+            struct ovsdb_error *error = read_db(db);
+            if (error) {
+                char *s = ovsdb_error_to_string_free(error);
+                VLOG_INFO("%s", s);
+                free(s);
+            }
         }
         if (run_process) {
             process_run();
@@ -229,6 +237,8 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
         SHASH_FOR_EACH(node, all_dbs) {
             struct db *db = node->data;
             ovsdb_trigger_wait(db->db, time_msec());
+            ovsdb_storage_wait(db->storage);
+            ovsdb_storage_read_wait(db->storage);
         }
         if (run_process) {
             process_wait(run_process);
@@ -501,6 +511,64 @@ close_db(struct db *db)
     }
 }
 
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+parse_txn(struct db *db, const struct json *json)
+{
+    if (json->type != JSON_ARRAY || json->u.array.n != 2) {
+        return ovsdb_error(NULL, "%s: invalid commit format", db->filename);
+    }
+
+    const struct json *schema_json = json->u.array.elems[0];
+    const struct json *data_json = json->u.array.elems[1];
+
+    if (schema_json->type != JSON_NULL) {
+        if (db->db) {
+            return ovsdb_error(NULL, "%s: changing schema not yet supported",
+                               db->filename);
+        }
+
+        struct ovsdb_schema *schema;
+        struct ovsdb_error *error;
+
+        error = ovsdb_schema_from_json(schema_json, &schema);
+        if (error) {
+            return ovsdb_wrap_error(error, "%s: invalid ovsdb schema",
+                                    db->filename);
+        }
+
+        const char *storage_name = ovsdb_storage_get_name(db->storage);
+        const char *schema_name = schema->name;
+        if (storage_name && strcmp(storage_name, schema_name)) {
+            ovsdb_schema_destroy(schema);
+            return ovsdb_error(NULL, "%s: name %s in file does not match "
+                               "name %s in schema", db->filename,
+                               storage_name, schema_name);
+        }
+
+        db->db = ovsdb_create(schema, db->storage);
+    }
+
+    if (data_json) {
+        char *s = json_to_string(data_json, JSSF_SORT);
+        VLOG_INFO("got txn %s", s);
+        free(s);
+
+        struct ovsdb_txn *txn;
+        struct ovsdb_error *error;
+
+        error = ovsdb_file_txn_from_json(db->db, data_json, false, &txn);
+        if (!error) {
+            error = ovsdb_txn_commit(txn, false);
+        }
+        if (error) {
+            ovsdb_storage_unread(db->storage);
+            return error;
+        }
+    }
+
+    return NULL;
+}
+
 /* XXX how to describe the return value for this function? */
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 read_db(struct db *db)
@@ -515,39 +583,14 @@ read_db(struct db *db)
         } else if (!json) {
             /* End of file. */
             return NULL;
-        } else if (!db->db) {
-            struct ovsdb_schema *schema;
-            error = ovsdb_schema_from_json(json, &schema);
-            json_destroy(json);
-            if (error) {
-                return ovsdb_wrap_error(error, "%s: invalid ovsdb schema",
-                                        db->filename);
-            }
-
-            const char *storage_name = ovsdb_storage_get_name(db->storage);
-            const char *schema_name = schema->name;
-            if (storage_name && strcmp(storage_name, schema_name)) {
-                ovsdb_schema_destroy(schema);
-                return ovsdb_error(NULL, "%s: name %s in file does not match "
-                                   "name %s in schema", db->filename,
-                                   storage_name, schema_name);
-            }
-
-            db->db = ovsdb_create(schema);
         } else {
-            struct ovsdb_txn *txn;
-
-            error = ovsdb_file_txn_from_json(db->db, json, false, &txn);
+            error = parse_txn(db, json);
             json_destroy(json);
-            if (!error) {
-                error = ovsdb_txn_commit(txn, false);
-            }
             if (error) {
-                ovsdb_storage_unread(db->storage);
                 break;
             }
         }
-    };
+    }
 
     /* Log error but otherwise ignore it.  Probably the database just
      * got truncated due to power failure etc. and we should use its

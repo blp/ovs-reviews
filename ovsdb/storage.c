@@ -20,14 +20,18 @@
 #include "log.h"
 #include "ovsdb-error.h"
 #include "openvswitch/json.h"
+#include "openvswitch/vlog.h"
 #include "poll-loop.h"
 #include "raft.h"
 #include "util.h"
+
+VLOG_DEFINE_THIS_MODULE(storage);
 
 struct ovsdb_storage {
     struct ovsdb_log *log;
     struct raft *raft;
     struct ovsdb_error *error;
+    unsigned int n_read;
 };
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -51,7 +55,7 @@ ovsdb_storage_open(const char *name, bool rw, struct ovsdb_storage **storagep)
         }
     }
 
-    struct ovsdb_storage *storage = xmalloc(sizeof *storage);
+    struct ovsdb_storage *storage = xzalloc(sizeof *storage);
     storage->log = log;
     storage->raft = raft;
     *storagep = storage;
@@ -107,13 +111,33 @@ ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
 {
     //*txnid = UUID_ZERO;         /* XXX */
 
+    struct ovsdb_error *error = NULL;
     if (storage->raft) {
         bool is_snapshot;
         const struct json *data = raft_next_entry(storage->raft, &is_snapshot);
         *jsonp = data ? json_clone(data) : NULL;
-        return NULL;
     } else {
-        return ovsdb_log_read(storage->log, jsonp);
+        error = ovsdb_log_read(storage->log, jsonp);
+        if (*jsonp) {
+            *jsonp = (!storage->n_read
+                      ? json_array_create_2(*jsonp, json_object_create())
+                      : json_array_create_2(json_null_create(), *jsonp));
+        }
+    }
+    if (!error) {
+        storage->n_read++;
+    }
+    return error;
+}
+
+bool
+ovsdb_storage_read_wait(struct ovsdb_storage *storage)
+{
+    if (storage->raft) {
+        return raft_has_next_entry(storage->raft);
+    } else {
+        /* XXX */
+        return false;
     }
 }
 
@@ -136,20 +160,21 @@ ovsdb_storage_unread(struct ovsdb_storage *storage)
 struct ovsdb_write {
     struct ovsdb_error *error;
     struct raft_command *command;
-
 };
 
 struct ovsdb_write * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
                     const struct uuid *prereq OVS_UNUSED, bool durable)
 {
+    ovs_assert(data->type == JSON_ARRAY && data->u.array.n == 2);
+
     struct ovsdb_write *w = xzalloc(sizeof *w);
     if (storage->error) {
         w->error = ovsdb_error_clone(storage->error);
     } else if (storage->raft) {
         w->command = raft_command_execute(storage->raft, data);
     } else {
-        w->error = ovsdb_log_write(storage->log, data);
+        w->error = ovsdb_log_write(storage->log, data->u.array.elems[1]);
         if (!w->error && durable) {
             w->error = ovsdb_log_commit(storage->log);
         }
@@ -162,6 +187,7 @@ ovsdb_storage_write_block(struct ovsdb_storage *storage,
                           const struct json *data, const struct uuid *prereq,
                           bool durable)
 {
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     struct ovsdb_write *w = ovsdb_storage_write(storage, data,
                                                 prereq, durable);
     while (!ovsdb_write_is_complete(w)) {
@@ -178,6 +204,7 @@ ovsdb_storage_write_block(struct ovsdb_storage *storage,
 
     struct ovsdb_error *error = ovsdb_error_clone(ovsdb_write_get_error(w));
     ovsdb_write_destroy(w);
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     return error;
 }
 

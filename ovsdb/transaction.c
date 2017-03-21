@@ -25,6 +25,7 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
 #include "openvswitch/list.h"
+#include "openvswitch/vlog.h"
 #include "ovsdb-error.h"
 #include "ovsdb.h"
 #include "row.h"
@@ -32,6 +33,8 @@
 #include "table.h"
 #include "perf-counter.h"
 #include "uuid.h"
+
+VLOG_DEFINE_THIS_MODULE(transaction);
 
 struct ovsdb_txn {
     struct ovsdb *db;
@@ -866,11 +869,14 @@ ovsdb_txn_commit_(struct ovsdb_txn *txn, bool durable)
     }
 
     /* Send the commit to each replica. */
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     if (txn->db->storage) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         struct json *txn_json = ovsdb_file_txn_to_json(txn);
         if (txn_json) {
             txn_json = ovsdb_file_txn_annotate(txn_json,
                                                ovsdb_txn_get_comment(txn));
+            txn_json = json_array_create_2(json_null_create(), txn_json);
             error = ovsdb_storage_write_block(txn->db->storage, txn_json,
                                               NULL, durable);
             if (error) {
