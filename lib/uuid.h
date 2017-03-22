@@ -71,6 +71,7 @@ uuid_prefix(const struct uuid *uuid, int digits)
 
 void uuid_init(void);
 void uuid_generate(struct uuid *);
+struct uuid uuid_random(void);
 void uuid_zero(struct uuid *);
 bool uuid_is_zero(const struct uuid *);
 int uuid_compare_3way(const struct uuid *, const struct uuid *);

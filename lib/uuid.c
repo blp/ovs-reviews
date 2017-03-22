@@ -1,4 +1,4 @@
-/* Copyright (c) 2008, 2009, 2010, 2011, 2013, 2016 Nicira, Inc.
+/* Copyright (c) 2008, 2009, 2010, 2011, 2013, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -99,6 +99,14 @@ uuid_generate(struct uuid *uuid)
     aes128_encrypt(&key, copy, uuid);
 
     uuid_set_bits_v4(uuid);
+}
+
+struct uuid
+uuid_random(void)
+{
+    struct uuid uuid;
+    uuid_generate(&uuid);
+    return uuid;
 }
 
 void
