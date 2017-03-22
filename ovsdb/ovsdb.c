@@ -323,13 +323,14 @@ ovsdb_set_ref_table(const struct shash *tables,
     }
 }
 
+/* XXX add prereq parameter? */
 struct ovsdb *
 ovsdb_create(struct ovsdb_schema *schema, struct ovsdb_storage *storage)
 {
     struct shash_node *node;
     struct ovsdb *db;
 
-    db = xmalloc(sizeof *db);
+    db = xzalloc(sizeof *db);
     db->schema = schema;
     db->storage = storage;
     ovs_list_init(&db->monitors);

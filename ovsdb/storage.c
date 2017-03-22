@@ -107,14 +107,13 @@ ovsdb_storage_get_name(const struct ovsdb_storage *storage)
  * '*jsonp'. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
-                   struct uuid *txnid OVS_UNUSED)
+                   struct uuid *txnid)
 {
-    //*txnid = UUID_ZERO;         /* XXX */
-
     struct ovsdb_error *error = NULL;
     if (storage->raft) {
         bool is_snapshot;
-        const struct json *data = raft_next_entry(storage->raft, &is_snapshot);
+        const struct json *data = raft_next_entry(storage->raft, txnid,
+                                                  &is_snapshot);
         *jsonp = data ? json_clone(data) : NULL;
     } else {
         error = ovsdb_log_read(storage->log, jsonp);
@@ -122,6 +121,9 @@ ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
             *jsonp = (!storage->n_read
                       ? json_array_create_2(*jsonp, json_object_create())
                       : json_array_create_2(json_null_create(), *jsonp));
+        }
+        if (txnid) {
+            *txnid = UUID_ZERO;
         }
     }
     if (!error) {
@@ -164,20 +166,26 @@ struct ovsdb_write {
 
 struct ovsdb_write * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
-                    const struct uuid *prereq OVS_UNUSED, bool durable)
+                    const struct uuid *prereq, struct uuid *resultp,
+                    bool durable)
 {
     ovs_assert(data->type == JSON_ARRAY && data->u.array.n == 2);
 
     struct ovsdb_write *w = xzalloc(sizeof *w);
+    struct uuid result = UUID_ZERO;
     if (storage->error) {
         w->error = ovsdb_error_clone(storage->error);
     } else if (storage->raft) {
-        w->command = raft_command_execute(storage->raft, data);
+        w->command = raft_command_execute(storage->raft, data,
+                                          prereq, &result);
     } else {
         w->error = ovsdb_log_write(storage->log, data->u.array.elems[1]);
         if (!w->error && durable) {
             w->error = ovsdb_log_commit(storage->log);
         }
+    }
+    if (resultp) {
+        *resultp = result;
     }
     return w;
 }
@@ -185,11 +193,11 @@ ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_write_block(struct ovsdb_storage *storage,
                           const struct json *data, const struct uuid *prereq,
-                          bool durable)
+                          struct uuid *resultp, bool durable)
 {
     VLOG_INFO("%s:%d", __FILE__, __LINE__);
     struct ovsdb_write *w = ovsdb_storage_write(storage, data,
-                                                prereq, durable);
+                                                prereq, resultp, durable);
     while (!ovsdb_write_is_complete(w)) {
         if (storage->raft) {
             raft_run(storage->raft);

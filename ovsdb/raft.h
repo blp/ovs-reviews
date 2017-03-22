@@ -95,7 +95,8 @@ void raft_run(struct raft *);
 void raft_wait(struct raft *);
 
 /* Reading snapshots and log entries. */
-const struct json *raft_next_entry(struct raft *, bool *is_snapshot);
+const struct json *raft_next_entry(struct raft *, struct uuid *eid,
+                                   bool *is_snapshot);
 bool raft_has_next_entry(const struct raft *);
 
 /* Writing log entries (executing commands). */
@@ -103,13 +104,16 @@ enum raft_command_status {
     RAFT_CMD_INCOMPLETE,        /* In progress, please wait. */
     RAFT_CMD_SUCCESS,           /* Committed. */
     RAFT_CMD_NOT_LEADER,        /* Failed because we are not the leader. */
+    RAFT_CMD_BAD_PREREQ,        /* Failed because prerequisite check failed. */
     RAFT_CMD_LOST_LEADERSHIP,   /* Leadership lost after command initiation. */
     RAFT_CMD_SHUTDOWN,          /* Raft server shut down. */
 };
 const char *raft_command_status_to_string(enum raft_command_status);
 
 struct raft_command *raft_command_execute(struct raft *,
-                                          const struct json *data)
+                                          const struct json *data,
+                                          const struct uuid *prereq,
+                                          struct uuid *result)
     OVS_WARN_UNUSED_RESULT;
 enum raft_command_status raft_command_get_status(const struct raft_command *);
 void raft_command_unref(struct raft_command *);

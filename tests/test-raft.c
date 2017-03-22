@@ -113,9 +113,10 @@ main(int argc, char *argv[])
         }
         while (raft_has_next_entry(raft)) {
             const struct json *entry;
+            struct uuid eid;
             bool snapshot;
 
-            entry = raft_next_entry(raft, &snapshot);
+            entry = raft_next_entry(raft, &eid, &snapshot);
             char *entry_s = json_to_string(entry, JSSF_SORT);
             if (snapshot) {
                 printf("new snapshot \"%s\"\n", entry_s);
@@ -238,7 +239,7 @@ test_raft_execute(struct unixctl_conn *conn,
         struct execute_ctx *ctx = ctx_;
         struct execute_command *command = xmalloc(sizeof *command);
         ovs_list_push_back(&ctx->commands, &command->list_node);
-        command->cmd = raft_command_execute(ctx->raft, data);
+        command->cmd = raft_command_execute(ctx->raft, data, NULL, NULL);
         command->conn = conn;
     }
     json_destroy(data);

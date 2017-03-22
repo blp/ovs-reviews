@@ -103,6 +103,7 @@ enum raft_entry_type {
 struct raft_entry {
     uint64_t term;
     enum raft_entry_type type;
+    struct uuid eid;
     struct json *data;
 };
 
@@ -209,6 +210,7 @@ struct raft {
     uint64_t prev_term;               /* Term for index 'log_start - 1'. */
     struct hmap prev_servers;         /* Contains "struct raft_server"s. */
     struct json *snapshot;            /* Snapshot. */
+    struct uuid snapshot_eid;         /* ID of last data in snapshot. */
 
 /* Volatile state.
  *
@@ -732,9 +734,10 @@ raft_create_cluster(const char *file_name, const char *name,
     }
 
     /* Write log file. */
-    struct uuid sid, cid;
+    struct uuid sid, cid, eid;
     uuid_generate(&sid);
     uuid_generate(&cid);
+    uuid_generate(&eid);
 
     char sid_s[UUID_LEN + 1];
     sprintf(sid_s, UUID_FMT, UUID_ARGS(&sid));
@@ -752,6 +755,7 @@ raft_create_cluster(const char *file_name, const char *name,
     json_object_put(snapshot, "prev_term", json_integer_create(0));
     json_object_put(snapshot, "prev_index", json_integer_create(1));
     json_object_put(snapshot, "prev_data", json_clone(data));
+    json_object_put_format(snapshot, "prev_eid", UUID_FMT, UUID_ARGS(&eid));
 
     error = ovsdb_log_write(storage, snapshot);
     json_destroy(snapshot);
@@ -901,6 +905,9 @@ raft_entry_to_json(const struct raft_entry *e)
     json_object_put_uint(json, "term", e->term);
     json_object_put(json,  e->type == RAFT_DATA ? "data" : "servers",
                     json_clone(e->data));
+    if (e->type == RAFT_DATA) {
+        json_object_put_format(json, "eid", UUID_FMT, UUID_ARGS(&e->eid));
+    }
     return json;
 }
 
@@ -1236,6 +1243,7 @@ raft_entry_from_json(struct json *json, struct raft_entry *e)
         if (data) {
             e->type = RAFT_DATA;
             e->data = json_clone(data);
+            e->eid = parse_required_uuid(&p, "eid");
         }
     }
 
@@ -1248,7 +1256,8 @@ raft_entry_from_json(struct json *json, struct raft_entry *e)
 
 static struct raft_entry *
 raft_add_entry(struct raft *raft,
-               uint64_t term, enum raft_entry_type type, struct json *data)
+               uint64_t term, enum raft_entry_type type,
+               struct json *data, const struct uuid *eid)
 {
     if (raft->log_end - raft->log_start >= raft->allocated_log) {
         raft->log = x2nrealloc(raft->log, &raft->allocated_log,
@@ -1259,17 +1268,19 @@ raft_add_entry(struct raft *raft,
     entry->type = type;
     entry->term = term;
     entry->data = data;
+    entry->eid = eid ? *eid : UUID_ZERO;
     return entry;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_entry(struct raft *raft,
-                 uint64_t term, enum raft_entry_type type, struct json *data)
+                 uint64_t term, enum raft_entry_type type, struct json *data,
+                 const struct uuid *eid)
 {
     /* XXX  when one write fails we need to make all subsequent writes fail (or
      * just not attempt them) since omitting some writes is fatal */
 
-    raft_add_entry(raft, term, type, data);
+    raft_add_entry(raft, term, type, data, eid);
     struct json *json = raft_entry_to_json_with_index(raft, raft->log_end - 1);
     struct ovsdb_error *error = ovsdb_log_write(raft->storage, json);
     json_destroy(json);
@@ -1378,12 +1389,14 @@ parse_log_record(struct raft *raft, const struct json *entry)
             ovsdb_error_destroy(ovsdb_parser_finish(&p));
             return error;
         }
-        raft_add_entry(raft, term, RAFT_SERVERS, json_clone(servers_json));
+        raft_add_entry(raft, term, RAFT_SERVERS, json_clone(servers_json),
+                       NULL);
     } else {
         const struct json *data = ovsdb_parser_member(&p, "data",
                                                       OP_OBJECT | OP_ARRAY);
         if (data) {
-            raft_add_entry(raft, term, RAFT_DATA, json_clone(data));
+            struct uuid eid = parse_required_uuid(&p, "eid");
+            raft_add_entry(raft, term, RAFT_DATA, json_clone(data), &eid);
         }
     }
 
@@ -1436,6 +1449,7 @@ raft_read_header(struct raft *raft)
         const struct json *snapshot = ovsdb_parser_member(&p, "prev_data",
                                                           OP_ANY | OP_OPTIONAL);
         if (snapshot) {
+            raft->snapshot_eid = parse_required_uuid(&p, "prev_eid");
             raft->prev_term = parse_uint(&p, "prev_term");
             raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
             raft->commit_index = raft->log_start - 1;
@@ -2160,6 +2174,8 @@ raft_command_status_to_string(enum raft_command_status status)
         return "success";
     case RAFT_CMD_NOT_LEADER:
         return "not leader";
+    case RAFT_CMD_BAD_PREREQ:
+        return "prerequisite check failed";
     case RAFT_CMD_LOST_LEADERSHIP:
         return "lost leadership";
     case RAFT_CMD_SHUTDOWN:
@@ -2169,9 +2185,23 @@ raft_command_status_to_string(enum raft_command_status status)
     }
 }
 
+static const struct uuid *
+raft_current_eid(const struct raft *raft)
+{
+    for (uint64_t index = raft->log_end - 1; index >= raft->log_start;
+         index--) {
+        struct raft_entry *e = &raft->log[index - raft->log_start];
+        if (e->type == RAFT_DATA) {
+            return &e->eid;
+        }
+    }
+    return &raft->snapshot_eid;
+}
+
 static struct raft_command * OVS_WARN_UNUSED_RESULT
 raft_command_execute__(struct raft *raft, enum raft_entry_type type,
-                       const struct json *data)
+                       const struct json *data, const struct uuid *prereq,
+                       struct uuid *result)
 {
     struct raft_command *cmd = xzalloc(sizeof *cmd);
     cmd->n_refs = 2;            /* One for client, one for raft->commands. */
@@ -2184,13 +2214,28 @@ raft_command_execute__(struct raft *raft, enum raft_entry_type type,
         return cmd;
     }
 
+    if (prereq && !uuid_equals(prereq, raft_current_eid(raft))) {
+        raft_command_complete(raft, cmd, RAFT_CMD_BAD_PREREQ);
+        return cmd;
+    }
+
+    struct uuid eid;
+    if (type == RAFT_DATA) {
+        uuid_generate(&eid);
+    } else {
+        eid = UUID_ZERO;
+    }
+    if (result) {
+        *result = eid;
+    }
+
     /* Write to local log.
      *
      * XXX If this server is being removed from the configuration then we
      * should not write to the local log; see section 4.2.2.  Or we could
      * implement leadership transfer. */
     struct ovsdb_error *error = raft_write_entry(raft, raft->current_term,
-                                                 type, json_clone(data));
+                                                 type, json_clone(data), &eid);
     if (!error) {
         struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_COMMAND);
         w->command.index = cmd->index;
@@ -2216,9 +2261,10 @@ raft_command_execute__(struct raft *raft, enum raft_entry_type type,
 }
 
 struct raft_command * OVS_WARN_UNUSED_RESULT
-raft_command_execute(struct raft *raft, const struct json *data)
+raft_command_execute(struct raft *raft, const struct json *data,
+                     const struct uuid *prereq, struct uuid *result)
 {
-    return raft_command_execute__(raft, RAFT_DATA, data);
+    return raft_command_execute__(raft, RAFT_DATA, data, prereq, result);
 }
 
 enum raft_command_status
@@ -2851,6 +2897,11 @@ raft_become_leader(struct raft *raft)
 
     /* XXX Initiate a no-op commit.  Otherwise we might never find out what's
      * in the log.  See section 6.4 item 1. */
+    struct json *data = json_array_create_2(json_null_create(),
+                                            json_object_create()); /* XXX */
+    raft_command_unref(raft_command_execute__(raft, RAFT_DATA,
+                                              data, NULL, NULL));
+    json_destroy(data);
 }
 
 /* Processes term 'term' received as part of RPC 'common'.  Returns true if the
@@ -2904,7 +2955,7 @@ raft_get_servers_from_log(struct raft *raft)
 
 /* Truncates the log, so that raft->log_end becomes 'new_end'.
  *
- * Doesn't write anything to disk.
+ * Doesn't write anything to disk.  (XXX need to truncate log?)
  *
  * Returns true if any of the removed log entries were server configuration
  * entries, false otherwise. */
@@ -2926,7 +2977,7 @@ raft_truncate(struct raft *raft, uint64_t new_end)
 }
 
 static const struct json *
-raft_peek_next_entry(struct raft *raft)
+raft_peek_next_entry(struct raft *raft, struct uuid *eid)
 {
     /* Invariant: log_start - 2 <= last_applied <= commit_index < log_end. */
     ovs_assert(raft->log_start <= raft->last_applied + 2);
@@ -2938,6 +2989,7 @@ raft_peek_next_entry(struct raft *raft)
     }
 
     if (raft->log_start == raft->last_applied + 2) {
+        *eid = raft->snapshot_eid;
         return raft->snapshot;
     }
 
@@ -2945,6 +2997,7 @@ raft_peek_next_entry(struct raft *raft)
         const struct raft_entry *e = raft_get_entry(raft,
                                                     raft->last_applied + 1);
         if (e->type == RAFT_DATA) {
+            *eid = e->eid;
             return e->data;
         }
 
@@ -2955,9 +3008,9 @@ raft_peek_next_entry(struct raft *raft)
 }
 
 static const struct json *
-raft_get_next_entry(struct raft *raft)
+raft_get_next_entry(struct raft *raft, struct uuid *eid)
 {
-    const struct json *data = raft_peek_next_entry(raft);
+    const struct json *data = raft_peek_next_entry(raft, eid);
     if (data) {
         raft->last_applied++;
     }
@@ -3099,7 +3152,7 @@ raft_handle_append_entries(struct raft *raft,
     for (; i < n_entries; i++) {
         const struct raft_entry *entry = &entries[i];
         error = raft_write_entry(raft, entry->term, entry->type,
-                                 json_clone(entry->data));
+                                 json_clone(entry->data), &entry->eid);
         if (error) {
             break;
         }
@@ -3327,13 +3380,14 @@ bool
 raft_has_next_entry(const struct raft *raft_)
 {
     struct raft *raft = CONST_CAST(struct raft *, raft_);
-    return raft_peek_next_entry(raft) != NULL;
+    struct uuid eid;
+    return raft_peek_next_entry(raft, &eid) != NULL;
 }
 
 const struct json *
-raft_next_entry(struct raft *raft, bool *is_snapshot)
+raft_next_entry(struct raft *raft, struct uuid *eid, bool *is_snapshot)
 {
-    const struct json *data = raft_get_next_entry(raft);
+    const struct json *data = raft_get_next_entry(raft, eid);
     *is_snapshot = data == raft->snapshot;
     return data;
 }
@@ -3630,7 +3684,7 @@ raft_log_reconfiguration(struct raft *raft)
     /* Add the reconfiguration to the log. */
     struct json *servers_json = raft_servers_to_json(&raft->servers);
     struct raft_command *cmd = raft_command_execute__(
-        raft, RAFT_SERVERS, servers_json);
+        raft, RAFT_SERVERS, servers_json, NULL, NULL);
     json_destroy(servers_json);
     if (cmd) {
         /* XXX handle error */

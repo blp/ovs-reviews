@@ -512,7 +512,7 @@ close_db(struct db *db)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-parse_txn(struct db *db, const struct json *json)
+parse_txn(struct db *db, const struct json *json, const struct uuid *txnid)
 {
     if (json->type != JSON_ARRAY || json->u.array.n != 2) {
         return ovsdb_error(NULL, "%s: invalid commit format", db->filename);
@@ -558,7 +558,10 @@ parse_txn(struct db *db, const struct json *json)
 
         error = ovsdb_file_txn_from_json(db->db, data_json, false, &txn);
         if (!error) {
-            error = ovsdb_txn_commit(txn, false);
+            error = ovsdb_txn_commit(txn, true, false);
+        }
+        if (!error && !uuid_is_zero(txnid)) {
+            db->db->prereq = *txnid;
         }
         if (error) {
             ovsdb_storage_unread(db->storage);
@@ -576,15 +579,15 @@ read_db(struct db *db)
     struct ovsdb_error *error;
     for (;;) {
         struct json *json;
-
-        error = ovsdb_storage_read(db->storage, &json, NULL);
+        struct uuid txnid;
+        error = ovsdb_storage_read(db->storage, &json, &txnid);
         if (error) {
             break;
         } else if (!json) {
             /* End of file. */
             return NULL;
         } else {
-            error = parse_txn(db, json);
+            error = parse_txn(db, json, &txnid);
             json_destroy(json);
             if (error) {
                 break;
@@ -1178,7 +1181,7 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
             update_remote_rows(all_dbs, db, remote, jsonrpc, txn);
         }
 
-        struct ovsdb_error *error = ovsdb_txn_commit(txn, false);
+        struct ovsdb_error *error = ovsdb_txn_commit(txn, true, false);
         if (error) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             char *msg = ovsdb_error_to_string_free(error);

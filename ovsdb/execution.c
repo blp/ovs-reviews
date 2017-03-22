@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -198,7 +198,7 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
     }
 
     if (!error) {
-        error = ovsdb_txn_commit(x.txn, x.durable);
+        error = ovsdb_txn_commit(x.txn, false, x.durable);
         if (error) {
             json_array_add(results, ovsdb_error_to_json(error));
         }

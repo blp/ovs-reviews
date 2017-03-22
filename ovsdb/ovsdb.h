@@ -20,13 +20,13 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/list.h"
 #include "openvswitch/shash.h"
+#include "openvswitch/uuid.h"
 
 struct json;
 struct ovsdb_log;
 struct ovsdb_session;
 struct ovsdb_txn;
 struct simap;
-struct uuid;
 
 /* Database schema. */
 struct ovsdb_schema {
@@ -62,6 +62,7 @@ enum ovsdb_state {
 struct ovsdb {
     struct ovsdb_schema *schema;
     struct ovsdb_storage *storage; /* If nonnull, log for transactions. */
+    struct uuid prereq;
     struct ovs_list monitors;   /* Contains "struct ovsdb_monitor"s. */
     struct shash tables;        /* Contains "struct ovsdb_table *"s. */
 

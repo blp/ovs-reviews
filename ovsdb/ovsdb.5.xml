@@ -220,9 +220,10 @@
     </dd>
 
     <dt>"prev_data": &lt;json-value&gt;</dt>
+    <dt>"prev_eid": &lt;raw-uuid&gt;</dt>
     <dd>
       A snapshot of the data in the database at index "prev_index" and term
-      "prev_term".
+      "prev_term", and the entry ID for that data.
     </dd>
   </dl>
 
@@ -246,9 +247,10 @@
     </dd>
 
     <dt>"data": &lt;json-value&gt;</dt>
+    <dt>"eid": &lt;raw-uuid&gt;</dt>
     <dd>
-      Optional.  If this member is present, <code>index</code> must also be
-      present.
+      Optional, but if either is present then both must be.  If these members
+      are present, <code>index</code> must also be present.
     </dd>
 
     <dt>"servers": &lt;servers&gt;</dt>
@@ -260,7 +262,8 @@
     <dt>"vote": &lt;raw-uuid&gt;</dt>
     <dd>
       Optional.  If this member is present, <code>index</code>,
-      <code>data</code>, and <code>servers</code> must be omitted.
+      <code>data</code>, <code>eid</code>, and <code>servers</code> must be
+      omitted.
     </dd>
   </dl>
 

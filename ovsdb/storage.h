@@ -44,11 +44,13 @@ void ovsdb_storage_unread(struct ovsdb_storage *);
 struct ovsdb_write *ovsdb_storage_write(struct ovsdb_storage *,
                                         const struct json *,
                                         const struct uuid *prereq,
+                                        struct uuid *result,
                                         bool durable)
     OVS_WARN_UNUSED_RESULT;
 struct ovsdb_error *ovsdb_storage_write_block(struct ovsdb_storage *,
                                               const struct json *,
                                               const struct uuid *prereq,
+                                              struct uuid *result,
                                               bool durable);
 
 bool ovsdb_write_is_complete(const struct ovsdb_write *);
