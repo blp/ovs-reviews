@@ -202,10 +202,7 @@ struct raft {
      * This is the state of the cluster as of the last discarded log entry,
      * that is, at log index 'log_start - 1' (called prevIndex in Figure 5.1).
      * Only committed log entries can be included in a snapshot. */
-    uint64_t prev_term;               /* Term for index 'log_start - 1'. */
-    struct hmap prev_servers;         /* Contains "struct raft_server"s. */
-    struct json *snapshot;            /* Snapshot. */
-    struct uuid snapshot_eid;         /* ID of last data in snapshot. */
+    struct raft_entry snap;
 
 /* Volatile state.
  *
@@ -495,7 +492,7 @@ struct raft_install_snapshot_request {
 
     uint64_t last_index;        /* Replaces everything up to this index. */
     uint64_t last_term;         /* Term of last_index. */
-    struct hmap last_servers;   /* Contains "struct raft_server"s. */
+    struct json *last_servers;
 
     /* Data. */
     struct json *data;
@@ -661,7 +658,6 @@ raft_alloc(void)
     struct raft *raft = xzalloc(sizeof *raft);
     hmap_init(&raft->servers);
     raft->log_start = raft->log_end = 1;
-    hmap_init(&raft->prev_servers);
     raft->role = RAFT_FOLLOWER;
     sset_init(&raft->remote_addresses);
     raft->join_timeout = LLONG_MAX;
@@ -1023,25 +1019,6 @@ raft_server_add(struct hmap *servers, const struct uuid *sid,
     return s;
 }
 
-static struct raft_server *
-raft_server_clone(const struct raft_server *src)
-{
-    struct raft_server *dst = xmemdup(src, sizeof *src);
-    dst->address = xstrdup(dst->address);
-    return dst;
-}
-
-static void
-raft_servers_clone(struct hmap *dst, const struct hmap *src)
-{
-    struct raft_server *s;
-    hmap_init(dst);
-    HMAP_FOR_EACH (s, hmap_node, src) {
-        struct raft_server *s2 = raft_server_clone(s);
-        hmap_insert(dst, &s2->hmap_node, uuid_hash(&s2->sid));
-    }
-}
-
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_servers_from_json__(const struct json *json, struct hmap *servers)
 {
@@ -1165,7 +1142,7 @@ static uint64_t
 raft_get_term(const struct raft *raft, uint64_t index)
 {
     return (index == raft->log_start - 1
-            ? raft->prev_term
+            ? raft->snap.term
             : raft_get_entry(raft, index)->term);
 }
 
@@ -1175,16 +1152,14 @@ raft_servers_for_index(const struct raft *raft, uint64_t index)
     ovs_assert(index >= raft->log_start - 1);
     ovs_assert(index < raft->log_end);
 
-    const struct json *servers = NULL;
+    const struct json *servers = raft->snap.servers;
     for (uint64_t i = raft->log_start; i <= index; i++) {
         const struct raft_entry *e = raft_get_entry(raft, i);
         if (e->servers) {
             servers = e->servers;
         }
     }
-    return (servers
-            ? json_clone(servers)
-            : raft_servers_to_json(&raft->prev_servers));
+    return json_clone(servers);
 }
 
 static void
@@ -1360,7 +1335,7 @@ parse_log_record__(struct raft *raft, struct ovsdb_parser *p)
      * term of the previous log entry. */
     uint64_t prev_term = (raft->log_end > raft->log_start
                           ? raft->log[raft->log_end - raft->log_start - 1].term
-                          : raft->prev_term);
+                          : raft->snap.term);
     if (term < prev_term) {
         ovsdb_parser_raise_error(p, "log entry index %"PRIu64" term "
                                  "%"PRIu64" precedes previous entry's term "
@@ -1427,26 +1402,25 @@ raft_read_header(struct raft *raft)
         error = raft_remotes_from_json(remotes, &raft->remote_addresses);
     } else {
         /* Parse required set of servers. */
-        const struct json *prev_servers_json = ovsdb_parser_member(
+        const struct json *servers = ovsdb_parser_member(
             &p, "prev_servers", OP_OBJECT);
-        struct hmap prev_servers;
-        error = raft_servers_from_json(prev_servers_json, &prev_servers);
+        error = raft_servers_validate_json(servers);
+        ovsdb_parser_put_error(&p, error);
         if (!error) {
-            hmap_swap(&prev_servers, &raft->prev_servers);
+            raft->snap.servers = json_clone(servers);
         }
-        raft_servers_destroy(&prev_servers);
 
         /* Parse term, index, and snapshot.  If any of these is present, all of
          * them must be. */
         const struct json *snapshot = ovsdb_parser_member(&p, "prev_data",
                                                           OP_ANY | OP_OPTIONAL);
         if (snapshot) {
-            raft->snapshot_eid = parse_required_uuid(&p, "prev_eid");
-            raft->prev_term = parse_uint(&p, "prev_term");
+            raft->snap.eid = parse_required_uuid(&p, "prev_eid");
+            raft->snap.term = parse_uint(&p, "prev_term");
             raft->log_start = raft->log_end = parse_uint(&p, "prev_index") + 1;
             raft->commit_index = raft->log_start - 1;
             raft->last_applied = raft->log_start - 2;
-            raft->snapshot = json_clone(snapshot);
+            raft->snap.data = json_clone(snapshot);
             raft->snapshot_size = ovsdb_log_get_offset(raft->storage);
         }
     }
@@ -1711,8 +1685,7 @@ raft_close(struct raft *raft)
     }
     free(raft->log);
 
-    raft_servers_destroy(&raft->prev_servers);
-    json_destroy(raft->snapshot);
+    raft_entry_destroy(&raft->snap);
 
     struct raft_conn *conn, *next;
     LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
@@ -2007,7 +1980,7 @@ raft_start_election(struct raft *raft)
                 .last_log_term = (
                     raft->log_end > raft->log_start
                     ? raft->log[raft->log_end - raft->log_start - 1].term
-                    : raft->prev_term),
+                    : raft->snap.term),
             },
         };
         raft_send(raft, &rq);
@@ -2187,7 +2160,7 @@ raft_current_eid(const struct raft *raft)
             return &e->eid;
         }
     }
-    return &raft->snapshot_eid;
+    return &raft->snap.eid;
 }
 
 static struct raft_command * OVS_WARN_UNUSED_RESULT
@@ -2346,7 +2319,7 @@ raft_rpc_destroy(union raft_rpc *rpc)
         sset_destroy(&rpc->server_reply.remotes);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_servers_destroy(&rpc->install_snapshot_request.last_servers);
+        json_destroy(rpc->install_snapshot_request.last_servers);
         json_destroy(rpc->install_snapshot_request.data);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
@@ -2518,8 +2491,7 @@ raft_install_snapshot_request_to_jsonrpc(
     json_object_put_uint(args, "term", rq->term);
     json_object_put_uint(args, "last_index", rq->last_index);
     json_object_put_uint(args, "last_term", rq->last_term);
-    json_object_put(args, "last_servers",
-                    raft_servers_to_json(&rq->last_servers));
+    json_object_put(args, "last_servers", json_clone(rq->last_servers));
 
     json_object_put(args, "data", json_clone(rq->data));
 }
@@ -2528,24 +2500,16 @@ static void
 raft_install_snapshot_request_from_jsonrpc(
     struct ovsdb_parser *p, struct raft_install_snapshot_request *rq)
 {
-    const struct json *last_servers = ovsdb_parser_member(p, "last_servers",
-                                                          OP_OBJECT);
-    struct ovsdb_error *error = raft_servers_from_json(last_servers,
-                                                       &rq->last_servers);
-    if (error) {
-        ovsdb_parser_put_error(p, error);
-        return;
-    }
+    rq->last_servers = json_nullable_clone(
+        ovsdb_parser_member(p, "last_servers", OP_OBJECT));
+    ovsdb_parser_put_error(p, raft_servers_validate_json(rq->last_servers));
 
     rq->term = parse_uint(p, "term");
     rq->last_index = parse_uint(p, "last_index");
     rq->last_term = parse_uint(p, "last_term");
 
-    const struct json *data = ovsdb_parser_member(p, "data",
-                                                  OP_OBJECT | OP_ARRAY);
-    if (data) {
-        rq->data = json_clone(data);
-    }
+    rq->data = json_nullable_clone(
+        ovsdb_parser_member(p, "data", OP_OBJECT | OP_ARRAY));
 }
 
 static void
@@ -2831,7 +2795,7 @@ raft_send_append_request(struct raft *raft,
             .prev_log_term = (peer->next_index - 1 >= raft->log_start
                               ? raft->log[peer->next_index - 1
                                           - raft->log_start].term
-                              : raft->prev_term),
+                              : raft->snap.term),
             .leader_commit = raft->commit_index,
             .entries = &raft->log[peer->next_index - raft->log_start],
             .n_entries = n,
@@ -2921,20 +2885,21 @@ raft_receive_term__(struct raft *raft, const struct raft_rpc_common *common,
 static void
 raft_get_servers_from_log(struct raft *raft)
 {
+    const struct json *servers_json = raft->snap.servers;
     for (uint64_t index = raft->log_end - 1; index >= raft->log_start;
          index--) {
         struct raft_entry *e = &raft->log[index - raft->log_start];
         if (e->servers) {
-            struct hmap servers;
-            struct ovsdb_error *error = raft_servers_from_json(e->servers,
-                                                               &servers);
-            ovs_assert(!error);
-            raft_set_servers(raft, &servers, VLL_INFO);
-            raft_servers_destroy(&servers);
-            return;
+            servers_json = e->servers;
+            break;
         }
     }
-    raft_set_servers(raft, &raft->prev_servers, VLL_INFO);
+
+    struct hmap servers;
+    struct ovsdb_error *error = raft_servers_from_json(servers_json, &servers);
+    ovs_assert(!error);
+    raft_set_servers(raft, &servers, VLL_INFO);
+    raft_servers_destroy(&servers);
 }
 
 /* Truncates the log, so that raft->log_end becomes 'new_end'.
@@ -2973,8 +2938,8 @@ raft_peek_next_entry(struct raft *raft, struct uuid *eid)
     }
 
     if (raft->log_start == raft->last_applied + 2) {
-        *eid = raft->snapshot_eid;
-        return raft->snapshot;
+        *eid = raft->snap.eid;
+        return raft->snap.data;
     }
 
     while (raft->last_applied < raft->commit_index) {
@@ -2984,8 +2949,6 @@ raft_peek_next_entry(struct raft *raft, struct uuid *eid)
             *eid = e->eid;
             return e->data;
         }
-
-        /* Skip RAFT_SERVERS entries. */
         raft->last_applied++;
     }
     return NULL;
@@ -3065,7 +3028,7 @@ match_index_and_term(const struct raft *raft,
     if (prev_log_index < raft->log_start - 1) {
         return "mismatch before start of log";
     } else if (prev_log_index == raft->log_start - 1) {
-        if (prev_log_term != raft->prev_term) {
+        if (prev_log_term != raft->snap.term) {
             return "prev_term mismatch";
         }
     } else if (prev_log_index < raft->log_end) {
@@ -3307,8 +3270,8 @@ raft_handle_append_request__(struct raft *raft,
      */
     if (nth_entry_index == raft->log_start - 1) {
         if (rq->n_entries
-            ? raft->prev_term == rq->entries[rq->n_entries - 1].term
-            : raft->prev_term == rq->prev_log_term) {
+            ? raft->snap.term == rq->entries[rq->n_entries - 1].term
+            : raft->snap.term == rq->prev_log_term) {
             raft_send_append_reply(raft, rq, true, "no change");
         } else {
             raft_send_append_reply(raft, rq, false, "term mismatch");
@@ -3374,7 +3337,7 @@ const struct json *
 raft_next_entry(struct raft *raft, struct uuid *eid, bool *is_snapshot)
 {
     const struct json *data = raft_get_next_entry(raft, eid);
-    *is_snapshot = data == raft->snapshot;
+    *is_snapshot = data == raft->snap.data;
     return data;
 }
 
@@ -3456,9 +3419,9 @@ raft_send_install_snapshot_request(struct raft *raft,
             },
             .term = raft->current_term,
             .last_index = raft->log_start - 1,
-            .last_term = raft->prev_term,
-            .last_servers = raft->prev_servers,
-            .data = raft->snapshot,
+            .last_term = raft->snap.term,
+            .last_servers = raft->snap.servers,
+            .data = raft->snap.data,
         }
     };
     raft_send(raft, &rpc);
@@ -3581,7 +3544,7 @@ raft_handle_vote_request__(struct raft *raft,
      * longer is more up-to-date." */
     uint64_t last_term = (raft->log_end > raft->log_start
                           ? raft->log[raft->log_end - 1 - raft->log_start].term
-                          : raft->prev_term);
+                          : raft->snap.term);
     if (last_term > rq->last_log_term
         || (last_term == rq->last_log_term
             && raft->log_end - 1 > rq->last_log_index)) {
@@ -3936,13 +3899,13 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
         json_object_put_format(header, "cluster_id", UUID_FMT,
                                UUID_ARGS(&raft->cid));
     }
-    if (raft->snapshot || new_snapshot) {
+    if (raft->snap.data || new_snapshot) {
         json_object_put(header, "prev_term", json_integer_create(prev_term));
         json_object_put(header, "prev_index",
                         json_integer_create(prev_index));
         json_object_put(header, "prev_data", json_clone(new_snapshot
                                                         ? new_snapshot
-                                                        : raft->snapshot));
+                                                        : raft->snap.data));
     }
     struct ovsdb_error *error = ovsdb_log_write(storage, header);
     json_destroy(header);
@@ -4023,13 +3986,13 @@ raft_handle_install_snapshot_request__(
         raft->last_applied = raft->log_start - 2;
     }
 
-    raft->prev_term = rq->last_term;
-    raft_servers_destroy(&raft->prev_servers);
-    raft_servers_clone(&raft->prev_servers, &rq->last_servers);
+    raft->snap.term = rq->last_term;
+    json_destroy(raft->snap.servers);
+    raft->snap.servers = json_clone(rq->last_servers);
 
     /* install snapshot */
-    json_destroy(raft->snapshot);
-    raft->snapshot = json_clone(rq->data);
+    json_destroy(raft->snap.data);
+    raft->snap.data = json_clone(rq->data);
 
     struct ovsdb_error *error = raft_save_snapshot(raft,
                                                    raft->log_start, NULL);
@@ -4082,7 +4045,7 @@ raft_handle_install_snapshot_reply(
     }
 
     if (rpy->last_index != raft->log_start - 1 ||
-        rpy->last_term != raft->prev_term) {
+        rpy->last_term != raft->snap.term) {
         VLOG_INFO("cluster %04x: server %04x installed "
                   "out-of-date snapshot, starting over",
                   uuid_prefix(&raft->cid, 4), uuid_prefix(&s->sid, 4));
@@ -4141,21 +4104,12 @@ raft_try_store_snapshot(struct raft *raft, const struct json *new_snapshot)
         return false;
     }
 
-    raft->prev_term = raft_get_term(raft, new_log_start - 1);
-    json_destroy(raft->snapshot);
-    raft->snapshot = json_clone(new_snapshot);
+    raft->snap.term = raft_get_term(raft, new_log_start - 1);
+    json_destroy(raft->snap.data);
+    raft->snap.data = json_clone(new_snapshot);
 
-    struct json *prev_servers_json = raft_servers_for_index(raft,
-                                                            new_log_start - 1);
-    struct hmap prev_servers;
-    error = raft_servers_from_json(prev_servers_json, &prev_servers);
-    if (error) {
-        /* XXX */
-        return false;
-    }
-    json_destroy(prev_servers_json);
-    hmap_swap(&prev_servers, &raft->prev_servers);
-    raft_servers_destroy(&prev_servers);
+    json_destroy(raft->snap.servers);
+    raft->snap.servers = raft_servers_for_index(raft, new_log_start - 1);
 
     memmove(&raft->log[0], &raft->log[new_log_start - raft->log_start],
             (raft->log_end - new_log_start) * sizeof *raft->log);
@@ -4306,7 +4260,17 @@ raft_format_install_snapshot_request(
     ds_put_format(s, " last_index=%"PRIu64, rq->last_index);
     ds_put_format(s, " last_term=%"PRIu64, rq->last_term);
     ds_put_cstr(s, " last_servers=");
-    raft_servers_format(&rq->last_servers, s);
+
+    struct hmap servers;
+    struct ovsdb_error *error =
+        raft_servers_from_json(rq->last_servers, &servers);
+    if (!error) {
+        raft_servers_format(&servers, s);
+        raft_servers_destroy(&servers);
+    } else {
+        ds_put_cstr(s, "***error***");
+        ovsdb_error_destroy(error);
+    }
 }
 
 static void
