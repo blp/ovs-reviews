@@ -201,7 +201,9 @@ struct raft {
      *
      * This is the state of the cluster as of the last discarded log entry,
      * that is, at log index 'log_start - 1' (called prevIndex in Figure 5.1).
-     * Only committed log entries can be included in a snapshot. */
+     * Only committed log entries can be included in a snapshot.
+     *
+     * XXX would be a little cleaner in a few places for this to be log[-1]. */
     struct raft_entry snap;
 
 /* Volatile state.

@@ -105,7 +105,8 @@ static unixctl_cb_func ovsdb_server_add_database;
 static unixctl_cb_func ovsdb_server_remove_database;
 static unixctl_cb_func ovsdb_server_list_databases;
 
-static struct ovsdb_error *read_db(struct db *) OVS_WARN_UNUSED_RESULT;
+static struct ovsdb_error *read_db(struct server_config *, struct db *)
+    OVS_WARN_UNUSED_RESULT;
 static struct ovsdb_error *open_db(struct server_config *,
                                    const char *filename)
     OVS_WARN_UNUSED_RESULT;
@@ -149,7 +150,8 @@ ovsdb_replication_init(const char *sync_from, const char *exclude,
 }
 
 static void
-main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
+main_loop(struct server_config *config,
+          struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
           struct unixctl_server *unixctl, struct sset *remotes,
           struct process *run_process, bool *exiting, bool *is_backup)
 {
@@ -205,9 +207,11 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
 
         SHASH_FOR_EACH(node, all_dbs) {
             struct db *db = node->data;
-            ovsdb_trigger_run(db->db, time_msec());
+            if (db->db) {
+                ovsdb_trigger_run(db->db, time_msec());
+            }
             ovsdb_storage_run(db->storage);
-            struct ovsdb_error *error = read_db(db);
+            struct ovsdb_error *error = read_db(config, db);
             if (error) {
                 char *s = ovsdb_error_to_string_free(error);
                 VLOG_INFO("%s", s);
@@ -236,7 +240,9 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
         unixctl_server_wait(unixctl);
         SHASH_FOR_EACH(node, all_dbs) {
             struct db *db = node->data;
-            ovsdb_trigger_wait(db->db, time_msec());
+            if (db->db) {
+                ovsdb_trigger_wait(db->db, time_msec());
+            }
             ovsdb_storage_wait(db->storage);
             ovsdb_storage_read_wait(db->storage);
         }
@@ -437,8 +443,8 @@ main(int argc, char *argv[])
         ovsdb_replication_init(sync_from, sync_exclude, &all_dbs, server_uuid);
     }
 
-    main_loop(jsonrpc, &all_dbs, unixctl, &remotes, run_process, &exiting,
-              &is_backup);
+    main_loop(&server_config, jsonrpc, &all_dbs, unixctl, &remotes,
+              run_process, &exiting, &is_backup);
 
     ovsdb_jsonrpc_server_destroy(jsonrpc);
     SHASH_FOR_EACH_SAFE(node, next, &all_dbs) {
@@ -512,7 +518,8 @@ close_db(struct db *db)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-parse_txn(struct db *db, const struct json *json, const struct uuid *txnid)
+parse_txn(struct server_config *config, struct db *db,
+          const struct json *json, const struct uuid *txnid)
 {
     if (json->type != JSON_ARRAY || json->u.array.n != 2) {
         return ovsdb_error(NULL, "%s: invalid commit format", db->filename);
@@ -546,9 +553,16 @@ parse_txn(struct db *db, const struct json *json, const struct uuid *txnid)
         }
 
         db->db = ovsdb_create(schema, db->storage);
+        if (shash_find(config->all_dbs, schema_name)) {
+            ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
+        }
     }
 
     if (data_json) {
+        if (!db->db) {
+            return ovsdb_error(NULL, "%s: data without schema", db->filename);
+        }
+
         char *s = json_to_string(data_json, JSSF_SORT);
         VLOG_INFO("got txn %s", s);
         free(s);
@@ -574,7 +588,7 @@ parse_txn(struct db *db, const struct json *json, const struct uuid *txnid)
 
 /* XXX how to describe the return value for this function? */
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-read_db(struct db *db)
+read_db(struct server_config *config, struct db *db)
 {
     struct ovsdb_error *error;
     for (;;) {
@@ -587,7 +601,7 @@ read_db(struct db *db)
             /* End of file. */
             return NULL;
         } else {
-            error = parse_txn(db, json, &txnid);
+            error = parse_txn(config, db, json, &txnid);
             json_destroy(json);
             if (error) {
                 break;
@@ -628,7 +642,7 @@ open_db(struct server_config *config, const char *filename)
     db->filename = xstrdup(filename);
     db->storage = storage;
 
-    error = read_db(db);
+    error = read_db(config, db);
     if (error) {
         close_db(db);
         return error;
@@ -650,8 +664,10 @@ open_db(struct server_config *config, const char *filename)
     }
 
     shash_add_assert(config->all_dbs, name, db);
-    bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
-    ovs_assert(ok);
+    if (db->db) {
+        bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
+        ovs_assert(ok);
+    }
 
     return NULL;
 }
