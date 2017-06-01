@@ -1,3 +1,7 @@
+# general documentation
+man_MANS += ovsdb/ovsdb.5 ovsdb/ovsdb.7
+EXTRA_DIST += ovsdb/ovsdb.5.xml ovsdb/ovsdb.7.xml
+
 # libovsdb
 lib_LTLIBRARIES += ovsdb/libovsdb.la
 ovsdb_libovsdb_la_LDFLAGS = \
@@ -24,12 +28,16 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/monitor.h \
 	ovsdb/query.c \
 	ovsdb/query.h \
+	ovsdb/raft.c \
+	ovsdb/raft.h \
 	ovsdb/replication.c \
 	ovsdb/replication.h \
 	ovsdb/row.c \
 	ovsdb/row.h \
 	ovsdb/server.c \
 	ovsdb/server.h \
+	ovsdb/storage.c \
+	ovsdb/storage.h \
 	ovsdb/table.c \
 	ovsdb/table.h \
 	ovsdb/trigger.c \
@@ -45,8 +53,7 @@ pkgconfig_DATA += \
 	ovsdb/libovsdb.pc
 
 MAN_FRAGMENTS += \
-	ovsdb/remote-active.man \
-	ovsdb/remote-passive.man \
+	ovsdb/ovsdb-schemas.man \
 	ovsdb/replication.man \
 	ovsdb/replication-syn.man
 

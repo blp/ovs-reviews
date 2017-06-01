@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manpage program="ovsdb" section="5" title="OVSDB">
+  <h1>Name</h1>
+  <p>ovsdb -- Open vSwitch Database (File Formats)</p>
+
+  <h1>Description</h1>
+  <p>
+    OVSDB, the Open vSwitch Database, is a database system whose network
+    protocol is specified by RFC 7047.  The RFC does not specify an on-disk
+    storage format.  The OVSDB implementation in Open vSwitch implements two
+    storage formats: one for standalone (and active-backup) databases, and the
+    other for clustered databases.  This manpage documents both of these
+    formats.
+  </p>
+
+  <p>
+    Most users do not need to be concerned with this specification.  Instead,
+    to manipulate OVSDB files, refer to <code>ovsdb-tool</code>(1).  For an
+    introduction to OVSDB as a whole, read <code>ovsdb</code>(7).
+  </p>
+
+  <p>
+    OVSDB files explicitly record changes that are implied by the database
+    schema.  For example, the OVSDB ``garbage collection'' feature means that
+    when a client removes the last reference to a garbage-collected row, the
+    database server automatically removes that row.  The database file
+    explicitly records the deletion of the garbage-collected row, so that the
+    reader does not need to infer it.
+  </p>
+
+  <p>
+    OVSDB files do not include the values of ephemeral columns.
+  </p>
+
+  <h2>Common Features</h2>
+
+  <p>
+    Standalone and clustered database files share the common structure
+    described here.  They are text files encoded in UTF-8 with LF (U+000A) line
+    ends, organized as append-only series of records.  Each record consists of
+    2 lines of text.
+  </p>
+
+  <p>
+    The first line in each record has the format <code>OVSDB <var>magic</var>
+    <var>length</var> <var>hash</var></code>, where <var>magic</var> is
+    <code>JSON</code> for standalone databases or <code>CLUSTER</code> for
+    clustered databases, <var>length</var> is a positive decimal integer, and
+    <var>hash</var> is a SHA-1 checksum expressed as 40 hexadecimal digits.
+    Words in the first line must be separated by exactly one space.
+  </p>
+
+  <p>
+    The second line must be exactly <var>length</var> bytes long (including the
+    LF) and its SHA-1 checksum (including the LF) must match <var>hash</var>
+    exactly.  The line's contents must be a valid JSON object as specified by
+    RFC 4627.  Strings in the JSON object must be valid UTF-8.  To ensure that
+    the second line is exactly one line of text, the OVSDB implementation
+    expresses any LF characters within a JSON string as <code>\n</code>.  For
+    the same reason, and to save space, the OVSDB implementation does not
+    ``pretty print'' the JSON object with spaces and LFs.  (The OVSDB
+    implementation tolerates LFs when reading an OVSDB database file, as long
+    as <var>length</var> and <var>hash</var> are correct.)
+  </p>
+
+  <h2>JSON Notation</h2>
+
+  <p>
+    We use notation from RFC 7047 here to describe the JSON data in records.
+    In addition to the notation defined there, we add the following:
+  </p>
+
+  <dl>
+    <dt>&lt;raw-uuid&gt;</dt>
+    <dd>
+      A 36-character JSON string that contains a UUID in the format described
+      by RFC 4122, e.g. <code>"550e8400-e29b-41d4-a716-446655440000"</code>.
+    </dd>
+  </dl>
+
+  <h2>Standalone Format</h2>
+
+  <p>
+    The first record in a standalone database contains the JSON schema for the
+    database, as specified in RFC 7047.  Only this record is mandatory (a
+    standalone file that contains only a schema represents an empty database).
+  </p>
+
+  <p>
+    The second and subsequent records in a standalone database are transaction
+    records.  Each record may have the following optional special members,
+    which do not have any semantics but are often useful to administrators
+    looking through a database log with <code>ovsdb-tool show-log</code>:
+  </p>
+
+  <dl>
+    <dt>"_date": &lt;integer&gt;</dt>
+    <dd>
+      <p>
+        The time at which the transaction was committed, as an integer number
+        of milliseconds since the Unix epoch.  Early versions of OVSDB counted
+        seconds instead of milliseconds; these can be detected by noticing that
+        their values are less than 2**32.
+      </p>
+
+      <p>
+        OVSDB always writes a <code>_date</code> member.
+      </p>
+    </dd>
+
+    <dt>"_comment": &lt;string&gt;</dt>
+    <dd>
+      <p>
+        A JSON string that specifies the comment provided in a transaction
+        <code>comment</code> operation.  If a transaction has multiple
+        <code>comment</code> operations, OVSDB concatenates them into a single
+        <code>_comment</code> member, separated by a new-line.
+      </p>
+
+      <p>
+        OVSDB only writes a <code>_comment</code> member if it would be
+        a nonempty string.
+      </p>
+    </dd>
+  </dl>
+
+  <p>
+    Each of these records also has one or more additional members, each of
+    which maps from the name of a database table to a &lt;table-txn&gt;:
+  </p>
+
+  <dl>
+    <dt>&lt;table-txn&gt;</dt>
+    <dd>
+      A JSON object that describes the effects of a transaction on a database
+      table.  Its names are &lt;raw-uuid&gt;s for rows in the table and its
+      values are &lt;row-txn&gt;s.
+    </dd>
+
+    <dt>&lt;row-txn&gt;</dt>
+    <dd>
+      <p>
+        Either <code>null</code>, which indicates that the transaction deleted
+        this row, or a JSON object that describes how the transaction inserted
+        or modified the row, whose names are the names of columns and whose
+        values are &lt;value&gt;s that give the column's new value.
+      </p>
+
+      <p>
+        For new rows, the OVSDB implementation omits columns whose values have
+        the default values for their types defined in RFC 7047 section 5.2.1;
+        for modified rows, the OVSDB implementation omits columns whose values
+        are unchanged.
+      </p>
+    </dd>
+  </dl>
+
+  <h2>Clustered Format</h2>
+
+  <p>
+    The clustered format has the following additional notation:
+  </p>
+
+  <dl>
+    <dt>&lt;address&gt;</dt>
+    <dd>
+      A JSON string that represents a network address to support clustering, in
+      the <code><var>protocol</var>:<var>ip</var>:<var>port</var></code> syntax
+      described in <code>ovsdb-tool</code>(1).
+    </dd>
+
+    <dt>&lt;servers&gt;</dt>
+    <dd>
+      A JSON object whose names are &lt;raw-uuid&gt;s that identify servers and
+      whose values are &lt;address&gt;es that specify those servers' addresses.
+    </dd>
+  </dl>
+
+  <p>
+    The first record in a clustered database contains the following members,
+    all of which are required:
+  </p>
+
+  <dl>
+    <dt>"server_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      The server's own UUID, which must be unique within the cluster.
+    </dd>
+
+    <dt>"address": &lt;address&gt;</dt>
+    <dd>
+      The address on which the server listens for connections from other
+      servers in the cluster.
+    </dd>
+
+    <dt>"name": &lt;id&gt;</dt>
+    <dd>
+      The database schema name.  It is only important when a server is in the
+      process of a joining a cluster: a server will only join a cluster if the
+      name matches.  (If the database schema name were unique, then we would
+      not also need a cluster ID.)
+    </dd>
+
+    <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      The cluster's UUID.  The all-zeros UUID is not a valid cluster ID.
+    </dd>
+
+    <dt>"prev_term": &lt;integer&gt;</dt>
+    <dt>"prev_index": &lt;integer&gt;</dt>
+    <dd>
+      The Raft term and index just before the beginning of the log.
+    </dd>
+
+    <dt>"prev_servers": &lt;servers&gt;</dt>
+    <dd>
+      The set of one or more servers in the cluster at index "prev_index" and
+      term "prev_term".  It might not include this server, if it was not the
+      initial server in the cluster.
+    </dd>
+
+    <dt>"prev_data": &lt;json-value&gt;</dt>
+    <dt>"prev_eid": &lt;raw-uuid&gt;</dt>
+    <dd>
+      A snapshot of the data in the database at index "prev_index" and term
+      "prev_term", and the entry ID for that data.
+    </dd>
+  </dl>
+
+  <p>
+    The second and subsequent records, if present, in a clustered database
+    represent changes to the database, to the cluster state, or both.  They
+    have the following members:
+  </p>
+
+  <dl>
+    <dt>"term": &lt;integer&gt;</dt>
+    <dd>
+      Always present.
+    </dd>
+
+    <dt>"index": &lt;integer&gt;</dt>
+    <dd>
+      Optional.  If this member is present, exactly one of <code>data</code> or
+      <code>servers</code> is also present, and <code>vote</code> must be
+      omitted.
+    </dd>
+
+    <dt>"data": &lt;json-value&gt;</dt>
+    <dt>"eid": &lt;raw-uuid&gt;</dt>
+    <dd>
+      Optional, but if either is present then both must be.  If these members
+      are present, <code>index</code> must also be present.
+    </dd>
+
+    <dt>"servers": &lt;servers&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code> must also be
+      present.
+    </dd>
+
+    <dt>"vote": &lt;raw-uuid&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code>,
+      <code>data</code>, <code>eid</code>, and <code>servers</code> must be
+      omitted.
+    </dd>
+  </dl>
+
+  <h3>Joining a Cluster</h3>
+
+  <p>
+    In addition to general format for a clustered database, there is also a
+    special case for a database file created by <code>ovsdb-tool
+    join-cluster</code>.  Such a file contains exactly one record, which
+    conveys the information passed to the <code>join-cluster</code> command.
+    It has the following members:
+  </p>
+
+  <dl>
+    <dt>"server_id": &lt;raw-uuid&gt;</dt>
+    <dt>"address": &lt;address&gt;</dt>
+    <dt>"name": &lt;id&gt;</dt>
+    <dd>
+      These have the same semantics described above in the general description
+      of the format.
+    </dd>
+
+    <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      This is provided only if the user gave the <code>--cid</code> option to
+      <code>join-cluster</code>.  It has the same semantics described above.
+    </dd>
+
+    <dt>"remotes"; [&lt;address&gt;*]</dt>
+    <dd>
+      One or more remote servers to contact for joining the cluster.
+    </dd>
+  </dl>
+
+  <p>
+    When the server successfully joins the cluster, the database file is
+    replaced by one in the general format described earlier.
+  </p>
+
+</manpage>

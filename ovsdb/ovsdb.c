@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include "ovsdb-parser.h"
 #include "ovsdb-types.h"
 #include "simap.h"
+#include "storage.h"
 #include "table.h"
 #include "transaction.h"
 
@@ -162,7 +163,7 @@ root_set_size(const struct ovsdb_schema *schema)
 }
 
 struct ovsdb_error *
-ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
+ovsdb_schema_from_json(const struct json *json, struct ovsdb_schema **schemap)
 {
     struct ovsdb_schema *schema;
     const struct json *name, *tables, *version_json, *cksum;
@@ -322,15 +323,16 @@ ovsdb_set_ref_table(const struct shash *tables,
     }
 }
 
+/* XXX add prereq parameter? */
 struct ovsdb *
-ovsdb_create(struct ovsdb_schema *schema)
+ovsdb_create(struct ovsdb_schema *schema, struct ovsdb_storage *storage)
 {
     struct shash_node *node;
     struct ovsdb *db;
 
-    db = xmalloc(sizeof *db);
+    db = xzalloc(sizeof *db);
     db->schema = schema;
-    db->file = NULL;
+    db->storage = storage;
     ovs_list_init(&db->monitors);
     ovs_list_init(&db->triggers);
     db->run_triggers = false;
@@ -364,9 +366,7 @@ ovsdb_destroy(struct ovsdb *db)
         struct shash_node *node;
 
         /* Close the log. */
-        if (db->file) {
-            ovsdb_file_destroy(db->file);
-        }
+        ovsdb_storage_close(db->storage);
 
         /* Remove all the monitors. */
         ovsdb_monitors_remove(db);

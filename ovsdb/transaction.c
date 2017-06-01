@@ -25,12 +25,16 @@
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
 #include "openvswitch/list.h"
+#include "openvswitch/vlog.h"
 #include "ovsdb-error.h"
 #include "ovsdb.h"
 #include "row.h"
+#include "storage.h"
 #include "table.h"
 #include "perf-counter.h"
 #include "uuid.h"
+
+VLOG_DEFINE_THIS_MODULE(transaction);
 
 struct ovsdb_txn {
     struct ovsdb *db;
@@ -807,7 +811,7 @@ update_version(struct ovsdb_txn *txn OVS_UNUSED, struct ovsdb_txn_row *txn_row)
 }
 
 static struct ovsdb_error *
-ovsdb_txn_commit_(struct ovsdb_txn *txn, bool durable)
+ovsdb_txn_commit_(struct ovsdb_txn *txn, bool replay, bool durable)
 {
     struct ovsdb_error *error;
 
@@ -865,11 +869,27 @@ ovsdb_txn_commit_(struct ovsdb_txn *txn, bool durable)
     }
 
     /* Send the commit to each replica. */
-    if (txn->db->file) {
-        error = ovsdb_file_commit(txn->db->file, txn, durable);
-        if (error) {
-            ovsdb_txn_abort(txn);
-            return error;
+    VLOG_INFO("%s:%d", __FILE__, __LINE__);
+    if (txn->db->storage && !replay) {
+        VLOG_INFO("%s:%d", __FILE__, __LINE__);
+        struct json *txn_json = ovsdb_file_txn_to_json(txn);
+        char *s = json_to_string(txn_json, 0);
+        VLOG_INFO("%s", s);
+        free(s);
+        if (txn_json) {
+            txn_json = ovsdb_file_txn_annotate(txn_json,
+                                               ovsdb_txn_get_comment(txn));
+            txn_json = json_array_create_2(json_null_create(), txn_json);
+
+            struct uuid next;
+            error = ovsdb_storage_write_block(txn->db->storage, txn_json,
+                                              &txn->db->prereq, &next,
+                                              durable);
+            if (error) {
+                ovsdb_txn_abort(txn);
+                return error;
+            }
+            txn->db->prereq = next;
         }
     }
     ovsdb_monitors_commit(txn->db, txn);
@@ -884,11 +904,11 @@ ovsdb_txn_commit_(struct ovsdb_txn *txn, bool durable)
 }
 
 struct ovsdb_error *
-ovsdb_txn_commit(struct ovsdb_txn *txn, bool durable)
+ovsdb_txn_commit(struct ovsdb_txn *txn, bool replay, bool durable)
 {
    struct ovsdb_error *err;
 
-   PERF(__func__, err = ovsdb_txn_commit_(txn, durable));
+   PERF(__func__, err = ovsdb_txn_commit_(txn, replay, durable));
    return err;
 }
 

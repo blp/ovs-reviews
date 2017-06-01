@@ -314,7 +314,7 @@ do_log_io(struct ovs_cmdl_context *ctx)
     } else if (!strcmp(mode_string, "read/write")) {
         mode = OVSDB_LOG_READ_WRITE;
     } else if (!strcmp(mode_string, "create")) {
-        mode = OVSDB_LOG_CREATE;
+        mode = OVSDB_LOG_CREATE_EXCL;
     } else {
         ovs_fatal(0, "unknown log-io open mode \"%s\"", mode_string);
     }
@@ -1433,7 +1433,7 @@ do_execute__(struct ovs_cmdl_context *ctx, bool ro)
     json = parse_json(ctx->argv[1]);
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    db = ovsdb_create(schema);
+    db = ovsdb_create(schema, NULL);
 
     for (i = 2; i < ctx->argc; i++) {
         struct json *params, *result;
@@ -1499,7 +1499,7 @@ do_trigger(struct ovs_cmdl_context *ctx)
     json = parse_json(ctx->argv[1]);
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    db = ovsdb_create(schema);
+    db = ovsdb_create(schema, NULL);
 
     ovsdb_server_init(&server);
     ovsdb_server_add_db(&server, db);
@@ -1558,7 +1558,7 @@ static struct ovsdb_table *do_transact_table;
 static void
 do_transact_commit(struct ovs_cmdl_context *ctx OVS_UNUSED)
 {
-    ovsdb_error_destroy(ovsdb_txn_commit(do_transact_txn, false));
+    ovsdb_error_destroy(ovsdb_txn_commit(do_transact_txn, true, false));
     do_transact_txn = NULL;
 }
 
@@ -1725,7 +1725,7 @@ do_transact(struct ovs_cmdl_context *ctx)
                       "       \"j\": {\"type\": \"integer\"}}}}}");
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    do_transact_db = ovsdb_create(schema);
+    do_transact_db = ovsdb_create(schema, NULL);
     do_transact_table = ovsdb_get_table(do_transact_db, "mytable");
     assert(do_transact_table != NULL);
 
