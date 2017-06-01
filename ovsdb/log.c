@@ -315,6 +315,13 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
                                    json->u.string);
         goto error;
     }
+    if (json->type != JSON_OBJECT) {
+        error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
+                                   "offset %lld are not a JSON object",
+                                   file->name, data_length,
+                                   (long long int) data_offset);
+        goto error;
+    }
 
     file->prev_offset = file->offset;
     file->offset = data_offset + data_length;
