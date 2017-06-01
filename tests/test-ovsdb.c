@@ -263,8 +263,7 @@ print_and_free_json(struct json *json)
 static void
 print_and_free_ovsdb_error(struct ovsdb_error *error)
 {
-    char *string = ovsdb_error_to_string(error);
-    ovsdb_error_destroy(error);
+    char *string = ovsdb_error_to_string_free(error);
     puts(string);
     free(string);
 }
@@ -273,8 +272,7 @@ static void
 check_ovsdb_error(struct ovsdb_error *error)
 {
     if (error) {
-        char *s = ovsdb_error_to_string(error);
-        ovsdb_error_destroy(error);
+        char *s = ovsdb_error_to_string_free(error);
         ovs_fatal(0, "%s", s);
     }
 }
@@ -338,10 +336,9 @@ do_log_io(struct ovs_cmdl_context *ctx)
             ovs_fatal(0, "unknown log-io command \"%s\"", command);
         }
         if (error) {
-            char *s = ovsdb_error_to_string(error);
+            char *s = ovsdb_error_to_string_free(error);
             printf("%s: %s failed: %s\n", name, command, s);
             free(s);
-            ovsdb_error_destroy(error);
         } else {
             printf("%s: %s successful\n", name, command);
         }
@@ -444,8 +441,7 @@ do_diff_data(struct ovs_cmdl_context *ctx)
         /* Apply diff to 'old' to create'reincarnation'. */
         error = ovsdb_datum_apply_diff(&reincarnation, &old, &diff, &type);
         if (error) {
-            char *string = ovsdb_error_to_string(error);
-            ovsdb_error_destroy(error);
+            char *string = ovsdb_error_to_string_free(error);
             ovs_fatal(0, "%s", string);
         }
 
@@ -866,10 +862,9 @@ do_parse_conditions(struct ovs_cmdl_context *ctx)
         if (!error) {
             print_and_free_json(ovsdb_condition_to_json(&cnd));
         } else {
-            char *s = ovsdb_error_to_string(error);
+            char *s = ovsdb_error_to_string_free(error);
             ovs_error(0, "%s", s);
             free(s);
-            ovsdb_error_destroy(error);
             exit_code = 1;
         }
         json_destroy(json);
@@ -1037,10 +1032,9 @@ do_parse_mutations(struct ovs_cmdl_context *ctx)
         if (!error) {
             print_and_free_json(ovsdb_mutation_set_to_json(&set));
         } else {
-            char *s = ovsdb_error_to_string(error);
+            char *s = ovsdb_error_to_string_free(error);
             ovs_error(0, "%s", s);
             free(s);
-            ovsdb_error_destroy(error);
             exit_code = 1;
         }
         json_destroy(json);
