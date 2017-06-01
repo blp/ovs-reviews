@@ -38,6 +38,7 @@
 #include "poll-loop.h"
 #include "openvswitch/shash.h"
 #include "sset.h"
+#include "svec.h"
 #include "util.h"
 #include "openvswitch/vlog.h"
 
@@ -227,6 +228,65 @@ ovsdb_idl_table_from_class(const struct ovsdb_idl *,
 static bool ovsdb_idl_track_is_set(struct ovsdb_idl_table *table);
 static void ovsdb_idl_send_cond_change(struct ovsdb_idl *idl);
 
+static const char *
+next_remote(const char *s)
+{
+    for (const char *delimiter = strchr(s, ','); delimiter;
+         delimiter = strchr(delimiter + 1, ',')) {
+        const char *p = delimiter + 1;
+        p += strspn(p, " \t");
+        size_t n_letters = strspn(p, "abcdefghijklmnopqrstuvwxyz");
+        if (n_letters && p[n_letters] == ':') {
+            return delimiter;
+        }
+    }
+    return NULL;
+}
+
+static void
+ovsdb_idl_parse_remote(const char *s,
+                       struct svec *remotes, struct uuid *cid)
+{
+    *cid = UUID_ZERO;
+    for (;;) {
+        /* Skip white space. */
+        s += strspn(s, " \t");
+        if (*s == '\0') {
+            break;
+        }
+
+        /* Find the start of the next remote  */
+        const char *delimiter = next_remote(s);
+        if (!delimiter) {
+            svec_add(remotes, s);
+            break;
+        }
+        svec_add_nocopy(remotes, xmemdup0(s, delimiter - s));
+        s = delimiter + 1;
+    }
+
+    size_t i;
+    for (i = 0; i < remotes->n; i++) {
+        const char *name = remotes->names[i];
+        struct uuid uuid;
+        if (!strncmp(name, "cid:", 4) && uuid_from_string(&uuid, name + 4)) {
+            *cid = uuid;
+            svec_del(remotes, name);
+            break;
+        }
+    }
+}
+
+static struct jsonrpc_session *
+ovsdb_idl_open_session(const char *remote, bool retry)
+{
+    struct svec remotes = SVEC_EMPTY_INITIALIZER;
+    struct uuid cid;            /* XXX */
+    ovsdb_idl_parse_remote(remote, &remotes, &cid);
+    return jsonrpc_session_open_multiple((const char **) remotes.names,
+                                         remotes.n, retry);
+}
+
 /* Creates and returns a connection to database 'remote', which should be in a
  * form acceptable to jsonrpc_session_open().  The connection will maintain an
  * in-memory replica of the remote database whose schema is described by
@@ -259,7 +319,7 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
 
     idl = xzalloc(sizeof *idl);
     idl->class = class;
-    idl->session = jsonrpc_session_open(remote, retry);
+    idl->session = ovsdb_idl_open_session(remote, retry);
     shash_init(&idl->table_by_name);
     idl->tables = xmalloc(class->n_tables * sizeof *idl->tables);
     for (i = 0; i < class->n_tables; i++) {
@@ -309,7 +369,7 @@ ovsdb_idl_set_remote(struct ovsdb_idl *idl, const char *remote,
     if (idl) {
         ovs_assert(!idl->txn);
         jsonrpc_session_close(idl->session);
-        idl->session = jsonrpc_session_open(remote, retry);
+        idl->session = ovsdb_idl_open_session(remote, retry);
         idl->state_seqno = UINT_MAX;
     }
 }
