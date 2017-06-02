@@ -72,7 +72,7 @@ AT_CHECK([
     ovs-vsctl add-br br-in1 -- \
         set bridge br-in1 datapath_type=netdev fail-mode=standalone
     ovs-vsctl add-br br-in2 -- \
-        set bridge br-in2 datapath_type=netdev fail-mode=standalone other-config:packet-type-aware=true
+        set bridge br-in2 datapath_type=netdev fail-mode=standalone other-config:legacy-l3-pipeline=true
     ovs-vsctl add-br br-in3 -- \
         set bridge br-in3 datapath_type=netdev fail-mode=standalone
     ovs-vsctl add-br br-p1 -- \
