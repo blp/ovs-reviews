@@ -33,6 +33,7 @@
 /test-ofpbuf
 /test-ovsdb
 /test-packets
+/test-raft
 /test-random
 /test-reconnect
 /test-rstp
