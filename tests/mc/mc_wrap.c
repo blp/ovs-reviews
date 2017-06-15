@@ -17,6 +17,7 @@
 #include <config.h>
 
 #include "mc_wrap.h"
+#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(mc_wrap);
 
