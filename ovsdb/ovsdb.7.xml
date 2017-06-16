@@ -255,7 +255,7 @@
     <code>ovs-appctl</code> to invoke the <code>cluster/leave</code> command.
     When a server fails and cannot be recovered, e.g. because its hard disk
     crashed, or to otherwise remove a server that is down from a cluster, use
-    <code>ovs-appctl</code> to invoke <code>cluster-kick</code> to make the
+    <code>ovs-appctl</code> to invoke <code>cluster/kick</code> to make the
     remaining servers kick it out of the cluster.
   </p>
 

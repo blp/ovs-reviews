@@ -308,6 +308,9 @@ ovsdb_file_change_cb(const struct ovsdb_row *old,
     return true;
 }
 
+/* Returns 'txn' transformed into the JSON format that is used in OVSDB files.
+ * (But the caller must use ovsdb_file_txn_annotate() to add the _comment the
+ * _date members.)  If 'txn' doesn't actually change anything, returns NULL */
 struct json *
 ovsdb_file_txn_to_json(const struct ovsdb_txn *txn)
 {
