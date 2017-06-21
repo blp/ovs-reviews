@@ -15,7 +15,7 @@
  */
 
 #include <config.h>
-
+#include "mc.h"
 #include "mc_wrap.h"
 #include "openvswitch/vlog.h"
 

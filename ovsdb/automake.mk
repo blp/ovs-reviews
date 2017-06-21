@@ -46,6 +46,7 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/transaction.h \
 	ovsdb/ovsdb-util.c \
 	ovsdb/ovsdb-util.h \
+	tests/mc/mc.h \
 	tests/mc/mc_wrap.h \
 	tests/mc/mc_wrap.c
 ovsdb_libovsdb_la_CFLAGS = $(AM_CFLAGS)
