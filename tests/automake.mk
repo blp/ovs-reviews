@@ -277,6 +277,10 @@ noinst_PROGRAMS += tests/test-raft
 tests_test_raft_SOURCES = tests/test-raft.c
 tests_test_raft_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
+noinst_PROGRAMS += tests/mc/mc
+tests_mc_mc_SOURCES = tests/mc/mc.h tests/mc/mc.c
+tests_mc_mc_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
+
 noinst_PROGRAMS += tests/test-lib
 tests_test_lib_SOURCES = \
 	tests/test-lib.c
