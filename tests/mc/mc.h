@@ -26,8 +26,8 @@ enum mc_rpc_client_msg_type {
 };
 
 enum mc_rpc_server_msg_type {
-  MC_RPC_CHOOSE_NORMAL,
-  MC_RPC_CHOOSE_ERROR
+  MC_RPC_CHOOSE_REPLY_NORMAL,
+  MC_RPC_CHOOSE_REPLY_ERROR
 };
 
 enum mc_rpc_choose_req_type {

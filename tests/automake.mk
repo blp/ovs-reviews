@@ -13,7 +13,8 @@ EXTRA_DIST += \
 	$(srcdir)/tests/testsuite.patch \
 	tests/test-raft.sh \
 	tests/test-raft2.sh \
-	tests/test-raft3.sh
+	tests/test-raft3.sh \
+	tests/mc/run-mc-raft.sh
 
 COMMON_MACROS_AT = \
 	tests/ovsdb-macros.at \
@@ -280,6 +281,22 @@ tests_test_raft_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 noinst_PROGRAMS += tests/mc/mc
 tests_mc_mc_SOURCES = tests/mc/mc.h tests/mc/mc.c
 tests_mc_mc_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
+
+noinst_PROGRAMS += tests/mc/raft-driver
+tests_mc_raft_driver_SOURCES = \
+	tests/mc/mc.h \
+	tests/mc/mc_wrap.h \
+	tests/mc/mc_wrap.c \
+	tests/mc/raft-driver.c
+tests_mc_raft_driver_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
+
+noinst_PROGRAMS += tests/mc/raft-client
+tests_mc_raft_client_SOURCES = \
+	tests/mc/mc.h \
+	tests/mc/mc_wrap.h \
+	tests/mc/mc_wrap.c \
+	tests/mc/raft-client.c
+tests_mc_raft_client_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/test-lib
 tests_test_lib_SOURCES = \

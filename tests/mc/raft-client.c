@@ -14,21 +14,34 @@
  * limitations under the License.
  */
 
+/*
+ * A raft client which takes a list of commands to send to a raft server
+ * driver (the kind in tests/mc/raft-driver.c) and sends them using library 
+ * calls interposed on by the model checker
+ */
+
 #include <config.h>
-#include "mc.h"
+#include <getopt.h>
+#include <stdio.h>
+#include "command-line.h"
+#include "openvswitch/json.h"
+#include "ovsdb-error.h"
+#include "poll-loop.h"
+#include "unixctl.h"
+#include "util.h"
 #include "openvswitch/vlog.h"
-#include "jsonrpc.h"
-
-VLOG_DEFINE_THIS_MODULE(mc);
-
-struct mc_conn {
-    struct ovs_list list_node;
-    struct jsonrpc_session *js;
-    struct uuid sid;
-};
 
 int
-main(int argc, char *argv[])
+main(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
+    struct jsonrpc *client;
+    unixctl_client_create(argv[1], &client);
+
+    char *result, *err;
+    unixctl_client_transact(client, "exit", 0, NULL , &result, &err);
+
+    printf("The result was %s and error was %s\n", result, err);
+    
     return 0;
 }
+
