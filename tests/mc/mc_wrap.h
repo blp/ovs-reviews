@@ -20,6 +20,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb/log.h"
 #include "compiler.h"
+#include "unixctl.h"
 
 /* Wrappers for library calls to allow the model checker to drive
  * the execution for testing
@@ -45,5 +46,12 @@ struct ovsdb_error *mc_wrap_ovsdb_log_replace_start(struct ovsdb_log *old,
 struct ovsdb_error *mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old,
 						     struct ovsdb_log *new)
     OVS_WARN_UNUSED_RESULT;
+
+int mc_wrap_unixctl_client_create(const char *path, struct jsonrpc **client);
+
+int mc_wrap_unixctl_client_transact(struct jsonrpc *client,
+				    const char *command,
+				    int argc, char *argv[],
+				    char **result, char **error);
 
 #endif /* tests/mc/mc_wrap.h */

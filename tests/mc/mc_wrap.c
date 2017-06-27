@@ -27,38 +27,55 @@ mc_wrap_ovsdb_log_open(const char *name,
 		       enum ovsdb_log_open_mode open_mode,
 		       int locking, struct ovsdb_log **filep)
 {
-  return ovsdb_log_open(name, magic, open_mode, locking, filep);
+    return ovsdb_log_open(name, magic, open_mode, locking, filep);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
 {
-  return ovsdb_log_read(file, jsonp);
+    return ovsdb_log_read(file, jsonp);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_write(struct ovsdb_log *file,
 			const struct json *json)
 {
-  return ovsdb_log_write(file, json);
+    return ovsdb_log_write(file, json);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_commit(struct ovsdb_log *file)
 {
-  return ovsdb_log_commit(file);
+    return ovsdb_log_commit(file);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_replace_start(struct ovsdb_log *old,
 				struct ovsdb_log **newp)
 {
-  return ovsdb_log_replace_start(old, newp);
+    return ovsdb_log_replace_start(old, newp);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old,
 				 struct ovsdb_log *new)
 {
-  return ovsdb_log_replace_commit(old, new);
+    return ovsdb_log_replace_commit(old, new);
+}
+
+int
+mc_wrap_unixctl_client_create(const char *path,
+			      struct jsonrpc **client)
+{
+    return unixctl_client_create(path, client);
+}
+
+int
+mc_wrap_unixctl_client_transact(struct jsonrpc *client,
+				const char *command,
+				int argc, char *argv[],
+				char **result, char **error)
+{
+    return unixctl_client_transact(client, command, argc,
+				   argv, result, error);
 }
