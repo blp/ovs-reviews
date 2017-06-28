@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "command-line.h"
+#include "mc_wrap.h"
 #include "openvswitch/json.h"
 #include "ovsdb-error.h"
 #include "poll-loop.h"
@@ -32,6 +33,12 @@
 #include "util.h"
 
 #define MAX_LINE_SIZE 50
+
+/* First arg is unix socket path for communicating with a raft server
+ *    -- In future make this a list and allow client to switch to other servers
+ * Second arg is unix socket path for communicating with model checker
+ * Third arg is the file containing a list of commands to send to the servers
+ */
 
 int
 main(int argc, char *argv[])
@@ -43,7 +50,7 @@ main(int argc, char *argv[])
     /*XXX Possibly add usage help and more sophisticated option processing */
 
     struct jsonrpc *raft_conn;
-    unixctl_client_create(argv[1], &raft_conn);
+    mc_wrap_unixctl_client_create(argv[1], &raft_conn);
 
     struct jsonrpc *mc_conn;
     unixctl_client_create(argv[2], &mc_conn);
@@ -66,7 +73,7 @@ main(int argc, char *argv[])
 	json_object_put_string(cmd_json, cmd, arg);
 
 	char* cmd_str[] = {json_to_string(cmd_json, 0)};
-	unixctl_client_transact(raft_conn, "execute", 1, cmd_str, &result, &err);
+	mc_wrap_unixctl_client_transact(raft_conn, "execute", 1, cmd_str, &result, &err);
 
 	if (err == NULL) {
 	    /* This could be because the server crashed (including deliberately
