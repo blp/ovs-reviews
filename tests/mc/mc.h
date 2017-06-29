@@ -25,11 +25,6 @@ enum mc_rpc_client_msg_type {
   MC_RPC_ASSERT
 };
 
-enum mc_rpc_server_msg_type {
-  MC_RPC_CHOOSE_REPLY_NORMAL,
-  MC_RPC_CHOOSE_REPLY_ERROR
-};
-
 enum mc_rpc_choose_req_type {
   MC_RPC_CHOOSE_LOG_OPEN,
   MC_RPC_CHOOSE_LOG_READ,
@@ -54,7 +49,12 @@ struct mc_rpc_choose_req {
   enum mc_rpc_choose_req_type type;
 };
 
-struct mc_rpc_server_msg {
+enum mc_rpc_server_msg_type {
+  MC_RPC_REPLY_NORMAL,
+  MC_RPC_REPLY_ERROR
+};
+
+struct mc_rpc_choose_reply {
   enum mc_rpc_server_msg_type type;
 };
 
