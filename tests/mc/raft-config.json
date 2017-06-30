@@ -4,15 +4,15 @@
     "model_check_execute": [
 	{"raft1":{
             "command":["raft-driver", "--unixctl=raft1.ctl", "s1.db"],
-	    "failure-inject":true}},
+	    "failure_inject":true}},
 	{"raft2":{
             "command":["raft-driver", "--unixctl=raft2.ctl", "s2.db"],
-	    "failure-inject":true}},
+	    "failure_inject":true}},
 	{"raft3":{
             "command":["raft-driver", "--unixctl=raft3.ctl", "s3.db"],
-	    "failure-inject":true}},
+	    "failure_inject":true}},
 	{"client1":{
             "command":["raft-client", "raft1.ctl", "mc.ctl", "commands"],
-	    "failure-inject":false}}
+	    "failure_inject":false}}
     ]
 }
