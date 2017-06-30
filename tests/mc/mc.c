@@ -31,6 +31,7 @@ VLOG_DEFINE_THIS_MODULE(mc);
 
 struct mc_process {
     char* name;
+    char** run_cmd;
     struct jsonrpc_session *js;
     struct ovs_list list_node;
     struct process *proc_ptr;
@@ -41,7 +42,42 @@ struct mc_process {
 static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
 
 static void
-start_processes(struct json *config) {
+start_processes(void)
+{
+    struct mc_process *new_proc;
+    LIST_FOR_EACH (new_proc, list_node, &mc_processes) {  
+	/* Prepare to redirect stderr and stdout of the process to a file
+	 * and then start the process */
+    
+	int stdout_copy = dup(fileno(stdout));
+	int stderr_copy = dup(fileno(stderr));
+    
+	char path[strlen(new_proc->name) + 4];
+	strcpy(path, new_proc->name);
+	strcpy(path + strlen(new_proc->name), ".out");
+	int fd = open(path, O_CREAT|O_APPEND|O_TRUNC, S_IRWXU);
+    
+	dup2(fd, fileno(stdout));
+	dup2(fd, fileno(stderr));
+    
+	int errno = process_start(new_proc->run_cmd, &(new_proc->proc_ptr));
+	if (errno != 0) {
+	    ovs_fatal(errno, "Cannot start process %s", new_proc->name);
+	}
+
+	/* Restore our stdout and stderr and close all the extra fds */
+	
+	dup2(stdout_copy, fileno(stdout));
+	dup2(stderr_copy, fileno(stderr));
+
+	close(stdout_copy);
+	close(stderr_copy);
+	close(fd);
+    }
+}
+
+static void
+read_config_processes(struct json *config) {
 
     ovs_assert(config->type == JSON_OBJECT);
     
@@ -69,43 +105,16 @@ start_processes(struct json *config) {
 	    ovs_fatal(0, "Did not find command for %s\n", exe->name);
 	}
 	
-	char **args = xmalloc(sizeof(char*) * (exe_data->u.array.n + 1));
+	char **run_cmd = xmalloc(sizeof(char*) * (exe_data->u.array.n + 1));
 	int j = 0;
 	for (; j < exe_data->u.array.n; j++) {
-	    args[j] = xmalloc(strlen(exe_data->u.array.elems[j]->u.string));
-	    strcpy(args[j], exe_data->u.array.elems[j]->u.string);
+	    run_cmd[j] = xmalloc(strlen(exe_data->u.array.elems[j]->u.string));
+	    strcpy(run_cmd[j], exe_data->u.array.elems[j]->u.string);
 	}
-	args[j] = NULL;
-
-	/* Prepare to redirect stderr and stdout of the process to a file
-	 * and then start the process */
+	run_cmd[j] = NULL;
+	new_proc->run_cmd = run_cmd;
 	
-	int stdout_copy = dup(fileno(stdout));
-	int stderr_copy = dup(fileno(stderr));
-
-	char path[strlen(new_proc->name) + 4];
-	strcpy(path, new_proc->name);
-	strcpy(path + strlen(new_proc->name), ".out");
-        int fd = open(path, O_CREAT|O_APPEND|O_TRUNC, S_IRWXU);
-
-	dup2(fd, fileno(stdout));
-	dup2(fd, fileno(stderr));
-
-	int errno = process_start(args, &(new_proc->proc_ptr));
-	if (errno != 0) {
-	    ovs_fatal(errno, "Cannot start process %s", new_proc->name);
-	}
-
-	/* Restore our stdout and stderr and close all the extra fds */
-	
-	dup2(stdout_copy, fileno(stdout));
-	dup2(stderr_copy, fileno(stderr));
-
-	close(stdout_copy);
-	close(stderr_copy);
-	close(fd);
-
-	/* Should we failure inject this process */
+	/* Should we failure inject this process ? */
 	
 	exe_data = exe->data;
 	exe_data = shash_find_data(exe_data->u.object, "failure_inject");
@@ -120,6 +129,8 @@ start_processes(struct json *config) {
 	} else {
 	    new_proc->failure_inject = false;
 	}
+
+	ovs_list_push_back(&mc_processes, &new_proc->list_node);
     }
 }
     
@@ -136,7 +147,8 @@ main(int argc, char *argv[])
 	ovs_fatal(0, "Cannot read the json config in %s\n%s", argv[1], config->u.string);
     }
 
-    start_processes(config);
+    read_config_processes(config);
+    start_processes();
     
     return 0;
 }
