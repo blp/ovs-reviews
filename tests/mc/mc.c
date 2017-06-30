@@ -15,6 +15,8 @@
  */
 
 #include <config.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include "jsonrpc.h"
 #include "mc.h"
 #include "openvswitch/dynamic-string.h"
@@ -72,22 +74,46 @@ start_processes(struct json *config) {
 	for (; j < exe_data->u.array.n; j++) {
 	    args[j] = xmalloc(strlen(exe_data->u.array.elems[j]->u.string));
 	    strcpy(args[j], exe_data->u.array.elems[j]->u.string);
-	    printf("%s\n", args[j]);
 	}
 	args[j] = NULL;
+
+	/* Prepare to redirect stderr and stdout of the process to a file
+	 * and then start the process */
+	
+	int stdout_copy = dup(fileno(stdout));
+	int stderr_copy = dup(fileno(stderr));
+
+	char path[strlen(new_proc->name) + 4];
+	strcpy(path, new_proc->name);
+	strcpy(path + strlen(new_proc->name), ".out");
+        int fd = open(path, O_CREAT|O_APPEND|O_TRUNC, S_IRWXU);
+
+	dup2(fd, fileno(stdout));
+	dup2(fd, fileno(stderr));
 
 	int errno = process_start(args, &(new_proc->proc_ptr));
 	if (errno != 0) {
 	    ovs_fatal(errno, "Cannot start process %s", new_proc->name);
 	}
 
+	/* Restore our stdout and stderr and close all the extra fds */
+	
+	dup2(stdout_copy, fileno(stdout));
+	dup2(stderr_copy, fileno(stderr));
+
+	close(stdout_copy);
+	close(stderr_copy);
+	close(fd);
+
+	/* Should we failure inject this process */
+	
 	exe_data = exe->data;
 	exe_data = shash_find_data(exe_data->u.object, "failure_inject");
 	if (exe_data == NULL ||
 	    !(exe_data->type == JSON_TRUE || exe_data->type == JSON_FALSE)) {
 
 	    ovs_fatal(0,
-		      "Did not find failure injection information for %s\n",
+		      "Did not find failure_inject boolean for %s\n",
 		      exe->name);
 	} else if (exe_data->type == JSON_TRUE) {
 	    new_proc->failure_inject = true;
