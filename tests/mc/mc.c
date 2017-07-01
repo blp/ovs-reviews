@@ -55,7 +55,7 @@ start_processes(void)
 	char path[strlen(new_proc->name) + 4];
 	strcpy(path, new_proc->name);
 	strcpy(path + strlen(new_proc->name), ".out");
-	int fd = open(path, O_CREAT|O_APPEND|O_TRUNC, S_IRWXU);
+	int fd = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
     
 	dup2(fd, fileno(stdout));
 	dup2(fd, fileno(stderr));
