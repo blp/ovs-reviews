@@ -48,7 +48,7 @@ start_processes(void)
     LIST_FOR_EACH (new_proc, list_node, &mc_processes) {  
 	/* Prepare to redirect stderr and stdout of the process to a file
 	 * and then start the process */
-    
+
 	int stdout_copy = dup(fileno(stdout));
 	int stderr_copy = dup(fileno(stderr));
     
@@ -61,14 +61,14 @@ start_processes(void)
 	dup2(fd, fileno(stderr));
     
 	int errno = process_start(new_proc->run_cmd, &(new_proc->proc_ptr));
+
+	/* Restore our stdout and stderr */
+	dup2(stdout_copy, fileno(stdout));
+	dup2(stderr_copy, fileno(stderr));
+	
 	if (errno != 0) {
 	    ovs_fatal(errno, "Cannot start process %s", new_proc->name);
 	}
-
-	/* Restore our stdout and stderr and close all the extra fds */
-	
-	dup2(stdout_copy, fileno(stdout));
-	dup2(stderr_copy, fileno(stderr));
 
 	close(stdout_copy);
 	close(stderr_copy);

@@ -15,6 +15,7 @@ EXTRA_DIST += \
 	tests/test-raft2.sh \
 	tests/test-raft3.sh \
 	tests/mc/run-mc-raft.sh \
+	tests/mc/kill-mc-raft.sh \
 	tests/mc/raft-config.json
 
 COMMON_MACROS_AT = \
