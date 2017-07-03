@@ -1,5 +1,5 @@
 {
-    "run_config":{"listen_socket": "mc.ctl"},
+    "run_config":{"listen_address": "tcp:127.0.0.1:6666"},
     
     "model_check_execute": [
 	{"raft1":{

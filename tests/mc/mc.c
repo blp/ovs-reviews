@@ -15,8 +15,9 @@
  */
 
 #include <config.h>
-#include <unistd.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include "jsonrpc.h"
 #include "mc.h"
 #include "openvswitch/dynamic-string.h"
@@ -25,6 +26,7 @@
 #include "openvswitch/vlog.h"
 #include "openvswitch/util.h"
 #include "process.h"
+#include "stream.h"
 #include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(mc);
@@ -34,50 +36,71 @@ struct mc_process {
     char** run_cmd;
     struct jsonrpc_session *js;
     struct ovs_list list_node;
+
+    /* If this is non-null then the 
+     * process is running and not otherwise */
     struct process *proc_ptr;
     struct uuid sid;
     bool failure_inject;
+    bool running;
 };
 
 static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
+static struct pstream *listener = NULL;
+static bool all_processes_running = false;
 
 static void
-start_processes(void)
-{
-    struct mc_process *new_proc;
-    LIST_FOR_EACH (new_proc, list_node, &mc_processes) {  
-	/* Prepare to redirect stderr and stdout of the process to a file
-	 * and then start the process */
+mc_start_process(struct mc_process *new_proc) {
+    /* Prepare to redirect stderr and stdout of the process to a file
+     * and then start the process */
 
-	int stdout_copy = dup(fileno(stdout));
-	int stderr_copy = dup(fileno(stderr));
+    int stdout_copy = dup(fileno(stdout));
+    int stderr_copy = dup(fileno(stderr));
     
-	char path[strlen(new_proc->name) + 4];
-	strcpy(path, new_proc->name);
-	strcpy(path + strlen(new_proc->name), ".out");
-	int fd = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
-    
-	dup2(fd, fileno(stdout));
-	dup2(fd, fileno(stderr));
-    
-	int errno = process_start(new_proc->run_cmd, &(new_proc->proc_ptr));
+    char path[strlen(new_proc->name) + 4];
+    strcpy(path, new_proc->name);
+    strcpy(path + strlen(new_proc->name), ".out");
+    int fd = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
 
-	/* Restore our stdout and stderr */
-	dup2(stdout_copy, fileno(stdout));
-	dup2(stderr_copy, fileno(stderr));
-	
-	if (errno != 0) {
-	    ovs_fatal(errno, "Cannot start process %s", new_proc->name);
-	}
-
-	close(stdout_copy);
-	close(stderr_copy);
-	close(fd);
+    if (fd < 0) {
+	ovs_fatal(errno, "Cannot open outfile for process %s",
+		  new_proc->name);
     }
+    
+    dup2(fd, fileno(stdout));
+    dup2(fd, fileno(stderr));
+    
+    int err = process_start(new_proc->run_cmd, &(new_proc->proc_ptr));
+
+    /* Restore our stdout and stderr */
+    dup2(stdout_copy, fileno(stdout));
+    dup2(stderr_copy, fileno(stderr));
+	
+    if (err != 0) {
+	ovs_fatal(err, "Cannot start process %s", new_proc->name);
+    }
+
+    new_proc->running = true;
+
+    close(stdout_copy);
+    close(stderr_copy);
+    close(fd);
 }
 
 static void
-read_config_processes(struct json *config) {
+mc_start_all_processes(void)
+{
+    struct mc_process *new_proc;
+    LIST_FOR_EACH (new_proc, list_node, &mc_processes) {
+	if (!new_proc->running) {
+	    mc_start_process(new_proc);
+	}
+    }
+    all_processes_running = true;
+}
+
+static void
+mc_read_config_processes(struct json *config) {
 
     ovs_assert(config->type == JSON_OBJECT);
     
@@ -130,10 +153,23 @@ read_config_processes(struct json *config) {
 	    new_proc->failure_inject = false;
 	}
 
+	new_proc->running = false;
 	ovs_list_push_back(&mc_processes, &new_proc->list_node);
     }
 }
+
+static void
+mc_run(void)
+{
+    if (listener == NULL) {
+	
+    }
     
+    if (!all_processes_running) {
+	mc_start_all_processes();
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -147,8 +183,8 @@ main(int argc, char *argv[])
 	ovs_fatal(0, "Cannot read the json config in %s\n%s", argv[1], config->u.string);
     }
 
-    read_config_processes(config);
-    start_processes();
+    mc_read_config_processes(config);
+    mc_run();
     
     return 0;
 }
