@@ -46,6 +46,7 @@ struct mc_process {
 };
 
 static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
+static char* listen_addr = NULL;
 static struct pstream *listener = NULL;
 static bool all_processes_running = false;
 
@@ -100,6 +101,22 @@ mc_start_all_processes(void)
 }
 
 static void
+mc_read_config_run(struct json *config) {
+    ovs_assert(config->type == JSON_OBJECT);
+    
+    struct json *run_conf = shash_find_data(config->u.object,
+					     "run_config");    
+    if (run_conf == NULL) {
+	ovs_fatal(0, "Cannot find the run config");
+    }
+
+    struct shash_node *addr = shash_first(run_conf->u.object);
+    struct json *listen_conf = addr->data; 
+    listen_addr = xmalloc(strlen(listen_conf->u.string) + 1);
+    strcpy(listen_addr, listen_conf->u.string);
+}
+
+static void
 mc_read_config_processes(struct json *config) {
 
     ovs_assert(config->type == JSON_OBJECT);
@@ -118,7 +135,7 @@ mc_read_config_processes(struct json *config) {
 	struct shash_node *exe =
 	    shash_first(exec_conf->u.array.elems[i]->u.object);
 	new_proc = xmalloc(sizeof(struct mc_process));
-	new_proc->name = xmalloc(strlen(exe->name));
+	new_proc->name = xmalloc(strlen(exe->name) + 1);
 	strcpy(new_proc->name, exe->name);
 
 	struct json *exe_data = exe->data;
@@ -131,7 +148,8 @@ mc_read_config_processes(struct json *config) {
 	char **run_cmd = xmalloc(sizeof(char*) * (exe_data->u.array.n + 1));
 	int j = 0;
 	for (; j < exe_data->u.array.n; j++) {
-	    run_cmd[j] = xmalloc(strlen(exe_data->u.array.elems[j]->u.string));
+	    run_cmd[j] = xmalloc(strlen(exe_data->u.array.elems[j]->u.string)
+				 + 1);
 	    strcpy(run_cmd[j], exe_data->u.array.elems[j]->u.string);
 	}
 	run_cmd[j] = NULL;
@@ -159,10 +177,21 @@ mc_read_config_processes(struct json *config) {
 }
 
 static void
+mc_read_config(struct json *config)
+{
+    mc_read_config_run(config);
+    mc_read_config_processes(config);
+}
+
+static void
 mc_run(void)
 {
     if (listener == NULL) {
-	
+	int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);
+
+	if (error) {
+	    ovs_fatal(error, "Cannot open the listening conn");
+	}
     }
     
     if (!all_processes_running) {
@@ -183,7 +212,7 @@ main(int argc, char *argv[])
 	ovs_fatal(0, "Cannot read the json config in %s\n%s", argv[1], config->u.string);
     }
 
-    mc_read_config_processes(config);
+    mc_read_config(config);
     mc_run();
     
     return 0;
