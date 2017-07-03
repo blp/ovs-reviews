@@ -186,12 +186,16 @@ mc_read_config(struct json *config)
 static void
 mc_run(void)
 {
-    if (listener == NULL) {
+    if (!listener) {
 	int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);
 
 	if (error) {
 	    ovs_fatal(error, "Cannot open the listening conn");
 	}
+    }
+
+    if (listener) {
+	
     }
     
     if (!all_processes_running) {
@@ -213,7 +217,10 @@ main(int argc, char *argv[])
     }
 
     mc_read_config(config);
-    mc_run();
+
+    for(;;) {
+	mc_run();
+    }
     
     return 0;
 }
