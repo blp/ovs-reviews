@@ -12,7 +12,7 @@
             "command":["raft-driver", "--unixctl=raft3.ctl", "s3.db"],
 	    "failure_inject":true}},
 	{"client1":{
-            "command":["raft-client", "raft1.ctl", "mc.ctl", "commands"],
+            "command":["raft-client", "raft1.ctl", "tcp:127.0.0.1:6666", "commands"],
 	    "failure_inject":false}}
     ]
 }

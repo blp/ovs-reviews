@@ -38,14 +38,21 @@ struct mc_process {
     struct ovs_list list_node;
 
     /* If this is non-null then the 
-     * process is running and not otherwise */
-    struct process *proc_ptr;
-    struct uuid sid;
+     * process is running (as far as
+     * the model checker knows) */
+    struct process *proc_p;
     bool failure_inject;
     bool running;
 };
 
+struct mc_conn {
+    struct ovs_list list_node;
+    struct jsonrpc_session *js;
+    unsigned int js_seqno;
+};
+
 static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
+static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
 static char* listen_addr = NULL;
 static struct pstream *listener = NULL;
 static bool all_processes_running = false;
@@ -71,7 +78,7 @@ mc_start_process(struct mc_process *new_proc) {
     dup2(fd, fileno(stdout));
     dup2(fd, fileno(stderr));
     
-    int err = process_start(new_proc->run_cmd, &(new_proc->proc_ptr));
+    int err = process_start(new_proc->run_cmd, &(new_proc->proc_p));
 
     /* Restore our stdout and stderr */
     dup2(stdout_copy, fileno(stdout));
@@ -195,7 +202,16 @@ mc_run(void)
     }
 
     if (listener) {
-	
+	struct stream *stream;
+	int error = pstream_accept(listener, &stream);
+
+	if (!error) {
+	    struct mc_conn *conn = xzalloc(sizeof *conn);
+	    ovs_list_push_back(&mc_conns, &conn->list_node);
+	    conn->js = jsonrpc_session_open_unreliably(
+		           jsonrpc_open(stream), DSCP_DEFAULT);
+	    conn->js_seqno = jsonrpc_session_get_seqno(conn->js);	    
+	}
     }
     
     if (!all_processes_running) {

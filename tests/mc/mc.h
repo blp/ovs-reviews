@@ -21,41 +21,41 @@
 
 
 enum mc_rpc_client_msg_type {
-  MC_RPC_CHOOSE,
-  MC_RPC_ASSERT
+    MC_RPC_CHOOSE,
+    MC_RPC_ASSERT
 };
 
 enum mc_rpc_choose_req_type {
-  MC_RPC_CHOOSE_LOG_OPEN,
-  MC_RPC_CHOOSE_LOG_READ,
-  MC_RPC_CHOOSE_LOG_WRITE,
-  MC_RPC_CHOOSE_LOG_COMMIT,
-  MC_RPC_CHOOSE_LOG_REPLACE_START,
-  MC_RPC_CHOOSE_LOG_REPLACE_COMMIT,
-  MC_RPC_CHOOSE_TIMER,
-  MC_RPC_CHOOSE_NETWORK_OPEN,
-  MC_RPC_CHOOSE_NETWORK_SEND,
-  MC_RPC_CHOOSE_NETWORK_RECV,
-  MC_RPC_NONE
+    MC_RPC_CHOOSE_LOG_OPEN,
+    MC_RPC_CHOOSE_LOG_READ,
+    MC_RPC_CHOOSE_LOG_WRITE,
+    MC_RPC_CHOOSE_LOG_COMMIT,
+    MC_RPC_CHOOSE_LOG_REPLACE_START,
+    MC_RPC_CHOOSE_LOG_REPLACE_COMMIT,
+    MC_RPC_CHOOSE_TIMER,
+    MC_RPC_CHOOSE_NETWORK_OPEN,
+    MC_RPC_CHOOSE_NETWORK_SEND,
+    MC_RPC_CHOOSE_NETWORK_RECV,
+    MC_RPC_NONE
 };
 
 struct mc_rpc_client_msg_common {
-  enum mc_rpc_client_msg_type type;
-  struct uuid sid;
+    enum mc_rpc_client_msg_type type;
+    struct uuid sid;
 };
 
 struct mc_rpc_choose_req {
-  struct mc_rpc_client_msg_common common;
-  enum mc_rpc_choose_req_type type;
+    struct mc_rpc_client_msg_common common;
+    enum mc_rpc_choose_req_type type;
 };
 
 enum mc_rpc_server_msg_type {
-  MC_RPC_REPLY_NORMAL,
-  MC_RPC_REPLY_ERROR
+    MC_RPC_REPLY_NORMAL,
+    MC_RPC_REPLY_ERROR
 };
 
 struct mc_rpc_choose_reply {
-  enum mc_rpc_server_msg_type type;
+    enum mc_rpc_server_msg_type type;
 };
 
 #endif /* tests/mc/mc.h */
