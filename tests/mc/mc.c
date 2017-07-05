@@ -216,7 +216,8 @@ mc_run(void)
 	int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);
 
 	if (error) {
-	    ovs_fatal(error, "Cannot open the listening conn");
+	    ovs_fatal(error, "Cannot open the listening conn due to %s\n",
+		      ovs_strerror(error));
 	}
     }
 
@@ -231,7 +232,7 @@ mc_run(void)
 	    struct mc_conn *conn = xzalloc(sizeof *conn);
 	    ovs_list_push_back(&mc_conns, &conn->list_node);
 	    conn->js = jsonrpc_session_open_unreliably(
-						       jsonrpc_open(stream), DSCP_DEFAULT);
+			     jsonrpc_open(stream), DSCP_DEFAULT);
 	    conn->js_seqno = jsonrpc_session_get_seqno(conn->js);	    
 	} 
     }

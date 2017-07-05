@@ -54,6 +54,7 @@ main(int argc, char *argv[])
     mc_wrap_unixctl_client_create(argv[1], &raft_conn);
 
     struct jsonrpc_session *mc_conn = jsonrpc_session_open(argv[2], true);
+    jsonrpc_session_run(mc_conn);
 
     FILE *fp = fopen(argv[3], "r");
 
