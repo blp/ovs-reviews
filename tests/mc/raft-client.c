@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "command-line.h"
+#include "jsonrpc.h"
 #include "mc_wrap.h"
 #include "openvswitch/json.h"
 #include "ovsdb-error.h"
@@ -52,8 +53,7 @@ main(int argc, char *argv[])
     struct jsonrpc *raft_conn;
     mc_wrap_unixctl_client_create(argv[1], &raft_conn);
 
-    struct jsonrpc *mc_conn;
-    unixctl_client_create(argv[2], &mc_conn);
+    struct jsonrpc_session *mc_conn = jsonrpc_session_open(argv[2], true);
 
     FILE *fp = fopen(argv[3], "r");
 
@@ -73,17 +73,22 @@ main(int argc, char *argv[])
 	json_object_put_string(cmd_json, cmd, arg);
 
 	char* cmd_str[] = {json_to_string(cmd_json, 0)};
-	mc_wrap_unixctl_client_transact(raft_conn, "execute", 1, cmd_str, &result, &err);
+	int error_num = mc_wrap_unixctl_client_transact(raft_conn, "execute", 1,
+							cmd_str, &result, &err);
 
-	if (err == NULL) {
+	if (error_num != 0) {
 	    /* This could be because the server crashed (including deliberately
 	     * by the model checker). Contact some other server ?
 	     */
-	    printf("Error: raft-client cannot communicate with server");
+	    fprintf(stderr, "Error: %s\n", ovs_strerror(error_num));
 	} else {
 	    /* Again here the server being contacted might not be the leader
 	     * in which case, maybe contact another server */
-	    printf("Command %s %s resulted in %s", cmd, arg, result);
+	    if (err == NULL) {
+		fprintf(stderr, "Command %s %s resulted in %s\n", cmd, arg, result);
+	    } else {
+		fprintf(stderr, "Command %s %s. Server error %s\n", cmd, arg, err);
+	    }
 	}
     }
 

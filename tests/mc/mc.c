@@ -42,6 +42,7 @@ struct mc_process {
      * the model checker knows) */
     struct process *proc_p;
     bool failure_inject;
+    size_t delay_start;
     bool running;
 };
 
@@ -68,15 +69,18 @@ mc_start_process(struct mc_process *new_proc) {
     char path[strlen(new_proc->name) + 4];
     strcpy(path, new_proc->name);
     strcpy(path + strlen(new_proc->name), ".out");
-    int fd = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
+    int fdout = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
 
-    if (fd < 0) {
+    strcpy(path + strlen(new_proc->name), ".err");
+    int fderr = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
+
+    if (fdout < 0 || fderr < 0) {
 	ovs_fatal(errno, "Cannot open outfile for process %s",
 		  new_proc->name);
     }
     
-    dup2(fd, fileno(stdout));
-    dup2(fd, fileno(stderr));
+    dup2(fdout, fileno(stdout));
+    dup2(fderr, fileno(stderr));
     
     int err = process_start(new_proc->run_cmd, &(new_proc->proc_p));
 
@@ -92,7 +96,8 @@ mc_start_process(struct mc_process *new_proc) {
 
     close(stdout_copy);
     close(stderr_copy);
-    close(fd);
+    close(fdout);
+    close(fderr);
 }
 
 static void
@@ -101,6 +106,10 @@ mc_start_all_processes(void)
     struct mc_process *new_proc;
     LIST_FOR_EACH (new_proc, list_node, &mc_processes) {
 	if (!new_proc->running) {
+	    if (new_proc->delay_start > 0) {
+		sleep(new_proc->delay_start);
+	    }
+	    
 	    mc_start_process(new_proc);
 	}
     }
@@ -178,6 +187,16 @@ mc_read_config_processes(struct json *config) {
 	    new_proc->failure_inject = false;
 	}
 
+	exe_data = exe->data;
+	exe_data = shash_find_data(exe_data->u.object, "delay_start");
+
+	if (exe_data != NULL) {
+	    ovs_assert(exe_data->type == JSON_INTEGER);
+	    new_proc->delay_start = json_integer(exe_data);
+	} else {
+	    new_proc->delay_start = 0;
+	}
+       
 	new_proc->running = false;
 	ovs_list_push_back(&mc_processes, &new_proc->list_node);
     }
@@ -201,21 +220,20 @@ mc_run(void)
 	}
     }
 
+    if (!all_processes_running) {
+	mc_start_all_processes();
+    }
+
     if (listener) {
 	struct stream *stream;
 	int error = pstream_accept(listener, &stream);
-
 	if (!error) {
 	    struct mc_conn *conn = xzalloc(sizeof *conn);
 	    ovs_list_push_back(&mc_conns, &conn->list_node);
 	    conn->js = jsonrpc_session_open_unreliably(
-		           jsonrpc_open(stream), DSCP_DEFAULT);
+						       jsonrpc_open(stream), DSCP_DEFAULT);
 	    conn->js_seqno = jsonrpc_session_get_seqno(conn->js);	    
-	}
-    }
-    
-    if (!all_processes_running) {
-	mc_start_all_processes();
+	} 
     }
 }
 
@@ -235,7 +253,7 @@ main(int argc, char *argv[])
     mc_read_config(config);
 
     for(;;) {
-	mc_run();
+    	mc_run();
     }
     
     return 0;

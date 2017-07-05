@@ -13,6 +13,7 @@
 	    "failure_inject":true}},
 	{"client1":{
             "command":["raft-client", "raft1.ctl", "tcp:127.0.0.1:6666", "commands"],
-	    "failure_inject":false}}
+	    "failure_inject":false,
+	    "delay_start":2}}
     ]
 }
