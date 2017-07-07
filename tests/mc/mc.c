@@ -42,7 +42,7 @@ struct mc_process {
      * the model checker knows) */
     struct process *proc_p;
     bool failure_inject;
-    size_t delay_start;
+    int delay_start;
     bool running;
 };
 
@@ -54,9 +54,12 @@ struct mc_conn {
 
 static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
 static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
-static char* listen_addr = NULL;
+static const char* listen_addr = NULL;
 static struct pstream *listener = NULL;
 static bool all_processes_running = false;
+
+static const bool trueval = true;
+static const bool falseval = false;
 
 static const char *
 mc_rpc_type_to_string(enum mc_rpc_type status)
@@ -67,6 +70,111 @@ mc_rpc_type_to_string(enum mc_rpc_type status)
 #undef MC_RPC
             }
     return "<unknown>";
+}
+
+static inline const void *
+__get_member(const struct json *j) {
+    if (j != NULL) {
+	switch(j->type) {
+	case JSON_FALSE:
+	    return &falseval;
+	case JSON_TRUE:
+	    return &trueval;
+	case JSON_OBJECT:
+	    return j;
+	case JSON_ARRAY:
+	    return &(j->u.array);
+	case JSON_INTEGER:
+	    return &(j->u.integer);
+	case JSON_REAL:
+	    return &(j->u.real);
+	case JSON_STRING:
+	    return j->u.string;
+	case JSON_NULL:
+	case JSON_N_TYPES:
+	    return NULL;
+	}
+    }
+    
+    return j;
+}
+
+static const void *
+get_member(const struct json *json, const char *name) {
+    if (!json) {
+	return NULL;
+    }
+    ovs_assert(json->type == JSON_OBJECT);
+    return __get_member(shash_find_data(json->u.object, name));
+}
+
+static const void *
+get_first_member(const struct json *json, char **name, bool copy_name) {
+    if (!json) {
+	return NULL;
+    }
+    ovs_assert(json->type == JSON_OBJECT);
+    struct shash_node *n = shash_first(json->u.object);
+
+    if (copy_name) {
+	*name = xmalloc(strlen(n->name) + 1);
+	strcpy(*name, n->name);
+    } else {
+	*name = n->name;
+    }
+    
+    return __get_member(n->data);
+}
+
+static const void *
+get_member_or_die(const struct json *json, const char *name, 
+		  int err_no, const char *format, ...) {
+    const void *member = get_member(json, name);
+
+    if (member) {
+	return member;
+    }
+
+    va_list args;
+    va_start(args, format);
+    ovs_fatal_valist(err_no, format, args);
+
+    OVS_NOT_REACHED();
+    return NULL;
+}
+
+/*
+ * De-allocation is responsibility of caller
+ */
+static const char *
+get_str_member_copy(const struct json *json, const char *name) {
+    const char *src = get_member(json, name);
+    char *dst = NULL;
+    
+    if (src) {
+	dst = xmalloc(strlen(src) + 1);
+	strcpy(dst, src);
+    }
+    
+    return dst;
+}
+
+static const char *
+get_str_member_copy_or_die(const struct json *json, const char *name,
+			   int err_no, const char *format, ...)
+{
+    const char *ret = get_str_member_copy(json, name);
+    
+    if (ret) {
+	return ret;
+    }
+    
+    va_list args;
+    va_start(args, format);
+    ovs_fatal_valist(err_no, format, args);
+    
+    OVS_NOT_REACHED();
+    return NULL;
 }
 
 static bool
@@ -109,14 +217,16 @@ mc_rpc_to_jsonrpc(const union mc_rpc *rpc)
 				 json_array_create_1(args));
 }
 
-static union mc_rpc *  
-mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg)
+static void
+mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg, union mc_rpc *rpc)
 {
-    union mc_rpc *rpc = xmalloc(sizeof(*rpc));
     memset(rpc, 0, sizeof *rpc);
     ovs_assert(msg->type == JSONRPC_NOTIFY);
     ovs_assert(mc_rpc_type_from_string(msg->method, &rpc->common.type));
 
+    rpc->common.pid = *(pid_t*)get_member(json_array(msg->params)->elems[0],
+					  "pid");
+    
     switch (rpc->common.type) {
     case MC_RPC_HELLO:
 	break;
@@ -133,8 +243,6 @@ mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg)
 	/** Handle Me !! **/
 	break;
     }
-    
-    return rpc;
 }
 
 static void
@@ -196,86 +304,58 @@ mc_start_all_processes(void)
 }
 
 static void
-mc_read_config_run(struct json *config) {
-    ovs_assert(config->type == JSON_OBJECT);
+mc_load_config_run(struct json *config) {
     
-    struct json *run_conf = shash_find_data(config->u.object,
-					    "run_config");    
-    if (run_conf == NULL) {
-	ovs_fatal(0, "Cannot find the run config");
-    }
+    const struct json *run_conf = get_member_or_die(config, "run_config", 0,
+						    "Cannot find run_config");
+    listen_addr = get_str_member_copy_or_die(run_conf, "listen_address",
+					     0, "Cannot find listen_address");
 
-    struct shash_node *addr = shash_first(run_conf->u.object);
-    struct json *listen_conf = addr->data; 
-    listen_addr = xmalloc(strlen(listen_conf->u.string) + 1);
-    strcpy(listen_addr, listen_conf->u.string);
 }
 
 static void
-mc_read_config_processes(struct json *config) {
+mc_load_config_processes(struct json *config) {
 
-    ovs_assert(config->type == JSON_OBJECT);
+    const struct json_array *mc_conf =
+	get_member_or_die(config, "model_check_execute", 0,
+			  "Cannot find the execute config");
     
-    struct json *exec_conf = shash_find_data(config->u.object,
-					     "model_check_execute");
-    
-    if (exec_conf == NULL) {
-	ovs_fatal(0, "Cannot find the execute config");
-    }
-
-    ovs_assert(exec_conf->type == JSON_ARRAY);
-
     struct mc_process *new_proc;
-    for (int i = 0; i < exec_conf->u.array.n; i++) {
-	struct shash_node *exe =
-	    shash_first(exec_conf->u.array.elems[i]->u.object);
+    for (int i = 0; i < mc_conf->n; i++) {
 	new_proc = xmalloc(sizeof(struct mc_process));
-	new_proc->name = xmalloc(strlen(exe->name) + 1);
-	strcpy(new_proc->name, exe->name);
 
-	struct json *exe_data = exe->data;
-	exe_data = shash_find_data(exe_data->u.object, "command");
+	const struct json *exe = get_first_member(mc_conf->elems[i],
+						  &(new_proc->name),
+						  true);
 
-	if (exe_data == NULL) {
-	    ovs_fatal(0, "Did not find command for %s\n", exe->name);
-	}
+	const struct json_array *cmd =
+	    get_member_or_die(exe, "command",
+			      0, "Did not find command for %s\n", new_proc->name);
 	
-	char **run_cmd = xmalloc(sizeof(char*) * (exe_data->u.array.n + 1));
+	char **run_cmd = xmalloc(sizeof(char*) * (cmd->n + 1));
 	int j = 0;
-	for (; j < exe_data->u.array.n; j++) {
-	    run_cmd[j] = xmalloc(strlen(exe_data->u.array.elems[j]->u.string)
-				 + 1);
-	    strcpy(run_cmd[j], exe_data->u.array.elems[j]->u.string);
+	for (; j < cmd->n; j++) {
+	    run_cmd[j] = xmalloc(strlen(json_string(cmd->elems[j]) + 1));
+	    strcpy(run_cmd[j], json_string(cmd->elems[j]));
 	}
 	run_cmd[j] = NULL;
 	new_proc->run_cmd = run_cmd;
 	
 	/* Should we failure inject this process ? */
+
+	new_proc->failure_inject =
+	    *(bool*) get_member_or_die(exe, "failure_inject",
+				      0,
+				      "Did not find failure_inject for %s\n",
+				      new_proc->name);
 	
-	exe_data = exe->data;
-	exe_data = shash_find_data(exe_data->u.object, "failure_inject");
-	if (exe_data == NULL ||
-	    !(exe_data->type == JSON_TRUE || exe_data->type == JSON_FALSE)) {
 
-	    ovs_fatal(0,
-		      "Did not find failure_inject boolean for %s\n",
-		      exe->name);
-	} else if (exe_data->type == JSON_TRUE) {
-	    new_proc->failure_inject = true;
-	} else {
-	    new_proc->failure_inject = false;
+	new_proc->delay_start = 0;
+	const void *result = get_member(exe, "delay_start");
+	if (result) {
+	    new_proc->delay_start = *(int *)result;
 	}
-
-	exe_data = exe->data;
-	exe_data = shash_find_data(exe_data->u.object, "delay_start");
-
-	if (exe_data != NULL) {
-	    ovs_assert(exe_data->type == JSON_INTEGER);
-	    new_proc->delay_start = json_integer(exe_data);
-	} else {
-	    new_proc->delay_start = 0;
-	}
-       
+	
 	new_proc->running = false;
 	ovs_list_push_back(&mc_processes, &new_proc->list_node);
     }
@@ -291,8 +371,8 @@ mc_load_config(const char *filename)
 		  config->u.string);
     }
     
-    mc_read_config_run(config);
-    mc_read_config_processes(config);
+    mc_load_config_run(config);
+    mc_load_config_processes(config);
     json_destroy(config);
 }
 
