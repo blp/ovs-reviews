@@ -19,11 +19,16 @@
 
 #include "uuid.h"
 
-enum mc_rpc_msg_type {
-    MC_RPC_HELLO,
-    MC_RPC_CHOOSE_REQ,
-    MC_RPC_CHOOSE_REPLY,
-    MC_RPC_ASSERT
+#define MC_RPC_TYPES					\
+    MC_RPC(MC_RPC_HELLO, "mc_hello")			\
+    MC_RPC(MC_RPC_CHOOSE_REQ, "mc_choose_req")		\
+    MC_RPC(MC_RPC_CHOOSE_REPLY, "mc_choose_reply")	\
+    MC_RPC(MC_RPC_ASSERT, "mc_assert")			\
+    
+enum mc_rpc_type {
+#define MC_RPC(ENUM, NAME) ENUM,
+    MC_RPC_TYPES
+#undef MC_RPC
 };
 
 enum mc_rpc_choose_req_type {
@@ -49,7 +54,7 @@ enum mc_rpc_choose_reply_type {
 };
 
 struct mc_rpc_common {
-    enum mc_rpc_msg_type type;
+    enum mc_rpc_type type;
     /* Due to the single machine setup
      * pid is a good way to identify the 
      * sender given that the model checker 
@@ -71,6 +76,13 @@ struct mc_rpc_choose_req {
 struct mc_rpc_choose_reply {
     struct mc_rpc_common common;
     enum mc_rpc_choose_reply_type reply;
+};
+
+union mc_rpc {
+    struct mc_rpc_common common;
+    struct mc_rpc_hello hello;
+    struct mc_rpc_choose_req choose_req;
+    struct mc_rpc_choose_reply choose_reply;
 };
 
 #endif /* tests/mc/mc.h */
