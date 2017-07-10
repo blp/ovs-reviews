@@ -31,16 +31,21 @@
 
 VLOG_DEFINE_THIS_MODULE(mc);
 
+/*
+ * Set the pointers to 
+ * struct process and
+ * struct jsonrpc_session
+ * to NULL after closing/freeing
+ * them, when deliberately crashing 
+ * processes */
 struct mc_process {
     char* name;
     char** run_cmd;
-    struct jsonrpc_session *js;
-    struct ovs_list list_node;
 
-    /* If this is non-null then the 
-     * process is running (as far as
-     * the model checker knows) */
-    struct process *proc_p;
+    struct jsonrpc_session *js;
+    unsigned int js_seqno;
+    struct ovs_list list_node;
+    struct process *p;
     bool failure_inject;
     int delay_start;
     bool running;
@@ -281,7 +286,7 @@ mc_start_process(struct mc_process *new_proc) {
     dup2(fdout, fileno(stdout));
     dup2(fderr, fileno(stderr));
     
-    int err = process_start(new_proc->run_cmd, &(new_proc->proc_p));
+    int err = process_start(new_proc->run_cmd, &(new_proc->p));
 
     /* Restore our stdout and stderr */
     dup2(stdout_copy, fileno(stdout));
@@ -334,7 +339,7 @@ mc_load_config_processes(struct json *config) {
     
     struct mc_process *new_proc;
     for (int i = 0; i < mc_conf->n; i++) {
-	new_proc = xmalloc(sizeof(struct mc_process));
+	new_proc = xzalloc(sizeof(struct mc_process));
 
 	const struct json *exe = get_first_member(mc_conf->elems[i],
 						  &(new_proc->name),
@@ -389,11 +394,65 @@ mc_load_config(const char *filename)
 }
 
 static void
-mc_run_session(struct jsonrpc_session *js)
+mc_handle_hello(struct jsonrpc_session *js, const struct mc_rpc_hello *rq)
 {
-    jsonrpc_session_run(js);
-    union mc_rpc rpc;
-    mc_receive_rpc(js, &rpc);
+    struct mc_process *proc;
+    LIST_FOR_EACH (proc, list_node, &mc_processes) {
+	if (rq->common.pid == process_pid(proc->p)) {
+	    proc->js = js;
+	    
+	    struct mc_conn *conn;
+	    LIST_FOR_EACH (conn, list_node, &mc_conns) {
+		if (conn->js == js) {
+		    proc->js_seqno = conn->js_seqno;
+		    ovs_list_remove(&conn->list_node);
+		    free(conn);
+		    break;
+		}
+	    }
+	    break;
+	}
+    }
+}
+
+static void
+mc_handle_rpc(struct jsonrpc_session *js, struct mc_process *proc,
+	      const union mc_rpc *rpc)
+{
+    switch (rpc->common.type) {
+    case MC_RPC_HELLO:
+	mc_handle_hello(js, &rpc->hello);
+	break;
+	
+    case MC_RPC_CHOOSE_REQ:
+	/** Handle Me !! **/
+	break;
+	
+    case MC_RPC_CHOOSE_REPLY:
+	/** Handle Me !! **/
+	break;
+	
+    case MC_RPC_ASSERT:
+	/** Handle Me !! **/
+	break;
+    }
+}
+
+static void
+mc_run_session(struct jsonrpc_session *js, struct mc_process *proc)
+{
+    if (js && jsonrpc_session_is_alive(js)) {
+	jsonrpc_session_run(js);
+	union mc_rpc rpc;
+	if (mc_receive_rpc(js, &rpc)) {
+	    mc_handle_rpc(js, proc, &rpc);
+	}
+    } else if (proc && proc->running) {
+	/* This has been called from a process context
+	 * which the model checker believes to be running
+	 * but the jsonrpc connection either is null or
+	 * it is no longer alive */
+    }
 }
 
 static void
@@ -422,6 +481,30 @@ mc_run(void)
 			     jsonrpc_open(stream), DSCP_DEFAULT);
 	    conn->js_seqno = jsonrpc_session_get_seqno(conn->js);	    
 	} 
+    }
+
+    struct mc_conn *conn, *next;
+    LIST_FOR_EACH_SAFE (conn, next, list_node, &mc_conns) {
+	ovs_assert(conn->js != NULL);
+	mc_run_session(conn->js, NULL);
+    }
+
+    process_run();
+    struct mc_process *proc;
+    LIST_FOR_EACH (proc, list_node, &mc_processes) {
+	if (proc->running && !process_exited(proc->p)) {
+	    mc_run_session(proc->js, proc);
+	} else if (proc->running && process_exited(proc->p)) {
+	    /* XXX. Model checker thinks the process is 
+	     * running but it is not running anymore ? **/
+	} else if (!proc->running) {
+	    /* XXX. This should only be the case when we
+	     * crash the process deliberately at some stage */
+	} /* XXX another else branch here should check for
+	   * timeouts of processes that are believed to be
+	   * running but have not contacted the model checker
+	   * for a decision on a syscall or libcall 
+	   * i.e. they might be stuck in an infinite loop */
     }
 }
 
