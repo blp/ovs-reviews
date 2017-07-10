@@ -245,6 +245,18 @@ mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg, union mc_rpc *rpc)
     }
 }
 
+static bool
+mc_receive_rpc(struct jsonrpc_session *js, union mc_rpc *rpc)
+{
+    struct jsonrpc_msg *msg = jsonrpc_session_recv(js);
+    if (!msg) {
+        return false;
+    }
+
+    mc_rpc_from_jsonrpc(msg, rpc);
+    return true;
+}
+
 static void
 mc_start_process(struct mc_process *new_proc) {
     /* Prepare to redirect stderr and stdout of the process to a file
@@ -374,6 +386,14 @@ mc_load_config(const char *filename)
     mc_load_config_run(config);
     mc_load_config_processes(config);
     json_destroy(config);
+}
+
+static void
+mc_run_session(struct jsonrpc_session *js)
+{
+    jsonrpc_session_run(js);
+    union mc_rpc rpc;
+    mc_receive_rpc(js, &rpc);
 }
 
 static void
