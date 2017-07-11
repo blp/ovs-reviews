@@ -17,7 +17,7 @@
 #ifndef MC_H
 #define MC_H 1
 
-#include "uuid.h"
+#include "process.h"
 
 #define MC_RPC_TYPES					\
     MC_RPC(MC_RPC_HELLO, "mc_hello")			\
@@ -84,5 +84,8 @@ union mc_rpc {
     struct mc_rpc_choose_req choose_req;
     struct mc_rpc_choose_reply choose_reply;
 };
+
+struct jsonrpc_msg *mc_rpc_to_jsonrpc(const union mc_rpc *rpc);
+void mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg, union mc_rpc *rpc);
 
 #endif /* tests/mc/mc.h */

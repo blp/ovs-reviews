@@ -282,7 +282,7 @@ tests_test_raft_SOURCES = tests/test-raft.c
 tests_test_raft_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/mc/mc
-tests_mc_mc_SOURCES = tests/mc/mc.h tests/mc/mc.c
+tests_mc_mc_SOURCES = tests/mc/mc.h tests/mc/mc_internal.h tests/mc/mc_lib.c tests/mc/mc.c
 tests_mc_mc_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/mc/raft-driver
@@ -290,6 +290,7 @@ tests_mc_raft_driver_SOURCES = \
 	tests/mc/mc.h \
 	tests/mc/mc_wrap.h \
 	tests/mc/mc_wrap.c \
+	tests/mc/mc_lib.c \
 	tests/mc/raft-driver.c
 tests_mc_raft_driver_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
@@ -298,6 +299,7 @@ tests_mc_raft_client_SOURCES = \
 	tests/mc/mc.h \
 	tests/mc/mc_wrap.h \
 	tests/mc/mc_wrap.c \
+	tests/mc/mc_lib.c \
 	tests/mc/raft-client.c
 tests_mc_raft_client_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
