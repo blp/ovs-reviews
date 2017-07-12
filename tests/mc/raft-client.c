@@ -53,12 +53,14 @@ main(int argc, char *argv[])
     /*XXX Possibly add usage help and more sophisticated option processing */
 
     struct jsonrpc_session *mc_conn = jsonrpc_session_open(argv[2], true);
-    jsonrpc_session_run(mc_conn);
     union mc_rpc rpc;
     rpc.common.type = MC_RPC_HELLO;
-    rpc.common.pid = getpid(); 
-    jsonrpc_session_send(mc_conn, mc_rpc_to_jsonrpc(&rpc));
-    
+    rpc.common.pid = getpid();
+
+    while(!jsonrpc_session_is_connected(mc_conn)) {
+	jsonrpc_session_run(mc_conn);
+	jsonrpc_session_send(mc_conn, mc_rpc_to_jsonrpc(&rpc));
+    }
     struct jsonrpc *raft_conn;
     mc_wrap_unixctl_client_create(argv[1], &raft_conn);
 

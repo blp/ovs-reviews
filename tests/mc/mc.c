@@ -268,11 +268,14 @@ mc_handle_rpc(struct jsonrpc_session *js, struct mc_process *proc,
 static void
 mc_run_session(struct jsonrpc_session *js, struct mc_process *proc)
 {
-    if (js && jsonrpc_session_is_alive(js)) {
+    if (js) {
 	jsonrpc_session_run(js);
-	union mc_rpc rpc;
-	if (mc_receive_rpc(js, &rpc)) {
-	    mc_handle_rpc(js, proc, &rpc);
+	
+	if (jsonrpc_session_is_connected(js)) {
+	    union mc_rpc rpc;
+	    if (mc_receive_rpc(js, &rpc)) {
+		mc_handle_rpc(js, proc, &rpc);
+	    }
 	}
     } else if (proc && proc->running) {
 	/* This has been called from a process context
