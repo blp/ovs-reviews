@@ -14,20 +14,11 @@
  * limitations under the License.
  */
 
-#include <config.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include "jsonrpc.h"
+#ifndef MC_INTERNAL_H
+#define MC_INTERNAL_H 1
+
 #include "mc.h"
-#include "openvswitch/dynamic-string.h"
 #include "openvswitch/json.h"
-#include "openvswitch/list.h"
-#include "openvswitch/vlog.h"
-#include "openvswitch/util.h"
-#include "process.h"
-#include "stream.h"
-#include "util.h"
 
 const char *mc_rpc_type_to_string(enum mc_rpc_type status);
 const void *get_member(const struct json *json, const char *name);
@@ -38,3 +29,5 @@ const char *get_str_member_copy(const struct json *json, const char *name);
 const char *get_str_member_copy_or_die(const struct json *json, const char *name,
 				       int err_no, const char *format, ...);
 bool mc_rpc_type_from_string(const char *s, enum mc_rpc_type *status);
+
+#endif /* tests/mc/mc_internal.h */

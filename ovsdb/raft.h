@@ -42,6 +42,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "compiler.h"
+#include "jsonrpc.h"
 #include "uuid.h"
 
 struct json;
@@ -73,9 +74,11 @@ struct ovsdb_error *raft_read_metadata(const char *file_name,
 void raft_metadata_destroy(struct raft_metadata *);
 
 /* Starting up or shutting down a server within a cluster. */
-struct ovsdb_error *raft_open(const char *file_name, struct raft **)
+struct ovsdb_error *raft_open(const char *file_name, struct raft **,
+			      char *mc_addr)
     OVS_WARN_UNUSED_RESULT;
-struct ovsdb_error *raft_open__(struct ovsdb_log *, struct raft **)
+struct ovsdb_error *raft_open__(struct ovsdb_log *, struct raft **,
+				char* mc_addr, struct jsonrpc *mc_conn)
     OVS_WARN_UNUSED_RESULT;
 void raft_close(struct raft *);
 

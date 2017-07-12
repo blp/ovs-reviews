@@ -39,6 +39,7 @@
 #include "socket-util.h"
 #include "stream.h"
 #include "tests/mc/mc_wrap.h"
+#include "tests/mc/mc.h"
 #include "timeval.h"
 #include "unicode.h"
 #include "util.h"
@@ -269,6 +270,10 @@ struct raft {
 #define SNAPSHOT_TIME_RANGE_MSEC (10 * 60 * 1000) /* 10 minutes. */
     long long int next_snapshot; /* Minimum time for next snapshot, in ms. */
     off_t snapshot_size;         /* Size of previous snapshot, in bytes. */
+
+    /* Model Checker connection */
+    char *mc_addr;
+    struct jsonrpc *mc_conn;
 };
 
 static struct ovsdb_error *raft_read_header(struct raft *)
@@ -294,7 +299,8 @@ raft_fsync_thread(void *raft_)
 
         if (cur != next) {
             /* XXX following has really questionable thread-safety. */
-            struct ovsdb_error *error = mc_wrap_ovsdb_log_commit(raft->storage);
+            struct ovsdb_error *error = mc_wrap_ovsdb_log_commit(raft->storage,
+								 raft->mc_conn);
             if (!error) {
                 ovs_mutex_lock(&raft->fsync_mutex);
                 raft->fsync_cur = next;
@@ -672,21 +678,23 @@ raft_alloc(void)
     ovs_list_init(&raft->conns);
     hmap_init(&raft->add_servers);
     hmap_init(&raft->commands);
-
+    
     raft_reset_timer(raft);
     raft_schedule_snapshot(raft, false);
-
+    
     return raft;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_header(struct ovsdb_log *storage,
-                  const struct uuid *cid, const struct uuid *sid)
+                  const struct uuid *cid, const struct uuid *sid,
+		  struct jsonrpc *mc_conn)
 {
     struct json *header = json_object_create();
     json_object_put_format(header, "cluster_id", UUID_FMT, UUID_ARGS(cid));
     json_object_put_format(header, "server_id", UUID_FMT, UUID_ARGS(sid));
-    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header);
+    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header,
+							mc_conn);
     json_destroy(header);
     return error;
 }
@@ -721,7 +729,7 @@ raft_create_cluster(const char *file_name, const char *name,
 
     /* Create log file. */
     struct ovsdb_log *storage;
-    error = mc_wrap_ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
                            -1, &storage);
     if (error) {
         return error;
@@ -751,10 +759,10 @@ raft_create_cluster(const char *file_name, const char *name,
     json_object_put(snapshot, "prev_data", json_clone(data));
     json_object_put_format(snapshot, "prev_eid", UUID_FMT, UUID_ARGS(&eid));
 
-    error = mc_wrap_ovsdb_log_write(storage, snapshot);
+    error = ovsdb_log_write(storage, snapshot);
     json_destroy(snapshot);
     if (!error) {
-        error = mc_wrap_ovsdb_log_commit(storage);
+        error = ovsdb_log_commit(storage);
     }
     ovsdb_log_close(storage);
 
@@ -816,7 +824,7 @@ raft_join_cluster(const char *file_name,
 
     /* Create log file. */
     struct ovsdb_log *storage;
-    error = mc_wrap_ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
+    error = ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_CREATE_EXCL,
                            -1, &storage);
     if (error) {
         return error;
@@ -844,10 +852,10 @@ raft_join_cluster(const char *file_name,
                                UUID_FMT, UUID_ARGS(cid));
     }
 
-    error = mc_wrap_ovsdb_log_write(storage, snapshot);
+    error = ovsdb_log_write(storage, snapshot);
     json_destroy(snapshot);
     if (!error) {
-        error = mc_wrap_ovsdb_log_commit(storage);
+        error = ovsdb_log_commit(storage);
     }
     ovsdb_log_close(storage);
 
@@ -859,8 +867,9 @@ raft_read_metadata(const char *file_name, struct raft_metadata *md)
 {
     struct raft *raft = raft_alloc();
     struct ovsdb_error *error = mc_wrap_ovsdb_log_open(file_name, RAFT_MAGIC,
-                                               OVSDB_LOG_READ_ONLY, -1,
-                                               &raft->storage);
+						       OVSDB_LOG_READ_ONLY, -1,
+						       &raft->storage,
+						       raft->mc_conn);
     if (error) {
         goto exit;
     }
@@ -1255,7 +1264,8 @@ raft_write_entry(struct raft *raft, uint64_t term, struct json *data,
 
     raft_add_entry(raft, term, data, eid, servers);
     struct json *json = raft_entry_to_json_with_index(raft, raft->log_end - 1);
-    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(raft->storage, json);
+    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(raft->storage, json,
+							raft->mc_conn);
     json_destroy(json);
 
     if (error) {
@@ -1268,14 +1278,16 @@ raft_write_entry(struct raft *raft, uint64_t term, struct json *data,
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_state(struct ovsdb_log *storage,
-                 uint64_t term, const struct uuid *vote)
+                 uint64_t term, const struct uuid *vote,
+		 struct jsonrpc *mc_conn)
 {
     struct json *json = json_object_create();
     json_object_put_uint(json, "term", term);
     if (vote && !uuid_is_zero(vote)) {
         json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(vote));
     }
-    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, json);
+    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, json,
+							mc_conn);
     json_destroy(json);
 
     return error;
@@ -1379,7 +1391,8 @@ raft_read_header(struct raft *raft)
 {
     /* Read header record. */
     struct json *header;
-    struct ovsdb_error *error = mc_wrap_ovsdb_log_read(raft->storage, &header);
+    struct ovsdb_error *error = mc_wrap_ovsdb_log_read(raft->storage, &header,
+						       raft->mc_conn);
     if (error || !header) {
         /* Report error or end-of-file. */
         return error;
@@ -1442,7 +1455,8 @@ raft_read_log(struct raft *raft)
 {
     for (;;) {
         struct json *entry;
-        struct ovsdb_error *error = mc_wrap_ovsdb_log_read(raft->storage, &entry);
+        struct ovsdb_error *error = mc_wrap_ovsdb_log_read(raft->storage, &entry,
+							   raft->mc_conn);
         if (!entry) {
             if (error) {
                 /* We assume that the error is due to a partial write while
@@ -1486,24 +1500,48 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js)
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
+/* 
+ * mc_addr is the address of a model checker process. 
+ * If no model check is desired then pass NULL here */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_open(const char *file_name, struct raft **raftp)
+raft_open(const char *file_name, struct raft **raftp, char *mc_addr)
 {
-
+    
     struct ovsdb_log *log;
     struct ovsdb_error *error;
+    
+    /* Model checking initialization 
+     * If mc_addr is null then model checking is disabled */
+    struct jsonrpc *mc_conn = NULL;
+    if (mc_addr != NULL) {
+	struct stream *s;
+	int error = stream_open(mc_addr, &s, DSCP_DEFAULT);
+	if (error != 0) {
+	    return ovsdb_error(NULL,
+			       "Can't connect to model checker, %s\n",
+			       ovs_strerror(error));
+	}
+	mc_conn = jsonrpc_open(s);
 
+	union mc_rpc rpc;
+	rpc.common.type = MC_RPC_HELLO;
+	rpc.common.pid = getpid();
+	
+	jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
+    }
+    
     *raftp = NULL;
     error = mc_wrap_ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
-                           -1, &log);
-    return error ? error : raft_open__(log, raftp);
+				   -1, &log, mc_conn);
+    return error ? error : raft_open__(log, raftp, mc_addr, mc_conn);
 }
 
 /* Starts the local server in an existing Raft cluster, using the local copy of
  * the cluster's log in 'file_name'.  Takes ownership of 'log', whether
  * successful or not. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_open__(struct ovsdb_log *log, struct raft **raftp)
+raft_open__(struct ovsdb_log *log, struct raft **raftp,
+	    char *mc_addr, struct jsonrpc *mc_conn)
 {
     struct raft *raft = raft_alloc();
     raft->storage = log;
@@ -1540,6 +1578,9 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp)
             raft_add_conn(raft, jsonrpc_session_open(remote, true));
         }
     }
+
+    raft->mc_addr = mc_addr;
+    raft->mc_conn = mc_conn;
 
     *raftp = raft;
     return NULL;
@@ -1818,7 +1859,9 @@ raft_run_session(struct raft *raft,
     if (ovsdb_log_get_offset(raft->storage) == 0
         && !uuid_is_zero(&raft->cid)) {
         struct ovsdb_error *error = raft_write_header(raft->storage,
-                                                      &raft->cid, &raft->sid);
+                                                      &raft->cid,
+						      &raft->sid,
+						      raft->mc_conn);
         if (error) {
             /* XXX */
         }
@@ -1917,7 +1960,8 @@ raft_waiters_wait(struct raft *raft)
 static void
 raft_set_term(struct raft *raft, uint64_t term, const struct uuid *vote)
 {
-    struct ovsdb_error *error = raft_write_state(raft->storage, term, vote);
+    struct ovsdb_error *error = raft_write_state(raft->storage, term, vote,
+						 raft->mc_conn);
     if (error) {
         /* XXX */
     }
@@ -3559,7 +3603,8 @@ raft_handle_vote_request__(struct raft *raft,
     raft->voted_for = rq->common.sid;
     struct ovsdb_error *error = raft_write_state(raft->storage,
                                                  raft->current_term,
-                                                 &raft->voted_for);
+                                                 &raft->voted_for,
+						 raft->mc_conn);
     if (error) {
         /* XXX */
     }
@@ -3910,7 +3955,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
                                                         ? new_snapshot
                                                         : raft->snap.data));
     }
-    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header);
+    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header,
+							raft->mc_conn);
     json_destroy(header);
     if (error) {
         return error;
@@ -3920,7 +3966,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
     /* Write log records. */
     for (uint64_t index = new_log_start; index < raft->log_end; index++) {
         struct json *json = raft_entry_to_json_with_index(raft, index);
-        error = mc_wrap_ovsdb_log_write(storage, json);
+        error = mc_wrap_ovsdb_log_write(storage, json,
+					raft->mc_conn);
         json_destroy(json);
         if (error) {
             return error;
@@ -3932,7 +3979,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
      * The term is redundant if we wrote a log record for that term above.  The
      * vote, if any, is never redundant.
      */
-    return raft_write_state(storage, raft->current_term, &raft->voted_for);
+    return raft_write_state(storage, raft->current_term, &raft->voted_for,
+			    raft->mc_conn);
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -3941,7 +3989,8 @@ raft_save_snapshot(struct raft *raft,
 {
     struct ovsdb_log *new_storage;
     struct ovsdb_error *error;
-    error = mc_wrap_ovsdb_log_replace_start(raft->storage, &new_storage);
+    error = mc_wrap_ovsdb_log_replace_start(raft->storage, &new_storage,
+					    raft->mc_conn);
     if (error) {
         return error;
     }
@@ -3952,7 +4001,8 @@ raft_save_snapshot(struct raft *raft,
         return error;
     }
 
-    return mc_wrap_ovsdb_log_replace_commit(raft->storage, new_storage);
+    return mc_wrap_ovsdb_log_replace_commit(raft->storage, new_storage,
+					    raft->mc_conn);
 }
 
 static void

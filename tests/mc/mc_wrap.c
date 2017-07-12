@@ -25,47 +25,50 @@ struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_open(const char *name,
 		       const char *magic,
 		       enum ovsdb_log_open_mode open_mode,
-		       int locking, struct ovsdb_log **filep)
+		       int locking, struct ovsdb_log **filep,
+		       struct jsonrpc *mc_conn)
 {
     return ovsdb_log_open(name, magic, open_mode, locking, filep);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-mc_wrap_ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
+mc_wrap_ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp,
+		       struct jsonrpc *mc_conn)
 {
     return ovsdb_log_read(file, jsonp);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-mc_wrap_ovsdb_log_write(struct ovsdb_log *file,
-			const struct json *json)
+mc_wrap_ovsdb_log_write(struct ovsdb_log *file, const struct json *json,
+			struct jsonrpc *mc_conn)
 {
     return ovsdb_log_write(file, json);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-mc_wrap_ovsdb_log_commit(struct ovsdb_log *file)
+mc_wrap_ovsdb_log_commit(struct ovsdb_log *file,
+			 struct jsonrpc *mc_conn)
 {
     return ovsdb_log_commit(file);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-mc_wrap_ovsdb_log_replace_start(struct ovsdb_log *old,
-				struct ovsdb_log **newp)
+mc_wrap_ovsdb_log_replace_start(struct ovsdb_log *old, struct ovsdb_log **newp,
+				struct jsonrpc *mc_conn)
 {
     return ovsdb_log_replace_start(old, newp);
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old,
-				 struct ovsdb_log *new)
+mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new,
+				 struct jsonrpc *mc_conn)
 {
     return ovsdb_log_replace_commit(old, new);
 }
 
 int
-mc_wrap_unixctl_client_create(const char *path,
-			      struct jsonrpc **client)
+mc_wrap_unixctl_client_create(const char *path, struct jsonrpc **client,
+			      struct jsonrpc *mc_conn)
 {
     return unixctl_client_create(path, client);
 }
@@ -74,7 +77,8 @@ int
 mc_wrap_unixctl_client_transact(struct jsonrpc *client,
 				const char *command,
 				int argc, char *argv[],
-				char **result, char **error)
+				char **result, char **error,
+				struct jsonrpc *mc_conn)
 {
     return unixctl_client_transact(client, command, argc,
 				   argv, result, error);

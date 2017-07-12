@@ -47,8 +47,8 @@ struct execute_ctx {
 };
 
 OVS_NO_RETURN static void usage(void);
-static void parse_options(int argc, char *argv[], char **unixctl_pathp);
-
+static void parse_options(int argc, char *argv[], char **unixctl_pathp,
+			  char **mc_addr);
 static unixctl_cb_func test_raft_exit;
 static unixctl_cb_func test_raft_execute;
 static unixctl_cb_func test_raft_leave;
@@ -70,10 +70,11 @@ int
 main(int argc, char *argv[])
 {
     char *unixctl_pathp = NULL;
+    char *mc_addr = NULL;
     set_program_name(argv[0]);
     service_start(&argc, &argv);
     fatal_signal_init();
-    parse_options(argc, argv, &unixctl_pathp);
+    parse_options(argc, argv, &unixctl_pathp, &mc_addr);
 
     argc -= optind;
     argv += optind;
@@ -86,7 +87,7 @@ main(int argc, char *argv[])
 
     struct raft *raft;
     const char *file_name = argv[0];
-    check_ovsdb_error(raft_open(file_name, &raft));
+    check_ovsdb_error(raft_open(file_name, &raft, mc_addr));
 
     struct unixctl_server *server;
     int error = unixctl_server_create(unixctl_pathp, &server);
@@ -162,17 +163,19 @@ main(int argc, char *argv[])
 }
 
 static void
-parse_options(int argc, char *argv[], char **unixctl_pathp)
+parse_options(int argc, char *argv[], char **unixctl_pathp, char **mc_addr)
 {
     enum {
         OPT_CLUSTER = UCHAR_MAX + 1,
         OPT_UNIXCTL,
+	OPT_MCADDR,
         DAEMON_OPTION_ENUMS,
         VLOG_OPTION_ENUMS
     };
     static const struct option long_options[] = {
         {"cluster", required_argument, NULL, OPT_CLUSTER},
         {"unixctl", required_argument, NULL, OPT_UNIXCTL},
+	{"mcaddr", required_argument, NULL, OPT_MCADDR},
         {"help", no_argument, NULL, 'h'},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
@@ -190,6 +193,10 @@ parse_options(int argc, char *argv[], char **unixctl_pathp)
         case OPT_UNIXCTL:
             *unixctl_pathp = optarg;
             break;
+
+	case OPT_MCADDR:
+	    *mc_addr = optarg;
+	    break;
 
         case 'h':
             usage();

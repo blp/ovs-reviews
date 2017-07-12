@@ -70,7 +70,9 @@ struct mc_rpc_choose_req {
     struct mc_rpc_common common;
     enum mc_rpc_choose_req_type type;
     enum mc_rpc_choose_subtype subtype;
-    void* data;
+    /* Data specific to a particular action
+     * e.g. a log write or a network send */
+    void *data;
 };
 
 struct mc_rpc_choose_reply {

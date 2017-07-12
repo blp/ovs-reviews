@@ -32,6 +32,7 @@
 #include "openvswitch/json.h"
 #include "ovsdb-error.h"
 #include "poll-loop.h"
+#include "stream.h"
 #include "unixctl.h"
 #include "util.h"
 
@@ -51,18 +52,21 @@ main(int argc, char *argv[])
     }
 
     /*XXX Possibly add usage help and more sophisticated option processing */
-
-    struct jsonrpc_session *mc_conn = jsonrpc_session_open(argv[2], true);
+    struct stream *s;
+    int error = stream_open(argv[2], &s, DSCP_DEFAULT);
+    if (error != 0) {
+	ovs_fatal(error, "Unable to open connection to the model checker\n");
+    }
+    struct jsonrpc *mc_conn = jsonrpc_open(s);
     union mc_rpc rpc;
     rpc.common.type = MC_RPC_HELLO;
     rpc.common.pid = getpid();
+    jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
 
-    while(!jsonrpc_session_is_connected(mc_conn)) {
-	jsonrpc_session_run(mc_conn);
-	jsonrpc_session_send(mc_conn, mc_rpc_to_jsonrpc(&rpc));
-    }
     struct jsonrpc *raft_conn;
-    mc_wrap_unixctl_client_create(argv[1], &raft_conn);
+    if (mc_wrap_unixctl_client_create(argv[1], &raft_conn, mc_conn) != 0) {
+	ovs_fatal(0, "Cannot open a connection to a server\n");
+    }
 
     FILE *fp = fopen(argv[3], "r");
 
@@ -83,7 +87,8 @@ main(int argc, char *argv[])
 
 	char* cmd_str[] = {json_to_string(cmd_json, 0)};
 	int error_num = mc_wrap_unixctl_client_transact(raft_conn, "execute", 1,
-							cmd_str, &result, &err);
+							cmd_str, &result, &err,
+							mc_conn);
 
 	if (error_num != 0) {
 	    /* This could be because the server crashed (including deliberately

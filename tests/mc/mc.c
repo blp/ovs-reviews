@@ -43,19 +43,22 @@ struct mc_process {
     char* name;
     char** run_cmd;
 
-    struct jsonrpc_session *js;
-    unsigned int js_seqno;
+    struct jsonrpc *js;
     struct ovs_list list_node;
     struct process *p;
+
+    /* Config Options */
     bool failure_inject;
     int delay_start;
+
+    /* Status data */
     bool running;
+    int recv_err;
 };
 
 struct mc_conn {
     struct ovs_list list_node;
-    struct jsonrpc_session *js;
-    unsigned int js_seqno;
+    struct jsonrpc *js;
 };
 
 static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
@@ -64,27 +67,37 @@ static const char* listen_addr = NULL;
 static struct pstream *listener = NULL;
 static bool all_processes_running = false;
 
-static bool mc_receive_rpc(struct jsonrpc_session *js, union mc_rpc *rpc);
+static bool mc_receive_rpc(struct jsonrpc *js, struct mc_process *p,
+			   union mc_rpc *rpc);
 static void mc_start_process(struct mc_process *new_proc);
 static void mc_start_all_processes(void);
 static void mc_load_config_run(struct json *config);
 static void mc_load_config_processes(struct json *config);
 static void mc_load_config(const char *filename);
-static void mc_handle_hello(struct jsonrpc_session *js,
+static void mc_handle_hello(struct jsonrpc *js,
 			    const struct mc_rpc_hello *rq);
-static void mc_handle_rpc(struct jsonrpc_session *js, struct mc_process *proc,
+static void mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 			  const union mc_rpc *rpc);
-static void mc_run_session(struct jsonrpc_session *js, struct mc_process *proc);
+static void mc_run_conn(struct jsonrpc *js, struct mc_process *proc);
 static void mc_run(void);
     
 static bool
-mc_receive_rpc(struct jsonrpc_session *js, union mc_rpc *rpc)
+mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
 {
-    struct jsonrpc_msg *msg = jsonrpc_session_recv(js);
-    if (!msg) {
-        return false;
-    }
+    struct jsonrpc_msg *msg;
+    int error = jsonrpc_recv(js, &msg);
+    
+    if (error != 0) {
+	if (error != EAGAIN) {
+	    jsonrpc_close(js);
 
+	    if (p) {
+		p->recv_err = error;
+	    }
+	}
+	return false;
+    }
+    
     mc_rpc_from_jsonrpc(msg, rpc);
     return true;
 }
@@ -221,7 +234,7 @@ mc_load_config(const char *filename)
 }
 
 static void
-mc_handle_hello(struct jsonrpc_session *js, const struct mc_rpc_hello *rq)
+mc_handle_hello(struct jsonrpc *js, const struct mc_rpc_hello *rq)
 {
     struct mc_process *proc;
     LIST_FOR_EACH (proc, list_node, &mc_processes) {
@@ -231,7 +244,6 @@ mc_handle_hello(struct jsonrpc_session *js, const struct mc_rpc_hello *rq)
 	    struct mc_conn *conn;
 	    LIST_FOR_EACH (conn, list_node, &mc_conns) {
 		if (conn->js == js) {
-		    proc->js_seqno = conn->js_seqno;
 		    ovs_list_remove(&conn->list_node);
 		    free(conn);
 		    break;
@@ -243,7 +255,24 @@ mc_handle_hello(struct jsonrpc_session *js, const struct mc_rpc_hello *rq)
 }
 
 static void
-mc_handle_rpc(struct jsonrpc_session *js, struct mc_process *proc,
+mc_handle_choose_req(const struct mc_process *proc,
+		     const struct mc_rpc_choose_req *rq)
+{
+    union mc_rpc rpc;
+    rpc.common.type = MC_RPC_CHOOSE_REPLY;
+    rpc.common.pid = 0;
+    rpc.choose_reply.reply = MC_RPC_CHOOSE_REPLY_NORMAL;
+
+    int error = jsonrpc_send_block(proc->js,
+    				   mc_rpc_to_jsonrpc(&rpc));
+    
+    if (error != 0) {
+    	ovs_fatal(error, "Cannot send choose reply to %s\n", proc->name);
+    }
+}
+
+static void
+mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 	      const union mc_rpc *rpc)
 {
     switch (rpc->common.type) {
@@ -252,11 +281,11 @@ mc_handle_rpc(struct jsonrpc_session *js, struct mc_process *proc,
 	break;
 	
     case MC_RPC_CHOOSE_REQ:
-	/** Handle Me !! **/
+	mc_handle_choose_req(proc, &rpc->choose_req);
 	break;
-	
+
     case MC_RPC_CHOOSE_REPLY:
-	/** Handle Me !! **/
+	ovs_assert(0);
 	break;
 	
     case MC_RPC_ASSERT:
@@ -266,16 +295,14 @@ mc_handle_rpc(struct jsonrpc_session *js, struct mc_process *proc,
 }
 
 static void
-mc_run_session(struct jsonrpc_session *js, struct mc_process *proc)
+mc_run_conn(struct jsonrpc *js, struct mc_process *proc)
 {
     if (js) {
-	jsonrpc_session_run(js);
+	jsonrpc_run(js);
 	
-	if (jsonrpc_session_is_connected(js)) {
-	    union mc_rpc rpc;
-	    if (mc_receive_rpc(js, &rpc)) {
-		mc_handle_rpc(js, proc, &rpc);
-	    }
+	union mc_rpc rpc;
+	if (mc_receive_rpc(js, proc, &rpc)) {
+	    mc_handle_rpc(js, proc, &rpc);
 	}
     } else if (proc && proc->running) {
 	/* This has been called from a process context
@@ -307,23 +334,21 @@ mc_run(void)
 	if (!error) {
 	    struct mc_conn *conn = xzalloc(sizeof *conn);
 	    ovs_list_push_back(&mc_conns, &conn->list_node);
-	    conn->js = jsonrpc_session_open_unreliably(
-			     jsonrpc_open(stream), DSCP_DEFAULT);
-	    conn->js_seqno = jsonrpc_session_get_seqno(conn->js);	    
+	    conn->js = jsonrpc_open(stream);
 	} 
     }
 
     struct mc_conn *conn, *next;
     LIST_FOR_EACH_SAFE (conn, next, list_node, &mc_conns) {
 	ovs_assert(conn->js != NULL);
-	mc_run_session(conn->js, NULL);
+	mc_run_conn(conn->js, NULL);
     }
 
     process_run();
     struct mc_process *proc;
     LIST_FOR_EACH (proc, list_node, &mc_processes) {
 	if (proc->running && !process_exited(proc->p)) {
-	    mc_run_session(proc->js, proc);
+	    mc_run_conn(proc->js, proc);
 	} else if (proc->running && process_exited(proc->p)) {
 	    /* XXX. Model checker thinks the process is 
 	     * running but it is not running anymore ? **/

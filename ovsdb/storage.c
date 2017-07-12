@@ -48,7 +48,7 @@ ovsdb_storage_open(const char *name, bool rw, struct ovsdb_storage **storagep)
 
     struct raft *raft = NULL;
     if (!strcmp(ovsdb_log_get_magic(log), RAFT_MAGIC)) {
-        error = raft_open__(log, &raft);
+        error = raft_open__(log, &raft, NULL, NULL);
         log = NULL;
         if (error) {
             return error;
