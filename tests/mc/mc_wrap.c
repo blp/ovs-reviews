@@ -15,11 +15,42 @@
  */
 
 #include <config.h>
+#include <unistd.h>
+#include <string.h>
 #include "mc.h"
 #include "mc_wrap.h"
 #include "openvswitch/vlog.h"
+#include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(mc_wrap);
+
+static enum mc_rpc_choose_reply_type
+mc_wrap_get_choose_reply(struct jsonrpc *mc_conn,
+			 enum mc_rpc_choose_req_type type,
+			 enum mc_rpc_subtype subtype)
+{
+    if (mc_conn == NULL) {
+	return MC_RPC_CHOOSE_REPLY_NORMAL;
+    }
+    
+    union mc_rpc rpc;
+    rpc.common.type = MC_RPC_CHOOSE_REQ;
+    rpc.common.pid = getpid();
+    rpc.choose_req.type = type;
+    rpc.choose_req.subtype = subtype;
+
+    struct jsonrpc_msg *reply;
+    int err = jsonrpc_transact_block(mc_conn, mc_rpc_to_jsonrpc(&rpc),
+				     &reply);
+
+    if (err != 0) {
+	ovs_fatal(err, "Failed to get a reply from model checker");
+    }
+
+    memset(&rpc, 0, sizeof(rpc));
+    mc_rpc_from_jsonrpc(reply, &rpc);   
+    return rpc.choose_reply.reply;
+}
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_open(const char *name,
@@ -28,42 +59,90 @@ mc_wrap_ovsdb_log_open(const char *name,
 		       int locking, struct ovsdb_log **filep,
 		       struct jsonrpc *mc_conn)
 {
-    return ovsdb_log_open(name, magic, open_mode, locking, filep);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
+				     MC_RPC_SUBTYPE_OPEN);
+
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return ovsdb_log_open(name, magic, open_mode, locking, filep);
+    } else {
+	return ovsdb_io_error(0, "Fake model checker error");
+    }
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp,
 		       struct jsonrpc *mc_conn)
 {
-    return ovsdb_log_read(file, jsonp);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
+				     MC_RPC_SUBTYPE_READ);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return ovsdb_log_read(file, jsonp);
+    } else {
+	return ovsdb_io_error(0, "Fake model checker error");
+    }
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_write(struct ovsdb_log *file, const struct json *json,
 			struct jsonrpc *mc_conn)
 {
-    return ovsdb_log_write(file, json);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
+				     MC_RPC_SUBTYPE_WRITE);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return ovsdb_log_write(file, json);
+    } else {
+	return ovsdb_io_error(0, "Fake model checker error");
+    }
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_commit(struct ovsdb_log *file,
 			 struct jsonrpc *mc_conn)
 {
-    return ovsdb_log_commit(file);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
+				     MC_RPC_SUBTYPE_COMMIT);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return ovsdb_log_commit(file);
+    } else {
+	return ovsdb_io_error(0, "Fake model checker error");
+    }
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_replace_start(struct ovsdb_log *old, struct ovsdb_log **newp,
 				struct jsonrpc *mc_conn)
 {
-    return ovsdb_log_replace_start(old, newp);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
+				     MC_RPC_SUBTYPE_REPLACE_START);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return ovsdb_log_replace_start(old, newp);
+    } else {
+	return ovsdb_io_error(0, "Fake model checker error");
+    }
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new,
 				 struct jsonrpc *mc_conn)
 {
-    return ovsdb_log_replace_commit(old, new);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
+				     MC_RPC_SUBTYPE_REPLACE_COMMIT);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return ovsdb_log_replace_commit(old, new);
+    } else {
+	return ovsdb_io_error(0, "Fake model checker error");
+    }
 }
 
 int

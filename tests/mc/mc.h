@@ -31,21 +31,31 @@ enum mc_rpc_type {
 #undef MC_RPC
 };
 
+#define MC_RPC_CHOOSE_TYPES						  \
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_LOG, "mc_rpc_choose_req_log")	  \
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_TIMER, "mc_rpc_choose_req_timer")	  \
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_NETWORK, "mc_rpc_choose_req_network") \
+    
 enum mc_rpc_choose_req_type {
-    MC_RPC_CHOOSE_REQ_LOG,
-    MC_RPC_CHOOSE_REQ_TIMER,
-    MC_RPC_CHOOSE_REQ_NETWORK,
+#define MC_RPC_CHOOSE(ENUM, NAME) ENUM,
+    MC_RPC_CHOOSE_TYPES
+#undef MC_RPC_CHOOSE
 };
 
-enum mc_rpc_choose_subtype {
-    MC_RPC_SUBTYPE_OPEN,
-    MC_RPC_SUBTYPE_READ,
-    MC_RPC_SUBTYPE_WRITE,
-    MC_RPC_SUBTYPE_SEND,
-    MC_RPC_SUBTYPE_RECV,
-    MC_RPC_SUBTYPE_COMMIT,
-    MC_RPC_SUBTYPE_REPLACE_START,
-    MC_RPC_SUBTYPE_REPLACE_COMMIT
+#define MC_RPC_SUBTYPES							\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_OPEN, "mc_rpc_subtype_open")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_READ, "mc_rpc_subtype_read")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_WRITE, "mc_rpc_subtype_write")	\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SEND, "mc_rpc_subtype_send")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_RECV, "mc_rpc_subtype_recv")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_COMMIT, "mc_rpc_subtype_commit")	\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_START, "mc_rpc_subtype_replace_start") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_COMMIT, "mc_rpc_subtype_replace_commit") \
+    
+enum mc_rpc_subtype {
+#define MC_RPC_SUBTYPE(ENUM, NAME) ENUM,
+    MC_RPC_SUBTYPES
+#undef MC_RPC_SUBTYPE
 };
 
 enum mc_rpc_choose_reply_type {
@@ -69,7 +79,7 @@ struct mc_rpc_hello {
 struct mc_rpc_choose_req {
     struct mc_rpc_common common;
     enum mc_rpc_choose_req_type type;
-    enum mc_rpc_choose_subtype subtype;
+    enum mc_rpc_subtype subtype;
     /* Data specific to a particular action
      * e.g. a log write or a network send */
     void *data;

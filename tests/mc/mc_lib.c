@@ -35,17 +35,24 @@ VLOG_DEFINE_THIS_MODULE(mc_lib);
 static const bool trueval = true;
 static const bool falseval = false;
 
-const char *
-mc_rpc_type_to_string(enum mc_rpc_type status)
-{
-    switch (status) {
-#define MC_RPC(ENUM, NAME) case ENUM: return NAME;
-        MC_RPC_TYPES
-#undef MC_RPC
-            }
-    return "<unknown>";
-}
-
+static const char * mc_rpc_type_to_string(enum mc_rpc_type status);
+static bool mc_rpc_type_from_string(const char *s, enum mc_rpc_type *status);
+static const char *
+mc_rpc_choose_req_type_to_string(enum mc_rpc_choose_req_type status);
+static bool
+mc_rpc_choose_req_type_from_string(const char *s,
+				   enum mc_rpc_choose_req_type *status);
+static const char * mc_rpc_subtype_to_string(enum mc_rpc_subtype status);
+static bool mc_rpc_subtype_from_string(const char *s,
+				       enum mc_rpc_subtype *status);
+static void mc_choose_req_to_jsonrpc(const struct mc_rpc_choose_req *rq,
+				     struct json *args);
+static void mc_choose_req_from_jsonrpc(const struct json *j,
+				       struct mc_rpc_choose_req *rq);
+static void mc_choose_reply_to_jsonrpc(const struct mc_rpc_choose_reply *rq,
+				       struct json *args);
+static void mc_choose_reply_from_jsonrpc(const struct json *j,
+					 struct mc_rpc_choose_reply *rq);
 static inline const void *
 __get_member(const struct json *j) {
     if (j != NULL) {
@@ -151,7 +158,18 @@ get_str_member_copy_or_die(const struct json *json, const char *name,
     return NULL;
 }
 
-bool
+static const char *
+mc_rpc_type_to_string(enum mc_rpc_type status)
+{
+    switch (status) {
+#define MC_RPC(ENUM, NAME) case ENUM: return NAME;
+        MC_RPC_TYPES
+#undef MC_RPC
+            }
+    return "<unknown>";
+}
+
+static bool
 mc_rpc_type_from_string(const char *s, enum mc_rpc_type *status)
 {
 #define MC_RPC(ENUM, NAME)			\
@@ -162,6 +180,104 @@ mc_rpc_type_from_string(const char *s, enum mc_rpc_type *status)
     MC_RPC_TYPES
 #undef MC_RPC
     return false;
+}
+
+static const char *
+mc_rpc_choose_req_type_to_string(enum mc_rpc_choose_req_type status)
+{
+    switch (status) {
+#define MC_RPC_CHOOSE(ENUM, NAME) case ENUM: return NAME;
+        MC_RPC_CHOOSE_TYPES
+#undef MC_RPC_CHOOSE
+            }
+    return "<unknown>";
+}
+
+static bool
+mc_rpc_choose_req_type_from_string(const char *s, enum mc_rpc_choose_req_type *status)
+{
+#define MC_RPC_CHOOSE(ENUM, NAME)		\
+    if (!strcmp(s, NAME)) {                     \
+        *status = ENUM;                         \
+        return true;                            \
+    }
+    MC_RPC_CHOOSE_TYPES
+#undef MC_RPC_CHOOSE
+    return false;
+}
+
+static const char *
+mc_rpc_subtype_to_string(enum mc_rpc_subtype status)
+{
+    switch (status) {
+#define MC_RPC_SUBTYPE(ENUM, NAME) case ENUM: return NAME;
+        MC_RPC_SUBTYPES
+#undef MC_RPC_SUBTYPE
+            }
+    return "<unknown>";
+}
+
+static bool
+mc_rpc_subtype_from_string(const char *s, enum mc_rpc_subtype *status)
+{
+#define MC_RPC_SUBTYPE(ENUM, NAME)		\
+    if (!strcmp(s, NAME)) {                     \
+        *status = ENUM;                         \
+        return true;                            \
+    }
+    MC_RPC_SUBTYPES
+#undef MC_RPC_SUBTYPE
+    return false;
+}
+
+static void
+mc_choose_req_to_jsonrpc(const struct mc_rpc_choose_req *rq,
+			 struct json *args)
+{
+    json_object_put_string(args, "type",
+			   mc_rpc_choose_req_type_to_string(rq->type));
+    json_object_put_string(args, "subtype",
+			   mc_rpc_subtype_to_string(rq->subtype));
+
+    /* XXX serialize the arbitrary data here */
+}
+
+static void
+mc_choose_req_from_jsonrpc(const struct json *j,
+			   struct mc_rpc_choose_req *rq)
+{
+    ovs_assert(mc_rpc_choose_req_type_from_string(get_member(j, "type"),
+						  &rq->type));
+    
+    ovs_assert(mc_rpc_subtype_from_string(get_member(j, "subtype"),
+					  &rq->subtype));
+    
+    /* XXX deserialize the arbitary data instead of this */
+    rq->data = NULL;
+}
+
+static void
+mc_choose_reply_to_jsonrpc(const struct mc_rpc_choose_reply *rq,
+			   struct json *args)
+{
+    if (rq->reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	json_object_put_string(args, "reply",
+			       "mc_rpc_choose_reply_normal");
+    } else if (rq->reply == MC_RPC_CHOOSE_REPLY_ERROR) {
+	json_object_put_string(args, "reply",
+			       "mc_rpc_choose_reply_error");
+    } else ovs_assert(0);
+}
+
+static void
+mc_choose_reply_from_jsonrpc(const struct json *j,
+			     struct mc_rpc_choose_reply *rq)
+{
+    if (!strcmp(get_member(j, "reply"), "mc_rpc_choose_reply_normal")) {
+	rq->reply = MC_RPC_CHOOSE_REPLY_NORMAL;
+    } else if (!strcmp(get_member(j, "reply"), "mc_rpc_choose_reply_normal")) {
+	rq->reply = MC_RPC_CHOOSE_REPLY_ERROR;
+    } else ovs_assert(0);
 }
 
 struct jsonrpc_msg *
@@ -175,11 +291,11 @@ mc_rpc_to_jsonrpc(const union mc_rpc *rpc)
 	break;
 
     case MC_RPC_CHOOSE_REQ:
-	/** Handle Me !! **/
+	mc_choose_req_to_jsonrpc(&rpc->choose_req, args);
 	break;
 	
     case MC_RPC_CHOOSE_REPLY:
-	/** Handle Me !! **/
+	mc_choose_reply_to_jsonrpc(&rpc->choose_reply, args);
 	break;
 	
     case MC_RPC_ASSERT:
@@ -198,19 +314,19 @@ mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg, union mc_rpc *rpc)
     ovs_assert(msg->type == JSONRPC_NOTIFY);
     ovs_assert(mc_rpc_type_from_string(msg->method, &rpc->common.type));
 
-    rpc->common.pid = *(pid_t*)get_member(json_array(msg->params)->elems[0],
-					  "pid");
+    struct json *json = json_array(msg->params)->elems[0];
+    rpc->common.pid = *(pid_t*)get_member(json, "pid");
     
     switch (rpc->common.type) {
     case MC_RPC_HELLO:
 	break;
 
     case MC_RPC_CHOOSE_REQ:
-	/** Handle Me !! **/
+	mc_choose_req_from_jsonrpc(json, &rpc->choose_req);
 	break;
 	
     case MC_RPC_CHOOSE_REPLY:
-	/** Handle Me !! **/
+	mc_choose_reply_from_jsonrpc(json, &rpc->choose_reply);
 	break;
 	
     case MC_RPC_ASSERT:
