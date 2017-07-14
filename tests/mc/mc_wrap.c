@@ -39,12 +39,17 @@ mc_wrap_get_choose_reply(struct jsonrpc *mc_conn,
     rpc.choose_req.type = type;
     rpc.choose_req.subtype = subtype;
 
-    struct jsonrpc_msg *reply;
-    int err = jsonrpc_transact_block(mc_conn, mc_rpc_to_jsonrpc(&rpc),
-				     &reply);
+    int err = jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
 
     if (err != 0) {
-	ovs_fatal(err, "Failed to get a reply from model checker");
+	ovs_fatal(err, "Failed to send choose RPC to model checker");
+    }
+
+    struct jsonrpc_msg *reply;
+    err = jsonrpc_recv_block(mc_conn, &reply);
+
+    if (err != 0) {
+	ovs_fatal(err, "Failed to receive choose RPC to model checker");
     }
 
     memset(&rpc, 0, sizeof(rpc));
