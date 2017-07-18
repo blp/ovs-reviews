@@ -49,7 +49,6 @@ struct mc_process {
 
     /* Config Options */
     bool failure_inject;
-    int delay_start;
 
     /* Status data */
     bool running;
@@ -150,10 +149,6 @@ mc_start_all_processes(void)
     struct mc_process *new_proc;
     LIST_FOR_EACH (new_proc, list_node, &mc_processes) {
 	if (!new_proc->running) {
-	    if (new_proc->delay_start > 0) {
-		sleep(new_proc->delay_start);
-	    }
-	    
 	    mc_start_process(new_proc);
 	}
     }
@@ -205,13 +200,6 @@ mc_load_config_processes(struct json *config) {
 				      0,
 				      "Did not find failure_inject for %s\n",
 				      new_proc->name);
-	
-
-	new_proc->delay_start = 0;
-	const void *result = get_member(exe, "delay_start");
-	if (result) {
-	    new_proc->delay_start = *(int *)result;
-	}
 	
 	new_proc->running = false;
 	ovs_list_push_back(&mc_processes, &new_proc->list_node);

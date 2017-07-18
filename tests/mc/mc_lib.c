@@ -35,14 +35,10 @@ VLOG_DEFINE_THIS_MODULE(mc_lib);
 static const bool trueval = true;
 static const bool falseval = false;
 
-static const char * mc_rpc_type_to_string(enum mc_rpc_type status);
 static bool mc_rpc_type_from_string(const char *s, enum mc_rpc_type *status);
-static const char *
-mc_rpc_choose_req_type_to_string(enum mc_rpc_choose_req_type status);
 static bool
 mc_rpc_choose_req_type_from_string(const char *s,
 				   enum mc_rpc_choose_req_type *status);
-static const char * mc_rpc_subtype_to_string(enum mc_rpc_subtype status);
 static bool mc_rpc_subtype_from_string(const char *s,
 				       enum mc_rpc_subtype *status);
 static void mc_choose_req_to_jsonrpc(const struct mc_rpc_choose_req *rq,
@@ -158,7 +154,7 @@ get_str_member_copy_or_die(const struct json *json, const char *name,
     return NULL;
 }
 
-static const char *
+const char *
 mc_rpc_type_to_string(enum mc_rpc_type status)
 {
     switch (status) {
@@ -182,7 +178,7 @@ mc_rpc_type_from_string(const char *s, enum mc_rpc_type *status)
     return false;
 }
 
-static const char *
+const char *
 mc_rpc_choose_req_type_to_string(enum mc_rpc_choose_req_type status)
 {
     switch (status) {
@@ -206,7 +202,7 @@ mc_rpc_choose_req_type_from_string(const char *s, enum mc_rpc_choose_req_type *s
     return false;
 }
 
-static const char *
+const char *
 mc_rpc_subtype_to_string(enum mc_rpc_subtype status)
 {
     switch (status) {

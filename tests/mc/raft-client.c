@@ -23,6 +23,7 @@
 #include <config.h>
 #include <getopt.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "command-line.h"
@@ -33,6 +34,7 @@
 #include "ovsdb-error.h"
 #include "poll-loop.h"
 #include "stream.h"
+#include "timeval.h"
 #include "unixctl.h"
 #include "util.h"
 
@@ -47,22 +49,27 @@
 int
 main(int argc, char *argv[])
 {
-    if (argc < 4) {
+    if (argc < 5) {
 	ovs_fatal(0, "Not enough arguments provided to raft-client");
     }
 
     /*XXX Possibly add usage help and more sophisticated option processing */
-    struct stream *s;
-    int error = stream_open(argv[2], &s, DSCP_DEFAULT);
-    if (error != 0) {
-	ovs_fatal(error, "Unable to open connection to the model checker\n");
+    struct jsonrpc *mc_conn = NULL;
+    if (strncmp(argv[2], "no_mc", 5) != 0) {
+	struct stream *s;
+	int error = stream_open(argv[2], &s, DSCP_DEFAULT);
+	if (error != 0) {
+	    ovs_fatal(error, "Unable to open connection to the model checker\n");
+	}
+	struct jsonrpc *mc_conn = jsonrpc_open(s);
+	union mc_rpc rpc;
+	rpc.common.type = MC_RPC_HELLO;
+	rpc.common.pid = getpid();
+	jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
     }
-    struct jsonrpc *mc_conn = jsonrpc_open(s);
-    union mc_rpc rpc;
-    rpc.common.type = MC_RPC_HELLO;
-    rpc.common.pid = getpid();
-    jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
-
+    
+    sleep(atoi(argv[4]));
+    
     struct jsonrpc *raft_conn;
     if (mc_wrap_unixctl_client_create(argv[1], &raft_conn, mc_conn) != 0) {
 	ovs_fatal(0, "Cannot open a connection to a server\n");

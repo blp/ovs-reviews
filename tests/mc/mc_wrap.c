@@ -24,6 +24,10 @@
 
 VLOG_DEFINE_THIS_MODULE(mc_wrap);
 
+/*
+ * No global state in this library to ensure thread safety, since multiple
+ * threads can be in the same wrapper at once */
+
 static enum mc_rpc_choose_reply_type
 mc_wrap_get_choose_reply(struct jsonrpc *mc_conn,
 			 enum mc_rpc_choose_req_type type,

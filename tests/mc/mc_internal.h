@@ -20,11 +20,14 @@
 #include "mc.h"
 #include "openvswitch/json.h"
 
-const void *get_member(const struct json *json, const char *name);
-const void *get_first_member(const struct json *json, char **name, bool copy_name);
-const void *get_member_or_die(const struct json *json, const char *name, 
+const void * get_member(const struct json *json, const char *name);
+const void * get_first_member(const struct json *json, char **name, bool copy_name);
+const void * get_member_or_die(const struct json *json, const char *name, 
 			      int err_no, const char *format, ...);
-const char *get_str_member_copy(const struct json *json, const char *name);
-const char *get_str_member_copy_or_die(const struct json *json, const char *name,
+const char * get_str_member_copy(const struct json *json, const char *name);
+const char * get_str_member_copy_or_die(const struct json *json, const char *name,
 				       int err_no, const char *format, ...);
+const char * mc_rpc_type_to_string(enum mc_rpc_type status);
+const char * mc_rpc_choose_req_type_to_string(enum mc_rpc_choose_req_type status);
+const char * mc_rpc_subtype_to_string(enum mc_rpc_subtype status);
 #endif /* tests/mc/mc_internal.h */
