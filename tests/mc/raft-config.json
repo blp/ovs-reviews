@@ -15,7 +15,7 @@
 		       "--mcaddr=tcp:127.0.0.1:6666", "s3.db"],
 	    "failure_inject":true}},
 	{"client1":{
-            "command":["raft-client", "raft1.ctl", "tcp:127.0.0.1:6666", "commands", "2"],
+            "command":["raft-client", "raft1.ctl", "tcp:127.0.0.1:6666", "commands"],
 	    "failure_inject":false}}
     ]
 }
