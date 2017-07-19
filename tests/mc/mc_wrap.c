@@ -15,6 +15,7 @@
  */
 
 #include <config.h>
+#include <errno.h>
 #include <unistd.h>
 #include <string.h>
 #include "mc.h"
@@ -154,20 +155,71 @@ mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new,
     }
 }
 
-int
+int OVS_WARN_UNUSED_RESULT
+mc_wrap_unixctl_server_create(const char *path,
+			      struct unixctl_server **serverp,
+			      struct jsonrpc *mc_conn)
+{
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
+				     MC_RPC_SUBTYPE_SERVER_CREATE);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return unixctl_server_create(path, serverp);
+    } else {
+	/* For now we do not explicitly fail this */
+	ovs_assert(0);
+	return ENOENT;
+    }
+}
+
+int OVS_WARN_UNUSED_RESULT
 mc_wrap_unixctl_client_create(const char *path, struct jsonrpc **client,
 			      struct jsonrpc *mc_conn)
 {
-    return unixctl_client_create(path, client);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
+				     MC_RPC_SUBTYPE_CLIENT_CREATE);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return unixctl_client_create(path, client);
+    } else {
+	/* For now we do not explicitly fail this */
+	ovs_assert(0);
+	return ECONNREFUSED;
+    }
 }
 
-int
+int OVS_WARN_UNUSED_RESULT
 mc_wrap_unixctl_client_transact(struct jsonrpc *client,
 				const char *command,
 				int argc, char *argv[],
 				char **result, char **error,
 				struct jsonrpc *mc_conn)
 {
-    return unixctl_client_transact(client, command, argc,
-				   argv, result, error);
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
+				     MC_RPC_SUBTYPE_CLIENT_TRANSACT);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	return unixctl_client_transact(client, command, argc,
+				       argv, result, error);
+    } else {
+	/* For now we do not explicitly fail this */
+	ovs_assert(0);
+	return EIO;
+    }
+}
+
+/*
+ * This is just supposed to allow blocking on the model checker, so that
+ * we can make the execution deterministic */
+void
+mc_wrap_noexecute_server_transact(struct jsonrpc *mc_conn)
+{
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
+				     MC_RPC_SUBTYPE_SERVER_RECV);
+    
+    ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL); 
 }

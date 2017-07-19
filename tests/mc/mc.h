@@ -31,10 +31,11 @@ enum mc_rpc_type {
 #undef MC_RPC
 };
 
-#define MC_RPC_CHOOSE_TYPES						  \
-    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_LOG, "mc_rpc_choose_req_log")	  \
-    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_TIMER, "mc_rpc_choose_req_timer")	  \
+#define MC_RPC_CHOOSE_TYPES						\
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_LOG, "mc_rpc_choose_req_log")	\
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_TIMER, "mc_rpc_choose_req_timer")	\
     MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_NETWORK, "mc_rpc_choose_req_network") \
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_UNIXCTL, "mc_rpc_choose_req_unixctl") \
     
 enum mc_rpc_choose_req_type {
 #define MC_RPC_CHOOSE(ENUM, NAME) ENUM,
@@ -44,6 +45,10 @@ enum mc_rpc_choose_req_type {
 
 #define MC_RPC_SUBTYPES							\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_OPEN, "mc_rpc_subtype_open")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CLIENT_CREATE, "mc_rpc_subtype_client_create") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SERVER_CREATE, "mc_rpc_subtype_server_create") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CLIENT_TRANSACT, "mc_rpc_subtype_client_transact") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SERVER_RECV, "mc_rpc_subtype_server_recv") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_READ, "mc_rpc_subtype_read")		\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_WRITE, "mc_rpc_subtype_write")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SEND, "mc_rpc_subtype_send")		\

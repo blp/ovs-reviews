@@ -69,5 +69,12 @@ int mc_wrap_unixctl_client_transact(struct jsonrpc *client,
 				    char **result, char **error,
 				    struct jsonrpc *mc_conn)
     OVS_WARN_UNUSED_RESULT;
-    
+
+int mc_wrap_unixctl_server_create(const char *path,
+				  struct unixctl_server **serverp,
+				  struct jsonrpc *mc_conn)
+    OVS_WARN_UNUSED_RESULT;
+
+void mc_wrap_noexecute_server_transact(struct jsonrpc *mc_conn);
+
 #endif /* tests/mc/mc_wrap.h */

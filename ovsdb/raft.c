@@ -1500,6 +1500,11 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js)
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
+struct jsonrpc *
+raft_get_mc_conn(struct raft *raft) {
+    return raft->mc_conn;
+}
+
 /* 
  * mc_addr is the address of a model checker process. 
  * If no model check is desired then pass NULL here */

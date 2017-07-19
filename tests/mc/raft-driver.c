@@ -27,6 +27,7 @@
 #include "command-line.h"
 #include "daemon.h"
 #include "fatal-signal.h"
+#include "mc_wrap.h"
 #include "openvswitch/json.h"
 #include "ovsdb-error.h"
 #include "poll-loop.h"
@@ -90,7 +91,8 @@ main(int argc, char *argv[])
     check_ovsdb_error(raft_open(file_name, &raft, mc_addr));
 
     struct unixctl_server *server;
-    int error = unixctl_server_create(unixctl_pathp, &server);
+    int error = mc_wrap_unixctl_server_create(unixctl_pathp, &server,
+					      raft_get_mc_conn(raft));
     if (error) {
         ovs_fatal(error, "failed to create unixctl server");
     }
@@ -250,6 +252,7 @@ test_raft_execute(struct unixctl_conn *conn,
         unixctl_command_reply_error(conn, json_string(data));
     } else {
         struct execute_ctx *ctx = ctx_;
+	mc_wrap_noexecute_server_transact(raft_get_mc_conn(ctx->raft));	
         struct execute_command *command = xmalloc(sizeof *command);
         ovs_list_push_back(&ctx->commands, &command->list_node);
         command->cmd = raft_command_execute(ctx->raft, data, NULL, NULL);
@@ -265,6 +268,7 @@ test_raft_take_leadership(struct unixctl_conn *conn,
                           void *raft_)
 {
     struct raft *raft = raft_;
+    mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft));
     raft_take_leadership(raft);
     unixctl_command_reply(conn, NULL);
 }
@@ -274,6 +278,7 @@ test_raft_transfer_leadership(struct unixctl_conn *conn, int argc OVS_UNUSED,
                               const char *argv[] OVS_UNUSED, void *raft_)
 {
     struct raft *raft = raft_;
+    mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft));
     raft_transfer_leadership(raft);
     unixctl_command_reply(conn, NULL);
 }
@@ -288,6 +293,7 @@ test_raft_store_snapshot(struct unixctl_conn *conn,
         unixctl_command_reply_error(conn, json_string(data));
     } else {
         struct raft *raft = raft_;
+	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft));
         raft_store_snapshot(raft, data);
         unixctl_command_reply(conn, NULL);
     }
@@ -305,6 +311,7 @@ test_raft_leave(struct unixctl_conn *conn,
     } else if (raft_is_leaving(raft)) {
         unixctl_command_reply_error(conn, "already leaving");
     } else {
+	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft));
         raft_leave(raft);
         unixctl_command_reply(conn, NULL);
     }

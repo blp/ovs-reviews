@@ -130,4 +130,7 @@ void raft_store_snapshot(struct raft *, const struct json *data);
 void raft_take_leadership(struct raft *);
 void raft_transfer_leadership(struct raft *);
 
+/* Model Checker */
+struct jsonrpc * raft_get_mc_conn(struct raft *raft);
+
 #endif /* lib/raft.h */
