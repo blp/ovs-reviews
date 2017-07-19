@@ -17,6 +17,7 @@
 #include <config.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "jsonrpc.h"
 #include "mc.h"
@@ -27,6 +28,7 @@
 #include "openvswitch/vlog.h"
 #include "openvswitch/util.h"
 #include "process.h"
+#include "signals.h"
 #include "stream.h"
 #include "util.h"
 
@@ -340,9 +342,22 @@ mc_run(void)
 	} else if (proc->running && process_exited(proc->p)) {
 	    /* XXX. Model checker thinks the process is 
 	     * running but it is not running anymore ? **/
+
+	    /* Use this check to judge if the process was killed
+	       by some signal (e.g. SIGSEGV) */
+	    if (WIFSIGNALED(process_status(proc->p))) {
+		fprintf(stderr, "%s %s\n", proc->name,
+			process_status_msg(process_status(proc->p)));
+	    }
 	} else if (!proc->running) {
 	    /* XXX. This should only be the case when we
-	     * crash the process deliberately at some stage */
+	     * crash the process deliberately at some stage 
+
+	     * This should instead be handled in a get_process_actions() 
+	     * function called from a larger get_enabled_actions()
+	     * function. One of the "actions" that can be applied
+	     * to a state is to restart a deliberately crashed 
+	     * process */
 	} /* XXX another else branch here should check for
 	   * timeouts of processes that are believed to be
 	   * running but have not contacted the model checker
