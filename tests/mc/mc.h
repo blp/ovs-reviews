@@ -19,11 +19,12 @@
 
 #include "process.h"
 
-#define MC_RPC_TYPES					\
-    MC_RPC(MC_RPC_HELLO, "mc_hello")			\
-    MC_RPC(MC_RPC_CHOOSE_REQ, "mc_choose_req")		\
-    MC_RPC(MC_RPC_CHOOSE_REPLY, "mc_choose_reply")	\
-    MC_RPC(MC_RPC_ASSERT, "mc_assert")			\
+#define MC_RPC_TYPES						\
+    MC_RPC(MC_RPC_HELLO, "mc_hello")				\
+    MC_RPC(MC_RPC_CHOOSE_REQ, "mc_choose_req")			\
+    MC_RPC(MC_RPC_CHOOSE_REPLY, "mc_choose_reply")		\
+    MC_RPC(MC_RPC_THREAD_INFO, "mc_rpc_thread_info")		\
+    MC_RPC(MC_RPC_ASSERT, "mc_assert")				\
     
 enum mc_rpc_type {
 #define MC_RPC(ENUM, NAME) ENUM,
@@ -45,6 +46,7 @@ enum mc_rpc_choose_req_type {
 
 #define MC_RPC_SUBTYPES							\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_OPEN, "mc_rpc_subtype_open")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CREATE, "mc_rpc_subtype_create")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CLIENT_CREATE, "mc_rpc_subtype_client_create") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SERVER_CREATE, "mc_rpc_subtype_server_create") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CLIENT_TRANSACT, "mc_rpc_subtype_client_transact") \
@@ -54,6 +56,7 @@ enum mc_rpc_choose_req_type {
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SEND, "mc_rpc_subtype_send")		\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_RECV, "mc_rpc_subtype_recv")		\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_COMMIT, "mc_rpc_subtype_commit")	\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_EXIT, "mc_rpc_subtype_exit")		\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_START, "mc_rpc_subtype_replace_start") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_COMMIT, "mc_rpc_subtype_replace_commit") \
     
@@ -95,11 +98,17 @@ struct mc_rpc_choose_reply {
     enum mc_rpc_choose_reply_type reply;
 };
 
+struct mc_rpc_thread_info {
+    struct mc_rpc_common common;
+    enum mc_rpc_subtype subtype;
+};
+
 union mc_rpc {
     struct mc_rpc_common common;
     struct mc_rpc_hello hello;
     struct mc_rpc_choose_req choose_req;
     struct mc_rpc_choose_reply choose_reply;
+    struct mc_rpc_thread_info thread_info;
 };
 
 struct jsonrpc_msg *mc_rpc_to_jsonrpc(const union mc_rpc *rpc);

@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <unistd.h>
 #include "jsonrpc.h"
 #include "mc.h"
@@ -54,6 +55,7 @@ struct mc_process {
 
     /* Status data */
     bool running;
+    int num_active_threads;
     int recv_err;
 };
 
@@ -82,27 +84,6 @@ static void mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 static void mc_run_conn(struct jsonrpc *js, struct mc_process *proc);
 static void mc_run(void);
     
-static bool
-mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
-{
-    struct jsonrpc_msg *msg;
-    int error = jsonrpc_recv(js, &msg);
-    
-    if (error != 0) {
-	if (error != EAGAIN) {
-	    jsonrpc_close(js);
-
-	    if (p) {
-		p->recv_err = error;
-	    }
-	}
-	return false;
-    }
-    
-    mc_rpc_from_jsonrpc(msg, rpc);
-    return true;
-}
-
 static void
 mc_start_process(struct mc_process *new_proc) {
     /* Prepare to redirect stderr and stdout of the process to a file
@@ -138,11 +119,37 @@ mc_start_process(struct mc_process *new_proc) {
     }
 
     new_proc->running = true;
-
+    new_proc->num_active_threads = 1;
+    
     close(stdout_copy);
     close(stderr_copy);
     close(fdout);
     close(fderr);
+}
+
+static void
+mc_process_death(struct mc_process *proc)
+{
+    process_destroy(proc->p);
+    proc->p = NULL;
+    jsonrpc_close(proc->js);
+    proc->js = NULL;
+    proc->running = false;
+    proc->num_active_threads = 0;
+    proc->recv_err = 0;
+}
+
+static void
+mc_kill_process(struct mc_process *proc)
+{
+    int err = process_kill(proc->p, SIGKILL);
+    if (err != 0) {
+	/* Currently assume that a parent can always kill
+	   its child */
+	ovs_fatal(err, "Cannot kill process %s", proc->name);
+    }
+
+    mc_process_death(proc);
 }
 
 static void
@@ -262,6 +269,19 @@ mc_handle_choose_req(const struct mc_process *proc,
 }
 
 static void
+mc_handle_thread_info(struct mc_process *proc,
+		      const struct mc_rpc_thread_info *rq)
+{
+    if (rq->subtype == MC_RPC_SUBTYPE_CREATE) {
+	proc->num_active_threads++;
+    } else if (rq->subtype == MC_RPC_SUBTYPE_EXIT) {
+	proc->num_active_threads--;
+    } else {
+	ovs_assert(0);
+    }
+}
+
+static void
 mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 	      const union mc_rpc *rpc)
 {
@@ -277,11 +297,40 @@ mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
     case MC_RPC_CHOOSE_REPLY:
 	ovs_assert(0);
 	break;
+
+    case MC_RPC_THREAD_INFO:
+	mc_handle_thread_info(proc, &rpc->thread_info);
+	break;
 	
     case MC_RPC_ASSERT:
 	/** Handle Me !! **/
 	break;
     }
+}
+
+static bool
+mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
+{
+    struct jsonrpc_msg *msg;
+    int error = jsonrpc_recv(js, &msg);
+    
+    if (error != 0) {
+	if (error != EAGAIN) {
+	    if (error == EOF) {
+		VLOG_INFO("End-of-File from %s\n", p->name);
+	    } else {
+		VLOG_ERR("Error in receiving rpc: %s\n", ovs_strerror(error));
+	    }
+	    
+	    if (p) {
+		p->recv_err = error;
+	    }
+	}
+	return false;
+    }
+    
+    mc_rpc_from_jsonrpc(msg, rpc);
+    return true;
 }
 
 static void
@@ -349,6 +398,10 @@ mc_run(void)
 		fprintf(stderr, "%s %s\n", proc->name,
 			process_status_msg(process_status(proc->p)));
 	    }
+
+	    /* This might need to be eventually moved, but remember to
+	     * to call it */
+	    mc_process_death(proc);
 	} else if (!proc->running) {
 	    /* XXX. This should only be the case when we
 	     * crash the process deliberately at some stage 

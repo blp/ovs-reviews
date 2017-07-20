@@ -317,6 +317,8 @@ raft_fsync_thread(void *raft_)
         seq_wait(raft->fsync_request, request_seq);
         poll_block();
     }
+
+    mc_wrap_thread_exit(raft->mc_conn);
     return NULL;
 }
 
@@ -1552,9 +1554,10 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp,
     raft->storage = log;
 
     raft->fsync_thread_running = true;
-    raft->fsync_thread = ovs_thread_create("raft_fsync",
-                                           raft_fsync_thread, raft);
-
+    raft->fsync_thread = mc_wrap_ovs_thread_create("raft_fsync",
+						   raft_fsync_thread,
+						   raft, mc_conn);
+    
     struct ovsdb_error *error = raft_read_header(raft);
     if (error) {
         goto error;

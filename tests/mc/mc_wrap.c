@@ -21,6 +21,7 @@
 #include "mc.h"
 #include "mc_wrap.h"
 #include "openvswitch/vlog.h"
+#include "ovs-thread.h"
 #include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(mc_wrap);
@@ -222,4 +223,35 @@ mc_wrap_noexecute_server_transact(struct jsonrpc *mc_conn)
 				     MC_RPC_SUBTYPE_SERVER_RECV);
     
     ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL); 
+}
+
+static void
+send_thread_info(struct jsonrpc *mc_conn, enum mc_rpc_subtype subtype)
+{
+    if (mc_conn) {
+	union mc_rpc rpc;
+	rpc.common.type = MC_RPC_THREAD_INFO;
+	rpc.common.pid = getpid();
+	rpc.thread_info.subtype = subtype;
+	
+	int err = jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
+	
+	if (err != 0) {
+	    ovs_fatal(err, "Failed to send choose RPC to model checker");
+	}
+    }   
+}
+
+pthread_t
+mc_wrap_ovs_thread_create(const char *name, void *(*start)(void *), void *arg,
+			  struct jsonrpc *mc_conn)
+{
+    send_thread_info(mc_conn, MC_RPC_SUBTYPE_CREATE);
+    return ovs_thread_create(name, start, arg);
+}
+
+void
+mc_wrap_thread_exit(struct jsonrpc *mc_conn)
+{
+    send_thread_info(mc_conn, MC_RPC_SUBTYPE_EXIT);
 }

@@ -76,5 +76,8 @@ int mc_wrap_unixctl_server_create(const char *path,
     OVS_WARN_UNUSED_RESULT;
 
 void mc_wrap_noexecute_server_transact(struct jsonrpc *mc_conn);
+pthread_t mc_wrap_ovs_thread_create(const char *name, void *(*start)(void *),
+				    void *arg, struct jsonrpc *mc_conn);
+void mc_wrap_thread_exit(struct jsonrpc *mc_conn);
 
 #endif /* tests/mc/mc_wrap.h */

@@ -276,6 +276,8 @@ mc_choose_reply_from_jsonrpc(const struct json *j,
     } else ovs_assert(0);
 }
 
+
+
 struct jsonrpc_msg *
 mc_rpc_to_jsonrpc(const union mc_rpc *rpc)
 {
@@ -292,6 +294,11 @@ mc_rpc_to_jsonrpc(const union mc_rpc *rpc)
 	
     case MC_RPC_CHOOSE_REPLY:
 	mc_choose_reply_to_jsonrpc(&rpc->choose_reply, args);
+	break;
+
+    case MC_RPC_THREAD_INFO:
+	json_object_put_string(args, "subtype",
+			       mc_rpc_subtype_to_string(rpc->thread_info.subtype));
 	break;
 	
     case MC_RPC_ASSERT:
@@ -323,6 +330,11 @@ mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg, union mc_rpc *rpc)
 	
     case MC_RPC_CHOOSE_REPLY:
 	mc_choose_reply_from_jsonrpc(json, &rpc->choose_reply);
+	break;
+
+    case MC_RPC_THREAD_INFO:
+	ovs_assert(mc_rpc_subtype_from_string(get_member(json, "subtype"),
+					      &rpc->thread_info.subtype));
 	break;
 	
     case MC_RPC_ASSERT:
