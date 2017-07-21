@@ -304,7 +304,7 @@ raft_fsync_thread(void *raft_)
         if (cur != next) {
             /* XXX following has really questionable thread-safety. */
             struct ovsdb_error *error = mc_wrap_ovsdb_log_commit(raft->storage,
-								 raft->mc_conn,
+								 fsync_mc_conn,
 								 MC_FSYNC_TID);
             if (!error) {
                 ovs_mutex_lock(&raft->fsync_mutex);
