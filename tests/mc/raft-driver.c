@@ -88,7 +88,16 @@ main(int argc, char *argv[])
 
     struct raft *raft;
     const char *file_name = argv[0];
-    check_ovsdb_error(raft_open(file_name, &raft, mc_addr));
+
+    /* Model checking initialization 
+     * If mc_conn is null then model checking is disabled */
+    struct jsonrpc *mc_conn = NULL;
+    if (mc_addr != NULL) {
+	mc_conn = mc_wrap_connect(mc_addr);
+	mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_HELLO, 0);
+    }
+    
+    check_ovsdb_error(raft_open(file_name, &raft, mc_conn, mc_addr));
 
     struct unixctl_server *server;
     int error = mc_wrap_unixctl_server_create(unixctl_pathp, &server,
@@ -161,6 +170,9 @@ main(int argc, char *argv[])
     unixctl_server_destroy(server);
     raft_close(raft);
 
+    mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_BYE, 0);
+    jsonrpc_close(mc_conn);
+    
     return 0;
 }
 

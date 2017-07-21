@@ -32,6 +32,7 @@
 #include "mc_wrap.h"
 #include "openvswitch/json.h"
 #include "ovsdb-error.h"
+#include "ovs-thread.h"
 #include "poll-loop.h"
 #include "stream.h"
 #include "timeval.h"
@@ -66,20 +67,12 @@ main(int argc, char *argv[])
     /*XXX Possibly add usage help and more sophisticated option processing */
     struct jsonrpc *mc_conn = NULL;
     if (strncmp(argv[2], "no_mc", 5) != 0) {
-	struct stream *s;
-	int error = stream_open(argv[2], &s, DSCP_DEFAULT);
-	if (error != 0) {
-	    ovs_fatal(error, "Unable to open connection to the model checker\n");
-	}
-	struct jsonrpc *mc_conn = jsonrpc_open(s);
-	union mc_rpc rpc;
-	rpc.common.type = MC_RPC_HELLO;
-	rpc.common.pid = getpid();
-	jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
+	mc_conn = mc_wrap_connect(argv[2]);
+	mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_HELLO, 0);
     }
 
     struct jsonrpc *raft_conn;
-    while (mc_wrap_unixctl_client_create(argv[1], &raft_conn, mc_conn) != 0) {
+    while (mc_wrap_unixctl_client_create(argv[1], &raft_conn, mc_conn, 0) != 0) {
 	fprintf(stderr, "Cannot open a connection to %s. Retrying...\n", argv[1]);
 	wait_for(300);
     }
@@ -107,7 +100,7 @@ main(int argc, char *argv[])
 	    int error_num = mc_wrap_unixctl_client_transact(raft_conn,
 							    "execute", 1,
 							    cmd_str, &result,
-							    &err, mc_conn);
+							    &err, mc_conn, 0);
 
 	    if (error_num != 0) {
 		/* This could be because the server crashed (including 
@@ -134,6 +127,8 @@ main(int argc, char *argv[])
 	    wait_for(300);
 	}
     }
+
+    mc_wrap_hello_or_bye(mc_conn, MC_RPC_BYE, 0);
     return 0;
 }
 

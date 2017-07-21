@@ -51,6 +51,9 @@ struct raft;
 
 #define RAFT_MAGIC "CLUSTER"
 
+#define MC_MAIN_TID 0
+#define MC_FSYNC_TID 1
+
 /* Setting up a new cluster. */
 struct ovsdb_error *raft_create_cluster(const char *file_name,
                                         const char *name,
@@ -75,10 +78,10 @@ void raft_metadata_destroy(struct raft_metadata *);
 
 /* Starting up or shutting down a server within a cluster. */
 struct ovsdb_error *raft_open(const char *file_name, struct raft **,
-			      char *mc_addr)
+			      struct jsonrpc *mc_conn)
     OVS_WARN_UNUSED_RESULT;
 struct ovsdb_error *raft_open__(struct ovsdb_log *, struct raft **,
-				char* mc_addr, struct jsonrpc *mc_conn)
+				struct jsonrpc *mc_conn)
     OVS_WARN_UNUSED_RESULT;
 void raft_close(struct raft *);
 

@@ -35,28 +35,37 @@
 
 VLOG_DEFINE_THIS_MODULE(mc);
 
-/*
- * Set the pointers to 
- * struct process and
- * struct jsonrpc_session
- * to NULL after closing/freeing
- * them, when deliberately crashing 
- * processes */
+#define MAX_THREADS_PER_PROC 4
+struct mc_thread;
+
+struct mc_action {
+    int p_idx; /* Index into the mc_procs array */
+    int t_idx; /* Index into the thread array */
+};
+
+struct mc_thread {
+    /* Action on which this thread is blocked in
+       the model checker */
+    struct mc_action *blocked;
+    struct jsonrpc *js;
+    bool valid;
+};
+
 struct mc_process {
     char* name;
     char** run_cmd;
 
-    struct jsonrpc *js;
-    struct ovs_list list_node;
     struct process *p;
 
+    struct mc_thread *threads;
+    int num_threads;
+    
     /* Config Options */
     bool failure_inject;
 
     /* Status data */
     bool running;
-    int num_active_threads;
-    int recv_err;
+    size_t thread_arr_size;
 };
 
 struct mc_conn {
@@ -64,11 +73,13 @@ struct mc_conn {
     struct jsonrpc *js;
 };
 
-static struct ovs_list mc_processes = OVS_LIST_INITIALIZER(&mc_processes);
+static struct mc_process *mc_procs = NULL;
+static int num_procs = 0;
+
 static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
+
 static const char* listen_addr = NULL;
 static struct pstream *listener = NULL;
-static bool all_processes_running = false;
 
 static bool mc_receive_rpc(struct jsonrpc *js, struct mc_process *p,
 			   union mc_rpc *rpc);
@@ -119,7 +130,8 @@ mc_start_process(struct mc_process *new_proc) {
     }
 
     new_proc->running = true;
-    new_proc->num_active_threads = 1;
+    new_proc[i].threads = xzalloc(sizeof(struct mc_thread) *
+				  MAX_THREADS_PER_PROC);
     
     close(stdout_copy);
     close(stderr_copy);
@@ -132,10 +144,17 @@ mc_process_death(struct mc_process *proc)
 {
     process_destroy(proc->p);
     proc->p = NULL;
-    jsonrpc_close(proc->js);
-    proc->js = NULL;
+
+    for (int i = 0; i < MAX_THREADS_PER_PROC; i++) {
+	if (proc->threads[i].valid) {
+	    jsonrpc_close(proc->threads[i].js);
+	    /* XXX FIX ME !!! Free any other thread members here */
+	}
+    }
+
+    free(proc->threads);
     proc->running = false;
-    proc->num_active_threads = 0;
+    proc->num_threads = 0;
     proc->recv_err = 0;
 }
 
@@ -155,43 +174,41 @@ mc_kill_process(struct mc_process *proc)
 static void
 mc_start_all_processes(void)
 {
-    struct mc_process *new_proc;
-    LIST_FOR_EACH (new_proc, list_node, &mc_processes) {
-	if (!new_proc->running) {
-	    mc_start_process(new_proc);
+    for (int i = 0; i < num_procs; i++) {
+	if (!mc_procs[i].running) {
+	    mc_start_process(&mc_procs[i]);
 	}
     }
-    all_processes_running = true;
 }
 
 static void
-mc_load_config_run(struct json *config) {
-    
+mc_load_config_run(struct json *config)
+{
     const struct json *run_conf = get_member_or_die(config, "run_config", 0,
 						    "Cannot find run_config");
     listen_addr = get_str_member_copy_or_die(run_conf, "listen_address",
 					     0, "Cannot find listen_address");
-
 }
 
 static void
-mc_load_config_processes(struct json *config) {
-
+mc_load_config_processes(struct json *config)
+{
     const struct json_array *mc_conf =
 	get_member_or_die(config, "model_check_execute", 0,
 			  "Cannot find the execute config");
     
-    struct mc_process *new_proc;
+    mc_procs = xzalloc(sizeof(struct mc_process) * mc_conf->n);
+    num_procs = mc_conf->n;
+    
     for (int i = 0; i < mc_conf->n; i++) {
-	new_proc = xzalloc(sizeof(struct mc_process));
-
 	const struct json *exe = get_first_member(mc_conf->elems[i],
-						  &(new_proc->name),
+						  &(mc_procs[i].name),
 						  true);
 
 	const struct json_array *cmd =
 	    get_member_or_die(exe, "command",
-			      0, "Did not find command for %s\n", new_proc->name);
+			      0, "Did not find command for %s\n",
+			      mc_procs[i].name);
 	
 	char **run_cmd = xmalloc(sizeof(char*) * (cmd->n + 1));
 	int j = 0;
@@ -200,18 +217,15 @@ mc_load_config_processes(struct json *config) {
 	    strcpy(run_cmd[j], json_string(cmd->elems[j]));
 	}
 	run_cmd[j] = NULL;
-	new_proc->run_cmd = run_cmd;
+	mc_procs[i].run_cmd = run_cmd;
 	
 	/* Should we failure inject this process ? */
-
-	new_proc->failure_inject =
+	mc_procs[i].failure_inject =
 	    *(bool*) get_member_or_die(exe, "failure_inject",
-				      0,
-				      "Did not find failure_inject for %s\n",
-				      new_proc->name);
-	
-	new_proc->running = false;
-	ovs_list_push_back(&mc_processes, &new_proc->list_node);
+				       0,
+				       "Did not find failure_inject for %s\n",
+				       new_proc->name);
+	}
     }
 }
 
@@ -231,22 +245,36 @@ mc_load_config(const char *filename)
 }
 
 static void
-mc_handle_hello(struct jsonrpc *js, const struct mc_rpc_hello *rq)
+mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 {
-    struct mc_process *proc;
-    LIST_FOR_EACH (proc, list_node, &mc_processes) {
-	if (rq->common.pid == process_pid(proc->p)) {
-	    proc->js = js;
+    for (int i = 0; i < num_procs; i++) {
+	if (rpc->common.pid == process_pid(mc_procs[i].p)) {
+	    int tid = rpc->common.tid;
+	    ovs_assert(tid >= 0);
 	    
-	    struct mc_conn *conn;
-	    LIST_FOR_EACH (conn, list_node, &mc_conns) {
-		if (conn->js == js) {
-		    ovs_list_remove(&conn->list_node);
-		    free(conn);
-		    break;
+	    if (rpc->common.type == MC_RPC_HELLO) {
+		mc_procs[i].threads[tid].js = js;
+		mc_procs[i].threads[tid].valid = true;
+		mc_procs[i].num_threads++;
+		
+		struct mc_conn *conn;
+		LIST_FOR_EACH (conn, list_node, &mc_conns) {
+		    if (conn->js == js) {
+			ovs_list_remove(&conn->list_node);
+			free(conn);
+			break;
+		    }
+		}
+	    } else if (rpc->common.type = MC_RPC_BYE) {
+		jsonrpc_close(mc_procs[i].threads[tid].js);
+		mc_procs[i].threads[tid].valid = false;
+		/** FIX ME !!! free other thread members here **/
+		mc_procs[i].num_threads--;
+
+		if (mc_procs[i].num_threads == 0) {
+		    mc_process_death(&mc_procs[i]);
 		}
 	    }
-	    break;
 	}
     }
 }
@@ -258,6 +286,7 @@ mc_handle_choose_req(const struct mc_process *proc,
     union mc_rpc rpc;
     rpc.common.type = MC_RPC_CHOOSE_REPLY;
     rpc.common.pid = 0;
+    rpc.common.tid = 0;
     rpc.choose_reply.reply = MC_RPC_CHOOSE_REPLY_NORMAL;
 
     int error = jsonrpc_send_block(proc->js,
@@ -269,25 +298,13 @@ mc_handle_choose_req(const struct mc_process *proc,
 }
 
 static void
-mc_handle_thread_info(struct mc_process *proc,
-		      const struct mc_rpc_thread_info *rq)
-{
-    if (rq->subtype == MC_RPC_SUBTYPE_CREATE) {
-	proc->num_active_threads++;
-    } else if (rq->subtype == MC_RPC_SUBTYPE_EXIT) {
-	proc->num_active_threads--;
-    } else {
-	ovs_assert(0);
-    }
-}
-
-static void
 mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 	      const union mc_rpc *rpc)
 {
     switch (rpc->common.type) {
     case MC_RPC_HELLO:
-	mc_handle_hello(js, &rpc->hello);
+    case MC_RPC_BYE:
+	mc_handle_hello_or_bye(js, rpc);
 	break;
 	
     case MC_RPC_CHOOSE_REQ:
@@ -298,10 +315,6 @@ mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 	ovs_assert(0);
 	break;
 
-    case MC_RPC_THREAD_INFO:
-	mc_handle_thread_info(proc, &rpc->thread_info);
-	break;
-	
     case MC_RPC_ASSERT:
 	/** Handle Me !! **/
 	break;
@@ -320,10 +333,6 @@ mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
 		VLOG_INFO("End-of-File from %s\n", p->name);
 	    } else {
 		VLOG_ERR("Error in receiving rpc: %s\n", ovs_strerror(error));
-	    }
-	    
-	    if (p) {
-		p->recv_err = error;
 	    }
 	}
 	return false;
@@ -363,9 +372,7 @@ mc_run(void)
 	}
     }
     
-    if (!all_processes_running) {
-	mc_start_all_processes();
-    }
+    mc_start_all_processes();
     
     if (listener) {
 	struct stream *stream;
@@ -384,25 +391,28 @@ mc_run(void)
     }
 
     process_run();
-    struct mc_process *proc;
-    LIST_FOR_EACH (proc, list_node, &mc_processes) {
-	if (proc->running && !process_exited(proc->p)) {
-	    mc_run_conn(proc->js, proc);
-	} else if (proc->running && process_exited(proc->p)) {
+    for (int i= 0; i < num_procs; i++) {	
+	if (mc_procs[i].running && !process_exited(mc_procs[i].p)) {
+	    for (int j = 0; j < MAX_THREADS_PER_PROC; j++) {
+		if (mc_procs[i].threads[j].valid) {
+		    mc_run_conn(mc_procs[i].threads[j].js, &mc_procs[i]);
+		}
+	    }
+	} else if (mc_procs[i].running && process_exited(mc_procs[i].p)) {
 	    /* XXX. Model checker thinks the process is 
 	     * running but it is not running anymore ? **/
 
 	    /* Use this check to judge if the process was killed
 	       by some signal (e.g. SIGSEGV) */
-	    if (WIFSIGNALED(process_status(proc->p))) {
-		fprintf(stderr, "%s %s\n", proc->name,
-			process_status_msg(process_status(proc->p)));
+	    if (WIFSIGNALED(process_status(mc_procs[i].p))) {
+		fprintf(stderr, "%s %s\n", mc_procs[i].name,
+			process_status_msg(process_status(mc_procs[i].p)));
 	    }
 
 	    /* This might need to be eventually moved, but remember to
 	     * to call it */
-	    mc_process_death(proc);
-	} else if (!proc->running) {
+	    mc_process_death(&mc_procs[i]);
+	} else if (!mc_procs[i].running) {
 	    /* XXX. This should only be the case when we
 	     * crash the process deliberately at some stage 
 
