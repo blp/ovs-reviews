@@ -80,7 +80,7 @@ main(int argc, char *argv[])
 
     struct raft *raft;
     const char *file_name = argv[0];
-    check_ovsdb_error(raft_open(file_name, &raft, NULL));
+    check_ovsdb_error(raft_open(file_name, &raft, NULL, NULL));
 
     struct unixctl_server *server;
     int error = unixctl_server_create(unixctl_pathp, &server);

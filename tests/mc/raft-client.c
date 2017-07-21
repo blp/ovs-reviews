@@ -128,7 +128,7 @@ main(int argc, char *argv[])
 	}
     }
 
-    mc_wrap_hello_or_bye(mc_conn, MC_RPC_BYE, 0);
+    mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_BYE, 0);
     return 0;
 }
 

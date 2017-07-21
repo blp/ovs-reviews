@@ -88,8 +88,8 @@ static void mc_start_all_processes(void);
 static void mc_load_config_run(struct json *config);
 static void mc_load_config_processes(struct json *config);
 static void mc_load_config(const char *filename);
-static void mc_handle_hello(struct jsonrpc *js,
-			    const struct mc_rpc_hello *rq);
+static void mc_handle_hello_or_bye(struct jsonrpc *js,
+				   const union mc_rpc *rpc);
 static void mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 			  const union mc_rpc *rpc);
 static void mc_run_conn(struct jsonrpc *js, struct mc_process *proc);
@@ -130,7 +130,7 @@ mc_start_process(struct mc_process *new_proc) {
     }
 
     new_proc->running = true;
-    new_proc[i].threads = xzalloc(sizeof(struct mc_thread) *
+    new_proc->threads = xzalloc(sizeof(struct mc_thread) *
 				  MAX_THREADS_PER_PROC);
     
     close(stdout_copy);
@@ -155,7 +155,6 @@ mc_process_death(struct mc_process *proc)
     free(proc->threads);
     proc->running = false;
     proc->num_threads = 0;
-    proc->recv_err = 0;
 }
 
 static void
@@ -204,7 +203,7 @@ mc_load_config_processes(struct json *config)
 	const struct json *exe = get_first_member(mc_conf->elems[i],
 						  &(mc_procs[i].name),
 						  true);
-
+	
 	const struct json_array *cmd =
 	    get_member_or_die(exe, "command",
 			      0, "Did not find command for %s\n",
@@ -224,8 +223,7 @@ mc_load_config_processes(struct json *config)
 	    *(bool*) get_member_or_die(exe, "failure_inject",
 				       0,
 				       "Did not find failure_inject for %s\n",
-				       new_proc->name);
-	}
+				       mc_procs[i].name);
     }
 }
 
@@ -265,7 +263,7 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 			break;
 		    }
 		}
-	    } else if (rpc->common.type = MC_RPC_BYE) {
+	    } else if (rpc->common.type == MC_RPC_BYE) {
 		jsonrpc_close(mc_procs[i].threads[tid].js);
 		mc_procs[i].threads[tid].valid = false;
 		/** FIX ME !!! free other thread members here **/
@@ -289,7 +287,8 @@ mc_handle_choose_req(const struct mc_process *proc,
     rpc.common.tid = 0;
     rpc.choose_reply.reply = MC_RPC_CHOOSE_REPLY_NORMAL;
 
-    int error = jsonrpc_send_block(proc->js,
+    int tid = rq->common.tid;
+    int error = jsonrpc_send_block(proc->threads[tid].js,
     				   mc_rpc_to_jsonrpc(&rpc));
     
     if (error != 0) {

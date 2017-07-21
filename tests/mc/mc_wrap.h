@@ -20,6 +20,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb/log.h"
 #include "compiler.h"
+#include "mc.h"
 #include "jsonrpc.h"
 #include "unixctl.h"
 

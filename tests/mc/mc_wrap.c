@@ -18,7 +18,6 @@
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
-#include "mc.h"
 #include "mc_wrap.h"
 #include "openvswitch/vlog.h"
 #include "ovs-thread.h"
@@ -34,9 +33,8 @@ mc_wrap_connect(char *mc_addr)
 	struct stream *s;
 	int error = stream_open(mc_addr, &s, DSCP_DEFAULT);
 	if (error != 0) {
-	    return ovsdb_error(NULL,
-			       "Can't connect to model checker, %s\n",
-			       ovs_strerror(error));
+	    ovs_fatal(0, "Can't connect to model checker, %s\n",
+		      ovs_strerror(error));
 	}
 	return jsonrpc_open(s);
     }
@@ -68,7 +66,7 @@ mc_wrap_send_hello_or_bye(struct jsonrpc *mc_conn,
 			  int tid)
 {
     if (mc_conn) {
-	assert(type == MC_RPC_HELLO || type == MC_RPC_BYE);
+	ovs_assert(type == MC_RPC_HELLO || type == MC_RPC_BYE);
 
 	union mc_rpc rpc;
 	rpc.common.type = type;
