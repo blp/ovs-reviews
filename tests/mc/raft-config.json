@@ -1,5 +1,9 @@
 {
-    "run_config":{"listen_address": "ptcp:6666:127.0.0.1"},
+    "run_config":{"listen_address": "ptcp:6666:127.0.0.1",
+		  "max_threads_per_proc" : 2,
+		  "search_strategy": "breadth"},
+
+    "model_check_setup" : {"command":["raft-setup.sh"]},
     
     "model_check_execute": [
 	{"raft1":{
@@ -17,5 +21,7 @@
 	{"client1":{
             "command":["raft-client", "raft1.ctl", "tcp:127.0.0.1:6666", "commands"],
 	    "failure_inject":false}}
-    ]
+    ],
+
+    "model_check_cleanup" : {"command":["rm", "s1.db", "s2.db", "s3.db"]}
 }

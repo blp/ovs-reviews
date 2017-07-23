@@ -35,7 +35,6 @@
 
 VLOG_DEFINE_THIS_MODULE(mc);
 
-#define MAX_THREADS_PER_PROC 4
 struct mc_thread;
 
 struct mc_action {
@@ -52,9 +51,9 @@ struct mc_thread {
 };
 
 struct mc_process {
-    char* name;
-    char** run_cmd;
-
+    char *name;
+    char **run_cmd;
+    
     struct process *p;
 
     struct mc_thread *threads;
@@ -78,8 +77,14 @@ static int num_procs = 0;
 
 static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
 
-static const char* listen_addr = NULL;
+static const char *listen_addr = NULL;
 static struct pstream *listener = NULL;
+
+static char **setup_cmd = NULL;
+static char **cleanup_cmd = NULL;
+
+static int max_threads_per_proc = 0;
+static const char *search_strategy = NULL;
 
 static bool mc_receive_rpc(struct jsonrpc *js, struct mc_process *p,
 			   union mc_rpc *rpc);
@@ -131,7 +136,7 @@ mc_start_process(struct mc_process *new_proc) {
 
     new_proc->running = true;
     new_proc->threads = xzalloc(sizeof(struct mc_thread) *
-				  MAX_THREADS_PER_PROC);
+				  max_threads_per_proc);
     
     close(stdout_copy);
     close(stderr_copy);
@@ -145,7 +150,7 @@ mc_process_death(struct mc_process *proc)
     process_destroy(proc->p);
     proc->p = NULL;
 
-    for (int i = 0; i < MAX_THREADS_PER_PROC; i++) {
+    for (int i = 0; i < max_threads_per_proc; i++) {
 	if (proc->threads[i].valid) {
 	    jsonrpc_close(proc->threads[i].js);
 	    /* XXX FIX ME !!! Free any other thread members here */
@@ -187,11 +192,46 @@ mc_load_config_run(struct json *config)
 						    "Cannot find run_config");
     listen_addr = get_str_member_copy_or_die(run_conf, "listen_address",
 					     0, "Cannot find listen_address");
+
+    max_threads_per_proc = *(int*) get_member_or_die(run_conf,
+						     "max_threads_per_proc",
+						     0,
+						     "Cant find threads_per_proc");
+
+    search_strategy = get_str_member_copy_or_die(run_conf,
+						 "search_strategy",
+						 0,
+						 "Cant find search strategy");
+    
+}
+
+static char**
+get_cmd_from_json(const struct json_array *jsoncmd) {
+    char **cmd = xmalloc(sizeof(char*) * (jsoncmd->n + 1));
+    int i = 0;
+    for (; i < jsoncmd->n; i++) {
+	cmd[i] = xmalloc(strlen(json_string(jsoncmd->elems[i]) + 1));
+	strcpy(cmd[i], json_string(jsoncmd->elems[i]));
+    }
+    cmd[i] = NULL;
+
+    return cmd;
 }
 
 static void
 mc_load_config_processes(struct json *config)
 {
+    const struct json_array *jsoncmd;
+    
+    const struct json *mc_setup = get_member(config, "model_check_setup");
+    if (mc_setup) {
+	jsoncmd = get_member(mc_setup, "command");
+
+	if (jsoncmd) {
+	    setup_cmd = get_cmd_from_json(jsoncmd);
+	}
+    }
+
     const struct json_array *mc_conf =
 	get_member_or_die(config, "model_check_execute", 0,
 			  "Cannot find the execute config");
@@ -203,20 +243,11 @@ mc_load_config_processes(struct json *config)
 	const struct json *exe = get_first_member(mc_conf->elems[i],
 						  &(mc_procs[i].name),
 						  true);
-	
-	const struct json_array *cmd =
-	    get_member_or_die(exe, "command",
-			      0, "Did not find command for %s\n",
-			      mc_procs[i].name);
-	
-	char **run_cmd = xmalloc(sizeof(char*) * (cmd->n + 1));
-	int j = 0;
-	for (; j < cmd->n; j++) {
-	    run_cmd[j] = xmalloc(strlen(json_string(cmd->elems[j]) + 1));
-	    strcpy(run_cmd[j], json_string(cmd->elems[j]));
-	}
-	run_cmd[j] = NULL;
-	mc_procs[i].run_cmd = run_cmd;
+	mc_procs[i].run_cmd =
+	    get_cmd_from_json(get_member_or_die(exe, "command",
+						0,
+						"Did not find command for %s\n",
+						mc_procs[i].name));
 	
 	/* Should we failure inject this process ? */
 	mc_procs[i].failure_inject =
@@ -224,6 +255,15 @@ mc_load_config_processes(struct json *config)
 				       0,
 				       "Did not find failure_inject for %s\n",
 				       mc_procs[i].name);
+    }
+
+    const struct json *mc_cleanup = get_member(config, "model_check_cleanup");
+    if (mc_cleanup) {
+	jsoncmd = get_member(mc_cleanup, "command");
+
+	if (jsoncmd) {
+	    cleanup_cmd = get_cmd_from_json(jsoncmd);
+	}
     }
 }
 
@@ -392,7 +432,7 @@ mc_run(void)
     process_run();
     for (int i= 0; i < num_procs; i++) {	
 	if (mc_procs[i].running && !process_exited(mc_procs[i].p)) {
-	    for (int j = 0; j < MAX_THREADS_PER_PROC; j++) {
+	    for (int j = 0; j < max_threads_per_proc; j++) {
 		if (mc_procs[i].threads[j].valid) {
 		    mc_run_conn(mc_procs[i].threads[j].js, &mc_procs[i]);
 		}
