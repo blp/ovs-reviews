@@ -17,7 +17,8 @@ EXTRA_DIST += \
 	tests/mc/run-mc-raft.sh \
 	tests/mc/kill-mc-raft.sh \
 	tests/mc/raft-config.json \
-	tests/mc/commands
+	tests/mc/commands \
+	tests/mc/raft-setup.sh
 
 COMMON_MACROS_AT = \
 	tests/ovsdb-macros.at \
