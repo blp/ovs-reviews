@@ -37,6 +37,7 @@ enum mc_rpc_type {
     MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_TIMER, "mc_rpc_choose_req_timer")	\
     MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_NETWORK, "mc_rpc_choose_req_network") \
     MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_UNIXCTL, "mc_rpc_choose_req_unixctl") \
+    MC_RPC_CHOOSE(MC_RPC_CHOOSE_REQ_THREAD, "mc_rpc_choose_req_thread") \
     
 enum mc_rpc_choose_req_type {
 #define MC_RPC_CHOOSE(ENUM, NAME) ENUM,
@@ -57,6 +58,8 @@ enum mc_rpc_choose_req_type {
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_COMMIT, "mc_rpc_subtype_commit")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_START, "mc_rpc_subtype_replace_start") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_COMMIT, "mc_rpc_subtype_replace_commit") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_LOCK, "mc_rpc_subtype_lock")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_UNLOCK, "mc_rpc_subtype_unlock") \
     
 enum mc_rpc_subtype {
 #define MC_RPC_SUBTYPE(ENUM, NAME) ENUM,

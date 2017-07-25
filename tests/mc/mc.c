@@ -37,9 +37,32 @@ VLOG_DEFINE_THIS_MODULE(mc);
 
 struct mc_thread;
 
+#define MC_ACTION_TYPES							\
+    MC_ACTION(MC_ACTION_RPC_REPLY_ERROR, "mc_action_rpc_reply_error")	\
+    MC_ACTION(MC_ACTION_RPC_REPLY_NORMAL, "mc_action_rpc_reply_normal")	\
+    MC_ACTION(MC_ACTION_TIMER_SHORT, "mc_action_timer_short")		\
+    MC_ACTION(MC_ACTION_TIMER_TRIGGER, "mc_action_timer_trigger")	\
+    MC_ACTION(MC_ACTION_CRASH_PROCESS, "mc_action_crash_process")	\
+    
+enum mc_action_type {
+#define MC_ACTION(ENUM, NAME) ENUM,
+    MC_ACTION_TYPES
+#undef MC_ACTION
+};
+
 struct mc_action {
+    enum mc_action_type type;
     int p_idx; /* Index into the mc_procs array */
     int t_idx; /* Index into the thread array */
+    enum mc_rpc_choose_req_type choosetype;
+    enum mc_rpc_subtype subtype;
+    struct ovs_list list_node;
+    void *data;
+};
+
+struct mc_state {
+    struct mc_action **path;
+    int length;
 };
 
 struct mc_thread {
@@ -76,6 +99,7 @@ static struct mc_process *mc_procs = NULL;
 static int num_procs = 0;
 
 static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
+static ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
 
 static const char *listen_addr = NULL;
 static struct pstream *listener = NULL;
