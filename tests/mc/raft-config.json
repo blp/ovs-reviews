@@ -23,5 +23,5 @@
 	    "failure_inject":false}}
     ],
 
-    "model_check_cleanup" : {"command":["rm", "s1.db", "s2.db", "s3.db"]}
+    "model_check_cleanup" : {"command":["raft-cleanup", "s1.db", "s2.db", "s3.db"]}
 }

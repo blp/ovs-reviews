@@ -300,6 +300,9 @@ tests_mc_raft_client_SOURCES = \
 	tests/mc/raft-client.c
 tests_mc_raft_client_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
+noinst_PROGRAMS += tests/mc/raft-cleanup
+tests_mc_raft_cleanup_SOURCES = tests/mc/raft-cleanup.c
+
 noinst_PROGRAMS += tests/test-lib
 tests_test_lib_SOURCES = \
 	tests/test-lib.c

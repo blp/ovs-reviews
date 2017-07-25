@@ -28,6 +28,7 @@
 #include "openvswitch/list.h"
 #include "openvswitch/vlog.h"
 #include "openvswitch/util.h"
+#include "poll-loop.h"
 #include "process.h"
 #include "signals.h"
 #include "stream.h"
@@ -50,13 +51,40 @@ enum mc_action_type {
 #undef MC_ACTION
 };
 
+#define MC_SEARCH_STRATEGY_TYPES					\
+    MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_BREADTH, "mc_search_strategy_breadth") \
+    MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_DEPTH, "mc_search_strategy_depth") \
+    MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_SINGLE, "mc_search_strategy_single") \
+    MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_RANDOM, "mc_search_strategy_random") \
+    MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_DPOR, "mc_search_strategy_dpor") \
+    
+enum mc_search_strategy {
+#define MC_SEARCH_STRATEGY(ENUM, NAME) ENUM,
+    MC_SEARCH_STRATEGY_TYPES
+#undef MC_SEARCH_STRATEGY
+};
+
+#define MC_FSM_STATES							\
+    MC_FSM(MC_FSM_PRE_INIT, "mc_fsm_pre_init")				\
+    MC_FSM(MC_FSM_RESTORE_INIT_WAIT, "mc_fsm_restore_init_wait")	\
+    MC_FSM(MC_FSM_RESTORE_MID_STATE, "mc_fsm_restore_mid_state")	\
+    MC_FSM(MC_FSM_RESTORE_ACTION_WAIT, "mc_fsm_restore_action_wait")	\
+    MC_FSM(MC_FSM_NEW_ACTION_WAIT, "mc_fsm_new_action_wait")		\
+    MC_FSM(MC_FSM_NEW_STATE, "mc_fsm_new_state")			\
+
+enum mc_fsm_state {
+#define MC_FSM(ENUM, NAME) ENUM,
+    MC_FSM_STATES
+#undef MC_FSM
+};
+
 struct mc_action {
+    struct ovs_list list_node;
     enum mc_action_type type;
     int p_idx; /* Index into the mc_procs array */
     int t_idx; /* Index into the thread array */
     enum mc_rpc_choose_req_type choosetype;
     enum mc_rpc_subtype subtype;
-    struct ovs_list list_node;
     void *data;
 };
 
@@ -65,9 +93,21 @@ struct mc_state {
     int length;
 };
 
+struct mc_queue_item {
+    struct ovs_list list_node;
+    struct mc_state *state;
+    struct mc_action *action;    
+};
+
 struct mc_thread {
-    /* Action on which this thread is blocked in
-       the model checker */
+    /* Only one of these can be be non-NULL at one time, (but
+     * both can be NULL at the same time). 
+     * If applying is non-NULL then it points to the 
+     * action current being applied to the state that this thread was 
+     * previously in.
+     * If blocked is non-NULL then it points to the action
+     * that this thread is currently blocked on in the model checker */
+    struct mc_action *applying;
     struct mc_action *blocked;
     struct jsonrpc *js;
     bool valid;
@@ -97,17 +137,19 @@ struct mc_conn {
 
 static struct mc_process *mc_procs = NULL;
 static int num_procs = 0;
+static int max_threads_per_proc = 0;
 
 static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
-static struct ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
-
 static const char *listen_addr = NULL;
 static struct pstream *listener = NULL;
 
 static char **setup_cmd = NULL;
 static char **cleanup_cmd = NULL;
 
-static int max_threads_per_proc = 0;
+static struct ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
+static struct ovs_list mc_queue = OVS_LIST_INITIALIZER(&mc_queue);
+static enum mc_fsm_state fsm_state = MC_FSM_PRE_INIT;
+static enum mc_search_strategy strategy = MC_SEARCH_STRATEGY_BREADTH;
 static const char *search_strategy = NULL;
 
 static bool mc_receive_rpc(struct jsonrpc *js, struct mc_process *p,
@@ -123,7 +165,7 @@ static void mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 			  const union mc_rpc *rpc);
 static void mc_run_conn(struct jsonrpc *js, struct mc_process *proc);
 static void mc_run(void);
-    
+
 static void
 mc_start_process(struct mc_process *new_proc) {
     /* Prepare to redirect stderr and stdout of the process to a file
@@ -200,12 +242,42 @@ mc_kill_process(struct mc_process *proc)
 }
 
 static void
+exec_cmd_and_wait(char **cmd, char *name_err_msg)
+{
+    struct process *p;
+    int err = process_start(cmd, &p);
+    if (err != 0) {
+	ovs_fatal(err, "Cannot start the %s process", name_err_msg);
+    }
+
+    while (!process_exited(p)) {
+	process_run();
+	process_wait(p);
+	poll_block();
+    }
+    
+    if (process_status(p) != 0) {
+	ovs_fatal(process_status(p), "%s process returned error",
+		  name_err_msg);
+    }
+}
+
+static void
 mc_start_all_processes(void)
 {
     for (int i = 0; i < num_procs; i++) {
-	if (!mc_procs[i].running) {
-	    mc_start_process(&mc_procs[i]);
+	if (mc_procs[i].running) {
+	    mc_kill_process(&mc_procs[i]);
 	}
+    }
+
+    /* Assume that the cleanup command is idempotent.
+       It should not fail, even if cleanup is not required */
+    exec_cmd_and_wait(cleanup_cmd, "Cleanup");
+    exec_cmd_and_wait(setup_cmd, "Setup");
+    
+    for (int i = 0; i < num_procs; i++) {
+	mc_start_process(&mc_procs[i]);
     }
 }
 
@@ -226,7 +298,6 @@ mc_load_config_run(struct json *config)
 						 "search_strategy",
 						 0,
 						 "Cant find search strategy");
-    
 }
 
 static char**
@@ -426,16 +497,10 @@ mc_run_conn(struct jsonrpc *js, struct mc_process *proc)
 static void
 mc_run(void)
 {
-    if (!listener) {
-	int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);
-	
-	if (error) {
-	    ovs_fatal(error, "Cannot open the listening conn due to %s\n",
-		      ovs_strerror(error));
-	}
+    if (fsm_state == MC_FSM_PRE_INIT) {
+	mc_start_all_processes();
+	fsm_state = MC_FSM_RESTORE_INIT_WAIT;
     }
-    
-    mc_start_all_processes();
     
     if (listener) {
 	struct stream *stream;
@@ -501,7 +566,22 @@ main(int argc, char *argv[])
 
     mc_load_config(argv[1]);
     
-    for(;;) {
+    if (!listener) {
+	int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);
+	
+	if (error) {
+	    ovs_fatal(error, "Cannot open the listening conn due to %s\n",
+		      ovs_strerror(error));
+	}
+    }
+
+    /* Add the initial state to the queue */
+    struct mc_queue_item *item = xzalloc(sizeof *item) ;
+    item->state = NULL;
+    item->action = NULL;
+    ovs_list_push_back(&mc_queue, &item->list_node);
+    
+    while(!ovs_list_is_empty(&mc_queue)) {
     	mc_run();
     }
     
