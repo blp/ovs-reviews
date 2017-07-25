@@ -99,7 +99,7 @@ static struct mc_process *mc_procs = NULL;
 static int num_procs = 0;
 
 static struct ovs_list mc_conns = OVS_LIST_INITIALIZER(&mc_conns);
-static ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
+static struct ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
 
 static const char *listen_addr = NULL;
 static struct pstream *listener = NULL;
