@@ -211,6 +211,15 @@ mc_start_process(struct mc_process *new_proc) {
 }
 
 static void
+mc_process_wait_block(struct process *p) {
+    while (!process_exited(p)) {
+	process_run();
+	process_wait(p);
+	poll_block();
+    }
+}
+
+static void
 mc_process_death(struct mc_process *proc)
 {
     process_destroy(proc->p);
@@ -238,6 +247,11 @@ mc_kill_process(struct mc_process *proc)
 	ovs_fatal(err, "Cannot kill process %s", proc->name);
     }
 
+    /* This might slow things. OTOH not doing it  means that you have 
+     * lots of zombie processes hanging around. If things are slow 
+     * then maybe comment this out */
+    mc_process_wait_block(proc->p);
+
     mc_process_death(proc);
 }
 
@@ -250,11 +264,7 @@ exec_cmd_and_wait(char **cmd, char *name_err_msg)
 	ovs_fatal(err, "Cannot start the %s process", name_err_msg);
     }
 
-    while (!process_exited(p)) {
-	process_run();
-	process_wait(p);
-	poll_block();
-    }
+    mc_process_wait_block(p);
     
     if (process_status(p) != 0) {
 	ovs_fatal(process_status(p), "%s process returned error",
