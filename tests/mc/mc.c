@@ -100,14 +100,8 @@ struct mc_queue_item {
 };
 
 struct mc_thread {
-    /* Only one of these can be be non-NULL at one time, (but
-     * both can be NULL at the same time). 
-     * If applying is non-NULL then it points to the 
-     * action current being applied to the state that this thread was 
-     * previously in.
-     * If blocked is non-NULL then it points to the action
+    /* If blocked is non-NULL then it points to the action
      * that this thread is currently blocked on in the model checker */
-    struct mc_action *applying;
     struct mc_action *blocked;
     struct jsonrpc *js;
     bool valid;
@@ -148,6 +142,11 @@ static char **cleanup_cmd = NULL;
 
 static struct ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
 static struct ovs_list mc_queue = OVS_LIST_INITIALIZER(&mc_queue);
+
+static struct mc_state *restore = NULL;
+static int restore_path_next = -1;
+static struct mc_thread *restore_thread = NULL;
+
 static enum mc_fsm_state fsm_state = MC_FSM_PRE_INIT;
 static enum mc_search_strategy strategy = MC_SEARCH_STRATEGY_BREADTH;
 static const char *search_strategy = NULL;
@@ -504,12 +503,71 @@ mc_run_conn(struct jsonrpc *js, struct mc_process *proc)
     }
 }
 
+static bool
+all_threads_blocked(void)
+{
+    for (int i = 0; i < num_procs; i++) {
+	for (int j = 0; j < mc_procs[i].num_threads; j++) {
+	    if (mc_procs[i].threads[j].blocked == NULL) {
+		return false;
+	    }
+	}
+    }
+
+    return true;
+}
+
 static void
 mc_run(void)
 {
-    if (fsm_state == MC_FSM_PRE_INIT) {
+    switch(fsm_state) {
+    case MC_FSM_PRE_INIT:
 	mc_start_all_processes();
 	fsm_state = MC_FSM_RESTORE_INIT_WAIT;
+	break;
+
+    case MC_FSM_RESTORE_INIT_WAIT:
+	if (all_threads_blocked()) {
+	    restore = CONTAINER_OF(ovs_list_front(&mc_queue),
+				   struct mc_queue_item,
+				   list_node)->state;
+	    restore_path_next = 0;
+	    fsm_state = MC_FSM_RESTORE_MID_STATE;
+	}
+	break;
+
+    case MC_FSM_RESTORE_MID_STATE:
+	if (restore && restore_path_next < restore->length) {
+	    // FILL ME !! Send out the action, using t_idx in mc_action
+	    // FILL ME !! restore_thread =
+	    restore_thread->blocked = NULL;
+	    restore_path_next++;
+	    fsm_state = MC_FSM_RESTORE_ACTION_WAIT;
+	} else {
+	    // FILL ME !! 
+	    // Apply the action from the front of the queue
+	    restore = NULL;
+	    restore_path_next = -1;
+	    fsm_state = MC_FSM_NEW_ACTION_WAIT;
+	}
+	break;
+
+    case MC_FSM_RESTORE_ACTION_WAIT:
+	if (restore_thread->blocked != NULL) {
+	    fsm_state = MC_FSM_RESTORE_MID_STATE;
+	}
+	break;
+
+    case MC_FSM_NEW_ACTION_WAIT:
+	//FILL ME !!
+	break;
+
+    case MC_FSM_NEW_STATE:
+	//FILL ME !!
+	break;
+	
+    default:
+	ovs_assert(0);
     }
     
     if (listener) {
@@ -575,14 +633,11 @@ main(int argc, char *argv[])
     }
 
     mc_load_config(argv[1]);
-    
-    if (!listener) {
-	int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);
-	
-	if (error) {
-	    ovs_fatal(error, "Cannot open the listening conn due to %s\n",
-		      ovs_strerror(error));
-	}
+
+    int error = pstream_open(listen_addr, &listener, DSCP_DEFAULT);    
+    if (error) {
+	ovs_fatal(error, "Cannot open the listening conn due to %s\n",
+		  ovs_strerror(error));
     }
 
     /* Add the initial state to the queue */
