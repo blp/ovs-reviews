@@ -80,6 +80,7 @@ enum mc_fsm_state {
 };
 
 struct mc_action {
+    struct ovs_list list_node;
     int refcount;
     enum mc_action_type type;
     int p_idx; /* Index into the mc_procs array */
@@ -165,8 +166,8 @@ static void mc_load_config_run(struct json *config);
 static void mc_load_config_processes(struct json *config);
 static void mc_load_config(const char *filename);
 static struct mc_action *mc_action_alloc(void);
-static void mc_action_inc_ref(struct mc_action *action);
-static void mc_action_dec_ref(struct mc_action *action);
+static struct mc_action *mc_action_inc_ref(struct mc_action *action);
+static void mc_action_dec_ref(struct mc_action **action);
 static void mc_handle_hello_or_bye(struct jsonrpc *js,
 				   const union mc_rpc *rpc);
 static void mc_handle_choose_req(int p_idx, int t_idx,
@@ -182,6 +183,7 @@ static void mc_send_choose_reply(struct mc_action *action,
 static void mc_execute_action(struct mc_action *action);
 static void mc_dump_state(void);
 static void mc_exit_error(void);
+static struct ovs_list mc_get_enabled_actions(void);
 static void mc_run(void);
 
 static void
@@ -458,23 +460,28 @@ static struct mc_action *
 mc_action_alloc(void)
 {
     struct mc_action *action = xzalloc(sizeof *action);
-    action->refcount = 1;
+    action->refcount = 0;
+    return action;
+}
+
+static struct mc_action *
+mc_action_inc_ref(struct mc_action *action)
+{
+    action->refcount++;
     return action;
 }
 
 static void
-mc_action_inc_ref(struct mc_action *action)
+mc_action_dec_ref(struct mc_action **action)
 {
-    action->refcount++;
-}
-
-static void
-mc_action_dec_ref(struct mc_action *action)
-{
-    action->refcount--;
-
-    if (action->refcount <= 0) {
-	free(action);
+    if (*action) {
+	(*action)->refcount--;
+	
+	if ((*action)->refcount <= 0) {
+	    free(*action);
+	}
+	
+	*action = NULL;
     }
 }
 
@@ -545,7 +552,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	ovs_assert(0);
     }
 
-    wait_thread->blocked = next_action;
+    wait_thread->blocked = mc_action_inc_ref(next_action);
 }
 
 static void
@@ -611,13 +618,16 @@ static bool
 mc_all_threads_blocked(void)
 {
     for (int i = 0; i < num_procs; i++) {
-	for (int j = 0; j < mc_procs[i].num_threads; j++) {
-	    if (mc_procs[i].threads[j].blocked == NULL) {
-		return false;
+	if (mc_procs[i].running) {
+	    for (int j = 0; j < max_threads_per_proc; j++) {
+		if (mc_procs[i].threads[j].valid &&
+		    mc_procs[i].threads[j].blocked == NULL) {
+		    return false;
+		}
 	    }
 	}
     }
-
+    
     return true;
 }
 
@@ -684,11 +694,39 @@ mc_exit_error(void)
     exit(1);
 }
 
+/* Gets the list of enabled actions, at the current state
+ * Returns the size as an optimization to avoid running 
+ * ovs_list_size() again */
+static struct ovs_list
+mc_get_enabled_actions()
+{
+    /* FIX ME !!!! 
+     * Currently just returns all the actions that each thread
+     * is blocked on. Eventually will need to add dependency 
+     * tracking and other enabled actions like crashes */
+
+    struct ovs_list retval = OVS_LIST_INITIALIZER(&retval);
+    for (int i = 0; i < num_procs; i++) {
+	if (mc_procs[i].running) {
+	    for (int j = 0; j < max_threads_per_proc; j++) {
+		if (mc_procs[i].threads[j].valid) {
+		    ovs_assert(mc_procs[i].threads[j].blocked != NULL);
+		    ovs_list_push_back(&retval,
+				       &mc_procs[i].threads[j].blocked->list_node);
+		}
+	    }
+	}
+    }
+
+    return retval;
+}
+
 static void
 mc_run(void)
 {
     struct mc_action *action = NULL;
-    
+    enum mc_fsm_state next_state;
+	
     switch(fsm_state) {
     case MC_FSM_PRE_INIT:
 	mc_start_all_processes();
@@ -708,24 +746,25 @@ mc_run(void)
     case MC_FSM_RESTORE_MID_STATE:
 	if (restore && restore_path_next < restore->length) {
 	    action = restore->path[restore_path_next++];
-	    fsm_state = MC_FSM_RESTORE_ACTION_WAIT;
+	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
 	} else {
 	    action = CONTAINER_OF(ovs_list_front(&mc_queue),
 				  struct mc_queue_item,
 				  list_node)->action;
 
 	    if (action) {
-		fsm_state = MC_FSM_NEW_ACTION_WAIT;
+		next_state = MC_FSM_NEW_ACTION_WAIT;
 	    } else {
-		fsm_state = MC_FSM_NEW_STATE;
+		next_state = MC_FSM_NEW_STATE;
 	    } 
 	}
 
 	if (action) {
 	    wait_thread = &mc_procs[action->p_idx].threads[action->t_idx];
-	    wait_thread->blocked = NULL;
+	    mc_action_dec_ref(&wait_thread->blocked);
 	    mc_execute_action(action);
 	}
+	fsm_state = next_state;
 	break;
 
     case MC_FSM_RESTORE_ACTION_WAIT:
