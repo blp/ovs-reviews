@@ -80,7 +80,7 @@ enum mc_fsm_state {
 };
 
 struct mc_action {
-    struct ovs_list list_node;
+    int refcount;
     enum mc_action_type type;
     int p_idx; /* Index into the mc_procs array */
     int t_idx; /* Index into the thread array */
@@ -141,7 +141,6 @@ static struct pstream *listener = NULL;
 static char **setup_cmd = NULL;
 static char **cleanup_cmd = NULL;
 
-static struct ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
 static struct ovs_list mc_queue = OVS_LIST_INITIALIZER(&mc_queue);
 
 static struct mc_state *restore = NULL;
@@ -153,18 +152,36 @@ static enum mc_fsm_state fsm_state = MC_FSM_PRE_INIT;
 static enum mc_search_strategy strategy = MC_SEARCH_STRATEGY_BREADTH;
 static const char *search_strategy = NULL;
 
-static bool mc_receive_rpc(struct jsonrpc *js, int p_idx,
-			   union mc_rpc *rpc);
 static void mc_start_process(struct mc_process *new_proc);
+static void mc_process_wait_block(struct process *p);
+static void mc_process_death(struct mc_process *proc);
+static void mc_kill_process(struct mc_process *proc);
+static void mc_kill_all_processes(void);
+static void mc_get_exit_statuses(struct ds *args);
+static void exec_cmd_and_wait(char **cmd, char *name_err_msg);
 static void mc_start_all_processes(void);
+static bool mc_processes_crashed(void);
 static void mc_load_config_run(struct json *config);
 static void mc_load_config_processes(struct json *config);
 static void mc_load_config(const char *filename);
+static struct mc_action *mc_action_alloc(void);
+static void mc_action_inc_ref(struct mc_action *action);
+static void mc_action_dec_ref(struct mc_action *action);
 static void mc_handle_hello_or_bye(struct jsonrpc *js,
 				   const union mc_rpc *rpc);
+static void mc_handle_choose_req(int p_idx, int t_idx,
+				 const struct mc_rpc_choose_req *rq);
 static void mc_handle_rpc(struct jsonrpc *js, int p_idx, int t_idx,
 			  const union mc_rpc *rpc);
+static bool mc_receive_rpc(struct jsonrpc *js, int p_idx,
+			   union mc_rpc *rpc);
 static void mc_run_conn(struct jsonrpc *js, int p_idx, int t_idx);
+static bool mc_all_threads_blocked(void);
+static void mc_send_choose_reply(struct mc_action *action,
+				 enum mc_rpc_choose_reply_type reply_type);
+static void mc_execute_action(struct mc_action *action);
+static void mc_dump_state(void);
+static void mc_exit_error(void);
 static void mc_run(void);
 
 static void
@@ -437,6 +454,30 @@ mc_load_config(const char *filename)
     json_destroy(config);
 }
 
+static struct mc_action *
+mc_action_alloc(void)
+{
+    struct mc_action *action = xzalloc(sizeof *action);
+    action->refcount = 1;
+    return action;
+}
+
+static void
+mc_action_inc_ref(struct mc_action *action)
+{
+    action->refcount++;
+}
+
+static void
+mc_action_dec_ref(struct mc_action *action)
+{
+    action->refcount--;
+
+    if (action->refcount <= 0) {
+	free(action);
+    }
+}
+
 static void
 mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 {
@@ -485,7 +526,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	ovs_assert(next_action->subtype == rq->subtype);
 	
     } else if (fsm_state == MC_FSM_NEW_ACTION_WAIT) {
-	next_action = xzalloc(sizeof *next_action);
+	next_action = mc_action_alloc();
 	next_action->type = MC_ACTION_UNKNOWN;
 	next_action->p_idx = p_idx;
 	next_action->t_idx = t_idx;
