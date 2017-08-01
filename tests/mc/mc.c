@@ -44,6 +44,7 @@ struct mc_thread;
     MC_ACTION(MC_ACTION_TIMER_SHORT, "mc_action_timer_short")		\
     MC_ACTION(MC_ACTION_TIMER_TRIGGER, "mc_action_timer_trigger")	\
     MC_ACTION(MC_ACTION_CRASH_PROCESS, "mc_action_crash_process")	\
+    MC_ACTION(MC_ACTION_UNKNOWN, "mc_action_unknown")	\
     
 enum mc_action_type {
 #define MC_ACTION(ENUM, NAME) ENUM,
@@ -144,14 +145,15 @@ static struct ovs_list mc_actions = OVS_LIST_INITIALIZER(&mc_actions);
 static struct ovs_list mc_queue = OVS_LIST_INITIALIZER(&mc_queue);
 
 static struct mc_state *restore = NULL;
-static int restore_path_next = -1;
-static struct mc_thread *restore_thread = NULL;
+static int restore_path_next = 0;
+
+static struct mc_thread *wait_thread = NULL;
 
 static enum mc_fsm_state fsm_state = MC_FSM_PRE_INIT;
 static enum mc_search_strategy strategy = MC_SEARCH_STRATEGY_BREADTH;
 static const char *search_strategy = NULL;
 
-static bool mc_receive_rpc(struct jsonrpc *js, struct mc_process *p,
+static bool mc_receive_rpc(struct jsonrpc *js, int p_idx,
 			   union mc_rpc *rpc);
 static void mc_start_process(struct mc_process *new_proc);
 static void mc_start_all_processes(void);
@@ -160,9 +162,9 @@ static void mc_load_config_processes(struct json *config);
 static void mc_load_config(const char *filename);
 static void mc_handle_hello_or_bye(struct jsonrpc *js,
 				   const union mc_rpc *rpc);
-static void mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
+static void mc_handle_rpc(struct jsonrpc *js, int p_idx, int t_idx,
 			  const union mc_rpc *rpc);
-static void mc_run_conn(struct jsonrpc *js, struct mc_process *proc);
+static void mc_run_conn(struct jsonrpc *js, int p_idx, int t_idx);
 static void mc_run(void);
 
 static void
@@ -236,22 +238,59 @@ mc_process_death(struct mc_process *proc)
     proc->num_threads = 0;
 }
 
+/* It is the caller's responsibility to make sure that the
+ * process in question is both marked as running in the model
+ * checker and also not crashed in reality before calling this */
 static void
 mc_kill_process(struct mc_process *proc)
 {
+    ovs_assert(proc->running);
     int err = process_kill(proc->p, SIGKILL);
     if (err != 0) {
 	/* Currently assume that a parent can always kill
-	   its child */
+	   its child that is running */
 	ovs_fatal(err, "Cannot kill process %s", proc->name);
     }
-
-    /* This might slow things. OTOH not doing it  means that you have 
+    
+    /* This might slow things. OTOH not doing it means that you have 
      * lots of zombie processes hanging around. If things are slow 
      * then maybe comment this out */
     mc_process_wait_block(proc->p);
-
     mc_process_death(proc);
+}
+
+/* Assuming that the system is in a state where there are some
+ * processes that are running and some that are crashed, kills
+ * off the running processes */
+static void
+mc_kill_all_processes(void)
+{
+    process_run();
+    for (int i= 0; i < num_procs; i++) {	
+	if (mc_procs[i].running) {
+	    if (process_exited(mc_procs[i].p)) {
+		mc_process_death(&mc_procs[i]);
+	    } else {
+		mc_kill_process(&mc_procs[i]);
+	    }
+	} 
+    }    
+}
+
+static void
+mc_get_exit_statuses(struct ds *args)
+{
+    process_run();
+    for (int i= 0; i < num_procs; i++) {	
+	if (process_exited(mc_procs[i].p)) {
+	    char *status =
+		process_status_msg(process_status(mc_procs[i].p));
+	    ds_put_format(args, "Process %s ", mc_procs[i].name);
+	    ds_put_cstr(args, status);
+	    ds_put_cstr(args, "\n");
+	    free(status);
+	}
+    }
 }
 
 static void
@@ -274,12 +313,8 @@ exec_cmd_and_wait(char **cmd, char *name_err_msg)
 static void
 mc_start_all_processes(void)
 {
-    for (int i = 0; i < num_procs; i++) {
-	if (mc_procs[i].running) {
-	    mc_kill_process(&mc_procs[i]);
-	}
-    }
-
+    mc_kill_all_processes();
+    
     /* Assume that the cleanup command is idempotent.
        It should not fail, even if cleanup is not required */
     exec_cmd_and_wait(cleanup_cmd, "Cleanup");
@@ -288,6 +323,22 @@ mc_start_all_processes(void)
     for (int i = 0; i < num_procs; i++) {
 	mc_start_process(&mc_procs[i]);
     }
+}
+
+/* Checks if all the processes being run by this model checker are alive
+ * If there are any processes which the model checker believes to be running
+ * but are acually crashed then returns true */
+static bool
+mc_processes_crashed(void)
+{
+    process_run();
+    for (int i= 0; i < num_procs; i++) {	
+	if (mc_procs[i].running && process_exited(mc_procs[i].p)) {
+	    return true;
+	}
+    }
+
+    return false;
 }
 
 static void
@@ -422,27 +473,42 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 }
 
 static void
-mc_handle_choose_req(const struct mc_process *proc,
-		     const struct mc_rpc_choose_req *rq)
+mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 {
-    union mc_rpc rpc;
-    rpc.common.type = MC_RPC_CHOOSE_REPLY;
-    rpc.common.pid = 0;
-    rpc.common.tid = 0;
-    rpc.choose_reply.reply = MC_RPC_CHOOSE_REPLY_NORMAL;
-
-    int tid = rq->common.tid;
-    int error = jsonrpc_send_block(proc->threads[tid].js,
-    				   mc_rpc_to_jsonrpc(&rpc));
+    struct mc_action *next_action;
+    ovs_assert(wait_thread == &mc_procs[p_idx].threads[t_idx]);
     
-    if (error != 0) {
-    	ovs_fatal(error, "Cannot send choose reply to %s\n", proc->name);
+    if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT) {
+	next_action = restore->path[restore_path_next];
+
+	ovs_assert(next_action->choosetype == rq->type);
+	ovs_assert(next_action->subtype == rq->subtype);
+	
+    } else if (fsm_state == MC_FSM_NEW_ACTION_WAIT) {
+	next_action = xzalloc(sizeof *next_action);
+	next_action->type = MC_ACTION_UNKNOWN;
+	next_action->p_idx = p_idx;
+	next_action->t_idx = t_idx;
+	next_action->choosetype = rq->type;
+	next_action->subtype = rq->subtype;
+
+	if (rq->data) {
+	    /* FIX ME !!!!!!!!!
+	     * Once you start sending data with these RPCs, copy that
+	     * data into this */
+	    ovs_assert(0);
+	}
+    } else {
+	/* Should not be getting choose requests if not
+	 * in either of the above two states */
+	ovs_assert(0);
     }
+
+    wait_thread->blocked = next_action;
 }
 
 static void
-mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
-	      const union mc_rpc *rpc)
+mc_handle_rpc(struct jsonrpc *js, int p_idx, int t_idx, const union mc_rpc *rpc)
 {
     switch (rpc->common.type) {
     case MC_RPC_HELLO:
@@ -451,7 +517,7 @@ mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 	break;
 	
     case MC_RPC_CHOOSE_REQ:
-	mc_handle_choose_req(proc, &rpc->choose_req);
+	mc_handle_choose_req(p_idx, t_idx, &rpc->choose_req);
 	break;
 
     case MC_RPC_CHOOSE_REPLY:
@@ -465,7 +531,7 @@ mc_handle_rpc(struct jsonrpc *js, struct mc_process *proc,
 }
 
 static bool
-mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
+mc_receive_rpc(struct jsonrpc *js, int p_idx, union mc_rpc *rpc)
 {
     struct jsonrpc_msg *msg;
     int error = jsonrpc_recv(js, &msg);
@@ -473,7 +539,8 @@ mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
     if (error != 0) {
 	if (error != EAGAIN) {
 	    if (error == EOF) {
-		VLOG_INFO("End-of-File from %s\n", p->name);
+		ovs_assert(p_idx >= 0);
+		VLOG_INFO("End-of-File from %s\n", mc_procs[p_idx].name);
 	    } else {
 		VLOG_ERR("Error in receiving rpc: %s\n", ovs_strerror(error));
 	    }
@@ -486,25 +553,21 @@ mc_receive_rpc(struct jsonrpc *js, struct mc_process *p, union mc_rpc *rpc)
 }
 
 static void
-mc_run_conn(struct jsonrpc *js, struct mc_process *proc)
+mc_run_conn(struct jsonrpc *js, int p_idx, int t_idx)
 {
     if (js) {
 	jsonrpc_run(js);
 	
 	union mc_rpc rpc;
-	if (mc_receive_rpc(js, proc, &rpc)) {
-	    mc_handle_rpc(js, proc, &rpc);
+	memset(&rpc, 0, sizeof(rpc));
+	if (mc_receive_rpc(js, p_idx, &rpc)) {
+	    mc_handle_rpc(js, p_idx, t_idx, &rpc);
 	}
-    } else if (proc && proc->running) {
-	/* This has been called from a process context
-	 * which the model checker believes to be running
-	 * but the jsonrpc connection either is null or
-	 * it is no longer alive */
     }
 }
 
 static bool
-all_threads_blocked(void)
+mc_all_threads_blocked(void)
 {
     for (int i = 0; i < num_procs; i++) {
 	for (int j = 0; j < mc_procs[i].num_threads; j++) {
@@ -518,8 +581,73 @@ all_threads_blocked(void)
 }
 
 static void
+mc_send_choose_reply(struct mc_action *action,
+		     enum mc_rpc_choose_reply_type reply_type)
+{
+    struct jsonrpc *js = mc_procs[action->p_idx].threads[action->t_idx].js;
+    
+    union mc_rpc rpc;
+    rpc.common.type = MC_RPC_CHOOSE_REPLY;
+    rpc.common.pid = 0;
+    rpc.common.tid = 0;
+    rpc.choose_reply.reply = reply_type;
+        
+    int error = jsonrpc_send_block(js, mc_rpc_to_jsonrpc(&rpc));
+    
+    if (error != 0) {
+	ovs_fatal(error, "Cannot send choose reply to %s\n",
+		  mc_procs[action->p_idx].name);
+    }   
+}
+
+static void
+mc_execute_action(struct mc_action *action)
+{
+    switch(action->type) {
+    case MC_ACTION_RPC_REPLY_ERROR:
+	mc_send_choose_reply(action, MC_RPC_CHOOSE_REPLY_ERROR);
+	break;
+	
+    case MC_ACTION_RPC_REPLY_NORMAL:
+	mc_send_choose_reply(action, MC_RPC_CHOOSE_REPLY_NORMAL);
+	break;
+	
+    case MC_ACTION_TIMER_SHORT:
+    case MC_ACTION_TIMER_TRIGGER:
+    case MC_ACTION_CRASH_PROCESS:
+    case MC_ACTION_UNKNOWN:
+	ovs_assert(0);
+    }
+}
+
+static void
+mc_dump_state(void)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    /* FILL ME !!!!!!!! */
+    /* Add to the string the current state of the state machine 
+     * and other statistics */
+    /* If restore is non-NULL then add the actions along 
+       the path until restore_path_next */
+    mc_get_exit_statuses(&ds);
+    fprintf(stderr, "%s", ds_cstr(&ds));
+    ds_destroy(&ds);
+}
+
+static void
+mc_exit_error(void)
+{
+    mc_dump_state();
+    mc_kill_all_processes();
+    exit(1);
+}
+
+static void
 mc_run(void)
 {
+    struct mc_action *action = NULL;
+    
     switch(fsm_state) {
     case MC_FSM_PRE_INIT:
 	mc_start_all_processes();
@@ -527,7 +655,7 @@ mc_run(void)
 	break;
 
     case MC_FSM_RESTORE_INIT_WAIT:
-	if (all_threads_blocked()) {
+	if (mc_all_threads_blocked()) {
 	    restore = CONTAINER_OF(ovs_list_front(&mc_queue),
 				   struct mc_queue_item,
 				   list_node)->state;
@@ -538,28 +666,37 @@ mc_run(void)
 
     case MC_FSM_RESTORE_MID_STATE:
 	if (restore && restore_path_next < restore->length) {
-	    // FILL ME !! Send out the action, using t_idx in mc_action
-	    // FILL ME !! restore_thread =
-	    restore_thread->blocked = NULL;
-	    restore_path_next++;
+	    action = restore->path[restore_path_next++];
 	    fsm_state = MC_FSM_RESTORE_ACTION_WAIT;
 	} else {
-	    // FILL ME !! 
-	    // Apply the action from the front of the queue
-	    restore = NULL;
-	    restore_path_next = -1;
-	    fsm_state = MC_FSM_NEW_ACTION_WAIT;
+	    action = CONTAINER_OF(ovs_list_front(&mc_queue),
+				  struct mc_queue_item,
+				  list_node)->action;
+
+	    if (action) {
+		fsm_state = MC_FSM_NEW_ACTION_WAIT;
+	    } else {
+		fsm_state = MC_FSM_NEW_STATE;
+	    } 
+	}
+
+	if (action) {
+	    wait_thread = &mc_procs[action->p_idx].threads[action->t_idx];
+	    wait_thread->blocked = NULL;
+	    mc_execute_action(action);
 	}
 	break;
 
     case MC_FSM_RESTORE_ACTION_WAIT:
-	if (restore_thread->blocked != NULL) {
+	if (wait_thread->blocked != NULL) {
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 	}
 	break;
 
     case MC_FSM_NEW_ACTION_WAIT:
-	//FILL ME !!
+	if (wait_thread->blocked != NULL) {
+	    fsm_state = MC_FSM_NEW_STATE;
+	}
 	break;
 
     case MC_FSM_NEW_STATE:
@@ -568,6 +705,10 @@ mc_run(void)
 	
     default:
 	ovs_assert(0);
+    }
+    
+    if (mc_processes_crashed()) {
+	mc_exit_error();
     }
     
     if (listener) {
@@ -583,46 +724,23 @@ mc_run(void)
     struct mc_conn *conn, *next;
     LIST_FOR_EACH_SAFE (conn, next, list_node, &mc_conns) {
 	ovs_assert(conn->js != NULL);
-	mc_run_conn(conn->js, NULL);
+	mc_run_conn(conn->js, -1, -1);
     }
 
-    process_run();
     for (int i= 0; i < num_procs; i++) {	
-	if (mc_procs[i].running && !process_exited(mc_procs[i].p)) {
+	if (mc_procs[i].running) {
 	    for (int j = 0; j < max_threads_per_proc; j++) {
 		if (mc_procs[i].threads[j].valid) {
-		    mc_run_conn(mc_procs[i].threads[j].js, &mc_procs[i]);
+		    mc_run_conn(mc_procs[i].threads[j].js, i, j);
 		}
 	    }
-	} else if (mc_procs[i].running && process_exited(mc_procs[i].p)) {
-	    /* XXX. Model checker thinks the process is 
-	     * running but it is not running anymore ? **/
-
-	    /* Use this check to judge if the process was killed
-	       by some signal (e.g. SIGSEGV) */
-	    if (WIFSIGNALED(process_status(mc_procs[i].p))) {
-		fprintf(stderr, "%s %s\n", mc_procs[i].name,
-			process_status_msg(process_status(mc_procs[i].p)));
-	    }
-
-	    /* This might need to be eventually moved, but remember to
-	     * to call it */
-	    mc_process_death(&mc_procs[i]);
-	} else if (!mc_procs[i].running) {
-	    /* XXX. This should only be the case when we
-	     * crash the process deliberately at some stage 
-
-	     * This should instead be handled in a get_process_actions() 
-	     * function called from a larger get_enabled_actions()
-	     * function. One of the "actions" that can be applied
-	     * to a state is to restart a deliberately crashed 
-	     * process */
-	} /* XXX another else branch here should check for
-	   * timeouts of processes that are believed to be
-	   * running but have not contacted the model checker
-	   * for a decision on a syscall or libcall 
-	   * i.e. they might be stuck in an infinite loop */
+	}
     }
+    
+    /* TODO check for timeouts of processes that are believed 
+     * to be running but have not contacted the model checker
+     * for a decision for TIMEOUT secs. They might be stuck in 
+     * an infinite loop */
 }
 
 int
