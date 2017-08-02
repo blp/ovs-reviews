@@ -1010,14 +1010,13 @@ dpif_netdev_pmd_info(struct unixctl_conn *conn, int argc, const char *argv[],
         } else {
             unsigned long long stats[DP_N_STATS];
             uint64_t cycles[PMD_N_CYCLES];
-            int i;
 
             /* Read current stats and cycle counters */
-            for (i = 0; i < ARRAY_SIZE(stats); i++) {
-                atomic_read_relaxed(&pmd->stats.n[i], &stats[i]);
+            for (size_t j = 0; j < ARRAY_SIZE(stats); j++) {
+                atomic_read_relaxed(&pmd->stats.n[j], &stats[j]);
             }
-            for (i = 0; i < ARRAY_SIZE(cycles); i++) {
-                atomic_read_relaxed(&pmd->cycles.n[i], &cycles[i]);
+            for (size_t j = 0; j < ARRAY_SIZE(cycles); j++) {
+                atomic_read_relaxed(&pmd->cycles.n[j], &cycles[j]);
             }
 
             if (type == PMD_INFO_CLEAR_STATS) {
@@ -3306,7 +3305,6 @@ static void
 reconfigure_pmd_threads(struct dp_netdev *dp)
     OVS_REQUIRES(dp->port_mutex)
 {
-    struct dp_netdev_pmd_thread *pmd;
     struct ovs_numa_dump *pmd_cores;
     bool changed = false;
 
@@ -3325,6 +3323,7 @@ reconfigure_pmd_threads(struct dp_netdev *dp)
     if (ovs_numa_dump_count(pmd_cores) != cmap_count(&dp->poll_threads) - 1) {
         changed = true;
     } else {
+        struct dp_netdev_pmd_thread *pmd;
         CMAP_FOR_EACH (pmd, node, &dp->poll_threads) {
             if (pmd->core_id != NON_PMD_CORE_ID
                 && !ovs_numa_dump_contains_core(pmd_cores,
