@@ -1,7 +1,8 @@
 {
     "run_config":{"listen_address": "ptcp:6666:127.0.0.1",
 		  "max_threads_per_proc" : 2,
-		  "search_strategy": "breadth"},
+		  "search_strategy": "mc_search_strategy_breadth",
+		  "max_search_depth": 10},
 
     "model_check_setup" : {"command":["raft-setup.sh"]},
     

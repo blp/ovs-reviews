@@ -30,6 +30,7 @@
 #include "openvswitch/util.h"
 #include "poll-loop.h"
 #include "process.h"
+#include "random.h"
 #include "signals.h"
 #include "stream.h"
 #include "util.h"
@@ -57,7 +58,6 @@ enum mc_action_type {
     MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_DEPTH, "mc_search_strategy_depth") \
     MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_SINGLE, "mc_search_strategy_single") \
     MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_RANDOM, "mc_search_strategy_random") \
-    MC_SEARCH_STRATEGY(MC_SEARCH_STRATEGY_DPOR, "mc_search_strategy_dpor") \
     
 enum mc_search_strategy {
 #define MC_SEARCH_STRATEGY(ENUM, NAME) ENUM,
@@ -90,6 +90,9 @@ struct mc_action {
     void *data;
 };
 
+/* Initial state is represented by path = NULL and length = 0 
+ * Subsequent states are represented by the sequence of actions 
+ * applied to the initial state */ 
 struct mc_state {
     struct mc_action **path;
     int length;
@@ -150,9 +153,13 @@ static int restore_path_next = 0;
 static struct mc_thread *wait_thread = NULL;
 
 static enum mc_fsm_state fsm_state = MC_FSM_PRE_INIT;
-static enum mc_search_strategy strategy = MC_SEARCH_STRATEGY_BREADTH;
-static const char *search_strategy = NULL;
+static enum mc_search_strategy strategy;
+static int max_search_depth = -1; /* < 0 means no bounds on depth */
+static bool max_search_depth_reached = false;
 
+static const char *mc_search_strategy_to_string(enum mc_search_strategy status);
+static bool mc_search_strategy_from_string(const char *s,
+					   enum mc_search_strategy *status);
 static void mc_start_process(struct mc_process *new_proc);
 static void mc_process_wait_block(struct process *p);
 static void mc_process_death(struct mc_process *proc);
@@ -184,7 +191,41 @@ static void mc_execute_action(struct mc_action *action);
 static void mc_dump_state(void);
 static void mc_exit_error(void);
 static struct ovs_list mc_get_enabled_actions(void);
+static void mc_enqueue_init_state_action_pair(void);
+static struct mc_queue_item *new_state_action_pair(struct mc_state *cur_state,
+						   struct mc_action *cur_action,
+						   const int cur_path_len,
+						   struct mc_action *next_action);
+static void mc_enqueue_state_action_pairs(struct mc_state *cur_state,
+					  struct mc_action *cur_action,
+					  const int cur_path_len,
+					  struct ovs_list next_actions);
+static void mc_explore(void);
 static void mc_run(void);
+
+static const char *
+mc_search_strategy_to_string(enum mc_search_strategy status)
+{
+    switch (status) {
+#define MC_SEARCH_STRATEGY(ENUM, NAME) case ENUM: return NAME;
+        MC_SEARCH_STRATEGY_TYPES
+#undef MC_SEARCH_STRATEGY
+            }
+    return "<unknown>";
+}
+
+static bool
+mc_search_strategy_from_string(const char *s, enum mc_search_strategy *status)
+{
+#define MC_SEARCH_STRATEGY(ENUM, NAME)		\
+    if (!strcmp(s, NAME)) {                     \
+        *status = ENUM;                         \
+        return true;                            \
+    }
+    MC_SEARCH_STRATEGY_TYPES
+#undef MC_SEARCH_STRATEGY
+    return false;
+}
 
 static void
 mc_start_process(struct mc_process *new_proc) {
@@ -368,15 +409,23 @@ mc_load_config_run(struct json *config)
     listen_addr = get_str_member_copy_or_die(run_conf, "listen_address",
 					     0, "Cannot find listen_address");
 
-    max_threads_per_proc = *(int*) get_member_or_die(run_conf,
-						     "max_threads_per_proc",
-						     0,
-						     "Cant find threads_per_proc");
+    max_threads_per_proc =
+	*(int*) get_member_or_die(run_conf,
+				  "max_threads_per_proc",
+				  0,
+				  "Cant find threads_per_proc");
+    
+    const char *search_strategy =
+	get_str_member_copy_or_die(run_conf,
+				   "search_strategy",
+				   0,
+				   "Cant find search strategy");
 
-    search_strategy = get_str_member_copy_or_die(run_conf,
-						 "search_strategy",
-						 0,
-						 "Cant find search strategy");
+    if (!mc_search_strategy_from_string(search_strategy, &strategy)) {
+	ovs_fatal(0, "Unknown search strategy");
+    }
+    
+    max_search_depth = *(int*) get_member(run_conf, "max_search_depth");
 }
 
 static char**
@@ -698,27 +747,185 @@ mc_exit_error(void)
  * Returns the size as an optimization to avoid running 
  * ovs_list_size() again */
 static struct ovs_list
-mc_get_enabled_actions()
+mc_get_enabled_actions(void)
 {
+    /* FIX ME AHHH!!!!!!!!!!!!!!!!!!!! 
+     * The action currently associated with each thread has type
+     * MC_ACTION_UNKNOWN. Replace that with multiple instances
+     * of REPLY_ERROR, REPLY_NORMAL, TIMER_SHORT etc */
+
     /* FIX ME !!!! 
      * Currently just returns all the actions that each thread
      * is blocked on. Eventually will need to add dependency 
      * tracking and other enabled actions like crashes */
-
-    struct ovs_list retval = OVS_LIST_INITIALIZER(&retval);
+    
+    struct ovs_list actions = OVS_LIST_INITIALIZER(&actions);
     for (int i = 0; i < num_procs; i++) {
 	if (mc_procs[i].running) {
 	    for (int j = 0; j < max_threads_per_proc; j++) {
 		if (mc_procs[i].threads[j].valid) {
 		    ovs_assert(mc_procs[i].threads[j].blocked != NULL);
-		    ovs_list_push_back(&retval,
+		    ovs_list_push_back(&actions,
 				       &mc_procs[i].threads[j].blocked->list_node);
 		}
 	    }
 	}
     }
+    
+    return actions;
+}
 
-    return retval;
+static void
+mc_enqueue_init_state_action_pair(void)
+{
+    struct mc_queue_item *item = xzalloc(sizeof *item) ;
+    item->state = xzalloc(sizeof(struct mc_state)); /* Note: zero initialized */
+    item->action = NULL;
+    ovs_list_push_back(&mc_queue, &item->list_node);   
+}
+
+static struct mc_queue_item *
+new_state_action_pair(struct mc_state *cur_state,
+		      struct mc_action *cur_action,
+		      const int cur_path_len,
+		      struct mc_action *next_action)
+{
+    struct mc_queue_item *new_pair = xmalloc(sizeof *new_pair);
+    struct mc_state *new_state = xzalloc(sizeof *new_state);
+
+    if (cur_path_len > 0) {
+	new_state->path = xmalloc(sizeof(struct mc_action*) * cur_path_len);
+	new_state->length = cur_path_len;
+	
+	for (int i = 0; i < cur_state->length; i++) {
+	    new_state->path[i] = mc_action_inc_ref(cur_state->path[i]);
+	}
+
+	new_state->path[cur_state->length] = mc_action_inc_ref(cur_action);
+    }
+
+    new_pair->state = new_state;
+    new_pair->action = mc_action_inc_ref(next_action);
+    return new_pair;
+}
+
+static void
+mc_enqueue_state_action_pairs(struct mc_state *cur_state,
+			      struct mc_action *cur_action,
+			      const int cur_path_len,
+			      struct ovs_list next_actions)
+{
+    int i, r;
+
+    if (strategy == MC_SEARCH_STRATEGY_RANDOM) {
+	i = -1;
+	r = random_range(ovs_list_size(&next_actions));
+    }
+    
+    while (!ovs_list_is_empty(&next_actions)) {
+	struct mc_action *next_action =
+	    CONTAINER_OF(ovs_list_pop_front(&next_actions),
+			 struct mc_action,
+			 list_node);
+	
+	struct mc_queue_item *pair =
+	    new_state_action_pair(cur_state,
+				  cur_action,
+				  cur_path_len,
+				  next_action);
+
+	switch (strategy) {
+	case MC_SEARCH_STRATEGY_BREADTH:
+	    ovs_list_push_back(&mc_queue, &pair->list_node);
+	    break;
+	    
+	case MC_SEARCH_STRATEGY_DEPTH:
+	    ovs_list_push_front(&mc_queue, &pair->list_node);
+	    break;
+	    
+	case MC_SEARCH_STRATEGY_RANDOM:
+	    if (++i == r) {
+		ovs_list_push_back(&mc_queue, &pair->list_node);
+	    }
+	    break;
+	    
+	case MC_SEARCH_STRATEGY_SINGLE:
+	    ovs_assert(0);
+	}
+    }
+}
+
+/* Dequeues the current front of the queue and adds the next list of
+ * enabled actions to the queue (front or back) based on the search strategy */
+static void
+mc_explore(void)
+{   
+    int cur_path_len = 0;
+    struct mc_state *cur_state = CONTAINER_OF(ovs_list_front(&mc_queue),
+					      struct mc_queue_item,
+					      list_node)->state;
+    cur_path_len += cur_state->length;
+
+    struct mc_action *cur_action = CONTAINER_OF(ovs_list_front(&mc_queue),
+					      struct mc_queue_item,
+					      list_node)->action;
+    
+    if (cur_action) {
+	cur_path_len += 1;
+    }
+    /* If in the initial state cur_path_len should be 0 */
+    ovs_assert(cur_path_len == 0 || cur_path_len == cur_state->length + 1);
+
+    /* Pop the front of mc_queue. We pop it here instead of earlier
+     * because otherwise the loop in "int main()" which relies on the queue 
+     * being non-empty will break incorrectly (e.g. after dequeuing the 
+     * initial <state, action> pair and while waiting for a network event) */
+    ovs_assert(!ovs_list_is_empty(&mc_queue));
+    struct mc_queue_item *front = CONTAINER_OF(ovs_list_pop_front(&mc_queue),
+					       struct mc_queue_item,
+					       list_node);
+    free(front);
+
+    /* Now get more <state,action> pairs and add them to the front or back
+     * of the queue based on the search strategy. Important to pop the front
+     * of the queue above before this step, since we might add new pairs to
+     * the front of the queue (if strategy is DFS) */
+    if (max_search_depth < 0 || cur_path_len < max_search_depth) {
+	switch (strategy) {
+	case MC_SEARCH_STRATEGY_BREADTH:
+	case MC_SEARCH_STRATEGY_DEPTH:
+	case MC_SEARCH_STRATEGY_RANDOM:
+	    mc_enqueue_state_action_pairs(cur_state,
+					  cur_action,
+					  cur_path_len,
+					  mc_get_enabled_actions());
+	    
+	    break;
+	    
+	case MC_SEARCH_STRATEGY_SINGLE:
+	    ovs_assert(0);
+	}
+    } else if (cur_path_len >= max_search_depth) {
+	/* Should only trigger when these two are equal */
+	ovs_assert(cur_path_len == max_search_depth);
+	max_search_depth_reached = true;
+	
+	if(strategy == MC_SEARCH_STRATEGY_RANDOM) {
+	    mc_enqueue_init_state_action_pair();
+	}
+    } /* FIX ME !!! If max_search_depth == -1 (i.e. disabled) then we
+       * need some way of knowing when a termination condition
+       * has been reached for DFS or Random Walk */
+
+    /* Now free up any memory for the <state,action> pair we popped earlier */
+    for (int i = 0; i < cur_state->length; i++) {
+	mc_action_dec_ref(&cur_state->path[i]);
+    }
+    free(cur_state);
+
+    if (cur_action) {
+	mc_action_dec_ref(&cur_action);
+    }
 }
 
 static void
@@ -780,14 +987,42 @@ mc_run(void)
 	break;
 
     case MC_FSM_NEW_STATE:
-	//FILL ME !!
+	mc_explore();
+
+	if ((strategy == MC_SEARCH_STRATEGY_DEPTH ||
+	     strategy == MC_SEARCH_STRATEGY_RANDOM) &&
+	    !max_search_depth_reached) {
+	    
+	    fsm_state = MC_FSM_RESTORE_MID_STATE;
+	    restore = NULL;
+	} else {
+	    fsm_state = MC_FSM_PRE_INIT;
+
+	    if (max_search_depth_reached) {
+		max_search_depth_reached = false;
+	    }
+	} /* If max_search_depth == -1 (i.e. disabled) then we
+	   * need some way of knowing when a termination condition
+	   * has been reached for DFS or Random Walk */
 	break;
-	
+
     default:
 	ovs_assert(0);
     }
     
     if (mc_processes_crashed()) {
+	/* otherwise there is some problem with the model checker */
+	ovs_assert(fsm_state == MC_FSM_NEW_ACTION_WAIT);
+	
+	/* FIX ME !!!!!!!!!!!!
+	 * Here instead of exiting, decide what to do based on a 
+	 * config option which decides if you should either:
+	 * 1) error exit after dumping path and killing processes
+	 *    (current behavior)
+	 * 2) dump the path along with the error and then continue
+	 *    without exploring down this path further. This can be
+	 *    easily ensured by avoiding the call to mc_explore 
+	 *    (by short circuiting the transition to MC_FSM_NEW_STATE) */
 	mc_exit_error();
     }
     
@@ -838,12 +1073,7 @@ main(int argc, char *argv[])
 		  ovs_strerror(error));
     }
 
-    /* Add the initial state to the queue */
-    struct mc_queue_item *item = xzalloc(sizeof *item) ;
-    item->state = NULL;
-    item->action = NULL;
-    ovs_list_push_back(&mc_queue, &item->list_node);
-    
+    mc_enqueue_init_state_action_pair();
     while(!ovs_list_is_empty(&mc_queue)) {
     	mc_run();
     }
