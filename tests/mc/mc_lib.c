@@ -282,7 +282,8 @@ mc_rpc_to_jsonrpc(const union mc_rpc *rpc)
     struct json *args = json_object_create();
     json_object_put(args, "pid", json_integer_create(rpc->common.pid));
     json_object_put(args, "tid", json_integer_create(rpc->common.tid));
-						     
+    json_object_put_string(args, "where", rpc->common.where);
+			   
     switch (rpc->common.type) {
     case MC_RPC_HELLO:
     case MC_RPC_BYE:
@@ -315,7 +316,8 @@ mc_rpc_from_jsonrpc(const struct jsonrpc_msg *msg, union mc_rpc *rpc)
     struct json *json = json_array(msg->params)->elems[0];
     rpc->common.pid = *(pid_t*)get_member(json, "pid");
     rpc->common.tid = *(int*)get_member(json, "tid");
-    
+    rpc->common.where = get_member(json, "where");
+	
     switch (rpc->common.type) {
     case MC_RPC_HELLO:
     case MC_RPC_BYE:

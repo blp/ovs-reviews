@@ -85,6 +85,7 @@ struct mc_action {
     enum mc_action_type type;
     int p_idx; /* Index into the mc_procs array */
     int t_idx; /* Index into the thread array */
+    char *where;
     enum mc_rpc_choose_req_type choosetype;
     enum mc_rpc_subtype subtype;
     void *data;
@@ -586,9 +587,11 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	next_action->type = MC_ACTION_UNKNOWN;
 	next_action->p_idx = p_idx;
 	next_action->t_idx = t_idx;
+	next_action->where = xmalloc(strlen(rq->common.where) + 1);
+	strcpy(next_action->where, rq->common.where);
 	next_action->choosetype = rq->type;
 	next_action->subtype = rq->subtype;
-
+	
 	if (rq->data) {
 	    /* FIX ME !!!!!!!!!
 	     * Once you start sending data with these RPCs, copy that

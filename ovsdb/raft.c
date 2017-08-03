@@ -285,7 +285,8 @@ raft_fsync_thread(void *raft_)
 {
     struct raft *raft = raft_;
     struct jsonrpc *fsync_mc_conn = mc_wrap_connect(raft->mc_addr);
-    mc_wrap_send_hello_or_bye(fsync_mc_conn, MC_RPC_HELLO, MC_FSYNC_TID);
+    mc_wrap_send_hello_or_bye(fsync_mc_conn, MC_RPC_HELLO,
+			      MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
     
     for (;;) {
         ovsrcu_quiesce_start();
@@ -303,9 +304,11 @@ raft_fsync_thread(void *raft_)
 
         if (cur != next) {
             /* XXX following has really questionable thread-safety. */
-            struct ovsdb_error *error = mc_wrap_ovsdb_log_commit(raft->storage,
-								 fsync_mc_conn,
-								 MC_FSYNC_TID);
+            struct ovsdb_error *error =
+		mc_wrap_ovsdb_log_commit(raft->storage,
+					 fsync_mc_conn,
+					 MC_FSYNC_TID,
+					 OVS_SOURCE_LOCATOR);
             if (!error) {
                 ovs_mutex_lock(&raft->fsync_mutex);
                 raft->fsync_cur = next;
@@ -323,7 +326,8 @@ raft_fsync_thread(void *raft_)
         poll_block();
     }
 
-    mc_wrap_send_hello_or_bye(fsync_mc_conn, MC_RPC_BYE, MC_FSYNC_TID);
+    mc_wrap_send_hello_or_bye(fsync_mc_conn, MC_RPC_BYE,
+			      MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
     return NULL;
 }
 
@@ -701,7 +705,8 @@ raft_write_header(struct ovsdb_log *storage,
     json_object_put_format(header, "cluster_id", UUID_FMT, UUID_ARGS(cid));
     json_object_put_format(header, "server_id", UUID_FMT, UUID_ARGS(sid));
     struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header,
-							mc_conn, MC_MAIN_TID);
+							mc_conn, MC_MAIN_TID,
+							OVS_SOURCE_LOCATOR);
     json_destroy(header);
     return error;
 }
@@ -877,7 +882,8 @@ raft_read_metadata(const char *file_name, struct raft_metadata *md)
 						       OVSDB_LOG_READ_ONLY, -1,
 						       &raft->storage,
 						       raft->mc_conn,
-						       MC_MAIN_TID);
+						       MC_MAIN_TID,
+						       OVS_SOURCE_LOCATOR);
     if (error) {
         goto exit;
     }
@@ -1274,7 +1280,8 @@ raft_write_entry(struct raft *raft, uint64_t term, struct json *data,
     struct json *json = raft_entry_to_json_with_index(raft, raft->log_end - 1);
     struct ovsdb_error *error = mc_wrap_ovsdb_log_write(raft->storage, json,
 							raft->mc_conn,
-							MC_MAIN_TID);
+							MC_MAIN_TID,
+							OVS_SOURCE_LOCATOR);
     json_destroy(json);
 
     if (error) {
@@ -1296,7 +1303,8 @@ raft_write_state(struct ovsdb_log *storage,
         json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(vote));
     }
     struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, json,
-							mc_conn, MC_MAIN_TID);
+							mc_conn, MC_MAIN_TID,
+							OVS_SOURCE_LOCATOR);
     json_destroy(json);
 
     return error;
@@ -1402,7 +1410,8 @@ raft_read_header(struct raft *raft)
     struct json *header;
     struct ovsdb_error *error = mc_wrap_ovsdb_log_read(raft->storage, &header,
 						       raft->mc_conn,
-						       MC_MAIN_TID);
+						       MC_MAIN_TID,
+						       OVS_SOURCE_LOCATOR);
     if (error || !header) {
         /* Report error or end-of-file. */
         return error;
@@ -1467,7 +1476,8 @@ raft_read_log(struct raft *raft)
         struct json *entry;
         struct ovsdb_error *error = mc_wrap_ovsdb_log_read(raft->storage, &entry,
 							   raft->mc_conn,
-							   MC_MAIN_TID);
+							   MC_MAIN_TID,
+							   OVS_SOURCE_LOCATOR);
         if (!entry) {
             if (error) {
                 /* We assume that the error is due to a partial write while
@@ -1529,7 +1539,8 @@ raft_open(const char *file_name, struct raft **raftp, struct jsonrpc *mc_conn,
     
     *raftp = NULL;
     error = mc_wrap_ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
-				   -1, &log, mc_conn, MC_MAIN_TID);
+				   -1, &log, mc_conn, MC_MAIN_TID,
+				   OVS_SOURCE_LOCATOR);
     return error ? error : raft_open__(log, raftp,  mc_conn, mc_addr);
 }
 
@@ -3953,7 +3964,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
     }
     struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header,
 							raft->mc_conn,
-							MC_MAIN_TID);
+							MC_MAIN_TID,
+							OVS_SOURCE_LOCATOR);
     json_destroy(header);
     if (error) {
         return error;
@@ -3964,7 +3976,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
     for (uint64_t index = new_log_start; index < raft->log_end; index++) {
         struct json *json = raft_entry_to_json_with_index(raft, index);
         error = mc_wrap_ovsdb_log_write(storage, json, raft->mc_conn,
-					MC_MAIN_TID);
+					MC_MAIN_TID, OVS_SOURCE_LOCATOR);
         json_destroy(json);
         if (error) {
             return error;
@@ -3987,7 +3999,8 @@ raft_save_snapshot(struct raft *raft,
     struct ovsdb_log *new_storage;
     struct ovsdb_error *error;
     error = mc_wrap_ovsdb_log_replace_start(raft->storage, &new_storage,
-					    raft->mc_conn, MC_MAIN_TID);
+					    raft->mc_conn, MC_MAIN_TID,
+					    OVS_SOURCE_LOCATOR);
     if (error) {
         return error;
     }
@@ -3999,7 +4012,8 @@ raft_save_snapshot(struct raft *raft,
     }
 
     return mc_wrap_ovsdb_log_replace_commit(raft->storage, new_storage,
-					    raft->mc_conn, MC_MAIN_TID);
+					    raft->mc_conn, MC_MAIN_TID,
+					    OVS_SOURCE_LOCATOR);
 }
 
 static void

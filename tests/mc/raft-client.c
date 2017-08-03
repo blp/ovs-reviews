@@ -68,11 +68,12 @@ main(int argc, char *argv[])
     struct jsonrpc *mc_conn = NULL;
     if (strncmp(argv[2], "no_mc", 5) != 0) {
 	mc_conn = mc_wrap_connect(argv[2]);
-	mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_HELLO, 0);
+	mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_HELLO, 0, OVS_SOURCE_LOCATOR);
     }
 
     struct jsonrpc *raft_conn;
-    while (mc_wrap_unixctl_client_create(argv[1], &raft_conn, mc_conn, 0) != 0) {
+    while (mc_wrap_unixctl_client_create(argv[1], &raft_conn,
+					 mc_conn, 0, OVS_SOURCE_LOCATOR) != 0) {
 	fprintf(stderr, "Cannot open a connection to %s. Retrying...\n", argv[1]);
 	wait_for(300);
     }
@@ -100,7 +101,8 @@ main(int argc, char *argv[])
 	    int error_num = mc_wrap_unixctl_client_transact(raft_conn,
 							    "execute", 1,
 							    cmd_str, &result,
-							    &err, mc_conn, 0);
+							    &err, mc_conn, 0,
+							    OVS_SOURCE_LOCATOR);
 
 	    if (error_num != 0) {
 		/* This could be because the server crashed (including 
@@ -128,7 +130,7 @@ main(int argc, char *argv[])
 	}
     }
 
-    mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_BYE, 0);
+    mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_BYE, 0, OVS_SOURCE_LOCATOR);
     return 0;
 }
 

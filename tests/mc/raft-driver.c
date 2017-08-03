@@ -94,14 +94,15 @@ main(int argc, char *argv[])
     struct jsonrpc *mc_conn = NULL;
     if (mc_addr != NULL) {
 	mc_conn = mc_wrap_connect(mc_addr);
-	mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_HELLO, 0);
+	mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_HELLO, 0, OVS_SOURCE_LOCATOR);
     }
     
     check_ovsdb_error(raft_open(file_name, &raft, mc_conn, mc_addr));
 
     struct unixctl_server *server;
     int error = mc_wrap_unixctl_server_create(unixctl_pathp, &server,
-					      raft_get_mc_conn(raft), 0);
+					      raft_get_mc_conn(raft), 0,
+					      OVS_SOURCE_LOCATOR);
     if (error) {
         ovs_fatal(error, "failed to create unixctl server");
     }
@@ -170,7 +171,7 @@ main(int argc, char *argv[])
     unixctl_server_destroy(server);
     raft_close(raft);
 
-    mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_BYE, 0);
+    mc_wrap_send_hello_or_bye(mc_conn, MC_RPC_BYE, 0, OVS_SOURCE_LOCATOR);
     jsonrpc_close(mc_conn);
     
     return 0;
@@ -264,7 +265,8 @@ test_raft_execute(struct unixctl_conn *conn,
         unixctl_command_reply_error(conn, json_string(data));
     } else {
         struct execute_ctx *ctx = ctx_;
-	mc_wrap_noexecute_server_transact(raft_get_mc_conn(ctx->raft), 0);	
+	mc_wrap_noexecute_server_transact(raft_get_mc_conn(ctx->raft), 0,
+					  OVS_SOURCE_LOCATOR);	
         struct execute_command *command = xmalloc(sizeof *command);
         ovs_list_push_back(&ctx->commands, &command->list_node);
         command->cmd = raft_command_execute(ctx->raft, data, NULL, NULL);
@@ -280,7 +282,8 @@ test_raft_take_leadership(struct unixctl_conn *conn,
                           void *raft_)
 {
     struct raft *raft = raft_;
-    mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0);
+    mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0,
+				      OVS_SOURCE_LOCATOR);
     raft_take_leadership(raft);
     unixctl_command_reply(conn, NULL);
 }
@@ -290,7 +293,8 @@ test_raft_transfer_leadership(struct unixctl_conn *conn, int argc OVS_UNUSED,
                               const char *argv[] OVS_UNUSED, void *raft_)
 {
     struct raft *raft = raft_;
-    mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0);
+    mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0,
+				      OVS_SOURCE_LOCATOR);
     raft_transfer_leadership(raft);
     unixctl_command_reply(conn, NULL);
 }
@@ -305,7 +309,8 @@ test_raft_store_snapshot(struct unixctl_conn *conn,
         unixctl_command_reply_error(conn, json_string(data));
     } else {
         struct raft *raft = raft_;
-	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0);
+	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0,
+					  OVS_SOURCE_LOCATOR);
         raft_store_snapshot(raft, data);
         unixctl_command_reply(conn, NULL);
     }
@@ -323,7 +328,8 @@ test_raft_leave(struct unixctl_conn *conn,
     } else if (raft_is_leaving(raft)) {
         unixctl_command_reply_error(conn, "already leaving");
     } else {
-	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0);
+	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0,
+					  OVS_SOURCE_LOCATOR);
         raft_leave(raft);
         unixctl_command_reply(conn, NULL);
     }

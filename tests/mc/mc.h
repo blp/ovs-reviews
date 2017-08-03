@@ -80,6 +80,7 @@ struct mc_rpc_common {
      * spawns all processes */
     pid_t pid;
     int tid;
+    const char *where;
 };
 
 struct mc_rpc_choose_req {
