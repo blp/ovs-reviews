@@ -1759,7 +1759,10 @@ static bool
 raft_receive_rpc(struct raft *raft, struct jsonrpc_session *js,
                  struct uuid *sid, union raft_rpc *rpc)
 {
-    struct jsonrpc_msg *msg = jsonrpc_session_recv(js);
+    struct jsonrpc_msg *msg = mc_wrap_jsonrpc_session_recv(js,
+							   raft->mc_conn,
+							   MC_MAIN_TID,
+							   OVS_SOURCE_LOCATOR);
     if (!msg) {
         return false;
     }
@@ -4423,7 +4426,9 @@ raft_send__(struct raft *raft, const union raft_rpc *rpc,
         ds_destroy(&s);
     }
 
-    jsonrpc_session_send(js, raft_rpc_to_jsonrpc(raft, rpc));
+    mc_wrap_jsonrpc_session_send(js, raft_rpc_to_jsonrpc(raft, rpc),
+				 raft->mc_conn, MC_MAIN_TID,
+				 OVS_SOURCE_LOCATOR);
 }
 
 static void

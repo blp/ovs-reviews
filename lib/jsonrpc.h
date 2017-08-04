@@ -112,6 +112,8 @@ size_t jsonrpc_session_get_backlog(const struct jsonrpc_session *);
 const char *jsonrpc_session_get_name(const struct jsonrpc_session *);
 
 int jsonrpc_session_send(struct jsonrpc_session *, struct jsonrpc_msg *);
+int jsonrpc_session_send_block(struct jsonrpc_session *s,
+			       struct jsonrpc_msg *msg);
 struct jsonrpc_msg *jsonrpc_session_recv(struct jsonrpc_session *);
 void jsonrpc_session_recv_wait(struct jsonrpc_session *);
 

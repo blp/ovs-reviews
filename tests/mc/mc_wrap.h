@@ -93,4 +93,12 @@ struct jsonrpc * mc_wrap_connect(char *mc_addr);
 void mc_wrap_send_hello_or_bye(struct jsonrpc *mc_conn, enum mc_rpc_type type,
 			       int tid, const char *where);
 
+int mc_wrap_jsonrpc_session_send(struct jsonrpc_session *s,
+				 struct jsonrpc_msg *msg,
+				 struct jsonrpc *mc_conn,
+				 int tid, const char *where);
+
+struct jsonrpc_msg * mc_wrap_jsonrpc_session_recv(struct jsonrpc_session *s,
+						  struct jsonrpc *mc_conn,
+						  int tid, const char *where);
 #endif /* tests/mc/mc_wrap.h */

@@ -286,3 +286,52 @@ mc_wrap_noexecute_server_transact(struct jsonrpc *mc_conn, int tid,
     
     ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL); 
 }
+
+int
+mc_wrap_jsonrpc_session_send(struct jsonrpc_session *s,
+			     struct jsonrpc_msg *msg,
+			     struct jsonrpc *mc_conn,
+			     int tid, const char *where)
+{
+    enum mc_rpc_choose_reply_type reply;
+    
+    if (mc_conn == NULL) {
+	return jsonrpc_session_send(s, msg);
+    }
+    
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_NETWORK,
+				     MC_RPC_SUBTYPE_JS_SEND, tid, where);
+    
+    if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
+	/* If model checking then we convert this non-blocking call into a
+	 * blocking call */
+	return jsonrpc_session_send_block(s, msg);
+    } else {
+	/* If this happened due to s->rpc being NULL then probably
+	 * we should send a message to the model checker ?. Although
+	 * currently */
+	jsonrpc_msg_destroy(msg);
+	return ENOTCONN;
+    }
+}
+
+struct jsonrpc_msg *
+mc_wrap_jsonrpc_session_recv(struct jsonrpc_session *s,
+			     struct jsonrpc *mc_conn,
+			     int tid, const char *where)
+{
+    struct jsonrpc_msg *msg = jsonrpc_session_recv(s);
+    if(!msg) {
+	/* We only interpose on a (non-blocking) jsonrpc_session_recv 
+	 * call when there is actually something to receive */
+	return NULL;
+    }
+
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_NETWORK,
+				     MC_RPC_SUBTYPE_JS_NB_RECV, tid, where);
+
+    /* No point in failing this call */
+    ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
+    return msg;
+}

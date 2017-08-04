@@ -1056,6 +1056,18 @@ jsonrpc_session_send(struct jsonrpc_session *s, struct jsonrpc_msg *msg)
     }
 }
 
+/* Always takes ownership of 'msg', regardless of success. */
+int
+jsonrpc_session_send_block(struct jsonrpc_session *s, struct jsonrpc_msg *msg)
+{
+    if (s->rpc) {
+        return jsonrpc_send_block(s->rpc, msg);
+    } else {
+        jsonrpc_msg_destroy(msg);
+        return ENOTCONN;
+    }
+}
+
 struct jsonrpc_msg *
 jsonrpc_session_recv(struct jsonrpc_session *s)
 {

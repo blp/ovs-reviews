@@ -54,7 +54,9 @@ enum mc_rpc_choose_req_type {
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_READ, "mc_rpc_subtype_read")		\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_WRITE, "mc_rpc_subtype_write")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SEND, "mc_rpc_subtype_send")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_JS_SEND, "mc_rpc_subtype_js_send")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_RECV, "mc_rpc_subtype_recv")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_JS_NB_RECV, "mc_rpc_subtype_js_nb_recv") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_COMMIT, "mc_rpc_subtype_commit")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_START, "mc_rpc_subtype_replace_start") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_COMMIT, "mc_rpc_subtype_replace_commit") \
