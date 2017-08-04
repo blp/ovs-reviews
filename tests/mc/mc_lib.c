@@ -235,7 +235,11 @@ mc_choose_req_to_jsonrpc(const struct mc_rpc_choose_req *rq,
     json_object_put_string(args, "subtype",
 			   mc_rpc_subtype_to_string(rq->subtype));
 
-    /* XXX serialize the arbitrary data here */
+    if (rq->type == MC_RPC_CHOOSE_REQ_THREAD) {
+	/* Assuming that since the lock is in the memory of the process
+	 * sending the choose request, it can just pass the address here */
+	json_object_put_uint(args, "lockaddr", (uint64_t) rq->data);
+    }
 }
 
 static void
@@ -248,8 +252,14 @@ mc_choose_req_from_jsonrpc(const struct json *j,
     ovs_assert(mc_rpc_subtype_from_string(get_member(j, "subtype"),
 					  &rq->subtype));
     
-    /* XXX deserialize the arbitary data instead of this */
-    rq->data = NULL;
+    if (rq->type == MC_RPC_CHOOSE_REQ_THREAD) {
+	rq->data = xmalloc(sizeof(uint64_t));
+	*((uint64_t*) rq->data) =
+	    *((uint64_t*) get_member_or_die(j, "lockaddr", 0,
+					    "Cannot find lockaddr"));
+    } else {
+	rq->data = NULL;
+    }
 }
 
 static void

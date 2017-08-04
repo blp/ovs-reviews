@@ -20,7 +20,6 @@
 #include <string.h>
 #include "mc_wrap.h"
 #include "openvswitch/vlog.h"
-#include "ovs-thread.h"
 #include "stream.h"
 #include "util.h"
 
@@ -89,8 +88,8 @@ mc_wrap_send_hello_or_bye(struct jsonrpc *mc_conn,
 static enum mc_rpc_choose_reply_type
 mc_wrap_get_choose_reply(struct jsonrpc *mc_conn,
 			 enum mc_rpc_choose_req_type type,
-			 enum mc_rpc_subtype subtype, int tid,
-			 const char *where)
+			 enum mc_rpc_subtype subtype,
+			 const void *data, int tid, const char *where)
 {
     if (mc_conn == NULL) {
 	return MC_RPC_CHOOSE_REPLY_NORMAL;
@@ -103,6 +102,7 @@ mc_wrap_get_choose_reply(struct jsonrpc *mc_conn,
     rpc.common.where = where;
     rpc.choose_req.type = type;
     rpc.choose_req.subtype = subtype;
+    rpc.choose_req.data = (void*) data;
 
     int err = jsonrpc_send_block(mc_conn, mc_rpc_to_jsonrpc(&rpc));
 
@@ -132,7 +132,7 @@ mc_wrap_ovsdb_log_open(const char *name,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
-				     MC_RPC_SUBTYPE_OPEN, tid, where);
+				     MC_RPC_SUBTYPE_OPEN, NULL, tid, where);
 
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return ovsdb_log_open(name, magic, open_mode, locking, filep);
@@ -147,7 +147,7 @@ mc_wrap_ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
-				     MC_RPC_SUBTYPE_READ, tid, where);
+				     MC_RPC_SUBTYPE_READ, NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return ovsdb_log_read(file, jsonp);
@@ -162,7 +162,7 @@ mc_wrap_ovsdb_log_write(struct ovsdb_log *file, const struct json *json,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
-				     MC_RPC_SUBTYPE_WRITE, tid, where);
+				     MC_RPC_SUBTYPE_WRITE, NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return ovsdb_log_write(file, json);
@@ -177,7 +177,7 @@ mc_wrap_ovsdb_log_commit(struct ovsdb_log *file,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
-				     MC_RPC_SUBTYPE_COMMIT, tid, where);
+				     MC_RPC_SUBTYPE_COMMIT, NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return ovsdb_log_commit(file);
@@ -192,7 +192,7 @@ mc_wrap_ovsdb_log_replace_start(struct ovsdb_log *old, struct ovsdb_log **newp,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
-				     MC_RPC_SUBTYPE_REPLACE_START, tid, where);
+				     MC_RPC_SUBTYPE_REPLACE_START, NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return ovsdb_log_replace_start(old, newp);
@@ -207,7 +207,7 @@ mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_LOG,
-				     MC_RPC_SUBTYPE_REPLACE_COMMIT, tid, where);
+				     MC_RPC_SUBTYPE_REPLACE_COMMIT, NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return ovsdb_log_replace_commit(old, new);
@@ -219,11 +219,13 @@ mc_wrap_ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new,
 int OVS_WARN_UNUSED_RESULT
 mc_wrap_unixctl_server_create(const char *path,
 			      struct unixctl_server **serverp,
-			      struct jsonrpc *mc_conn, int tid, const char *where)
+			      struct jsonrpc *mc_conn, int tid,
+			      const char *where)
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
-				     MC_RPC_SUBTYPE_SERVER_CREATE, tid, where);
+				     MC_RPC_SUBTYPE_SERVER_CREATE, NULL,
+				     tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return unixctl_server_create(path, serverp);
@@ -240,7 +242,8 @@ mc_wrap_unixctl_client_create(const char *path, struct jsonrpc **client,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
-				     MC_RPC_SUBTYPE_CLIENT_CREATE, tid, where);
+				     MC_RPC_SUBTYPE_CLIENT_CREATE,
+				     NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return unixctl_client_create(path, client);
@@ -261,7 +264,8 @@ mc_wrap_unixctl_client_transact(struct jsonrpc *client,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
-				     MC_RPC_SUBTYPE_CLIENT_TRANSACT, tid, where);
+				     MC_RPC_SUBTYPE_CLIENT_TRANSACT,
+				     NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	return unixctl_client_transact(client, command, argc,
@@ -282,7 +286,8 @@ mc_wrap_noexecute_server_transact(struct jsonrpc *mc_conn, int tid,
 {
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_UNIXCTL,
-				     MC_RPC_SUBTYPE_SERVER_RECV, tid, where);
+				     MC_RPC_SUBTYPE_SERVER_RECV,
+				     NULL, tid, where);
     
     ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL); 
 }
@@ -300,7 +305,8 @@ mc_wrap_jsonrpc_session_send(struct jsonrpc_session *s,
     }
     
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_NETWORK,
-				     MC_RPC_SUBTYPE_JS_SEND, tid, where);
+				     MC_RPC_SUBTYPE_JS_SEND,
+				     NULL, tid, where);
     
     if (reply == MC_RPC_CHOOSE_REPLY_NORMAL) {
 	/* If model checking then we convert this non-blocking call into a
@@ -329,9 +335,38 @@ mc_wrap_jsonrpc_session_recv(struct jsonrpc_session *s,
 
     enum mc_rpc_choose_reply_type reply;
     reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_NETWORK,
-				     MC_RPC_SUBTYPE_JS_NB_RECV, tid, where);
+				     MC_RPC_SUBTYPE_JS_NB_RECV,
+				     NULL, tid, where);
 
     /* No point in failing this call */
     ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
     return msg;
+}
+
+void
+mc_wrap_ovs_mutex_lock(const struct ovs_mutex *mutex,
+		       struct jsonrpc *mc_conn,
+		       int tid, const char *where)
+{
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_THREAD,
+				     MC_RPC_SUBTYPE_LOCK,
+				     mutex, tid, where);
+    
+    ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
+    ovs_mutex_lock(mutex);
+}
+
+void
+mc_wrap_ovs_mutex_unlock(const struct ovs_mutex *mutex,
+			 struct jsonrpc *mc_conn,
+			 int tid, const char *where)
+{
+    enum mc_rpc_choose_reply_type reply;
+    reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_THREAD,
+				     MC_RPC_SUBTYPE_UNLOCK,
+				     mutex, tid, where);
+    
+    ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
+    ovs_mutex_unlock(mutex);
 }

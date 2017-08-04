@@ -17,11 +17,12 @@
 #ifndef MC_WRAP_H
 #define MC_WRAP_H 1
 
+#include "compiler.h"
+#include "jsonrpc.h"
+#include "mc.h"
+#include "ovs-thread.h"
 #include "ovsdb-error.h"
 #include "ovsdb/log.h"
-#include "compiler.h"
-#include "mc.h"
-#include "jsonrpc.h"
 #include "unixctl.h"
 
 /* Wrappers for library calls to allow the model checker to drive
@@ -101,4 +102,12 @@ int mc_wrap_jsonrpc_session_send(struct jsonrpc_session *s,
 struct jsonrpc_msg * mc_wrap_jsonrpc_session_recv(struct jsonrpc_session *s,
 						  struct jsonrpc *mc_conn,
 						  int tid, const char *where);
+
+void mc_wrap_ovs_mutex_lock(const struct ovs_mutex *mutex,
+			    struct jsonrpc *mc_conn,
+			    int tid, const char *where);
+
+void mc_wrap_ovs_mutex_unlock(const struct ovs_mutex *mutex,
+			      struct jsonrpc *mc_conn,
+			      int tid, const char *where);
 #endif /* tests/mc/mc_wrap.h */

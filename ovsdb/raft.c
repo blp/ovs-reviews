@@ -293,10 +293,12 @@ raft_fsync_thread(void *raft_)
 
         uint64_t request_seq = seq_read(raft->fsync_request);
 
-        ovs_mutex_lock(&raft->fsync_mutex);
+        mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+			       MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
         uint64_t next = raft->fsync_next;
         uint64_t cur = raft->fsync_cur;
-        ovs_mutex_unlock(&raft->fsync_mutex);
+        mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+			       MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
 
         if (next == UINT64_MAX) {
             break;
@@ -310,9 +312,11 @@ raft_fsync_thread(void *raft_)
 					 MC_FSYNC_TID,
 					 OVS_SOURCE_LOCATOR);
             if (!error) {
-                ovs_mutex_lock(&raft->fsync_mutex);
+                mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+				       MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
                 raft->fsync_cur = next;
-                ovs_mutex_unlock(&raft->fsync_mutex);
+                mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+					 MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
 
                 seq_change(raft->fsync_complete);
             } else {
@@ -1717,10 +1721,12 @@ raft_close(struct raft *raft)
 
     raft_transfer_leadership(raft);
     raft_complete_all_commands(raft, RAFT_CMD_SHUTDOWN);
-
-    ovs_mutex_lock(&raft->fsync_mutex);
+    
+    mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn, MC_MAIN_TID,
+			   OVS_SOURCE_LOCATOR);
     raft->fsync_next = UINT64_MAX;
-    ovs_mutex_unlock(&raft->fsync_mutex);
+    mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn, MC_MAIN_TID,
+			     OVS_SOURCE_LOCATOR);
     seq_change(raft->fsync_request);
     if (raft->fsync_thread_running) {
         xpthread_join(raft->fsync_thread, NULL);
@@ -1928,9 +1934,11 @@ raft_waiters_run(struct raft *raft)
         return;
     }
 
-    ovs_mutex_lock(&raft->fsync_mutex);
+    mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+			   MC_MAIN_TID, OVS_SOURCE_LOCATOR);
     uint64_t cur = raft->fsync_cur;
-    ovs_mutex_unlock(&raft->fsync_mutex);
+    mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+			     MC_MAIN_TID, OVS_SOURCE_LOCATOR);
 
     struct raft_waiter *w, *next;
     LIST_FOR_EACH_SAFE (w, next, list_node, &raft->waiters) {
@@ -1952,9 +1960,11 @@ raft_waiters_wait(struct raft *raft)
 
     uint64_t complete = seq_read(raft->fsync_complete);
 
-    ovs_mutex_lock(&raft->fsync_mutex);
+    mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+			   MC_MAIN_TID, OVS_SOURCE_LOCATOR);
     uint64_t cur = raft->fsync_cur;
-    ovs_mutex_unlock(&raft->fsync_mutex);
+    mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+			     MC_MAIN_TID, OVS_SOURCE_LOCATOR);
 
     struct raft_waiter *w, *next;
     LIST_FOR_EACH_SAFE (w, next, list_node, &raft->waiters) {
@@ -2173,10 +2183,11 @@ raft_wait(struct raft *raft)
 static struct raft_waiter *
 raft_waiter_create(struct raft *raft, enum raft_waiter_type type)
 {
-    ovs_mutex_lock(&raft->fsync_mutex);
+    mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+			   MC_MAIN_TID, OVS_SOURCE_LOCATOR);
     uint64_t seqno = ++raft->fsync_next;
-    ovs_mutex_unlock(&raft->fsync_mutex);
-
+    mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+			     MC_MAIN_TID, OVS_SOURCE_LOCATOR);
     seq_change(raft->fsync_request);
 
     struct raft_waiter *w = xzalloc(sizeof *w);
