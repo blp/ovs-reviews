@@ -510,7 +510,6 @@ static struct mc_action *
 mc_action_alloc(void)
 {
     struct mc_action *action = xzalloc(sizeof *action);
-    action->refcount = 0;
     return action;
 }
 
