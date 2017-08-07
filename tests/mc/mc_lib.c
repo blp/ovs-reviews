@@ -236,8 +236,6 @@ mc_choose_req_to_jsonrpc(const struct mc_rpc_choose_req *rq,
 			   mc_rpc_subtype_to_string(rq->subtype));
 
     if (rq->type == MC_RPC_CHOOSE_REQ_THREAD) {
-	/* Assuming that since the lock is in the memory of the process
-	 * sending the choose request, it can just pass the address here */
 	json_object_put_uint(args, "lockaddr", (uint64_t) rq->data);
     }
 }

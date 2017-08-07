@@ -528,6 +528,9 @@ mc_action_dec_ref(struct mc_action **action)
 	(*action)->refcount--;
 	
 	if ((*action)->refcount <= 0) {
+	    if ((*action)->data) {
+		free((*action)->data);
+	    }
 	    free(*action);
 	}
 	
@@ -591,13 +594,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	strcpy(next_action->where, rq->common.where);
 	next_action->choosetype = rq->type;
 	next_action->subtype = rq->subtype;
-	
-	if (rq->data) {
-	    /* FIX ME !!!!!!!!!
-	     * Once you start sending data with these RPCs, copy that
-	     * data into this */
-	    ovs_assert(0);
-	}
+	next_action->data = rq->data;
     } else {
 	/* Should not be getting choose requests if not
 	 * in either of the above two states */
