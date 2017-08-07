@@ -166,7 +166,7 @@ main(int argc, char *argv[])
         LIST_FOR_EACH (c, list_node, &ec.commands) {
             raft_command_wait(c->cmd);
         }
-        poll_block();
+        mc_wrap_poll_block(mc_conn);
     }
     unixctl_server_destroy(server);
     raft_close(raft);

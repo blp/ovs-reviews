@@ -23,6 +23,7 @@
 #include "ovs-thread.h"
 #include "ovsdb-error.h"
 #include "ovsdb/log.h"
+#include "seq.h"
 #include "unixctl.h"
 
 /* Wrappers for library calls to allow the model checker to drive
@@ -110,4 +111,10 @@ void mc_wrap_ovs_mutex_lock(const struct ovs_mutex *mutex,
 void mc_wrap_ovs_mutex_unlock(const struct ovs_mutex *mutex,
 			      struct jsonrpc *mc_conn,
 			      int tid, const char *where);
+
+void mc_wrap_poll_block(struct jsonrpc *mc_conn);
+void mc_wrap_seq_wait(const struct seq *seq, uint64_t value,
+		      struct jsonrpc *mc_conn, int tid, const char *where);
+void mc_wrap_seq_change(struct seq *seq, struct jsonrpc *mc_conn, int tid,
+			const char *where);
 #endif /* tests/mc/mc_wrap.h */

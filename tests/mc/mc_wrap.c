@@ -20,6 +20,7 @@
 #include <string.h>
 #include "mc_wrap.h"
 #include "openvswitch/vlog.h"
+#include "poll-loop.h"
 #include "stream.h"
 #include "util.h"
 
@@ -369,4 +370,45 @@ mc_wrap_ovs_mutex_unlock(const struct ovs_mutex *mutex,
     
     ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
     ovs_mutex_unlock(mutex);
+}
+
+void
+mc_wrap_poll_block(struct jsonrpc *mc_conn)
+{
+    if (mc_conn == NULL) {
+	poll_block();
+    }
+}
+
+void
+mc_wrap_seq_wait(const struct seq *seq, uint64_t value,
+		 struct jsonrpc *mc_conn, int tid,
+		 const char *where)
+{
+    if (mc_conn != NULL) {
+	enum mc_rpc_choose_reply_type reply;
+	reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_THREAD,
+					 MC_RPC_SUBTYPE_SEQ_WAIT,
+					 seq, tid, where);
+	
+	ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
+    }
+
+    seq_wait(seq, value);
+}
+
+void
+mc_wrap_seq_change(struct seq *seq, struct jsonrpc *mc_conn,
+	      int tid, const char *where)
+{
+    if (mc_conn != NULL) {
+	enum mc_rpc_choose_reply_type reply;
+	reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_THREAD,
+					 MC_RPC_SUBTYPE_SEQ_CHANGE,
+					 seq, tid, where);
+	
+	ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
+    }
+    
+    seq_change(seq);
 }

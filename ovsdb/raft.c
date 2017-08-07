@@ -293,11 +293,11 @@ raft_fsync_thread(void *raft_)
 
         uint64_t request_seq = seq_read(raft->fsync_request);
 
-        mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+        mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, fsync_mc_conn,
 			       MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
         uint64_t next = raft->fsync_next;
         uint64_t cur = raft->fsync_cur;
-        mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+        mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, fsync_mc_conn,
 			       MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
 
         if (next == UINT64_MAX) {
@@ -312,13 +312,14 @@ raft_fsync_thread(void *raft_)
 					 MC_FSYNC_TID,
 					 OVS_SOURCE_LOCATOR);
             if (!error) {
-                mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, raft->mc_conn,
+                mc_wrap_ovs_mutex_lock(&raft->fsync_mutex, fsync_mc_conn,
 				       MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
                 raft->fsync_cur = next;
-                mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
+                mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, fsync_mc_conn,
 					 MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
 
-                seq_change(raft->fsync_complete);
+                mc_wrap_seq_change(raft->fsync_complete, fsync_mc_conn,
+				   MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
             } else {
                 char *error_string = ovsdb_error_to_string_free(error);
                 VLOG_WARN("%s", error_string);
@@ -326,8 +327,9 @@ raft_fsync_thread(void *raft_)
             }
         }
 
-        seq_wait(raft->fsync_request, request_seq);
-        poll_block();
+        mc_wrap_seq_wait(raft->fsync_request, request_seq, fsync_mc_conn,
+			 MC_FSYNC_TID, OVS_SOURCE_LOCATOR);
+        mc_wrap_poll_block(fsync_mc_conn);
     }
 
     mc_wrap_send_hello_or_bye(fsync_mc_conn, MC_RPC_BYE,
@@ -1727,7 +1729,8 @@ raft_close(struct raft *raft)
     raft->fsync_next = UINT64_MAX;
     mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn, MC_MAIN_TID,
 			     OVS_SOURCE_LOCATOR);
-    seq_change(raft->fsync_request);
+    mc_wrap_seq_change(raft->fsync_request, raft->mc_conn, MC_MAIN_TID,
+		  OVS_SOURCE_LOCATOR);
     if (raft->fsync_thread_running) {
         xpthread_join(raft->fsync_thread, NULL);
     }
@@ -1969,7 +1972,9 @@ raft_waiters_wait(struct raft *raft)
     struct raft_waiter *w, *next;
     LIST_FOR_EACH_SAFE (w, next, list_node, &raft->waiters) {
         if (cur < w->fsync_seqno) {
-            seq_wait(raft->fsync_complete, complete);
+            mc_wrap_seq_wait(raft->fsync_complete, complete,
+			     raft->mc_conn, MC_MAIN_TID,
+			     OVS_SOURCE_LOCATOR);
         } else {
             poll_immediate_wake();
         }
@@ -2188,7 +2193,8 @@ raft_waiter_create(struct raft *raft, enum raft_waiter_type type)
     uint64_t seqno = ++raft->fsync_next;
     mc_wrap_ovs_mutex_unlock(&raft->fsync_mutex, raft->mc_conn,
 			     MC_MAIN_TID, OVS_SOURCE_LOCATOR);
-    seq_change(raft->fsync_request);
+    mc_wrap_seq_change(raft->fsync_request, raft->mc_conn, MC_MAIN_TID,
+		       OVS_SOURCE_LOCATOR);
 
     struct raft_waiter *w = xzalloc(sizeof *w);
     ovs_list_push_back(&raft->waiters, &w->list_node);

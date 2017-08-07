@@ -61,7 +61,9 @@ enum mc_rpc_choose_req_type {
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_START, "mc_rpc_subtype_replace_start") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_REPLACE_COMMIT, "mc_rpc_subtype_replace_commit") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_LOCK, "mc_rpc_subtype_lock")		\
-    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_UNLOCK, "mc_rpc_subtype_unlock") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_UNLOCK, "mc_rpc_subtype_unlock")	\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SEQ_CHANGE, "mc_rpc_subtype_seq_change") \
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SEQ_WAIT, "mc_rpc_subtype_seq_wait")	\
     
 enum mc_rpc_subtype {
 #define MC_RPC_SUBTYPE(ENUM, NAME) ENUM,
