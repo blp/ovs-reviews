@@ -818,10 +818,9 @@ mc_enqueue_state_action_pairs(struct mc_state *cur_state,
 			      const int cur_path_len,
 			      struct ovs_list next_actions)
 {
-    int i = -1, r = -1;
+    int i = -1, r = 0;
 
     if (strategy == MC_SEARCH_STRATEGY_RANDOM) {
-	i = -1;
 	r = random_range(ovs_list_size(&next_actions));
     }
     
