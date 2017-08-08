@@ -191,7 +191,8 @@ static void mc_send_choose_reply(struct mc_action *action,
 static void mc_execute_action(struct mc_action *action);
 static void mc_dump_state(void);
 static void mc_exit_error(void);
-static struct ovs_list mc_get_enabled_actions(void);
+static struct ovs_list mc_get_enabled_actions(struct mc_state *cur_state,
+					      struct mc_action *cur_action);
 static void mc_enqueue_init_state_action_pair(void);
 static struct mc_queue_item *new_state_action_pair(struct mc_state *cur_state,
 						   struct mc_action *cur_action,
@@ -510,6 +511,7 @@ static struct mc_action *
 mc_action_alloc(void)
 {
     struct mc_action *action = xzalloc(sizeof *action);
+    action->refcount++;
     return action;
 }
 
@@ -527,6 +529,10 @@ mc_action_dec_ref(struct mc_action **action)
 	(*action)->refcount--;
 	
 	if ((*action)->refcount <= 0) {
+	    if ((*action)->where) {
+		free((*action)->where);
+	    }
+	    
 	    if ((*action)->data) {
 		free((*action)->data);
 	    }
@@ -600,7 +606,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	ovs_assert(0);
     }
 
-    wait_thread->blocked = mc_action_inc_ref(next_action);
+    wait_thread->blocked = next_action;
 }
 
 static void
@@ -742,17 +748,137 @@ mc_exit_error(void)
     exit(1);
 }
 
+static struct mc_action *
+mc_action_copy(struct mc_action * action)
+{
+    struct mc_action *copy = mc_action_alloc();
+    copy->type = action->type;
+    copy->p_idx = action->p_idx;
+    copy->t_idx = action->t_idx;
+    copy->where = xmalloc(strlen(action->where) + 1);
+    strcpy(copy->where, action->where);
+    copy->choosetype = action->choosetype;
+    copy->subtype = action->subtype;
+    /* If this changes to anything other than uint64_t then 
+       this will need replacement */
+    copy->data = xmalloc(sizeof(uint64_t));
+    *((uint64_t*) copy->data) = *((uint64_t*) action->data);
+
+    return copy;
+}
+
+/* Currently assumes that there are at most two options for an
+ * action (e.g. error or normal, timer trigger or short). If that
+ * changes then this will need to be modified */
+static struct mc_action *
+mc_action_expand_unknown(struct mc_action* action)
+{
+    struct mc_action *other = NULL;
+    switch(action->choosetype) {
+    case MC_RPC_CHOOSE_REQ_LOG:
+	action->type = MC_ACTION_RPC_REPLY_NORMAL;
+	other = mc_action_copy(action);
+	other->type = MC_ACTION_RPC_REPLY_ERROR;
+	
+    case MC_RPC_CHOOSE_REQ_TIMER:
+	action->type = MC_ACTION_TIMER_SHORT;
+	other = mc_action_copy(action);
+	other->type = MC_ACTION_TIMER_TRIGGER;
+	
+    case MC_RPC_CHOOSE_REQ_NETWORK:
+    case MC_RPC_CHOOSE_REQ_UNIXCTL:
+    case MC_RPC_CHOOSE_REQ_THREAD:
+	action->type = MC_ACTION_RPC_REPLY_NORMAL;
+    }
+
+    return other;
+}
+
+/* struct sync_dep_entry { */
+/*     struct ovs_list list_node; */
+/*     uint64_t addr; */
+/*     int p_idx; */
+/*     int t_idx; */
+/*     int count; */
+/* }; */
+
+/* static struct sync_dep_entry * */
+/* find_sync_dep(struct ovs_list dep_list, uint64_t addr, int p_idx) */
+/* { */
+/*     struct sync_dep_entry *entry; */
+/*     LIST_FOR_EACH (entry, list_node, &dep_list) { */
+/* 	if (entry->addr == addr && entry->p_idx == p_idx) { */
+/* 	    return entry; */
+/* 	} */
+/*     } */
+
+/*     return NULL; */
+/* } */
+
+static struct ovs_list
+mc_filter_disabled_actions(struct mc_state *cur_state,
+			   struct mc_action *cur_action,
+			   struct ovs_list actions)
+{
+    /* struct ovs_list seqs = OVS_LIST_INITIALIZER(&seqs); */
+    /* struct ovs_list locks = OVS_LIST_INITIALIZER(&locks); */
+    
+    /* for (int i = 0; i < cur_state->length; i++) { */
+    /* 	struct mc_action *cur_action = cur_state->path[i]; */
+    /* 	uint64_t addr = *((uint64_t *) cur_state->path[i].data); */
+    /* 	int p_idx = cur_action->p_idx; */
+    /* 	int t_idx = cur_action->t_idx */
+			  
+    /* 	if (cur_action->choosetype == MC_RPC_CHOOSE_THREAD) { */
+    /* 	    struct sync_dep_entry *entry = find_sync_dep(seqs, addr, p_idx); */
+
+    /* 	    if (cur_action->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) { */
+    /* 		if(entry) { */
+    /* 		    ovs_list_remove(&entry->list_node); */
+    /* 		}  */
+    /* 	    } else if (cur_action->subtype == MC_RPC_SUBTYPE_LOCK) { */
+    /* 		if(entry != NULL) { */
+    /* 		    entry = xmalloc(sizeof *entry); */
+    /* 		    entry->addr = addr; */
+    /* 		    entry->p_idx = p_idx; */
+    /* 		    entry->t_idx = t_idx; */
+    /* 		    ovs_list_push_back(&locks, &entry->list_node); */
+    /* 		} else { */
+    /* 		    /\* Same lock acquired twice ???? *\/ */
+    /* 		    ovs_assert(0); */
+    /* 		} */
+    /* 	    } else if (cur_action->subtype == MC_RPC_SUBTYPE_SEQ_CHANGE) { */
+		
+    /* 	    } else if (cur_action->subtype == MC_RPC_SUBTYPE_UNLOCK) { */
+
+    /* 	    } else { */
+    /* 		/\* MC_RPC_CHOOSE_THREAD should not have anything else *\/ */
+    /* 		ovs_assert(0); */
+    /* 	    } */
+    /* 	} */
+    /* } */
+    
+    struct ovs_list filtered = OVS_LIST_INITIALIZER(&filtered);
+    while (!ovs_list_is_empty(&actions)) {
+	struct mc_action *next =
+	    CONTAINER_OF(ovs_list_pop_front(&actions),
+			 struct mc_action,
+			 list_node);
+
+	/* FIX ME !!!! */
+	/* Replace below with filtering code */
+	ovs_list_push_back(&filtered, &next->list_node);
+    }
+    return filtered;
+}
+
 /* Gets the list of enabled actions, at the current state
  * Returns the size as an optimization to avoid running 
  * ovs_list_size() again */
 static struct ovs_list
-mc_get_enabled_actions(void)
+mc_get_enabled_actions(struct mc_state *cur_state,
+		       struct mc_action *cur_action)
 {
-    /* FIX ME AHHH!!!!!!!!!!!!!!!!!!!! 
-     * The action currently associated with each thread has type
-     * MC_ACTION_UNKNOWN. Replace that with multiple instances
-     * of REPLY_ERROR, REPLY_NORMAL, TIMER_SHORT etc */
-
     /* FIX ME !!!! 
      * Currently just returns all the actions that each thread
      * is blocked on. Eventually will need to add dependency 
@@ -764,14 +890,24 @@ mc_get_enabled_actions(void)
 	    for (int j = 0; j < max_threads_per_proc; j++) {
 		if (mc_procs[i].threads[j].valid) {
 		    ovs_assert(mc_procs[i].threads[j].blocked != NULL);
+		    struct mc_action *other =
+			mc_action_expand_unknown(mc_procs[i].threads[j].blocked);
 		    ovs_list_push_back(&actions,
 				       &mc_procs[i].threads[j].blocked->list_node);
+
+		    if (other) {
+			ovs_list_push_back(&actions,
+					   &other->list_node);
+		    }
 		}
 	    }
 	}
     }
-    
-    return actions;
+
+    struct ovs_list retval = mc_filter_disabled_actions(cur_state,
+							cur_action,
+							actions);        
+    return retval;
 }
 
 static void
@@ -896,7 +1032,8 @@ mc_explore(void)
 	    mc_enqueue_state_action_pairs(cur_state,
 					  cur_action,
 					  cur_path_len,
-					  mc_get_enabled_actions());
+					  mc_get_enabled_actions(cur_state,
+								 cur_action));
 	    
 	    break;
 	    
