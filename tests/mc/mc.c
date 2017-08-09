@@ -748,6 +748,111 @@ mc_exit_error(void)
     exit(1);
 }
 
+struct sync_dep_entry {
+    struct ovs_list list_node;
+    uint64_t addr;
+    int p_idx;
+    int t_idx;
+};
+
+static struct sync_dep_entry *
+find_sync_dep(struct ovs_list dep_list, uint64_t addr, int p_idx)
+{
+    struct sync_dep_entry *entry;
+    LIST_FOR_EACH (entry, list_node, &dep_list) {
+	if (entry->addr == addr && entry->p_idx == p_idx) {
+	    return entry;
+	}
+    }
+
+    return NULL;
+}
+
+static void
+track_sync_dep(struct mc_action *action, uint64_t addr,
+	       struct ovs_list cur_locks)
+{
+    if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
+	int p_idx = action->p_idx;
+	int t_idx = action->t_idx;
+	struct sync_dep_entry *entry = find_sync_dep(cur_locks, addr, p_idx);
+	
+	switch(action->subtype) {
+	case MC_RPC_SUBTYPE_SEQ_WAIT:
+	case MC_RPC_SUBTYPE_UNLOCK:
+	    if (entry) {
+		ovs_list_remove(&entry->list_node);
+		free(entry);
+	    }
+	    break;
+	    
+	case MC_RPC_SUBTYPE_LOCK:
+	    if (entry != NULL) {
+		/* Same lock acquired twice ???? */
+		ovs_assert(0);
+	    } /* Fall-thru */
+	case MC_RPC_SUBTYPE_SEQ_CHANGE:
+	    entry = xmalloc(sizeof *entry);
+	    entry->addr = addr;
+	    entry->p_idx = p_idx;
+	    entry->t_idx = t_idx;
+	    ovs_list_push_back(&cur_locks, &entry->list_node);
+	    break;
+
+	default:
+	    ovs_assert(0);
+	}
+    }
+}
+
+static struct ovs_list
+mc_filter_disabled_actions(struct mc_state *cur_state,
+			   struct mc_action *cur_action,
+			   struct ovs_list actions)
+{
+    struct ovs_list locks = OVS_LIST_INITIALIZER(&locks);
+
+    /* Construct a map of locks held (or seq_change() calls) 
+     * by each thread at the end of this path. The seq_change()/seq_wait()
+     * logic is somewhat crude. It will identify a pending seq_change()
+     * if the number of seq_wait() calls on a thread are > the number
+     * of seq_change() calls. It currently does not take the value
+     * passed to seq_wait() into account */
+    for (int i = 0; i < cur_state->length; i++) {
+    	struct mc_action *action = cur_state->path[i];
+    	uint64_t addr = *((uint64_t *) cur_state->path[i]->data);
+	track_sync_dep(action, addr, locks);			  
+    }
+    track_sync_dep(cur_action, *((uint64_t *) cur_action->data), locks);
+    
+    struct ovs_list filtered = OVS_LIST_INITIALIZER(&filtered);
+    while (!ovs_list_is_empty(&actions)) {
+	struct mc_action *next =
+	    CONTAINER_OF(ovs_list_pop_front(&actions),
+			 struct mc_action,
+			 list_node);
+
+	if (next->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
+	    (next->subtype == MC_RPC_SUBTYPE_LOCK ||
+	     next->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) &&
+	    find_sync_dep(locks, *((uint64_t *) next->data),
+			  next->p_idx) != NULL) {
+	    continue;
+	}
+	ovs_list_push_back(&filtered, &next->list_node);
+    }
+    
+    while (!ovs_list_is_empty(&locks)) {
+	struct sync_dep_entry *entry =
+	    CONTAINER_OF(ovs_list_pop_front(&locks),
+			 struct sync_dep_entry,
+			 list_node);
+	free(entry);
+    }	
+
+    return filtered;
+}
+
 static struct mc_action *
 mc_action_copy(struct mc_action * action)
 {
@@ -771,7 +876,7 @@ mc_action_copy(struct mc_action * action)
  * action (e.g. error or normal, timer trigger or short). If that
  * changes then this will need to be modified */
 static struct mc_action *
-mc_action_expand_unknown(struct mc_action* action)
+mc_action_expand_unknown(struct mc_action *action)
 {
     struct mc_action *other = NULL;
     switch(action->choosetype) {
@@ -779,11 +884,13 @@ mc_action_expand_unknown(struct mc_action* action)
 	action->type = MC_ACTION_RPC_REPLY_NORMAL;
 	other = mc_action_copy(action);
 	other->type = MC_ACTION_RPC_REPLY_ERROR;
+	break;
 	
     case MC_RPC_CHOOSE_REQ_TIMER:
 	action->type = MC_ACTION_TIMER_SHORT;
 	other = mc_action_copy(action);
 	other->type = MC_ACTION_TIMER_TRIGGER;
+	break;
 	
     case MC_RPC_CHOOSE_REQ_NETWORK:
     case MC_RPC_CHOOSE_REQ_UNIXCTL:
@@ -794,107 +901,27 @@ mc_action_expand_unknown(struct mc_action* action)
     return other;
 }
 
-/* struct sync_dep_entry { */
-/*     struct ovs_list list_node; */
-/*     uint64_t addr; */
-/*     int p_idx; */
-/*     int t_idx; */
-/*     int count; */
-/* }; */
-
-/* static struct sync_dep_entry * */
-/* find_sync_dep(struct ovs_list dep_list, uint64_t addr, int p_idx) */
-/* { */
-/*     struct sync_dep_entry *entry; */
-/*     LIST_FOR_EACH (entry, list_node, &dep_list) { */
-/* 	if (entry->addr == addr && entry->p_idx == p_idx) { */
-/* 	    return entry; */
-/* 	} */
-/*     } */
-
-/*     return NULL; */
-/* } */
-
-static struct ovs_list
-mc_filter_disabled_actions(struct mc_state *cur_state,
-			   struct mc_action *cur_action,
-			   struct ovs_list actions)
-{
-    /* struct ovs_list seqs = OVS_LIST_INITIALIZER(&seqs); */
-    /* struct ovs_list locks = OVS_LIST_INITIALIZER(&locks); */
-    
-    /* for (int i = 0; i < cur_state->length; i++) { */
-    /* 	struct mc_action *cur_action = cur_state->path[i]; */
-    /* 	uint64_t addr = *((uint64_t *) cur_state->path[i].data); */
-    /* 	int p_idx = cur_action->p_idx; */
-    /* 	int t_idx = cur_action->t_idx */
-			  
-    /* 	if (cur_action->choosetype == MC_RPC_CHOOSE_THREAD) { */
-    /* 	    struct sync_dep_entry *entry = find_sync_dep(seqs, addr, p_idx); */
-
-    /* 	    if (cur_action->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) { */
-    /* 		if(entry) { */
-    /* 		    ovs_list_remove(&entry->list_node); */
-    /* 		}  */
-    /* 	    } else if (cur_action->subtype == MC_RPC_SUBTYPE_LOCK) { */
-    /* 		if(entry != NULL) { */
-    /* 		    entry = xmalloc(sizeof *entry); */
-    /* 		    entry->addr = addr; */
-    /* 		    entry->p_idx = p_idx; */
-    /* 		    entry->t_idx = t_idx; */
-    /* 		    ovs_list_push_back(&locks, &entry->list_node); */
-    /* 		} else { */
-    /* 		    /\* Same lock acquired twice ???? *\/ */
-    /* 		    ovs_assert(0); */
-    /* 		} */
-    /* 	    } else if (cur_action->subtype == MC_RPC_SUBTYPE_SEQ_CHANGE) { */
-		
-    /* 	    } else if (cur_action->subtype == MC_RPC_SUBTYPE_UNLOCK) { */
-
-    /* 	    } else { */
-    /* 		/\* MC_RPC_CHOOSE_THREAD should not have anything else *\/ */
-    /* 		ovs_assert(0); */
-    /* 	    } */
-    /* 	} */
-    /* } */
-    
-    struct ovs_list filtered = OVS_LIST_INITIALIZER(&filtered);
-    while (!ovs_list_is_empty(&actions)) {
-	struct mc_action *next =
-	    CONTAINER_OF(ovs_list_pop_front(&actions),
-			 struct mc_action,
-			 list_node);
-
-	/* FIX ME !!!! */
-	/* Replace below with filtering code */
-	ovs_list_push_back(&filtered, &next->list_node);
-    }
-    return filtered;
-}
-
-/* Gets the list of enabled actions, at the current state
- * Returns the size as an optimization to avoid running 
- * ovs_list_size() again */
+/* Gets the list of enabled actions, at the current state */
 static struct ovs_list
 mc_get_enabled_actions(struct mc_state *cur_state,
 		       struct mc_action *cur_action)
 {
-    /* FIX ME !!!! 
-     * Currently just returns all the actions that each thread
-     * is blocked on. Eventually will need to add dependency 
-     * tracking and other enabled actions like crashes */
-    
+    /* TODO
+     * Add other enabled actions not derived from blocked thread actions
+     * like crashes. Also check dependencies for other types of calls 
+     * wrapped */    
     struct ovs_list actions = OVS_LIST_INITIALIZER(&actions);
     for (int i = 0; i < num_procs; i++) {
 	if (mc_procs[i].running) {
 	    for (int j = 0; j < max_threads_per_proc; j++) {
 		if (mc_procs[i].threads[j].valid) {
 		    ovs_assert(mc_procs[i].threads[j].blocked != NULL);
+		    /* See comment with mc_action_expand_unknown() definition */
 		    struct mc_action *other =
 			mc_action_expand_unknown(mc_procs[i].threads[j].blocked);
 		    ovs_list_push_back(&actions,
 				       &mc_procs[i].threads[j].blocked->list_node);
-
+		    
 		    if (other) {
 			ovs_list_push_back(&actions,
 					   &other->list_node);
@@ -903,7 +930,7 @@ mc_get_enabled_actions(struct mc_state *cur_state,
 	    }
 	}
     }
-
+    
     struct ovs_list retval = mc_filter_disabled_actions(cur_state,
 							cur_action,
 							actions);        
