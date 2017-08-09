@@ -582,7 +582,6 @@ static void
 mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 {
     struct mc_action *next_action;
-    ovs_assert(wait_thread == &mc_procs[p_idx].threads[t_idx]);
     
     if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT) {
 	next_action = restore->path[restore_path_next];
@@ -590,7 +589,9 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	ovs_assert(next_action->choosetype == rq->type);
 	ovs_assert(next_action->subtype == rq->subtype);
 	
-    } else if (fsm_state == MC_FSM_NEW_ACTION_WAIT) {
+    } else if (fsm_state == MC_FSM_NEW_ACTION_WAIT ||
+	       fsm_state == MC_FSM_RESTORE_INIT_WAIT) {
+
 	next_action = mc_action_alloc();
 	next_action->type = MC_ACTION_UNKNOWN;
 	next_action->p_idx = p_idx;
@@ -602,11 +603,19 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	next_action->data = rq->data;
     } else {
 	/* Should not be getting choose requests if not
-	 * in either of the above two states */
+	 * in any of the above three states */
 	ovs_assert(0);
     }
 
-    wait_thread->blocked = next_action;
+    if (fsm_state == MC_FSM_NEW_ACTION_WAIT ||
+	fsm_state == MC_FSM_RESTORE_ACTION_WAIT) {
+
+	ovs_assert(wait_thread == &mc_procs[p_idx].threads[t_idx]);
+	wait_thread->blocked = next_action;
+	
+    } else { /* MC_FSM_RESTORE_INIT_WAIT */
+	mc_procs[p_idx].threads[t_idx].blocked = next_action;
+    }
 }
 
 static void
