@@ -1561,8 +1561,10 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp, struct jsonrpc *mc_conn,
     raft->storage = log;
 
     raft->fsync_thread_running = true;
-    raft->fsync_thread = ovs_thread_create("raft_fsync", raft_fsync_thread,
-					   raft);
+    raft->fsync_thread = mc_wrap_ovs_thread_create("raft_fsync",
+						   raft_fsync_thread,
+						   raft, mc_conn, MC_MAIN_TID,
+						   OVS_SOURCE_LOCATOR);
     
     struct ovsdb_error *error = raft_read_header(raft);
     if (error) {

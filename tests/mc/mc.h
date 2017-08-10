@@ -47,6 +47,7 @@ enum mc_rpc_choose_req_type {
 
 #define MC_RPC_SUBTYPES							\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_OPEN, "mc_rpc_subtype_open")		\
+    MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CREATE, "mc_rpc_subtype_create")	\
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CLIENT_CREATE, "mc_rpc_subtype_client_create") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_SERVER_CREATE, "mc_rpc_subtype_server_create") \
     MC_RPC_SUBTYPE(MC_RPC_SUBTYPE_CLIENT_TRANSACT, "mc_rpc_subtype_client_transact") \

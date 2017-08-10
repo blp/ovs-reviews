@@ -412,3 +412,19 @@ mc_wrap_seq_change(struct seq *seq, struct jsonrpc *mc_conn,
     
     seq_change(seq);
 }
+
+pthread_t
+mc_wrap_ovs_thread_create(const char *name, void *(*start)(void *), void *arg,
+			  struct jsonrpc *mc_conn, int tid, const char *where)
+{
+    if (mc_conn != NULL) {
+	enum mc_rpc_choose_reply_type reply;
+	reply = mc_wrap_get_choose_reply(mc_conn, MC_RPC_CHOOSE_REQ_THREAD,
+					 MC_RPC_SUBTYPE_CREATE,
+					 NULL, tid, where);
+
+	ovs_assert(reply == MC_RPC_CHOOSE_REPLY_NORMAL);
+    }
+
+    return ovs_thread_create(name, start, arg);
+}

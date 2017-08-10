@@ -117,4 +117,7 @@ void mc_wrap_seq_wait(const struct seq *seq, uint64_t value,
 		      struct jsonrpc *mc_conn, int tid, const char *where);
 void mc_wrap_seq_change(struct seq *seq, struct jsonrpc *mc_conn, int tid,
 			const char *where);
+pthread_t mc_wrap_ovs_thread_create(const char *name, void *(*start)(void *),
+				    void *arg, struct jsonrpc *mc_conn,
+				    int tid, const char *where);
 #endif /* tests/mc/mc_wrap.h */
