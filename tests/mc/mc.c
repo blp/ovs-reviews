@@ -899,7 +899,7 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
 	}
     }
     
-    if (cur_action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
+    if (cur_action && cur_action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
 	track_sync_dep(cur_action, *((uint64_t *) cur_action->data), locks);
     }
     
