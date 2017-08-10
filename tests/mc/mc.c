@@ -193,8 +193,9 @@ static void mc_execute_action(struct mc_action *action);
 static struct ds mc_action_to_str(const struct mc_action *a);
 static struct ds mc_state_to_str(struct mc_state *state);
 static void mc_exit_error(void);
-static struct ovs_list mc_get_enabled_actions(struct mc_state *cur_state,
-					      struct mc_action *cur_action);
+static void mc_get_enabled_actions(struct mc_state *cur_state,
+				   struct mc_action *cur_action,
+				   struct ovs_list *args);
 static void mc_enqueue_init_state_action_pair(void);
 static struct mc_queue_item *new_state_action_pair(struct mc_state *cur_state,
 						   struct mc_action *cur_action,
@@ -203,7 +204,7 @@ static struct mc_queue_item *new_state_action_pair(struct mc_state *cur_state,
 static void mc_enqueue_state_action_pairs(struct mc_state *cur_state,
 					  struct mc_action *cur_action,
 					  const int cur_path_len,
-					  struct ovs_list next_actions);
+					  struct ovs_list *next_actions);
 static void mc_explore(void);
 static void mc_run(void);
 
@@ -831,10 +832,10 @@ struct sync_dep_entry {
 };
 
 static struct sync_dep_entry *
-find_sync_dep(struct ovs_list dep_list, uint64_t addr, int p_idx)
+find_sync_dep(struct ovs_list *dep_list, uint64_t addr, int p_idx)
 {
     struct sync_dep_entry *entry;
-    LIST_FOR_EACH (entry, list_node, &dep_list) {
+    LIST_FOR_EACH (entry, list_node, dep_list) {
 	if (entry->addr == addr && entry->p_idx == p_idx) {
 	    return entry;
 	}
@@ -845,7 +846,7 @@ find_sync_dep(struct ovs_list dep_list, uint64_t addr, int p_idx)
 
 static void
 track_sync_dep(struct mc_action *action, uint64_t addr,
-	       struct ovs_list cur_locks)
+	       struct ovs_list *cur_locks)
 {
     int p_idx = action->p_idx;
     int t_idx = action->t_idx;
@@ -870,7 +871,7 @@ track_sync_dep(struct mc_action *action, uint64_t addr,
 	entry->addr = addr;
 	entry->p_idx = p_idx;
 	entry->t_idx = t_idx;
-	ovs_list_push_back(&cur_locks, &entry->list_node);
+	ovs_list_push_back(cur_locks, &entry->list_node);
 	break;
 	
     default:
@@ -878,10 +879,10 @@ track_sync_dep(struct mc_action *action, uint64_t addr,
     }
 }
 
-static struct ovs_list
+static void
 mc_filter_disabled_actions(struct mc_state *cur_state,
 			   struct mc_action *cur_action,
-			   struct ovs_list actions)
+			   struct ovs_list *actions)
 {
     struct ovs_list locks = OVS_LIST_INITIALIZER(&locks);
 
@@ -895,44 +896,35 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
 	struct mc_action *action = cur_state->path[i];
 	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
 	    uint64_t addr = *((uint64_t *) cur_state->path[i]->data);
-	    track_sync_dep(action, addr, locks);
+	    track_sync_dep(action, addr, &locks);
 	}
     }
     
     if (cur_action && cur_action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
-	track_sync_dep(cur_action, *((uint64_t *) cur_action->data), locks);
+	track_sync_dep(cur_action, *((uint64_t *) cur_action->data), &locks);
     }
-    
-    struct ovs_list filtered = OVS_LIST_INITIALIZER(&filtered);
-    while (!ovs_list_is_empty(&actions)) {
-	struct mc_action *next =
-	    CONTAINER_OF(ovs_list_pop_front(&actions),
-			 struct mc_action,
-			 list_node);
 
-	if (next->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
-	    (next->subtype == MC_RPC_SUBTYPE_LOCK ||
-	     next->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) &&
-	    find_sync_dep(locks, *((uint64_t *) next->data),
-			  next->p_idx) != NULL) {
-	    continue;
+    struct mc_action *action, *next;
+    LIST_FOR_EACH_SAFE (action, next, list_node, actions) {
+	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
+	    (action->subtype == MC_RPC_SUBTYPE_LOCK ||
+	     action->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) &&
+	    find_sync_dep(&locks, *((uint64_t *) action->data),
+			  action->p_idx) != NULL) {
+
+	    ovs_list_remove(&action->list_node);
 	}
-	ovs_list_push_back(&filtered, &next->list_node);
     }
-    
-    while (!ovs_list_is_empty(&locks)) {
-	struct sync_dep_entry *entry =
-	    CONTAINER_OF(ovs_list_pop_front(&locks),
-			 struct sync_dep_entry,
-			 list_node);
-	free(entry);
-    }	
 
-    return filtered;
+    struct sync_dep_entry *entry, *next_entry;
+    LIST_FOR_EACH_SAFE (entry, next_entry, list_node, &locks) {
+	ovs_list_remove(&entry->list_node);
+	free(entry);
+    }
 }
 
 static struct mc_action *
-mc_action_copy(struct mc_action * action)
+mc_action_copy(struct mc_action *action)
 {
     struct mc_action *copy = mc_action_alloc();
     copy->type = action->type;
@@ -981,15 +973,15 @@ mc_action_expand_unknown(struct mc_action *action)
 }
 
 /* Gets the list of enabled actions, at the current state */
-static struct ovs_list
+static void
 mc_get_enabled_actions(struct mc_state *cur_state,
-		       struct mc_action *cur_action)
+		       struct mc_action *cur_action,
+		       struct ovs_list *args)
 {
     /* TODO
      * Add other enabled actions not derived from blocked thread actions
      * like crashes. Also check dependencies for other types of calls 
      * wrapped */    
-    struct ovs_list actions = OVS_LIST_INITIALIZER(&actions);
     for (int i = 0; i < num_procs; i++) {
 	if (mc_procs[i].running) {
 	    for (int j = 0; j < max_threads_per_proc; j++) {
@@ -998,11 +990,11 @@ mc_get_enabled_actions(struct mc_state *cur_state,
 		    /* See comment with mc_action_expand_unknown() definition */
 		    struct mc_action *other =
 			mc_action_expand_unknown(mc_procs[i].threads[j].blocked);
-		    ovs_list_push_back(&actions,
+		    ovs_list_push_back(args,
 				       &mc_procs[i].threads[j].blocked->list_node);
 		    
 		    if (other) {
-			ovs_list_push_back(&actions,
+			ovs_list_push_back(args,
 					   &other->list_node);
 		    }
 		}
@@ -1010,10 +1002,7 @@ mc_get_enabled_actions(struct mc_state *cur_state,
 	}
     }
     
-    struct ovs_list retval = mc_filter_disabled_actions(cur_state,
-							cur_action,
-							actions);        
-    return retval;
+    mc_filter_disabled_actions(cur_state, cur_action, args);        
 }
 
 static void
@@ -1054,17 +1043,17 @@ static void
 mc_enqueue_state_action_pairs(struct mc_state *cur_state,
 			      struct mc_action *cur_action,
 			      const int cur_path_len,
-			      struct ovs_list next_actions)
+			      struct ovs_list *next_actions)
 {
     int i = -1, r = 0;
 
     if (strategy == MC_SEARCH_STRATEGY_RANDOM) {
-	r = random_range(ovs_list_size(&next_actions));
+	r = random_range(ovs_list_size(next_actions));
     }
     
-    while (!ovs_list_is_empty(&next_actions)) {
+    while (!ovs_list_is_empty(next_actions)) {
 	struct mc_action *next_action =
-	    CONTAINER_OF(ovs_list_pop_front(&next_actions),
+	    CONTAINER_OF(ovs_list_pop_front(next_actions),
 			 struct mc_action,
 			 list_node);
 	
@@ -1130,16 +1119,18 @@ mc_explore(void)
      * of the queue based on the search strategy. Important to pop the front
      * of the queue above before this step, since we might add new pairs to
      * the front of the queue (if strategy is DFS) */
+    struct ovs_list enabled_actions = OVS_LIST_INITIALIZER(&enabled_actions);
     if (max_search_depth < 0 || cur_path_len < max_search_depth) {
 	switch (strategy) {
 	case MC_SEARCH_STRATEGY_BREADTH:
 	case MC_SEARCH_STRATEGY_DEPTH:
 	case MC_SEARCH_STRATEGY_RANDOM:
+	    mc_get_enabled_actions(cur_state, cur_action,
+				   &enabled_actions);
 	    mc_enqueue_state_action_pairs(cur_state,
 					  cur_action,
 					  cur_path_len,
-					  mc_get_enabled_actions(cur_state,
-								 cur_action));
+					  &enabled_actions);
 	    
 	    break;
 	    
