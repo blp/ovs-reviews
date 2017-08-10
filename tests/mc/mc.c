@@ -267,6 +267,7 @@ mc_start_process(struct mc_process *new_proc) {
     new_proc->threads = xzalloc(sizeof(struct mc_thread) *
 				  max_threads_per_proc);
     new_proc->num_threads = 1;
+    new_proc->threads[0].valid = true;
     
     close(stdout_copy);
     close(stderr_copy);
@@ -554,7 +555,6 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 	    
 	    if (rpc->common.type == MC_RPC_HELLO) {
 		mc_procs[i].threads[tid].js = js;
-		mc_procs[i].threads[tid].valid = true;
 		
 		struct mc_conn *conn;
 		LIST_FOR_EACH (conn, list_node, &mc_conns) {
@@ -720,8 +720,8 @@ mc_execute_action(struct mc_action *action)
     if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
 	action->subtype == MC_RPC_SUBTYPE_CREATE) {
 
-	int new_tid = ++mc_procs[action->p_idx].num_threads;
-	mc_procs[action->p_idx].threads[new_tid].valid = true;
+	int n = ++mc_procs[action->p_idx].num_threads;
+	mc_procs[action->p_idx].threads[n-1].valid = true;
     }
     
     switch(action->type) {
