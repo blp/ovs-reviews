@@ -186,10 +186,12 @@ static bool mc_receive_rpc(struct jsonrpc *js, int p_idx,
 			   union mc_rpc *rpc);
 static void mc_run_conn(struct jsonrpc *js, int p_idx, int t_idx);
 static bool mc_all_threads_blocked(void);
+static struct ds mc_threads_blocked_status_str(void);
 static void mc_send_choose_reply(struct mc_action *action,
 				 enum mc_rpc_choose_reply_type reply_type);
 static void mc_execute_action(struct mc_action *action);
-static void mc_dump_state(void);
+static struct ds mc_action_to_str(const struct mc_action *a);
+static struct ds mc_state_to_str(struct mc_state *state);
 static void mc_exit_error(void);
 static struct ovs_list mc_get_enabled_actions(struct mc_state *cur_state,
 					      struct mc_action *cur_action);
@@ -694,6 +696,33 @@ mc_all_threads_blocked(void)
     return true;
 }
 
+static struct ds
+mc_threads_blocked_status_str(void)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&ds, "Status || ");
+    
+    for (int i = 0; i < num_procs; i++) {
+	if (mc_procs[i].running) {
+	    for (int j = 0; j < max_threads_per_proc; j++) {
+		if (mc_procs[i].threads[j].valid &&
+		    mc_procs[i].threads[j].blocked != NULL) {
+
+		    struct ds action_ds =
+			mc_action_to_str(mc_procs[i].threads[j].blocked);
+		    ds_put_format(&ds, "Blocked %s || ", ds_cstr(&action_ds));
+		    ds_destroy(&action_ds);
+		} else if (mc_procs[i].threads[j].valid) {
+		    ds_put_format(&ds, "Waiting %s thread %d || ",
+				  mc_procs[i].name, j);
+		}
+	    }
+	}
+    }
+    
+    return ds;
+}
+
 static void
 mc_send_choose_reply(struct mc_action *action,
 		     enum mc_rpc_choose_reply_type reply_type)
@@ -741,25 +770,55 @@ mc_execute_action(struct mc_action *action)
     }
 }
 
-static void
-mc_dump_state(void)
+/* Deallocation is responsibility of caller !!!!*/
+static struct ds
+mc_action_to_str(const struct mc_action *a)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
 
-    /* FILL ME !!!!!!!! */
-    /* Add to the string the current state of the state machine 
-     * and other statistics */
-    /* If restore is non-NULL then add the actions along 
-       the path until restore_path_next */
-    mc_get_exit_statuses(&ds);
-    fprintf(stderr, "%s", ds_cstr(&ds));
-    ds_destroy(&ds);
+    if (a) {
+	ds_put_format(&ds, "%s(%d) %s %s %s",
+		      mc_procs[a->p_idx].name,
+		      a->t_idx,
+		      mc_rpc_choose_req_type_to_string(a->choosetype),
+		      mc_rpc_subtype_to_string(a->subtype),
+		      a->where);
+    } else {
+	ds_put_cstr(&ds, "NULL");
+    }
+    
+    return ds;
+}
+
+/* Deallocation is responsibility of caller !!!!*/ 
+static struct ds
+mc_state_to_str(struct mc_state *state)
+{
+    struct ds ret = DS_EMPTY_INITIALIZER;
+
+    if (state) {
+	struct ds action_ds;
+	ds_put_format(&ret, "State length %d || ", state->length);
+	for (int i = 0; i < state->length; i++) {
+	    action_ds = mc_action_to_str(state->path[i]);
+	    ds_put_format(&ret, "%s || ", ds_cstr(&action_ds));
+	}
+    } else {
+	ds_put_cstr(&ret, "State NULL");
+    }
+
+    return ret;
 }
 
 static void
 mc_exit_error(void)
 {
-    mc_dump_state();
+    VLOG_ERR("Exiting in Error ...");
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    mc_get_exit_statuses(&ds);
+    VLOG_ERR("%s", ds_cstr(&ds));
+    ds_destroy(&ds);
+    
     mc_kill_all_processes();
     exit(1);
 }
@@ -1111,9 +1170,12 @@ mc_run(void)
 {
     struct mc_action *action = NULL;
     enum mc_fsm_state next_state;
-	
+    struct ds s;
+    
     switch(fsm_state) {
     case MC_FSM_PRE_INIT:
+	VLOG_DBG("PRE_INIT, about to start processes");
+	
 	mc_start_all_processes();
 	fsm_state = MC_FSM_RESTORE_INIT_WAIT;
 	break;
@@ -1125,23 +1187,41 @@ mc_run(void)
 				   list_node)->state;
 	    restore_path_next = 0;
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
+
+	    VLOG_DBG("INIT_WAIT, all threads blocked");
+	    s = mc_threads_blocked_status_str();
+	    VLOG_DBG("\t<Blocked> %s", ds_cstr(&s));
+	    ds_destroy(&s);
+	    s = mc_state_to_str(restore);
+	    VLOG_DBG("\t<Next Restoring> %s", ds_cstr(&s));
+	    ds_destroy(&s);
 	}
 	break;
 
     case MC_FSM_RESTORE_MID_STATE:
+	VLOG_DBG("RESTORE_MID_STATE");
+	
 	if (restore && restore_path_next < restore->length) {
 	    action = restore->path[restore_path_next++];
 	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
+
+	    s = mc_action_to_str(action);
+	    VLOG_DBG("\t<Restore Applying Action> %s", ds_cstr(&s));
+	    ds_destroy(&s);
 	} else {
 	    action = CONTAINER_OF(ovs_list_front(&mc_queue),
 				  struct mc_queue_item,
 				  list_node)->action;
-
+	    
 	    if (action) {
 		next_state = MC_FSM_NEW_ACTION_WAIT;
 	    } else {
 		next_state = MC_FSM_NEW_STATE;
-	    } 
+	    }
+
+	    s = mc_action_to_str(action);
+	    VLOG_DBG("\t<Queue Applying Action> %s", ds_cstr(&s));
+	    ds_destroy(&s);
 	}
 
 	if (action) {
@@ -1154,17 +1234,20 @@ mc_run(void)
 
     case MC_FSM_RESTORE_ACTION_WAIT:
 	if (wait_thread->blocked != NULL) {
+	    VLOG_DBG("\t<Applied>");
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 	}
 	break;
 
     case MC_FSM_NEW_ACTION_WAIT:
 	if (wait_thread->blocked != NULL) {
+	    VLOG_DBG("\t<Applied>");
 	    fsm_state = MC_FSM_NEW_STATE;
 	}
 	break;
 
     case MC_FSM_NEW_STATE:
+	VLOG_DBG("NEW_STATE");
 	mc_explore();
 
 	if ((strategy == MC_SEARCH_STRATEGY_DEPTH ||
@@ -1242,6 +1325,8 @@ main(int argc, char *argv[])
     if (argc < 2) {
 	ovs_fatal(0, "Usage is ./mc <configfile>. Not enough arguments provided");
     }
+
+    vlog_set_levels(&this_module, VLF_CONSOLE, VLL_DBG);
 
     mc_load_config(argv[1]);
 
