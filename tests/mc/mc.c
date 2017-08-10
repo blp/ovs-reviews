@@ -554,6 +554,7 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 	    
 	    if (rpc->common.type == MC_RPC_HELLO) {
 		mc_procs[i].threads[tid].js = js;
+		mc_procs[i].threads[tid].valid = true;
 		
 		struct mc_conn *conn;
 		LIST_FOR_EACH (conn, list_node, &mc_conns) {
