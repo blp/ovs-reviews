@@ -847,36 +847,34 @@ static void
 track_sync_dep(struct mc_action *action, uint64_t addr,
 	       struct ovs_list cur_locks)
 {
-    if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
-	int p_idx = action->p_idx;
-	int t_idx = action->t_idx;
-	struct sync_dep_entry *entry = find_sync_dep(cur_locks, addr, p_idx);
-	
-	switch(action->subtype) {
-	case MC_RPC_SUBTYPE_SEQ_WAIT:
-	case MC_RPC_SUBTYPE_UNLOCK:
-	    if (entry) {
-		ovs_list_remove(&entry->list_node);
-		free(entry);
-	    }
-	    break;
-	    
-	case MC_RPC_SUBTYPE_LOCK:
-	    if (entry != NULL) {
-		/* Same lock acquired twice ???? */
-		ovs_assert(0);
-	    } /* Fall-thru */
-	case MC_RPC_SUBTYPE_SEQ_CHANGE:
-	    entry = xmalloc(sizeof *entry);
-	    entry->addr = addr;
-	    entry->p_idx = p_idx;
-	    entry->t_idx = t_idx;
-	    ovs_list_push_back(&cur_locks, &entry->list_node);
-	    break;
-
-	default:
-	    ovs_assert(0);
+    int p_idx = action->p_idx;
+    int t_idx = action->t_idx;
+    struct sync_dep_entry *entry = find_sync_dep(cur_locks, addr, p_idx);
+    
+    switch(action->subtype) {
+    case MC_RPC_SUBTYPE_SEQ_WAIT:
+    case MC_RPC_SUBTYPE_UNLOCK:
+	if (entry) {
+	    ovs_list_remove(&entry->list_node);
+	    free(entry);
 	}
+	break;
+	
+    case MC_RPC_SUBTYPE_LOCK:
+	if (entry != NULL) {
+	    /* Same lock acquired twice ???? */
+	    ovs_assert(0);
+	} /* Fall-thru */
+    case MC_RPC_SUBTYPE_SEQ_CHANGE:
+	entry = xmalloc(sizeof *entry);
+	entry->addr = addr;
+	entry->p_idx = p_idx;
+	entry->t_idx = t_idx;
+	ovs_list_push_back(&cur_locks, &entry->list_node);
+	break;
+	
+    default:
+	ovs_assert(0);
     }
 }
 
@@ -894,11 +892,16 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
      * of seq_change() calls. It currently does not take the value
      * passed to seq_wait() into account */
     for (int i = 0; i < cur_state->length; i++) {
-    	struct mc_action *action = cur_state->path[i];
-    	uint64_t addr = *((uint64_t *) cur_state->path[i]->data);
-	track_sync_dep(action, addr, locks);			  
+	struct mc_action *action = cur_state->path[i];
+	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
+	    uint64_t addr = *((uint64_t *) cur_state->path[i]->data);
+	    track_sync_dep(action, addr, locks);
+	}
     }
-    track_sync_dep(cur_action, *((uint64_t *) cur_action->data), locks);
+    
+    if (cur_action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
+	track_sync_dep(cur_action, *((uint64_t *) cur_action->data), locks);
+    }
     
     struct ovs_list filtered = OVS_LIST_INITIALIZER(&filtered);
     while (!ovs_list_is_empty(&actions)) {
@@ -941,9 +944,10 @@ mc_action_copy(struct mc_action * action)
     copy->subtype = action->subtype;
     /* If this changes to anything other than uint64_t then 
        this will need replacement */
-    copy->data = xmalloc(sizeof(uint64_t));
-    *((uint64_t*) copy->data) = *((uint64_t*) action->data);
-
+    if (action->data) {
+	copy->data = xmalloc(sizeof(uint64_t));
+	*((uint64_t*) copy->data) = *((uint64_t*) action->data);
+    }
     return copy;
 }
 
