@@ -1319,6 +1319,7 @@ mc_run(void)
 int
 main(int argc, char *argv[])
 {
+    set_program_name(argv[0]);
     if (argc < 2) {
 	ovs_fatal(0, "Usage is ./mc <configfile>. Not enough arguments provided");
     }
