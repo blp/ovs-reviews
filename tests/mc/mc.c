@@ -955,8 +955,8 @@ mc_action_expand_unknown(struct mc_action *action)
     switch(action->choosetype) {
     case MC_RPC_CHOOSE_REQ_LOG:
 	action->type = MC_ACTION_RPC_REPLY_NORMAL;
-	other = mc_action_copy(action);
-	other->type = MC_ACTION_RPC_REPLY_ERROR;
+	/* other = mc_action_copy(action); */
+	/* other->type = MC_ACTION_RPC_REPLY_ERROR; */
 	break;
 	
     case MC_RPC_CHOOSE_REQ_TIMER:
@@ -1199,7 +1199,7 @@ mc_run(void)
 	VLOG_DBG("RESTORE_MID_STATE");
 	
 	if (restore && restore_path_next < restore->length) {
-	    action = restore->path[restore_path_next++];
+	    action = restore->path[restore_path_next];
 	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
 
 	    s = mc_action_to_str(action);
@@ -1232,6 +1232,7 @@ mc_run(void)
     case MC_FSM_RESTORE_ACTION_WAIT:
 	if (wait_thread->blocked != NULL) {
 	    VLOG_DBG("\t<Applied>");
+	    restore_path_next++;
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 	}
 	break;
