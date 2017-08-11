@@ -440,7 +440,7 @@ get_cmd_from_json(const struct json_array *jsoncmd) {
     char **cmd = xmalloc(sizeof(char*) * (jsoncmd->n + 1));
     int i = 0;
     for (; i < jsoncmd->n; i++) {
-	cmd[i] = xmalloc(strlen(json_string(jsoncmd->elems[i]) + 1));
+	cmd[i] = xmalloc(strlen(json_string(jsoncmd->elems[i])) + 1);
 	strcpy(cmd[i], json_string(jsoncmd->elems[i]));
     }
     cmd[i] = NULL;
@@ -734,6 +734,7 @@ mc_send_choose_reply(struct mc_action *action,
     rpc.common.type = MC_RPC_CHOOSE_REPLY;
     rpc.common.pid = 0;
     rpc.common.tid = 0;
+    rpc.common.where = "";
     rpc.choose_reply.reply = reply_type;
         
     int error = jsonrpc_send_block(js, mc_rpc_to_jsonrpc(&rpc));
