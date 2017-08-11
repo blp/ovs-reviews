@@ -158,7 +158,7 @@ static enum mc_search_strategy strategy;
 static int max_search_depth = -1; /* < 0 means no bounds on depth */
 static bool max_search_depth_reached = false;
 
-static const char *mc_search_strategy_to_string(enum mc_search_strategy status);
+static const char *mc_action_type_to_string(enum mc_action_type status);
 static bool mc_search_strategy_from_string(const char *s,
 					   enum mc_search_strategy *status);
 static void mc_start_process(struct mc_process *new_proc);
@@ -209,12 +209,12 @@ static void mc_explore(void);
 static void mc_run(void);
 
 static const char *
-mc_search_strategy_to_string(enum mc_search_strategy status)
+mc_action_type_to_string(enum mc_action_type status)
 {
     switch (status) {
-#define MC_SEARCH_STRATEGY(ENUM, NAME) case ENUM: return NAME;
-        MC_SEARCH_STRATEGY_TYPES
-#undef MC_SEARCH_STRATEGY
+#define MC_ACTION(ENUM, NAME) case ENUM: return NAME;
+        MC_ACTION_TYPES
+#undef MC_ACTION
             }
     return "<unknown>";
 }
@@ -778,9 +778,10 @@ mc_action_to_str(const struct mc_action *a)
     struct ds ds = DS_EMPTY_INITIALIZER;
 
     if (a) {
-	ds_put_format(&ds, "%s(%d) %s %s %s",
+	ds_put_format(&ds, "%s(%d) %s %s %s %s",
 		      mc_procs[a->p_idx].name,
 		      a->t_idx,
+		      mc_action_type_to_string(a->type),
 		      mc_rpc_choose_req_type_to_string(a->choosetype),
 		      mc_rpc_subtype_to_string(a->subtype),
 		      a->where);
