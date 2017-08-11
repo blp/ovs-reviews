@@ -236,7 +236,7 @@ mc_choose_req_to_jsonrpc(const struct mc_rpc_choose_req *rq,
 			   mc_rpc_subtype_to_string(rq->subtype));
 
     if (rq->type == MC_RPC_CHOOSE_REQ_THREAD) {
-	json_object_put_uint(args, "lockaddr", (uint64_t) rq->data);
+	json_object_put_uint(args, "lockaddr", (uintptr_t) rq->data);
     }
 }
 
@@ -279,7 +279,7 @@ mc_choose_reply_from_jsonrpc(const struct json *j,
 {
     if (!strcmp(get_member(j, "reply"), "mc_rpc_choose_reply_normal")) {
 	rq->reply = MC_RPC_CHOOSE_REPLY_NORMAL;
-    } else if (!strcmp(get_member(j, "reply"), "mc_rpc_choose_reply_normal")) {
+    } else if (!strcmp(get_member(j, "reply"), "mc_rpc_choose_reply_error")) {
 	rq->reply = MC_RPC_CHOOSE_REPLY_ERROR;
     } else ovs_assert(0);
 }
