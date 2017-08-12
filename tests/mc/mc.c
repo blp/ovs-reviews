@@ -881,13 +881,36 @@ track_sync_dep(struct mc_action *action, uint64_t addr,
     }
 }
 
+static inline bool
+is_action_disabled(struct mc_action *action,
+		   struct ovs_list *locks,
+		   bool unixctl_server_create)
+{
+    if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
+	(action->subtype == MC_RPC_SUBTYPE_LOCK ||
+	 action->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) &&
+	find_sync_dep(locks, *((uint64_t *) action->data),
+		      action->p_idx) != NULL) {
+	
+	return true;
+    } else if (action->choosetype == MC_RPC_CHOOSE_REQ_UNIXCTL &&
+	       action->subtype == MC_RPC_SUBTYPE_CLIENT_CREATE &&
+	       !unixctl_server_create) {
+	
+	return true;
+    }
+    
+    return false;
+}
+
 static void
 mc_filter_disabled_actions(struct mc_state *cur_state,
 			   struct mc_action *cur_action,
 			   struct ovs_list *actions)
 {
     struct ovs_list locks = OVS_LIST_INITIALIZER(&locks);
-
+    bool unixctl_server_create = false;
+    
     /* Construct a map of locks held (or seq_change() calls) 
      * by each thread at the end of this path. The seq_change()/seq_wait()
      * logic is somewhat crude. It will identify a pending seq_change()
@@ -899,6 +922,11 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
 	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
 	    uint64_t addr = *((uint64_t *) cur_state->path[i]->data);
 	    track_sync_dep(action, addr, &locks);
+	    
+	} else if (action->choosetype == MC_RPC_CHOOSE_REQ_UNIXCTL &&
+		   action->subtype == MC_RPC_SUBTYPE_SERVER_CREATE) {
+
+	    unixctl_server_create = true;
 	}
     }
     
@@ -908,12 +936,7 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
 
     struct mc_action *action, *next;
     LIST_FOR_EACH_SAFE (action, next, list_node, actions) {
-	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
-	    (action->subtype == MC_RPC_SUBTYPE_LOCK ||
-	     action->subtype == MC_RPC_SUBTYPE_SEQ_WAIT) &&
-	    find_sync_dep(&locks, *((uint64_t *) action->data),
-			  action->p_idx) != NULL) {
-
+	if (is_action_disabled(action, &locks, unixctl_server_create)) {
 	    ovs_list_remove(&action->list_node);
 	}
     }
