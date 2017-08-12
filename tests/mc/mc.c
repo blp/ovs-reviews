@@ -1058,12 +1058,20 @@ mc_enqueue_state_action_pairs(struct mc_state *cur_state,
 	    CONTAINER_OF(ovs_list_pop_front(next_actions),
 			 struct mc_action,
 			 list_node);
-	
+
 	struct mc_queue_item *pair =
 	    new_state_action_pair(cur_state,
 				  cur_action,
 				  cur_path_len,
 				  next_action);
+
+	struct ds s, a;
+	s = mc_state_to_str(pair->state);
+	a = mc_action_to_str(pair->action);
+	VLOG_DBG("Enqueuing state %s ||| action %s",
+		 ds_cstr(&s),
+		 ds_cstr(&a));
+	ds_destroy(&s); ds_destroy(&a);
 
 	switch (strategy) {
 	case MC_SEARCH_STRATEGY_BREADTH:
