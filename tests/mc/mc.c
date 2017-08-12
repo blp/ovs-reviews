@@ -557,6 +557,8 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 	    ovs_assert(tid >= 0);
 	    
 	    if (rpc->common.type == MC_RPC_HELLO) {
+		VLOG_INFO("Received a hello request from process"
+			  " %s thread %d", mc_procs[i].name, tid);
 		mc_procs[i].threads[tid].js = js;
 		
 		struct mc_conn *conn;
@@ -568,6 +570,8 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 		    }
 		}
 	    } else if (rpc->common.type == MC_RPC_BYE) {
+		VLOG_INFO("Received a bye request from process"
+			  " %s thread %d", mc_procs[i].name, tid);
 		jsonrpc_close(mc_procs[i].threads[tid].js);
 		mc_procs[i].threads[tid].valid = false;
 		/** FIX ME !!! free other thread members here **/
@@ -585,6 +589,11 @@ static void
 mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 {
     struct mc_action *next_action;
+
+    VLOG_INFO("Received %s %s from %s(%d)",
+	      mc_rpc_choose_req_type_to_string(rq->type),
+	      mc_rpc_subtype_to_string(rq->subtype),
+	      mc_procs[p_idx].name, t_idx);
     
     if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT &&
 	restore_path_next < restore->length) {
@@ -753,7 +762,7 @@ mc_execute_action(struct mc_action *action)
 {
     if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
 	action->subtype == MC_RPC_SUBTYPE_CREATE) {
-
+	
 	int n = ++mc_procs[action->p_idx].num_threads;
 	mc_procs[action->p_idx].threads[n-1].valid = true;
     }
