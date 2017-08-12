@@ -151,8 +151,6 @@ static struct ovs_list mc_queue = OVS_LIST_INITIALIZER(&mc_queue);
 static struct mc_state *restore = NULL;
 static int restore_path_next = 0;
 
-static struct mc_thread *wait_thread = NULL;
-
 static enum mc_fsm_state fsm_state = MC_FSM_PRE_INIT;
 static enum mc_search_strategy strategy;
 static int max_search_depth = -1; /* < 0 means no bounds on depth */
@@ -622,15 +620,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	ovs_assert(0);
     }
 
-    if (fsm_state == MC_FSM_NEW_ACTION_WAIT ||
-	fsm_state == MC_FSM_RESTORE_ACTION_WAIT) {
-
-	ovs_assert(wait_thread == &mc_procs[p_idx].threads[t_idx]);
-	wait_thread->blocked = next_action;
-	
-    } else { /* MC_FSM_RESTORE_INIT_WAIT */
-	mc_procs[p_idx].threads[t_idx].blocked = next_action;
-    }
+    mc_procs[p_idx].threads[t_idx].blocked = next_action;
 }
 
 static void
@@ -1265,22 +1255,21 @@ mc_run(void)
 	}
 
 	if (action) {
-	    wait_thread = &mc_procs[action->p_idx].threads[action->t_idx];
-	    wait_thread->blocked = NULL;
+	    mc_procs[action->p_idx].threads[action->t_idx].blocked = NULL;
 	    mc_execute_action(action);
 	}
 	fsm_state = next_state;
 	break;
 
     case MC_FSM_RESTORE_ACTION_WAIT:
-	if (wait_thread->blocked != NULL) {
+	if (mc_all_threads_blocked()) {
 	    VLOG_DBG("\t<Applied>");
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 	}
 	break;
 
     case MC_FSM_NEW_ACTION_WAIT:
-	if (wait_thread->blocked != NULL) {
+	if (mc_all_threads_blocked()) {
 	    VLOG_DBG("\t<Applied>");
 	    fsm_state = MC_FSM_NEW_STATE;
 	}
