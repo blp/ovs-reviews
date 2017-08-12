@@ -586,13 +586,16 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 {
     struct mc_action *next_action;
     
-    if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT) {
+    if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT &&
+	restore_path_next < restore->length) {
+	
 	next_action = restore->path[restore_path_next];
 
 	ovs_assert(next_action->choosetype == rq->type);
 	ovs_assert(next_action->subtype == rq->subtype);
 	
-    } else if (fsm_state == MC_FSM_NEW_ACTION_WAIT ||
+    } else if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT ||
+	       fsm_state == MC_FSM_NEW_ACTION_WAIT ||
 	       fsm_state == MC_FSM_RESTORE_INIT_WAIT) {
 
 	next_action = mc_action_alloc();
@@ -1230,7 +1233,7 @@ mc_run(void)
 	VLOG_DBG("RESTORE_MID_STATE");
 	
 	if (restore && restore_path_next < restore->length) {
-	    action = restore->path[restore_path_next];
+	    action = restore->path[restore_path_next++];
 	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
 
 	    s = mc_action_to_str(action);
@@ -1254,7 +1257,7 @@ mc_run(void)
 
 	if (action) {
 	    wait_thread = &mc_procs[action->p_idx].threads[action->t_idx];
-	    mc_action_dec_ref(&wait_thread->blocked);
+	    wait_thread->blocked = NULL;
 	    mc_execute_action(action);
 	}
 	fsm_state = next_state;
@@ -1263,7 +1266,6 @@ mc_run(void)
     case MC_FSM_RESTORE_ACTION_WAIT:
 	if (wait_thread->blocked != NULL) {
 	    VLOG_DBG("\t<Applied>");
-	    restore_path_next++;
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 	}
 	break;
