@@ -921,7 +921,9 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
      * passed to seq_wait() into account */
     for (int i = 0; i < cur_state->length; i++) {
 	struct mc_action *action = cur_state->path[i];
-	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
+	if (action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
+	    action->subtype != MC_RPC_SUBTYPE_CREATE) {
+	    
 	    uint64_t addr = *((uint64_t *) cur_state->path[i]->data);
 	    track_sync_dep(action, addr, &locks);
 	    
@@ -932,7 +934,8 @@ mc_filter_disabled_actions(struct mc_state *cur_state,
 	}
     }
     
-    if (cur_action && cur_action->choosetype == MC_RPC_CHOOSE_REQ_THREAD) {
+    if (cur_action && cur_action->choosetype == MC_RPC_CHOOSE_REQ_THREAD &&
+	cur_action->subtype != MC_RPC_SUBTYPE_CREATE) {
 	track_sync_dep(cur_action, *((uint64_t *) cur_action->data), &locks);
     }
 
