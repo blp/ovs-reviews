@@ -1560,6 +1560,9 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp, struct jsonrpc *mc_conn,
     struct raft *raft = raft_alloc();
     raft->storage = log;
 
+    raft->mc_conn = mc_conn;
+    raft->mc_addr = mc_addr;
+
     raft->fsync_thread_running = true;
     raft->fsync_thread = mc_wrap_ovs_thread_create("raft_fsync",
 						   raft_fsync_thread,
@@ -1594,9 +1597,7 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp, struct jsonrpc *mc_conn,
             raft_add_conn(raft, jsonrpc_session_open(remote, true));
         }
     }
-
-    raft->mc_conn = mc_conn;
-    raft->mc_addr = mc_addr;
+    
     *raftp = raft;
     return NULL;
 
