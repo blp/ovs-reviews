@@ -1274,6 +1274,7 @@ mc_run(void)
 
     case MC_FSM_RESTORE_ACTION_WAIT:
 	if (mc_all_threads_blocked()) {
+	    VLOG_DBG("\t<Blocked> %s", mc_threads_blocked_status_str());
 	    VLOG_DBG("\t<Applied>");
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 	}
@@ -1281,6 +1282,7 @@ mc_run(void)
 
     case MC_FSM_NEW_ACTION_WAIT:
 	if (mc_all_threads_blocked()) {
+	    VLOG_DBG("\t<Blocked> %s", mc_threads_blocked_status_str());
 	    VLOG_DBG("\t<Applied>");
 	    fsm_state = MC_FSM_NEW_STATE;
 	}
