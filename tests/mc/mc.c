@@ -588,37 +588,45 @@ mc_handle_hello_or_bye(struct jsonrpc *js, const union mc_rpc *rpc)
 static void
 mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 {
-    struct mc_action *next_action;
-
     VLOG_INFO("Received %s %s from %s(%d)",
 	      mc_rpc_choose_req_type_to_string(rq->type),
 	      mc_rpc_subtype_to_string(rq->subtype),
 	      mc_procs[p_idx].name, t_idx);
+
+    struct mc_action *block_action;
     
-    if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT &&
-	restore_path_next < restore->length) {
-	next_action = restore->path[restore_path_next];
-	
-    } else if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT ||
+    /* if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT && */
+    /* 	restore_path_next < restore->length && */
+    /* 	p_idx == restore->path[restore_path_next]->p_idx && */
+    /* 	t_idx == restore->path[restore_path_next]->t_idx) { */
+
+    /* 	struct mc_action *block_action = restore->path[restore_path_next]; */
+
+    /* 	ovs_assert(block_action->p_idx == p_idx); */
+    /* 	ovs_assert(block_action->t_idx == t_idx); */
+    /* 	ovs_assert(block_action->choosetype == rq->type); */
+    /* 	ovs_assert(block_action->subtype == rq->subtype); */
+
+    /* } else*/ if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT ||
 	       fsm_state == MC_FSM_NEW_ACTION_WAIT ||
 	       fsm_state == MC_FSM_RESTORE_INIT_WAIT) {
 
-	next_action = mc_action_alloc();
-	next_action->type = MC_ACTION_UNKNOWN;
-	next_action->p_idx = p_idx;
-	next_action->t_idx = t_idx;
-	next_action->where = xmalloc(strlen(rq->common.where) + 1);
-	strcpy(next_action->where, rq->common.where);
-	next_action->choosetype = rq->type;
-	next_action->subtype = rq->subtype;
-	next_action->data = rq->data;
+	block_action = mc_action_alloc();
+	block_action->type = MC_ACTION_UNKNOWN;
+	block_action->p_idx = p_idx;
+	block_action->t_idx = t_idx;
+	block_action->where = xmalloc(strlen(rq->common.where) + 1);
+	strcpy(block_action->where, rq->common.where);
+	block_action->choosetype = rq->type;
+	block_action->subtype = rq->subtype;
+	block_action->data = rq->data;
     } else {
 	/* Should not be getting choose requests if not
 	 * in any of the above three states */
 	ovs_assert(0);
     }
 
-    mc_procs[p_idx].threads[t_idx].blocked = next_action;
+    mc_procs[p_idx].threads[t_idx].blocked = block_action;
 }
 
 static void
@@ -1246,10 +1254,6 @@ mc_run(void)
 	    action = restore->path[restore_path_next++];
 	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
 
-	    struct mc_thread *t = &mc_procs[action->p_idx].threads[action->t_idx];
-	    ovs_assert(action->choosetype == t->blocked->choosetype);
-	    ovs_assert(action->subtype == t->blocked->subtype);
-	    
 	    VLOG_DBG("\t<Restore Applying Action> %s", mc_action_to_cstr(action));
 	} else {
 	    action = CONTAINER_OF(ovs_list_front(&mc_queue),
