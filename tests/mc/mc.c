@@ -597,11 +597,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
     
     if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT &&
 	restore_path_next < restore->length) {
-	
 	next_action = restore->path[restore_path_next];
-
-	ovs_assert(next_action->choosetype == rq->type);
-	ovs_assert(next_action->subtype == rq->subtype);
 	
     } else if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT ||
 	       fsm_state == MC_FSM_NEW_ACTION_WAIT ||
@@ -1250,6 +1246,10 @@ mc_run(void)
 	    action = restore->path[restore_path_next++];
 	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
 
+	    struct mc_thread *t = &mc_procs[action->p_idx].threads[action->t_idx];
+	    ovs_assert(action->choosetype == t->blocked->choosetype);
+	    ovs_assert(action->subtype == t->blocked->subtype);
+	    
 	    VLOG_DBG("\t<Restore Applying Action> %s", mc_action_to_cstr(action));
 	} else {
 	    action = CONTAINER_OF(ovs_list_front(&mc_queue),
