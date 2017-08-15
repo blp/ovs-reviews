@@ -184,12 +184,14 @@ static bool mc_receive_rpc(struct jsonrpc *js, int p_idx,
 			   union mc_rpc *rpc);
 static void mc_run_conn(struct jsonrpc *js, int p_idx, int t_idx);
 static bool mc_all_threads_blocked(void);
-static struct ds mc_threads_blocked_status_str(void);
+static char *mc_threads_blocked_status_str(void);
 static void mc_send_choose_reply(struct mc_action *action,
 				 enum mc_rpc_choose_reply_type reply_type);
 static void mc_execute_action(struct mc_action *action);
-static struct ds mc_action_to_str(const struct mc_action *a);
-static struct ds mc_state_to_str(struct mc_state *state);
+static struct ds mc_action_to_ds(const struct mc_action *a);
+static char *mc_action_to_cstr(const struct mc_action *a);
+static struct ds mc_state_to_ds(struct mc_state *state);
+static char *mc_state_to_cstr(struct mc_state *state);
 static void mc_exit_error(void);
 static void mc_get_enabled_actions(struct mc_state *cur_state,
 				   struct mc_action *cur_action,
@@ -699,7 +701,7 @@ mc_all_threads_blocked(void)
     return true;
 }
 
-static struct ds
+static char *
 mc_threads_blocked_status_str(void)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
@@ -712,7 +714,7 @@ mc_threads_blocked_status_str(void)
 		    mc_procs[i].threads[j].blocked != NULL) {
 
 		    struct ds action_ds =
-			mc_action_to_str(mc_procs[i].threads[j].blocked);
+			mc_action_to_ds(mc_procs[i].threads[j].blocked);
 		    ds_put_format(&ds, "Blocked %s || ", ds_cstr(&action_ds));
 		    ds_destroy(&action_ds);
 		} else if (mc_procs[i].threads[j].valid) {
@@ -723,7 +725,7 @@ mc_threads_blocked_status_str(void)
 	}
     }
     
-    return ds;
+    return ds_cstr(&ds);
 }
 
 static void
@@ -776,7 +778,7 @@ mc_execute_action(struct mc_action *action)
 
 /* Deallocation is responsibility of caller !!!!*/
 static struct ds
-mc_action_to_str(const struct mc_action *a)
+mc_action_to_ds(const struct mc_action *a)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
 
@@ -795,9 +797,18 @@ mc_action_to_str(const struct mc_action *a)
     return ds;
 }
 
+/* Wrapper to allow easy printing. Deallocation
+ * is responsibility of caller. */
+static char *
+mc_action_to_cstr(const struct mc_action *a)
+{
+    struct ds ds = mc_action_to_ds(a);
+    return ds_cstr(&ds);
+}
+
 /* Deallocation is responsibility of caller !!!!*/ 
 static struct ds
-mc_state_to_str(struct mc_state *state)
+mc_state_to_ds(struct mc_state *state)
 {
     struct ds ret = DS_EMPTY_INITIALIZER;
 
@@ -805,14 +816,24 @@ mc_state_to_str(struct mc_state *state)
 	struct ds action_ds;
 	ds_put_format(&ret, "State length %d || ", state->length);
 	for (int i = 0; i < state->length; i++) {
-	    action_ds = mc_action_to_str(state->path[i]);
+	    action_ds = mc_action_to_ds(state->path[i]);
 	    ds_put_format(&ret, "%s || ", ds_cstr(&action_ds));
+	    ds_destroy(&action_ds);
 	}
     } else {
 	ds_put_cstr(&ret, "State NULL");
     }
 
     return ret;
+}
+
+/* Wrapper to allow easy printing. Deallocation
+ * is responsibility of caller. */
+static char *
+mc_state_to_cstr(struct mc_state *state)
+{
+    struct ds ds = mc_state_to_ds(state);
+    return ds_cstr(&ds);
 }
 
 static void
@@ -1093,14 +1114,10 @@ mc_enqueue_state_action_pairs(struct mc_state *cur_state,
 				  cur_path_len,
 				  next_action);
 
-	struct ds s, a;
-	s = mc_state_to_str(pair->state);
-	a = mc_action_to_str(pair->action);
 	VLOG_DBG("Enqueuing state %s ||| action %s",
-		 ds_cstr(&s),
-		 ds_cstr(&a));
-	ds_destroy(&s); ds_destroy(&a);
-
+		 mc_state_to_cstr(pair->state),
+		 mc_action_to_cstr(pair->action));
+	
 	switch (strategy) {
 	case MC_SEARCH_STRATEGY_BREADTH:
 	    ovs_list_push_back(&mc_queue, &pair->list_node);
@@ -1203,7 +1220,6 @@ mc_run(void)
 {
     struct mc_action *action = NULL;
     enum mc_fsm_state next_state;
-    struct ds s;
     
     switch(fsm_state) {
     case MC_FSM_PRE_INIT:
@@ -1222,12 +1238,8 @@ mc_run(void)
 	    fsm_state = MC_FSM_RESTORE_MID_STATE;
 
 	    VLOG_DBG("INIT_WAIT, all threads blocked");
-	    s = mc_threads_blocked_status_str();
-	    VLOG_DBG("\t<Blocked> %s", ds_cstr(&s));
-	    ds_destroy(&s);
-	    s = mc_state_to_str(restore);
-	    VLOG_DBG("\t<Next Restoring> %s", ds_cstr(&s));
-	    ds_destroy(&s);
+	    VLOG_DBG("\t<Blocked> %s", mc_threads_blocked_status_str());
+	    VLOG_DBG("\t<Next Restoring> %s", mc_state_to_cstr(restore));
 	}
 	break;
 
@@ -1238,9 +1250,7 @@ mc_run(void)
 	    action = restore->path[restore_path_next++];
 	    next_state = MC_FSM_RESTORE_ACTION_WAIT;
 
-	    s = mc_action_to_str(action);
-	    VLOG_DBG("\t<Restore Applying Action> %s", ds_cstr(&s));
-	    ds_destroy(&s);
+	    VLOG_DBG("\t<Restore Applying Action> %s", mc_action_to_cstr(action));
 	} else {
 	    action = CONTAINER_OF(ovs_list_front(&mc_queue),
 				  struct mc_queue_item,
@@ -1252,9 +1262,7 @@ mc_run(void)
 		next_state = MC_FSM_NEW_STATE;
 	    }
 
-	    s = mc_action_to_str(action);
-	    VLOG_DBG("\t<Queue Applying Action> %s", ds_cstr(&s));
-	    ds_destroy(&s);
+	    VLOG_DBG("\t<Queue Applying Action> %s", mc_action_to_cstr(action));
 	}
 
 	if (action) {
