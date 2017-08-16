@@ -592,26 +592,33 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	      mc_rpc_choose_req_type_to_string(rq->type),
 	      mc_rpc_subtype_to_string(rq->subtype),
 	      mc_procs[p_idx].name, t_idx);
-
-    struct mc_action *block_action;
     
-    /* if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT && */
-    /* 	restore_path_next < restore->length && */
-    /* 	p_idx == restore->path[restore_path_next]->p_idx && */
-    /* 	t_idx == restore->path[restore_path_next]->t_idx) { */
+    if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT &&
+    	restore_path_next < restore->length &&
+    	p_idx == restore->path[restore_path_next]->p_idx &&
+    	t_idx == restore->path[restore_path_next]->t_idx) {
 
-    /* 	struct mc_action *block_action = restore->path[restore_path_next]; */
+	/* In this case we know what the next action should be
+	 * so assert here to make sure that the state-space
+	 * exploration is deterministic */
+	
+    	struct mc_action *next_action = restore->path[restore_path_next];
 
-    /* 	ovs_assert(block_action->p_idx == p_idx); */
-    /* 	ovs_assert(block_action->t_idx == t_idx); */
-    /* 	ovs_assert(block_action->choosetype == rq->type); */
-    /* 	ovs_assert(block_action->subtype == rq->subtype); */
+    	ovs_assert(next_action->choosetype == rq->type);
+    	ovs_assert(next_action->subtype == rq->subtype);
+    }
 
-    /* } else*/ if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT ||
-	       fsm_state == MC_FSM_NEW_ACTION_WAIT ||
-	       fsm_state == MC_FSM_RESTORE_INIT_WAIT) {
+    if (fsm_state == MC_FSM_RESTORE_ACTION_WAIT ||
+	fsm_state == MC_FSM_NEW_ACTION_WAIT ||
+	fsm_state == MC_FSM_RESTORE_INIT_WAIT) {
 
-	block_action = mc_action_alloc();
+	/* FIX ME !!!!!!!!!!!!!!!!!!!!!!!
+	 * This is consuming way more memory than an optimized version
+	 * should. When we get a new action while restoring a state, we
+	 * should not be allocating memory again and again every time
+	 * we traverse that path */
+	
+	struct mc_action *block_action = mc_action_alloc();
 	block_action->type = MC_ACTION_UNKNOWN;
 	block_action->p_idx = p_idx;
 	block_action->t_idx = t_idx;
@@ -620,13 +627,13 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	block_action->choosetype = rq->type;
 	block_action->subtype = rq->subtype;
 	block_action->data = rq->data;
+
+	mc_procs[p_idx].threads[t_idx].blocked = block_action;
     } else {
 	/* Should not be getting choose requests if not
 	 * in any of the above three states */
 	ovs_assert(0);
     }
-
-    mc_procs[p_idx].threads[t_idx].blocked = block_action;
 }
 
 static void
