@@ -888,30 +888,22 @@ track_sync_dep(struct mc_action *action, uint64_t addr,
     int t_idx = action->t_idx;
     struct sync_dep_entry *entry = find_sync_dep(cur_locks, addr, p_idx);
     
-    switch(action->subtype) {
-    case MC_RPC_SUBTYPE_SEQ_WAIT:
-    case MC_RPC_SUBTYPE_UNLOCK:
-	if (entry) {
-	    ovs_list_remove(&entry->list_node);
-	    free(entry);
-	}
-	break;
-	
-    case MC_RPC_SUBTYPE_LOCK:
-	if (entry != NULL) {
-	    /* Same lock acquired twice ???? */
-	    ovs_assert(0);
-	} /* Fall-thru */
-    case MC_RPC_SUBTYPE_SEQ_CHANGE:
-	entry = xmalloc(sizeof *entry);
-	entry->addr = addr;
-	entry->p_idx = p_idx;
-	entry->t_idx = t_idx;
-	ovs_list_push_back(cur_locks, &entry->list_node);
-	break;
-	
-    default:
-	ovs_assert(0);
+    if (action->subtype == MC_RPC_SUBTYPE_SEQ_WAIT ||
+        action->subtype == MC_RPC_SUBTYPE_UNLOCK) {
+
+        if (entry) {
+            ovs_list_remove(&entry->list_node);
+            free(entry);
+        }
+    } else if (action->subtype == MC_RPC_SUBTYPE_LOCK ||
+               action->subtype == MC_RPC_SUBTYPE_SEQ_CHANGE) {
+        ovs_assert(!(action->subtype == MC_RPC_SUBTYPE_LOCK && entry));
+
+        entry = xmalloc(sizeof *entry);
+        entry->addr = addr;
+        entry->p_idx = p_idx;
+        entry->t_idx = t_idx;
+        ovs_list_push_back(cur_locks, &entry->list_node);
     }
 }
 
