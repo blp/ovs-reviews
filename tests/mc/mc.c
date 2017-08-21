@@ -240,13 +240,13 @@ mc_start_process(struct mc_process *new_proc) {
     int stdout_copy = dup(fileno(stdout));
     int stderr_copy = dup(fileno(stderr));
     
-    char path[strlen(new_proc->name) + 4];
-    strcpy(path, new_proc->name);
-    strcpy(path + strlen(new_proc->name), ".out");
+    char *path = xasprintf("%s.out", new_proc->name);
     int fdout = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
+    free(path);
 
-    strcpy(path + strlen(new_proc->name), ".err");
+    path = xasprintf("%s.err", new_proc->name);
     int fderr = open(path, O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);
+    free(path);
 
     if (fdout < 0 || fderr < 0) {
 	ovs_fatal(errno, "Cannot open outfile for process %s",
@@ -617,7 +617,7 @@ mc_handle_choose_req(int p_idx, int t_idx, const struct mc_rpc_choose_req *rq)
 	 * should. When we get a new action while restoring a state, we
 	 * should not be allocating memory again and again every time
 	 * we traverse that path */
-	
+
 	struct mc_action *block_action = mc_action_alloc();
 	block_action->type = MC_ACTION_UNKNOWN;
 	block_action->p_idx = p_idx;
@@ -904,6 +904,8 @@ track_sync_dep(struct mc_action *action, uint64_t addr,
         entry->p_idx = p_idx;
         entry->t_idx = t_idx;
         ovs_list_push_back(cur_locks, &entry->list_node);
+    } else {
+        OVS_NOT_REACHED();
     }
 }
 
