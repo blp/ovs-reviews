@@ -651,14 +651,16 @@ open_db(struct server_config *config, const char *filename)
     const char *name = (db->db
                         ? db->db->schema->name
                         : ovsdb_storage_get_name(db->storage));
-    if (!name) {
-        close_db(db);
-        return ovsdb_error(NULL, "%s: cannot determine database name",
-                           filename);
-    }
-
-    if (shash_find(config->all_dbs, name)) {
-        error = ovsdb_error(NULL, "%s: duplicate database name", name);
+    error = (!name
+             ? ovsdb_error(NULL, "%s: cannot determine database name",
+                           filename)
+             : name[0] == '_'
+             ? ovsdb_error(NULL, "%s: names beginning with \"_\" are reserved",
+                           name)
+             : shash_find(config->all_dbs, name)
+             ? ovsdb_error(NULL, "%s: duplicate database name", name)
+             : NULL);
+    if (error) {
         close_db(db);
         return error;
     }
