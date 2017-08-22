@@ -77,12 +77,41 @@ struct ovsdb_idl_arc {
     struct ovsdb_idl_row *dst;  /* Destination row. */
 };
 
+/* Connection state machine.
+ *
+ * When a JSON-RPC session connects, the IDL sends a "get_schema" request and
+ * transitions to IDL_S_SCHEMA_REQUESTED.  If the session drops and reconnects,
+ * the IDL starts over again in the same way. */
 enum ovsdb_idl_state {
+    /* Waits for "get_schema" reply, then sends a "monitor_cond" request whose
+     * details are informed by the schema and transitions to
+     * IDL_S_MONITOR_COND_REQUESTED. */
     IDL_S_SCHEMA_REQUESTED,
-    IDL_S_MONITOR_REQUESTED,
-    IDL_S_MONITORING,
+
+    /* Waits for "monitor_cond" reply:
+     *
+     *    - If the reply indicates success, replaces the IDL contents by the
+     *      data carried in the reply and transitions to IDL_S_MONITORING_COND.
+     *
+     *    - If the reply indicates failure because the database is too old to
+     *      support monitor_cond, sends a "monitor" request and transitions to
+     *      IDl_S_MONITOR_REQUESTED.  */
     IDL_S_MONITOR_COND_REQUESTED,
+
+    /* Waits for "monitor" reply, then replaces the IDL contents by the data
+     * carried in the reply and transitions to IDL_S_MONITORING.  */
+    IDL_S_MONITOR_REQUESTED,
+
+    /* Terminal states that process "update2" (IDL_S_MONITORING_COND) or
+     * "update" (IDL_S_MONITORING) notifications. */
     IDL_S_MONITORING_COND,
+    IDL_S_MONITORING,
+
+    /* Terminal error state that indicates that nothing useful can be done.
+     * The most likely reason is that the database server doesn't actually have
+     * the desired database.  We maintain the session with the database server
+     * anyway.  If it starts serving the database that we want, then it will
+     * kill the session and we will automatically reconnect and try again. */
     IDL_S_NO_SCHEMA
 };
 
