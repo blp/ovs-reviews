@@ -1,0 +1,12 @@
+#! /usr/bin/python
+
+import re
+import sys
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+
+    s = line.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    print('"' + s + '"')

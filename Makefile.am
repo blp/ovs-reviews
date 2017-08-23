@@ -76,13 +76,6 @@ EXTRA_DIST = \
 	.travis/osx-prepare.sh \
 	appveyor.yml \
 	boot.sh \
-	build-aux/cccl \
-	build-aux/cksum-schema-check \
-	build-aux/calculate-schema-cksum \
-	build-aux/dist-docs \
-	build-aux/sodepends.pl \
-	build-aux/soexpand.pl \
-	build-aux/xml2nroff \
 	$(MAN_FRAGMENTS) \
 	$(MAN_ROOTS) \
 	Vagrantfile \

@@ -89,9 +89,12 @@ void raft_close(struct raft *);
 const char *raft_get_name(const struct raft *);
 const struct uuid *raft_get_cid(const struct raft *);
 const struct uuid *raft_get_sid(const struct raft *);
+bool raft_is_connected(const struct raft *);
+bool raft_is_leader(const struct raft *);
+
+/* Joining and leaving a cluster */
 bool raft_is_joining(const struct raft *);
 
-/* Leaving a cluster */
 void raft_leave(struct raft *);
 bool raft_is_leaving(const struct raft *);
 bool raft_left(const struct raft *);

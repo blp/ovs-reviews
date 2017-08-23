@@ -27,6 +27,13 @@
 
 VLOG_DEFINE_THIS_MODULE(storage);
 
+/* There are three kinds of storage:
+ *
+ *    - Standalone, backed by a disk file.  'log' is nonnull, 'raft' is null.
+ *
+ *    - Clustered, backed by a Raft cluster.  'log' is null, 'raft' is nonnull.
+ *
+ *    - Memory only, unbacked.  'log' and 'raft' are null. */
 struct ovsdb_storage {
     struct ovsdb_log *log;
     struct raft *raft;
@@ -34,12 +41,20 @@ struct ovsdb_storage {
     unsigned int n_read;
 };
 
+/* Opens 'filename' for use as storage.  If 'rw', opens it for read/write access,
+ * otherwise read-only.  If successful, stores the new storage in '*storagep'
+ * and returns NULL; on failure, stores NULL in '*storagep' and returns the
+ * error.
+ *
+ * The returned storage might be clustered or standalone, depending on what
+ * 'filename' contains. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-ovsdb_storage_open(const char *name, bool rw, struct ovsdb_storage **storagep)
+ovsdb_storage_open(const char *filename, bool rw,
+                   struct ovsdb_storage **storagep)
 {
     struct ovsdb_log *log;
     struct ovsdb_error *error;
-    error = ovsdb_log_open(name, OVSDB_MAGIC"|"RAFT_MAGIC,
+    error = ovsdb_log_open(filename, OVSDB_MAGIC"|"RAFT_MAGIC,
                            rw ? OVSDB_LOG_READ_WRITE : OVSDB_LOG_READ_ONLY,
                            -1, &log);
     if (error) {
@@ -62,6 +77,14 @@ ovsdb_storage_open(const char *name, bool rw, struct ovsdb_storage **storagep)
     return NULL;
 }
 
+/* Creates and returns new storage without any backing.  Nothing will be read
+ * from the storage, and writes are discarded. */
+struct ovsdb_storage *
+ovsdb_storage_create_unbacked(void)
+{
+    return xzalloc(sizeof(struct ovsdb_storage));
+}
+
 void
 ovsdb_storage_close(struct ovsdb_storage *storage)
 {
@@ -71,6 +94,24 @@ ovsdb_storage_close(struct ovsdb_storage *storage)
         ovsdb_error_destroy(storage->error);
         free(storage);
     }
+}
+
+const char *
+ovsdb_storage_get_model(const struct ovsdb_storage *storage)
+{
+    return storage->raft ? "clustered" : "standalone";
+}
+
+bool
+ovsdb_storage_is_connected(const struct ovsdb_storage *storage)
+{
+    return !storage->raft || raft_is_connected(storage->raft);
+}
+
+bool
+ovsdb_storage_is_leader(const struct ovsdb_storage *storage)
+{
+    return !storage->raft || raft_is_leaving(storage->raft);
 }
 
 void
@@ -89,6 +130,9 @@ ovsdb_storage_wait(struct ovsdb_storage *storage)
     }
 }
 
+/* Returns 'storage''s embedded name, if it has one, otherwise null.
+ *
+ * Only clustered storage has a built-in name.  */
 const char *
 ovsdb_storage_get_name(const struct ovsdb_storage *storage)
 {
@@ -115,7 +159,7 @@ ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
         const struct json *data = raft_next_entry(storage->raft, txnid,
                                                   &is_snapshot);
         *jsonp = data ? json_clone(data) : NULL;
-    } else {
+    } else if (storage->log) {
         error = ovsdb_log_read(storage->log, jsonp);
         if (*jsonp) {
             *jsonp = (!storage->n_read
@@ -125,6 +169,9 @@ ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
         if (txnid) {
             *txnid = UUID_ZERO;
         }
+    } else {
+        *jsonp = NULL;
+        error = NULL;
     }
     if (!error) {
         storage->n_read++;
@@ -154,7 +201,7 @@ ovsdb_storage_unread(struct ovsdb_storage *storage)
         if (!storage->error) {
             storage->error = ovsdb_error(NULL, "inconsistent data");
         }
-    } else {
+    } else if (storage->log) {
         ovsdb_log_unread(storage->log);
     }
 }
@@ -178,11 +225,15 @@ ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
     } else if (storage->raft) {
         w->command = raft_command_execute(storage->raft, data,
                                           prereq, &result);
-    } else {
+    } else if (storage->log) {
         w->error = ovsdb_log_write(storage->log, data->u.array.elems[1]);
         if (!w->error && durable) {
             w->error = ovsdb_log_commit(storage->log);
         }
+    } else {
+        /* When 'error' and 'command' are both null, it indicates that the
+         * command is complete.  This is fine since this unbacked storage drops
+         * writes. */
     }
     if (resultp) {
         *resultp = result;
@@ -220,6 +271,7 @@ bool
 ovsdb_write_is_complete(const struct ovsdb_write *w)
 {
     return (w->error
+            || !w->command
             || raft_command_get_status(w->command) != RAFT_CMD_INCOMPLETE);
 }
 
@@ -265,8 +317,11 @@ ovsdb_storage_get_offset(const struct ovsdb_storage *storage)
     if (storage->raft) {
         /* XXX */
         return 1000000;
-    } else {
+    } else if (storage->log) {
         return ovsdb_log_get_offset(storage->log);
+    } else {
+        /* XXX */
+        return 1000000;
     }
 }
 

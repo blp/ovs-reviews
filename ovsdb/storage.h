@@ -24,10 +24,15 @@ struct ovsdb_storage;
 struct ovsdb_completion;
 struct uuid;
 
-struct ovsdb_error *ovsdb_storage_open(const char *name, bool rw,
+struct ovsdb_error *ovsdb_storage_open(const char *filename, bool rw,
                                        struct ovsdb_storage **)
     OVS_WARN_UNUSED_RESULT;
+struct ovsdb_storage *ovsdb_storage_create_unbacked(void);
 void ovsdb_storage_close(struct ovsdb_storage *);
+
+const char *ovsdb_storage_get_model(const struct ovsdb_storage *);
+bool ovsdb_storage_is_connected(const struct ovsdb_storage *);
+bool ovsdb_storage_is_leader(const struct ovsdb_storage *);
 
 void ovsdb_storage_run(struct ovsdb_storage *);
 void ovsdb_storage_wait(struct ovsdb_storage *);

@@ -63,7 +63,7 @@ bool ovsdb_jsonrpc_server_get_remote_status(
 void ovsdb_jsonrpc_server_free_remote_status(
     struct ovsdb_jsonrpc_remote_status *);
 
-void ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *);
+void ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *, bool force);
 
 void ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *);
 void ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *);

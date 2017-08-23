@@ -1614,6 +1614,21 @@ raft_get_name(const struct raft *raft)
 }
 
 bool
+raft_is_connected(const struct raft *raft)
+{
+    return (raft->role != RAFT_CANDIDATE
+            && !raft->joining
+            && !raft->leaving
+            && !raft->left);
+}
+
+bool
+raft_is_leader(const struct raft *raft)
+{
+    return raft->role == RAFT_LEADER;
+}
+
+bool
 raft_is_joining(const struct raft *raft)
 {
     return raft->joining;

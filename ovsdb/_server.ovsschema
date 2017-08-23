@@ -1,0 +1,15 @@
+{"name": "_Server",
+ "version": "1.0.0",
+ "cksum": "3706108928 433",
+ "tables": {
+   "Database": {
+     "columns": {
+       "name": {"type": "string"},
+       "generation": {"type": "uuid"},
+       "model": {
+         "type": {"key": {"type": "string",
+	                  "enum": ["set", ["standalone", "clustered"]]}}},
+       "connected": {"type": "boolean"},
+       "leader": {"type": "boolean"},
+       "schema": {"type": "string"}},
+     "isRoot": true}}}
