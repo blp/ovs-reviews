@@ -6,4 +6,4 @@
 # it can generate more programmer-friendly data structures.
 
 s["idlPrefix"] = "serverrec_"
-s["idlHeader"] = "\"lib/_server-idl.h\""
+s["idlHeader"] = "\"lib/ovsdb-server-idl.h\""

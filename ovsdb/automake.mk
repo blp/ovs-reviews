@@ -127,13 +127,7 @@ noinst_SCRIPTS += ovsdb/ovsdb-dot
 CLEANFILES += ovsdb/ovsdb-dot
 OVSDB_DOT = $(run_python) $(srcdir)/ovsdb/ovsdb-dot.in
 
-# _server IDL
-OVSIDL_BUILT += ovsdb/_server-idl.c ovsdb/_server-idl.h ovsdb/_server-idl.ovsidl
-
-EXTRA_DIST += ovsdb/_server.ovsschema ovsdb/_server-idl.ann
-ovsdb/_server-idl.ovsidl: ovsdb/_server.ovsschema ovsdb/_server-idl.ann
-	$(AM_V_GEN)$(OVSDB_IDLC) annotate $(srcdir)/ovsdb/_server.ovsschema $(srcdir)/ovsdb/_server-idl.ann > $@.tmp && mv $@.tmp $@
-
+EXTRA_DIST += ovsdb/_server.ovsschema
 ovsdb/ovsdb-server.o: ovsdb/_server.ovsschema.inc
 ovsdb/_server.ovsschema.inc: ovsdb/_server.ovsschema $(srcdir)/build-aux/text2c
 	$(AM_V_GEN)$(run_python) $(srcdir)/build-aux/text2c < $< > $@.tmp
