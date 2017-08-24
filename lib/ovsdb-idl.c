@@ -53,30 +53,6 @@ COVERAGE_DEFINE(txn_try_again);
 COVERAGE_DEFINE(txn_not_locked);
 COVERAGE_DEFINE(txn_error);
 
-/* An arc from one idl_row to another.  When row A contains a UUID that
- * references row B, this is represented by an arc from A (the source) to B
- * (the destination).
- *
- * Arcs from a row to itself are omitted, that is, src and dst are always
- * different.
- *
- * Arcs are never duplicated, that is, even if there are multiple references
- * from A to B, there is only a single arc from A to B.
- *
- * Arcs are directed: an arc from A to B is the converse of an an arc from B to
- * A.  Both an arc and its converse may both be present, if each row refers
- * to the other circularly.
- *
- * The source and destination row may be in the same table or in different
- * tables.
- */
-struct ovsdb_idl_arc {
-    struct ovs_list src_node;   /* In src->src_arcs list. */
-    struct ovs_list dst_node;   /* In dst->dst_arcs list. */
-    struct ovsdb_idl_row *src;  /* Source row. */
-    struct ovsdb_idl_row *dst;  /* Destination row. */
-};
-
 /* Connection state machine.
  *
  * When a JSON-RPC session connects, the IDL sends a "monitor_cond" request for
@@ -233,7 +209,6 @@ static void ovsdb_idl_row_parse(struct ovsdb_idl_row *);
 static void ovsdb_idl_row_unparse(struct ovsdb_idl_row *);
 static void ovsdb_idl_row_clear_old(struct ovsdb_idl_row *);
 static void ovsdb_idl_row_clear_new(struct ovsdb_idl_row *);
-static void ovsdb_idl_row_clear_arcs(struct ovsdb_idl_row *, bool destroy_dsts);
 
 static void ovsdb_idl_txn_abort_all(struct ovsdb_idl *);
 static bool ovsdb_idl_txn_process_reply(struct ovsdb_idl *,
@@ -452,21 +427,7 @@ ovsdb_idl_clear(struct ovsdb_idl *idl)
 
         changed = true;
         HMAP_FOR_EACH_SAFE (row, next_row, hmap_node, &table->rows) {
-            struct ovsdb_idl_arc *arc, *next_arc;
-
-            if (!ovsdb_idl_row_is_orphan(row)) {
-                ovsdb_idl_row_unparse(row);
-            }
-            LIST_FOR_EACH_SAFE (arc, next_arc, src_node, &row->src_arcs) {
-                free(arc);
-            }
-            /* No need to do anything with dst_arcs: some node has those arcs
-             * as forward arcs and will destroy them itself. */
-
-            if (!ovs_list_is_empty(&row->track_node)) {
-                ovs_list_remove(&row->track_node);
-            }
-
+            ovsdb_idl_row_unparse(row);
             ovsdb_idl_row_destroy(row);
         }
     }
@@ -821,70 +782,6 @@ add_row_references(const struct ovsdb_base_type *type,
             ++*n_dstsp;
         }
     }
-}
-
-/* Checks for consistency in 'idl''s graph of arcs between database rows.  Each
- * reference from one row to a different row should be reflected as a "struct
- * ovsdb_idl_arc" between those rows.
- *
- * This function is slow, big-O wise, and aborts if it finds an inconsistency,
- * thus it is only for use in test programs. */
-void
-ovsdb_idl_check_consistency(const struct ovsdb_idl *idl)
-{
-    /* Consistency is broken while a transaction is in progress. */
-    if (!idl->txn) {
-        return;
-    }
-
-    bool ok = true;
-
-    struct uuid *dsts = NULL;
-    size_t allocated_dsts = 0;
-
-    for (size_t i = 0; i < idl->class->n_tables; i++) {
-        const struct ovsdb_idl_table *table = &idl->tables[i];
-        const struct ovsdb_idl_table_class *class = table->class;
-
-        const struct ovsdb_idl_row *row;
-        HMAP_FOR_EACH (row, hmap_node, &table->rows) {
-            size_t n_dsts = 0;
-            if (row->new) {
-                size_t n_columns = shash_count(&row->table->columns);
-                for (size_t j = 0; j < n_columns; j++) {
-                    const struct ovsdb_type *type = &class->columns[j].type;
-                    const struct ovsdb_datum *datum = &row->new[j];
-                    add_row_references(&type->key,
-                                       datum->keys, datum->n, &row->uuid,
-                                       &dsts, &n_dsts, &allocated_dsts);
-                    add_row_references(&type->value,
-                                       datum->values, datum->n, &row->uuid,
-                                       &dsts, &n_dsts, &allocated_dsts);
-                }
-            }
-            const struct ovsdb_idl_arc *arc;
-            LIST_FOR_EACH (arc, src_node, &row->src_arcs) {
-                if (!remove_uuid_from_array(&arc->dst->uuid,
-                                            dsts, &n_dsts)) {
-                    VLOG_ERR("unexpected arc from %s row "UUID_FMT" to %s "
-                             "row "UUID_FMT,
-                             table->class->name,
-                             UUID_ARGS(&row->uuid),
-                             arc->dst->table->class->name,
-                             UUID_ARGS(&arc->dst->uuid));
-                    ok = false;
-                }
-            }
-            for (size_t i = 0; i < n_dsts; i++) {
-                VLOG_ERR("%s row "UUID_FMT" missing arc to row "UUID_FMT,
-                         table->class->name, UUID_ARGS(&row->uuid),
-                         UUID_ARGS(&dsts[i]));
-                ok = false;
-            }
-        }
-    }
-    free(dsts);
-    ovs_assert(ok);
 }
 
 const struct ovsdb_idl_class *
@@ -2145,60 +2042,11 @@ ovsdb_idl_row_clear_new(struct ovsdb_idl_row *row)
     }
 }
 
-static void
-ovsdb_idl_row_clear_arcs(struct ovsdb_idl_row *row, bool destroy_dsts)
-{
-    struct ovsdb_idl_arc *arc, *next;
-
-    /* Delete all forward arcs.  If 'destroy_dsts', destroy any orphaned rows
-     * that this causes to be unreferenced, if tracking is not enabled.
-     * If tracking is enabled, orphaned nodes are removed from hmap but not
-     * freed.
-     */
-    LIST_FOR_EACH_SAFE (arc, next, src_node, &row->src_arcs) {
-        ovs_list_remove(&arc->dst_node);
-        if (destroy_dsts
-            && ovsdb_idl_row_is_orphan(arc->dst)
-            && ovs_list_is_empty(&arc->dst->dst_arcs)) {
-            ovsdb_idl_row_destroy(arc->dst);
-        }
-        free(arc);
-    }
-    ovs_list_init(&row->src_arcs);
-}
-
-/* Force nodes that reference 'row' to reparse. */
-static void
-ovsdb_idl_row_reparse_backrefs(struct ovsdb_idl_row *row)
-{
-    struct ovsdb_idl_arc *arc, *next;
-
-    /* This is trickier than it looks.  ovsdb_idl_row_clear_arcs() will destroy
-     * 'arc', so we need to use the "safe" variant of list traversal.  However,
-     * calling an ovsdb_idl_column's 'parse' function will add an arc
-     * equivalent to 'arc' to row->arcs.  That could be a problem for
-     * traversal, but it adds it at the beginning of the list to prevent us
-     * from stumbling upon it again.
-     *
-     * (If duplicate arcs were possible then we would need to make sure that
-     * 'next' didn't also point into 'arc''s destination, but we forbid
-     * duplicate arcs.) */
-    LIST_FOR_EACH_SAFE (arc, next, dst_node, &row->dst_arcs) {
-        struct ovsdb_idl_row *ref = arc->src;
-
-        ovsdb_idl_row_unparse(ref);
-        ovsdb_idl_row_clear_arcs(ref, false);
-        ovsdb_idl_row_parse(ref);
-    }
-}
-
 static struct ovsdb_idl_row *
 ovsdb_idl_row_create__(const struct ovsdb_idl_table_class *class)
 {
     struct ovsdb_idl_row *row = xzalloc(class->allocation_size);
     class->row_init(row);
-    ovs_list_init(&row->src_arcs);
-    ovs_list_init(&row->dst_arcs);
     hmap_node_nullify(&row->txn_node);
     ovs_list_init(&row->track_node);
     return row;
@@ -2322,13 +2170,8 @@ static void
 ovsdb_idl_delete_row(struct ovsdb_idl_row *row)
 {
     ovsdb_idl_row_unparse(row);
-    ovsdb_idl_row_clear_arcs(row, true);
     ovsdb_idl_row_clear_old(row);
-    if (ovs_list_is_empty(&row->dst_arcs)) {
-        ovsdb_idl_row_destroy(row);
-    } else {
-        ovsdb_idl_row_reparse_backrefs(row);
-    }
+    ovsdb_idl_row_destroy(row);
 }
 
 /* Returns true if a column with mode OVSDB_IDL_MODE_RW changed, false
@@ -2339,7 +2182,6 @@ ovsdb_idl_modify_row(struct ovsdb_idl_row *row, const struct json *row_json)
     bool changed;
 
     ovsdb_idl_row_unparse(row);
-    ovsdb_idl_row_clear_arcs(row, true);
     changed = ovsdb_idl_row_update(row, row_json, OVSDB_IDL_CHANGE_MODIFY);
     ovsdb_idl_row_parse(row);
 
@@ -2353,7 +2195,6 @@ ovsdb_idl_modify_row_by_diff(struct ovsdb_idl_row *row,
     bool changed;
 
     ovsdb_idl_row_unparse(row);
-    ovsdb_idl_row_clear_arcs(row, true);
     changed = ovsdb_idl_row_apply_diff(row, diff_json,
                                        OVSDB_IDL_CHANGE_MODIFY);
     ovsdb_idl_row_parse(row);
@@ -2361,79 +2202,11 @@ ovsdb_idl_modify_row_by_diff(struct ovsdb_idl_row *row,
     return changed;
 }
 
-static bool
-may_add_arc(const struct ovsdb_idl_row *src, const struct ovsdb_idl_row *dst)
-{
-    const struct ovsdb_idl_arc *arc;
-
-    /* No self-arcs. */
-    if (src == dst) {
-        return false;
-    }
-
-    /* No duplicate arcs.
-     *
-     * We only need to test whether the first arc in dst->dst_arcs originates
-     * at 'src', since we add all of the arcs from a given source in a clump
-     * (in a single call to ovsdb_idl_row_parse()) and new arcs are always
-     * added at the front of the dst_arcs list. */
-    if (ovs_list_is_empty(&dst->dst_arcs)) {
-        return true;
-    }
-    arc = CONTAINER_OF(dst->dst_arcs.next, struct ovsdb_idl_arc, dst_node);
-    return arc->src != src;
-}
-
 static struct ovsdb_idl_table *
 ovsdb_idl_table_from_class(const struct ovsdb_idl *idl,
                            const struct ovsdb_idl_table_class *table_class)
 {
     return &idl->tables[table_class - idl->class->tables];
-}
-
-/* Called by ovsdb-idlc generated code. */
-struct ovsdb_idl_row *
-ovsdb_idl_get_row_arc(struct ovsdb_idl_row *src,
-                      const struct ovsdb_idl_table_class *dst_table_class,
-                      const struct uuid *dst_uuid)
-{
-    struct ovsdb_idl *idl = src->table->idl;
-    struct ovsdb_idl_table *dst_table;
-    struct ovsdb_idl_arc *arc;
-    struct ovsdb_idl_row *dst;
-
-    dst_table = ovsdb_idl_table_from_class(idl, dst_table_class);
-    dst = ovsdb_idl_get_row(dst_table, dst_uuid);
-    if (idl->txn) {
-        /* We're being called from ovsdb_idl_txn_write().  We must not update
-         * any arcs, because the transaction will be backed out at commit or
-         * abort time and we don't want our graph screwed up.
-         *
-         * Just return the destination row, if there is one and it has not been
-         * deleted. */
-        if (dst && (hmap_node_is_null(&dst->txn_node) || dst->new)) {
-            return dst;
-        }
-        return NULL;
-    } else {
-        /* We're being called from some other context.  Update the graph. */
-        if (!dst) {
-            dst = ovsdb_idl_row_create(dst_table, dst_uuid);
-        }
-
-        /* Add a new arc, if it wouldn't be a self-arc or a duplicate arc. */
-        if (may_add_arc(src, dst)) {
-            /* The arc *must* be added at the front of the dst_arcs list.  See
-             * ovsdb_idl_row_reparse_backrefs() for details. */
-            arc = xmalloc(sizeof *arc);
-            ovs_list_push_front(&src->src_arcs, &arc->src_node);
-            ovs_list_push_front(&dst->dst_arcs, &arc->dst_node);
-            arc->src = src;
-            arc->dst = dst;
-        }
-
-        return !ovsdb_idl_row_is_orphan(dst) ? dst : NULL;
-    }
 }
 
 /* Searches 'tc''s table in 'idl' for a row with UUID 'uuid'.  Returns a
@@ -2808,10 +2581,6 @@ ovsdb_idl_txn_disassemble(struct ovsdb_idl_txn *txn)
 {
     struct ovsdb_idl_row *row, *next;
 
-    /* This must happen early.  Otherwise, ovsdb_idl_row_parse() will call an
-     * ovsdb_idl_column's 'parse' function, which will call
-     * ovsdb_idl_get_row_arc(), which will seen that the IDL is in a
-     * transaction and fail to update the graph.  */
     txn->idl->txn = NULL;
 
     HMAP_FOR_EACH_SAFE (row, next, txn_node, &txn->txn_rows) {
@@ -2820,7 +2589,6 @@ ovsdb_idl_txn_disassemble(struct ovsdb_idl_txn *txn)
         if (row->old) {
             if (row->written) {
                 ovsdb_idl_row_unparse(row);
-                ovsdb_idl_row_clear_arcs(row, false);
                 ovsdb_idl_row_parse(row);
             }
         } else {
