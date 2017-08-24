@@ -64,9 +64,10 @@
 struct ovsdb_idl_row {
     struct hmap_node hmap_node; /* In struct ovsdb_idl_table's 'rows'. */
     struct uuid uuid;           /* Row "_uuid" field. */
+    struct ovs_list src_arcs;   /* Forward arcs (ovsdb_idl_arc.src_node). */
+    struct ovs_list dst_arcs;   /* Backward arcs (ovsdb_idl_arc.dst_node). */
     struct ovsdb_idl_table *table; /* Containing table. */
-    struct ovsdb_datum *old;    /* Committed data. */
-    size_t n_refs;              /* Number of references from other rows. */
+    struct ovsdb_datum *old;    /* Committed data (null if orphaned). */
 
     /* Transactional data. */
     struct ovsdb_datum *new;    /* Modified data (null to delete row). */
@@ -120,6 +121,11 @@ struct ovsdb_idl_class {
     const struct ovsdb_idl_table_class *tables;
     size_t n_tables;
 };
+
+struct ovsdb_idl_row *ovsdb_idl_get_row_arc(
+    struct ovsdb_idl_row *src,
+    const struct ovsdb_idl_table_class *dst_table,
+    const struct uuid *dst_uuid);
 
 void ovsdb_idl_txn_verify(const struct ovsdb_idl_row *,
                           const struct ovsdb_idl_column *);
