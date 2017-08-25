@@ -118,18 +118,23 @@ enum ovsdb_idl_state {
 };
 
 struct ovsdb_idl {
+    /* Data. */
     const struct ovsdb_idl_class *class_;
-    struct jsonrpc_session *session;
     struct shash table_by_name; /* Contains "struct ovsdb_idl_table *"s.*/
     struct ovsdb_idl_table *tables; /* Array of ->class_->n_tables elements. */
     unsigned int change_seqno;
-    bool verify_write_only;
 
-    /* Session state. */
-    unsigned int state_seqno;
-    enum ovsdb_idl_state state;
-    struct json *request_id;
-    struct json *schema;
+    /* Session state.
+     *
+     *'state_seqno' is a snapshot of the session's sequence number as returned
+     * jsonrpc_session_get_seqno(session), so if it differs from the value that
+     * function currently returns then the session has reconnected and the
+     * state machine must restart.  */
+    struct jsonrpc_session *session; /* Connection to the server. */
+    enum ovsdb_idl_state state;      /* Current session state. */
+    unsigned int state_seqno;        /* See above. */
+    struct json *request_id;         /* JSON ID for request awaiting reply. */
+    struct json *schema;             /* Temporary copy of database schema. */
 
     /* Database locking. */
     char *lock_name;            /* Name of lock we need, NULL if none. */
@@ -140,6 +145,7 @@ struct ovsdb_idl {
     /* Transaction support. */
     struct ovsdb_idl_txn *txn;
     struct hmap outstanding_txns;
+    bool verify_write_only;
 
     /* Conditional monitoring. */
     bool cond_changed;
