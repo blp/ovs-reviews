@@ -1196,7 +1196,7 @@ ovsdb_idl_condition_clone(struct ovsdb_idl_condition *dst,
  * arranges to send the new condition to the database server.
  *
  * Return the next conditional update sequence number. When this
- * value and ovsdb_idl_get_condition_seqno() matchs, the 'idl'
+ * value and ovsdb_idl_get_condition_seqno() matches, the 'idl'
  * contains rows that match the 'condition'.
  */
 unsigned int
