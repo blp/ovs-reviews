@@ -118,7 +118,6 @@ enum ovsdb_idl_state {
 struct ovsdb_idl {
     const struct ovsdb_idl_class *class;
     struct jsonrpc_session *session;
-    struct uuid uuid;
     struct shash table_by_name; /* Contains "struct ovsdb_idl_table *"s.*/
     struct ovsdb_idl_table *tables; /* Array of ->class->n_tables elements. */
     unsigned int change_seqno;
@@ -385,7 +384,6 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl->schema = NULL;
 
     hmap_init(&idl->outstanding_txns);
-    uuid_generate(&idl->uuid);
 
     return idl;
 }
@@ -1251,8 +1249,7 @@ static void
 ovsdb_idl_send_cond_change(struct ovsdb_idl *idl)
 {
     int i;
-    char uuid[UUID_LEN + 1];
-    struct json *params, *json_uuid;
+    struct json *params;
     struct jsonrpc_msg *request;
 
     /* When 'idl-request_id' is not NULL, there is an outstanding
@@ -1284,15 +1281,8 @@ ovsdb_idl_send_cond_change(struct ovsdb_idl *idl)
 
     /* Send request if not empty. */
     if (monitor_cond_change_requests) {
-        snprintf(uuid, sizeof uuid, UUID_FMT,
-                 UUID_ARGS(&idl->uuid));
-        json_uuid = json_string_create(uuid);
-
-        /* Create a new uuid */
-        uuid_generate(&idl->uuid);
-        snprintf(uuid, sizeof uuid, UUID_FMT,
-                 UUID_ARGS(&idl->uuid));
-        params = json_array_create_3(json_uuid, json_string_create(uuid),
+        params = json_array_create_3(json_string_create("monitor"),
+                                     json_string_create("monitor"),
                                      monitor_cond_change_requests);
 
         request = jsonrpc_create_request("monitor_cond_change", params,
@@ -1592,7 +1582,6 @@ ovsdb_idl_send_monitor_request__(struct ovsdb_idl *idl,
     struct shash *schema;
     struct json *monitor_requests;
     struct jsonrpc_msg *msg;
-    char uuid[UUID_LEN + 1];
     size_t i;
 
     schema = parse_schema(idl->schema);
@@ -1651,11 +1640,10 @@ ovsdb_idl_send_monitor_request__(struct ovsdb_idl *idl,
 
     json_destroy(idl->request_id);
 
-    snprintf(uuid, sizeof uuid, UUID_FMT, UUID_ARGS(&idl->uuid));
     msg = jsonrpc_create_request(
         method,
         json_array_create_3(json_string_create(idl->class->database),
-                            json_string_create(uuid), monitor_requests),
+                            json_string_create("monitor"), monitor_requests),
         &idl->request_id);
     jsonrpc_session_send(idl->session, msg);
     idl->cond_changed = false;
