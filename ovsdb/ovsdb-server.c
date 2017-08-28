@@ -565,10 +565,6 @@ parse_txn(struct server_config *config, struct db *db,
             return ovsdb_error(NULL, "%s: data without schema", db->filename);
         }
 
-        char *s = json_to_string(data_json, JSSF_SORT);
-        VLOG_INFO("got txn %s", s);
-        free(s);
-
         struct ovsdb_txn *txn;
         struct ovsdb_error *error;
 

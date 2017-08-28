@@ -439,6 +439,8 @@ add_pmd_of_ports () {
     add_of_ports__ dummy-pmd $@
 }
 
+
+
 m4_divert_pop([PREPARE_TESTS])
 
 # OVS_VSWITCHD_STOP([WHITELIST])
