@@ -869,13 +869,8 @@ ovsdb_txn_commit_(struct ovsdb_txn *txn, bool replay, bool durable)
     }
 
     /* Send the commit to each replica. */
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     if (txn->db->storage && !replay) {
-        VLOG_INFO("%s:%d", __FILE__, __LINE__);
         struct json *txn_json = ovsdb_file_txn_to_json(txn);
-        char *s = json_to_string(txn_json, 0);
-        VLOG_INFO("%s", s);
-        free(s);
         if (txn_json) {
             txn_json = ovsdb_file_txn_annotate(txn_json,
                                                ovsdb_txn_get_comment(txn));
