@@ -110,6 +110,7 @@ void jsonrpc_session_wait(struct jsonrpc_session *);
 
 size_t jsonrpc_session_get_backlog(const struct jsonrpc_session *);
 const char *jsonrpc_session_get_name(const struct jsonrpc_session *);
+size_t jsonrpc_session_get_n_remotes(const struct jsonrpc_session *);
 
 int jsonrpc_session_send(struct jsonrpc_session *, struct jsonrpc_msg *);
 int jsonrpc_session_send_block(struct jsonrpc_session *s,

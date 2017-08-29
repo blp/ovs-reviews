@@ -1044,6 +1044,12 @@ jsonrpc_session_get_name(const struct jsonrpc_session *s)
     return reconnect_get_name(s->reconnect);
 }
 
+size_t
+jsonrpc_session_get_n_remotes(const struct jsonrpc_session *s)
+{
+    return s->n_remotes;
+}
+
 /* Always takes ownership of 'msg', regardless of success. */
 int
 jsonrpc_session_send(struct jsonrpc_session *s, struct jsonrpc_msg *msg)

@@ -30,12 +30,12 @@
 #include "openvswitch/json.h"
 #include "jsonrpc.h"
 #include "ovsdb/ovsdb.h"
-#include "ovsdb/_server-idl.h"
 #include "ovsdb/table.h"
 #include "ovsdb-data.h"
 #include "ovsdb-error.h"
 #include "ovsdb-idl-provider.h"
 #include "ovsdb-parser.h"
+#include "ovsdb-server-idl.h"
 #include "poll-loop.h"
 #include "openvswitch/shash.h"
 #include "sset.h"
@@ -82,9 +82,14 @@ struct ovsdb_idl_arc {
  *
  * When a JSON-RPC session connects, the IDL sends a "monitor_cond" request for
  * the Database table in the _Server database and transitions to the
- * IDL_S_SERVER_MONITOR_REQUESTED state.  If the session drops and reconnects,
- * the IDL starts over again in the same way. */
+ * IDL_S_SERVER_MONITOR_COND_REQUESTED state.  If the session drops and
+ * reconnects, the IDL starts over again in the same way. */
 enum ovsdb_idl_state {
+    /* Waits for "get_schema" reply, then sends "monitor_cond" request for the
+     * Database table in the _Server database, whose details are informed by
+     * the schema, and transitions to IDL_S_SERVER_MONITOR_COND_REQUESTED. */
+    IDL_S_SERVER_SCHEMA_REQUESTED,
+
     /* Waits for "monitor_cond" reply for the Database table:
      *
      * - If the reply indicates success, and the Database table has a row for
@@ -94,17 +99,19 @@ enum ovsdb_idl_state {
      *     connected to the cluster, closes the connection.  The next
      *     connection attempt has a chance at picking a connected server.
      *
-     *   * Otherwise, sends a "set_db_change_aware" request and a
-     *     "monitor_cond" request for the IDL database whose details are
-     *     informed by the schema (obtained from the row), and transitions to
-     *     IDL_S_DATA_MONITOR_COND_REQUESTED.
+     *   * Otherwise, sends a "monitor_cond" request for the IDL database whose
+     *     details are informed by the schema (obtained from the row), and
+     *     transitions to IDL_S_DATA_MONITOR_COND_REQUESTED.
+     *
+     *     XXX Should also send set_db_change_aware and monitor the database
+     *     status
      *
      * - If the reply indicates success, but the Database table does not have a
      *   row for the IDL database, transitions to IDL_S_ERROR.
      *
      * - If the reply indicates failure, sends a "get_schema" request for the
-     *   IDL database and transitions to IDL_S_SCHEMA_REQUESTED. */
-    IDL_S_SERVER_MONITOR_REQUESTED,
+     *   IDL database and transitions to IDL_S_DATA_SCHEMA_REQUESTED. */
+    IDL_S_SERVER_MONITOR_COND_REQUESTED,
 
     /* Waits for "get_schema" reply, then sends "monitor_cond" request whose
      * details are informed by the schema, and transitions to
@@ -176,8 +183,11 @@ static unsigned int ovsdb_idl_db_set_condition(
     struct ovsdb_idl_db *, const struct ovsdb_idl_table_class *,
     const struct ovsdb_idl_condition *);
 
-static struct jsonrpc_msg *ovsdb_idl_db_compose_monitor_request(
-    struct ovsdb_idl_db *, bool use_monitor_cond);
+static void ovsdb_idl_send_schema_request(struct ovsdb_idl *,
+                                          struct ovsdb_idl_db *);
+static void ovsdb_idl_send_monitor_request(struct ovsdb_idl *,
+                                           struct ovsdb_idl_db *,
+                                           bool use_monitor_cond);
 
 struct ovsdb_idl {
     struct ovsdb_idl_db server;
@@ -230,6 +240,9 @@ static struct vlog_rate_limit syntax_rl = VLOG_RATE_LIMIT_INIT(1, 5);
 static struct vlog_rate_limit semantic_rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
 static void ovsdb_idl_clear(struct ovsdb_idl *);
+static void ovsdb_idl_db_parse_monitor_reply(struct ovsdb_idl_db *,
+                                             const struct json *result,
+                                             bool is_monitor_cond);
 static bool ovsdb_idl_db_parse_update_rpc(struct ovsdb_idl_db *,
                                           const struct jsonrpc_msg *);
 static void ovsdb_idl_db_parse_update(struct ovsdb_idl_db *,
@@ -424,7 +437,7 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     struct ovsdb_idl *idl;
 
     idl = xzalloc(sizeof *idl);
-    ovsdb_idl_db_init(&idl->server, &serverrec_idl_class, idl, false);
+    ovsdb_idl_db_init(&idl->server, &serverrec_idl_class, idl, true);
     ovsdb_idl_db_init(&idl->db, class, idl, monitor_everything_by_default);
     idl->session = ovsdb_idl_open_session(remote, retry);
     idl->state_seqno = UINT_MAX;
@@ -433,9 +446,6 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     /* Monitor the Database table in the _Server database.
      *
      * We monitor only the row for 'class'. */
-    ovsdb_idl_db_add_column(&idl->server, &serverrec_database_col_generation);
-    ovsdb_idl_db_add_column(&idl->server, &serverrec_database_col_connected);
-    ovsdb_idl_db_add_column(&idl->server, &serverrec_database_col_schema);
     struct ovsdb_idl_condition cond;
     ovsdb_idl_condition_init(&cond);
     serverrec_database_add_clause_name(&cond, OVSDB_F_EQ, class->database);
@@ -555,7 +565,8 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
 {
     bool ok = msg->type == JSONRPC_REPLY;
     if (!ok
-        && idl->state != IDL_S_SERVER_MONITOR_REQUESTED
+        && idl->state != IDL_S_SERVER_SCHEMA_REQUESTED
+        && idl->state != IDL_S_SERVER_MONITOR_COND_REQUESTED
         && idl->state != IDL_S_DATA_MONITOR_COND_REQUESTED) {
         /* XXX Log error. */
         idl->state = IDL_S_ERROR;
@@ -563,46 +574,70 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
     }
 
     switch (idl->state) {
-    case IDL_S_SERVER_MONITOR_REQUESTED:
+    case IDL_S_SERVER_SCHEMA_REQUESTED:
         if (ok) {
-            VLOG_ABORT("<table-updates2>");
-            /* parse <table-updates2> in response XXX */
+            json_destroy(idl->server.schema);
+            idl->server.schema = json_clone(msg->result);
+            ovsdb_idl_send_monitor_request(idl, &idl->server, true);
+            idl->state = IDL_S_SERVER_MONITOR_COND_REQUESTED;
         } else {
-            ovsdb_idl_send_request(
-                idl, jsonrpc_create_request(
-                    "get_schema",
-                    json_array_create_1(json_string_create(
-                                            idl->db.class->database)),
-                    NULL));
+            ovsdb_idl_send_schema_request(idl, &idl->db);
+            idl->state = IDL_S_DATA_SCHEMA_REQUESTED;
+        }
+        break;
+
+    case IDL_S_SERVER_MONITOR_COND_REQUESTED:
+        if (ok) {
+            ovsdb_idl_db_parse_monitor_reply(&idl->server, msg->result, true);
+
+            const struct serverrec_database *database;
+            SERVERREC_DATABASE_FOR_EACH (database, idl) {
+                if (!strcmp(database->name, idl->db.class->database)) {
+                    break;
+                }
+            }
+
+            if (database) {
+                if (!strcmp(database->model, "clustered")
+                    && !database->connected
+                    && jsonrpc_session_get_n_remotes(idl->session) > 1) {
+                    ovsdb_idl_force_reconnect(idl);
+                    idl->state = IDL_S_ERROR;
+                } else {
+                    json_destroy(idl->db.schema);
+                    idl->db.schema = json_from_string(database->schema);
+                    ovsdb_idl_send_monitor_request(idl, &idl->db, true);
+                    idl->state = IDL_S_DATA_MONITOR_COND_REQUESTED;
+                }
+            } else {
+                idl->state = IDL_S_ERROR;
+            }
+        } else {
+            ovsdb_idl_send_schema_request(idl, &idl->db);
             idl->state = IDL_S_DATA_SCHEMA_REQUESTED;
         }
         break;
 
     case IDL_S_DATA_SCHEMA_REQUESTED:
-        idl->db.schema = json_clone(msg->result);
-        ovsdb_idl_send_request(
-            idl,
-            ovsdb_idl_db_compose_monitor_request(&idl->db, true));
+        json_destroy(idl->db.schema);
+        ovsdb_idl_send_monitor_request(idl, &idl->db, true);
         idl->state = IDL_S_DATA_MONITOR_COND_REQUESTED;
         break;
 
     case IDL_S_DATA_MONITOR_COND_REQUESTED:
         if (!ok) {
             /* "monitor_cond" not supported.  Try "monitor". */
-            ovsdb_idl_send_request(
-                idl,
-                ovsdb_idl_db_compose_monitor_request(&idl->db, false));
+            ovsdb_idl_send_monitor_request(idl, &idl->db, false);
             idl->state = IDL_S_DATA_MONITOR_REQUESTED;
         } else {
             idl->state = IDL_S_MONITORING_COND;
-            idl->db.change_seqno++;
-            ovsdb_idl_clear(idl);
-            ovsdb_idl_db_parse_update(&idl->db, msg->result, true);
+            ovsdb_idl_db_parse_monitor_reply(&idl->db, msg->result, true);
         }
         break;
 
     case IDL_S_DATA_MONITOR_REQUESTED:
         idl->state = IDL_S_MONITORING;
+        ovsdb_idl_db_parse_monitor_reply(&idl->db, msg->result, false);
         idl->db.change_seqno++;
         ovsdb_idl_clear(idl);
         ovsdb_idl_db_parse_update(&idl->db, msg->result, false);
@@ -691,10 +726,8 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
         if (idl->state_seqno != seqno) {
             idl->state_seqno = seqno;
             ovsdb_idl_txn_abort_all(idl);
-
-            ovsdb_idl_send_request(
-                idl, ovsdb_idl_db_compose_monitor_request(&idl->server, true));
-            idl->state = IDL_S_SERVER_MONITOR_REQUESTED;
+            ovsdb_idl_send_schema_request(idl, &idl->server);
+            idl->state = IDL_S_SERVER_SCHEMA_REQUESTED;
 
             if (idl->db.lock_name) {
                 jsonrpc_session_send(
@@ -1601,6 +1634,17 @@ ovsdb_idl_track_clear(struct ovsdb_idl *idl)
 }
 
 static void
+ovsdb_idl_send_schema_request(struct ovsdb_idl *idl,
+                              struct ovsdb_idl_db *db)
+{
+    ovsdb_idl_send_request(idl, jsonrpc_create_request(
+                               "get_schema",
+                               json_array_create_1(json_string_create(
+                                                       db->class->database)),
+                               NULL));
+}
+
+static void
 log_error(struct ovsdb_error *error)
 {
     char *s = ovsdb_error_to_string_free(error);
@@ -1683,9 +1727,9 @@ parse_schema(const struct json *schema_json)
     return schema;
 }
 
-static struct jsonrpc_msg *
-ovsdb_idl_db_compose_monitor_request(struct ovsdb_idl_db *db,
-                                     bool use_monitor_cond)
+static void
+ovsdb_idl_send_monitor_request(struct ovsdb_idl *idl, struct ovsdb_idl_db *db,
+                               bool use_monitor_cond)
 {
     struct shash *schema = parse_schema(db->schema);
     struct json *monitor_requests = json_object_create();
@@ -1730,7 +1774,7 @@ ovsdb_idl_db_compose_monitor_request(struct ovsdb_idl_db *db,
             json_object_put(monitor_request, "columns", columns);
 
             const struct ovsdb_idl_condition *cond = &table->condition;
-            if (!use_monitor_cond && !ovsdb_idl_condition_is_true(cond)) {
+            if (use_monitor_cond && !ovsdb_idl_condition_is_true(cond)) {
                 json_object_put(monitor_request, "where",
                                 ovsdb_idl_condition_to_json(cond));
                 table->cond_changed = false;
@@ -1742,11 +1786,13 @@ ovsdb_idl_db_compose_monitor_request(struct ovsdb_idl_db *db,
 
     db->cond_changed = false;
 
-    return jsonrpc_create_request(
-        use_monitor_cond ? "monitor_cond" : "monitor",
-        json_array_create_3(json_string_create(db->class->database),
-                            json_clone(db->monitor_id), monitor_requests),
-        NULL);
+    ovsdb_idl_send_request(
+        idl,
+        jsonrpc_create_request(
+            use_monitor_cond ? "monitor_cond" : "monitor",
+            json_array_create_3(json_string_create(db->class->database),
+                                json_clone(db->monitor_id), monitor_requests),
+            NULL));
 }
 
 static void
@@ -1758,6 +1804,16 @@ log_parse_update_error(struct ovsdb_error *error)
         free(s);
     }
     ovsdb_error_destroy(error);
+}
+
+static void
+ovsdb_idl_db_parse_monitor_reply(struct ovsdb_idl_db *db,
+                                 const struct json *result,
+                                 bool is_monitor_cond)
+{
+    db->change_seqno++;
+    ovsdb_idl_db_clear(db);
+    ovsdb_idl_db_parse_update(db, result, is_monitor_cond);
 }
 
 static bool
@@ -2476,7 +2532,22 @@ static struct ovsdb_idl_table *
 ovsdb_idl_db_table_from_class(const struct ovsdb_idl_db *db,
                               const struct ovsdb_idl_table_class *table_class)
 {
-    return &db->tables[table_class - db->class->tables];
+    ptrdiff_t idx = table_class - db->class->tables;
+    return idx >= 0 && idx < db->class->n_tables ? &db->tables[idx] : NULL;
+}
+
+static struct ovsdb_idl_table *
+ovsdb_idl_table_from_class(const struct ovsdb_idl *idl,
+                           const struct ovsdb_idl_table_class *table_class)
+{
+    struct ovsdb_idl_table *table;
+
+    table = ovsdb_idl_db_table_from_class(&idl->db, table_class);
+    if (!table) {
+         table = ovsdb_idl_db_table_from_class(&idl->server, table_class);
+    }
+
+    return table;
 }
 
 /* Called by ovsdb-idlc generated code. */
@@ -2531,8 +2602,7 @@ ovsdb_idl_get_row_for_uuid(const struct ovsdb_idl *idl,
                            const struct ovsdb_idl_table_class *tc,
                            const struct uuid *uuid)
 {
-    return ovsdb_idl_get_row(ovsdb_idl_db_table_from_class(&idl->db, tc),
-                             uuid);
+    return ovsdb_idl_get_row(ovsdb_idl_table_from_class(idl, tc), uuid);
 }
 
 static struct ovsdb_idl_row *
@@ -2559,8 +2629,8 @@ const struct ovsdb_idl_row *
 ovsdb_idl_first_row(const struct ovsdb_idl *idl,
                     const struct ovsdb_idl_table_class *table_class)
 {
-    struct ovsdb_idl_table *table
-        = ovsdb_idl_db_table_from_class(&idl->db, table_class);
+    struct ovsdb_idl_table *table = ovsdb_idl_table_from_class(idl,
+                                                               table_class);
     return next_real_row(table, hmap_first(&table->rows));
 }
 
