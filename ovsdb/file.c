@@ -58,7 +58,58 @@ static void ovsdb_file_txn_add_row(struct ovsdb_file_txn *,
                                    const struct ovsdb_row *old,
                                    const struct ovsdb_row *new,
                                    const unsigned long int *changed);
+static struct ovsdb_error *ovsdb_file_open__(const char *file_name,
+                                             const struct ovsdb_schema *,
+                                             bool read_only, struct ovsdb **,
+                                             struct ovsdb_file **);
+static struct ovsdb_error *ovsdb_file_create(struct ovsdb *,
+                                             struct ovsdb_log *,
+                                             const char *file_name,
+                                             unsigned int n_transactions,
+                                             off_t snapshot_size,
+                                             struct ovsdb_file **filep);
 
+/* Opens database 'file_name' and stores a pointer to the new database in
+ * '*dbp'.  If 'read_only' is false, then the database will be locked and
+ * changes to the database will be written to disk.  If 'read_only' is true,
+ * the database will not be locked and changes to the database will persist
+ * only as long as the "struct ovsdb".
+ *
+ * If 'filep' is nonnull and 'read_only' is false, then on success sets
+ * '*filep' to an ovsdb_file that represents the open file.  This ovsdb_file
+ * persists until '*dbp' is destroyed.
+ *
+ * On success, returns NULL.  On failure, returns an ovsdb_error (which the
+ * caller must destroy) and sets '*dbp' and '*filep' to NULL. */
+struct ovsdb_error *
+ovsdb_file_open(const char *file_name, bool read_only,
+                struct ovsdb **dbp, struct ovsdb_file **filep)
+{
+    return ovsdb_file_open__(file_name, NULL, read_only, dbp, filep);
+}
+
+/* Opens database 'file_name' with an alternate schema.  The specified 'schema'
+ * is used to interpret the data in 'file_name', ignoring the schema actually
+ * stored in the file.  Data in the file for tables or columns that do not
+ * exist in 'schema' are ignored, but the ovsdb file format must otherwise be
+ * observed, including column constraints.
+ *
+ * This function can be useful for upgrading or downgrading databases to
+ * "almost-compatible" formats.
+ *
+ * The database will not be locked.  Changes to the database will persist only
+ * as long as the "struct ovsdb".
+ *
+ * On success, stores a pointer to the new database in '*dbp' and returns a
+ * null pointer.  On failure, returns an ovsdb_error (which the caller must
+ * destroy) and sets '*dbp' to NULL. */
+struct ovsdb_error *
+ovsdb_file_open_as_schema(const char *file_name,
+                          const struct ovsdb_schema *schema,
+                          struct ovsdb **dbp)
+{
+    return ovsdb_file_open__(file_name, schema, true, dbp, NULL);
+}
 
 static struct ovsdb_error *
 ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
@@ -116,6 +167,102 @@ error:
     if (schemap) {
         *schemap = NULL;
     }
+    return error;
+}
+
+static struct ovsdb_error *
+ovsdb_file_open__(const char *file_name,
+                  const struct ovsdb_schema *alternate_schema,
+                  bool read_only, struct ovsdb **dbp,
+                  struct ovsdb_file **filep)
+{
+    enum ovsdb_log_open_mode open_mode;
+    struct ovsdb_schema *schema = NULL;
+    struct ovsdb_error *error;
+    struct ovsdb_log *log;
+    struct json *json;
+    struct ovsdb *db = NULL;
+
+    /* In read-only mode there is no ovsdb_file so 'filep' must be null. */
+    ovs_assert(!(read_only && filep));
+
+    open_mode = read_only ? OVSDB_LOG_READ_ONLY : OVSDB_LOG_READ_WRITE;
+    error = ovsdb_file_open_log(file_name, open_mode, -1, &log,
+                                alternate_schema ? NULL : &schema);
+    if (error) {
+        goto error;
+    }
+
+    db = ovsdb_create(schema ? schema : ovsdb_schema_clone(alternate_schema),
+                      NULL);
+
+    /* When a log gets big, we compact it into a new log that initially has
+     * only a single transaction that represents the entire state of the
+     * database.  Thus, we consider the first transaction in the database to be
+     * the snapshot.  We measure its size to later influence the minimum log
+     * size before compacting again.
+     *
+     * The schema precedes the snapshot in the log; we could compensate for its
+     * size, but it's just not that important. */
+    off_t snapshot_size = 0;
+    unsigned int n_transactions = 0;
+    while ((error = ovsdb_log_read(log, &json)) == NULL && json) {
+        struct ovsdb_txn *txn;
+
+        error = ovsdb_file_txn_from_json(db, json, alternate_schema != NULL,
+                                         &txn);
+        json_destroy(json);
+        if (error) {
+            ovsdb_log_unread(log);
+            break;
+        }
+
+        n_transactions++;
+        error = ovsdb_txn_commit(txn, true, false);
+        if (error) {
+            ovsdb_log_unread(log);
+            break;
+        }
+
+        if (n_transactions == 1) {
+            snapshot_size = ovsdb_log_get_offset(log);
+        }
+    }
+    if (error) {
+        /* Log error but otherwise ignore it.  Probably the database just got
+         * truncated due to power failure etc. and we should use its current
+         * contents. */
+        char *msg = ovsdb_error_to_string_free(error);
+        VLOG_ERR("%s", msg);
+        free(msg);
+    }
+
+    if (!read_only) {
+        struct ovsdb_file *file;
+
+        error = ovsdb_file_create(db, log, file_name, n_transactions,
+                                  snapshot_size, &file);
+        if (error) {
+            goto error;
+        }
+        if (filep) {
+            *filep = file;
+        }
+        //db->file = *filep;
+    } else {
+        ovsdb_log_close(log);
+    }
+
+    *dbp = db;
+    return NULL;
+
+error:
+    *dbp = NULL;
+    if (filep) {
+        *filep = NULL;
+    }
+    ovsdb_destroy(db);
+    ovsdb_log_close(log);
     return error;
 }
 

@@ -184,6 +184,25 @@ default_schema(void)
     return schema;
 }
 
+static struct json *
+parse_json(const char *s)
+{
+    struct json *json = json_from_string(s);
+    if (json->type == JSON_STRING) {
+        ovs_fatal(0, "\"%s\": %s", s, json->u.string);
+    }
+    return json;
+}
+
+static void
+print_and_free_json(struct json *json)
+{
+    char *string = json_to_string(json, JSSF_SORT);
+    json_destroy(json);
+    puts(string);
+    free(string);
+}
+
 static void
 check_ovsdb_error(struct ovsdb_error *error)
 {
@@ -260,6 +279,90 @@ do_join_cluster(struct ovs_cmdl_context *ctx)
     check_ovsdb_error(raft_join_cluster(db_file_name, name, local,
                                         &ctx->argv[4], ctx->argc - 4,
                                         uuid_is_zero(&cid) ? NULL : &cid));
+}
+
+static void
+compact_or_convert(const char *src_name_, const char *dst_name_,
+                   const struct ovsdb_schema *new_schema,
+                   const char *comment)
+{
+    char *src_name, *dst_name;
+    struct lockfile *src_lock;
+    struct lockfile *dst_lock;
+    bool in_place = dst_name_ == NULL;
+    struct ovsdb *db;
+    int retval;
+
+    /* Dereference symlinks for source and destination names.  In the in-place
+     * case this ensures that, if the source name is a symlink, we replace its
+     * target instead of replacing the symlink by a regular file.  In the
+     * non-in-place, this has the same effect for the destination name. */
+    src_name = follow_symlinks(src_name_);
+    dst_name = (in_place
+                ? xasprintf("%s.tmp", src_name)
+                : follow_symlinks(dst_name_));
+
+    /* Lock the source, if we will be replacing it. */
+    if (in_place) {
+        retval = lockfile_lock(src_name, &src_lock);
+        if (retval) {
+            ovs_fatal(retval, "%s: failed to lock lockfile", src_name);
+        }
+    }
+
+    /* Get (temporary) destination and lock it. */
+    retval = lockfile_lock(dst_name, &dst_lock);
+    if (retval) {
+        ovs_fatal(retval, "%s: failed to lock lockfile", dst_name);
+    }
+
+    /* Save a copy. */
+    check_ovsdb_error(new_schema
+                      ? ovsdb_file_open_as_schema(src_name, new_schema, &db)
+                      : ovsdb_file_open(src_name, true, &db, NULL));
+    check_ovsdb_error(ovsdb_file_save_copy(dst_name, false, comment, db));
+    ovsdb_destroy(db);
+
+    /* Replace source. */
+    if (in_place) {
+#ifdef _WIN32
+        unlink(src_name);
+#endif
+        if (rename(dst_name, src_name)) {
+            ovs_fatal(errno, "failed to rename \"%s\" to \"%s\"",
+                      dst_name, src_name);
+        }
+        fsync_parent_dir(dst_name);
+        lockfile_unlock(src_lock);
+    }
+
+    lockfile_unlock(dst_lock);
+
+    free(src_name);
+    free(dst_name);
+}
+
+static void
+do_compact(struct ovs_cmdl_context *ctx)
+{
+    const char *db = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    const char *target = ctx->argc >= 3 ? ctx->argv[2] : NULL;
+
+    compact_or_convert(db, target, NULL, "compacted by ovsdb-tool "VERSION);
+}
+
+static void
+do_convert(struct ovs_cmdl_context *ctx)
+{
+    const char *db = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    const char *schema = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
+    const char *target = ctx->argc >= 4 ? ctx->argv[3] : NULL;
+    struct ovsdb_schema *new_schema;
+
+    check_ovsdb_error(ovsdb_schema_from_file(schema, &new_schema));
+    compact_or_convert(db, target, new_schema,
+                       "converted by ovsdb-tool "VERSION);
+    ovsdb_schema_destroy(new_schema);
 }
 
 static void
@@ -377,6 +480,36 @@ do_schema_cksum(struct ovs_cmdl_context *ctx)
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
     puts(schema->cksum);
     ovsdb_schema_destroy(schema);
+}
+
+static void
+transact(bool read_only, int argc, char *argv[])
+{
+    const char *db_file_name = argc >= 3 ? argv[1] : default_db();
+    const char *transaction = argv[argc - 1];
+    struct json *request, *result;
+    struct ovsdb *db;
+
+    check_ovsdb_error(ovsdb_file_open(db_file_name, read_only, &db, NULL));
+
+    request = parse_json(transaction);
+    result = ovsdb_execute(db, NULL, request, false, 0, NULL);
+    json_destroy(request);
+
+    print_and_free_json(result);
+    ovsdb_destroy(db);
+}
+
+static void
+do_query(struct ovs_cmdl_context *ctx)
+{
+    transact(true, ctx->argc, ctx->argv);
+}
+
+static void
+do_transact(struct ovs_cmdl_context *ctx)
+{
+    transact(false, ctx->argc, ctx->argv);
 }
 
 static void
@@ -718,6 +851,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "create-cluster", "db contents local", 3, 3, do_create_cluster, OVS_RW },
     { "join-cluster", "db name local remote...", 4, INT_MAX, do_join_cluster,
       OVS_RW },
+    { "compact", "[db [dst]]", 0, 2, do_compact, OVS_RW },
+    { "convert", "[db [schema [dst]]]", 0, 3, do_convert, OVS_RW },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion, OVS_RO },
     { "db-name", "[db]",  0, 1, do_db_name, OVS_RO },
     { "db-version", "[db]",  0, 1, do_db_version, OVS_RO },
@@ -728,6 +863,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "schema-name", "[schema]", 0, 1, do_schema_name, OVS_RO },
     { "schema-version", "[schema]", 0, 1, do_schema_version, OVS_RO },
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum, OVS_RO },
+    { "query", "[db] trns", 1, 2, do_query, OVS_RO },
+    { "transact", "[db] trns", 1, 2, do_transact, OVS_RO },
     { "show-log", "[db]", 0, 1, do_show_log, OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { "list-commands", NULL, 0, INT_MAX, do_list_commands, OVS_RO },
