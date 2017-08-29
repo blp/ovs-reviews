@@ -103,6 +103,12 @@ ovsdb_storage_get_model(const struct ovsdb_storage *storage)
 }
 
 bool
+ovsdb_storage_is_clustered(const struct ovsdb_storage *storage)
+{
+    return storage->raft != NULL;
+}
+
+bool
 ovsdb_storage_is_connected(const struct ovsdb_storage *storage)
 {
     return !storage->raft || raft_is_connected(storage->raft);

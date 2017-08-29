@@ -38,6 +38,7 @@
 #include "ovsdb-parser.h"
 #include "raft.h"
 #include "socket-util.h"
+#include "storage.h"
 #include "table.h"
 #include "timeval.h"
 #include "util.h"
@@ -191,6 +192,64 @@ check_ovsdb_error(struct ovsdb_error *error)
         ovs_fatal(0, "%s", ovsdb_error_to_string(error));
     }
 }
+
+static struct ovsdb_error *
+ovsdb_tool_parse_schema(const struct json *txn_json, const char *filename,
+                        struct ovsdb_schema **schemap)
+{
+    *schemap = NULL;
+    if (!txn_json) {
+        return ovsdb_io_error(EOF, "%s: database file contains no schema",
+                              filename);
+    }
+
+    if (txn_json->type != JSON_ARRAY || txn_json->u.array.n != 2) {
+        return ovsdb_error(NULL, "%s: invalid commit format", filename);
+    }
+
+    const struct json *schema_json = txn_json->u.array.elems[0];
+    if (!schema_json->type) {
+        return ovsdb_error(NULL, "%s: missing schema", filename);
+    }
+
+    struct ovsdb_schema *schema;
+    struct ovsdb_error *error;
+
+    error = ovsdb_schema_from_json(schema_json, &schema);
+    if (error) {
+        return ovsdb_wrap_error(error, "%s: invalid ovsdb schema", filename);
+    }
+
+    *schemap = schema;
+    return NULL;
+}
+
+static struct ovsdb_schema *
+ovsdb_tool_read_schema(struct ovs_cmdl_context *ctx, const char *filename)
+{
+    struct ovsdb_storage *storage;
+    check_ovsdb_error(ovsdb_storage_open(filename, false, &storage));
+    if (ovsdb_storage_is_clustered(storage)) {
+        ovs_fatal(0, "%s: cannot apply %s to clustered database "
+                  "(use ovsdb-client against online database instead)",
+                  filename, ctx->argv[0]);
+    }
+
+    struct json *txn_json;
+    struct ovsdb_schema *schema;
+    check_ovsdb_error(ovsdb_storage_read(storage, &txn_json, NULL));
+    check_ovsdb_error(ovsdb_tool_parse_schema(txn_json, filename, &schema));
+    json_destroy(txn_json);
+
+    const char *storage_name = ovsdb_storage_get_name(storage);
+    const char *schema_name = schema->name;
+    if (storage_name && strcmp(storage_name, schema_name)) {
+        ovs_fatal(0, "%s: name %s in file does not match "
+                  "name %s in schema", filename, storage_name, schema_name);
+    }
+
+    return schema;
+}
 
 static void
 do_create(struct ovs_cmdl_context *ctx)
@@ -269,7 +328,7 @@ do_needs_conversion(struct ovs_cmdl_context *ctx)
     const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
     struct ovsdb_schema *schema1, *schema2;
 
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema1));
+    schema1 = ovsdb_tool_read_schema(ctx, db_file_name);
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema2));
     puts(ovsdb_schema_equal(schema1, schema2) ? "no" : "yes");
     ovsdb_schema_destroy(schema1);
@@ -280,20 +339,33 @@ static void
 do_db_name(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    struct ovsdb_schema *schema;
 
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
-    puts(schema->name);
-    ovsdb_schema_destroy(schema);
+    struct ovsdb_storage *storage;
+    check_ovsdb_error(ovsdb_storage_open(db_file_name, false, &storage));
+
+    const char *name = ovsdb_storage_get_name(storage);
+    if (name) {
+        /* Clustered databases. */
+        puts(name);
+    } else {
+        /* Standalone databases. */
+        struct json *txn_json;
+        struct ovsdb_schema *schema;
+        check_ovsdb_error(ovsdb_storage_read(storage, &txn_json, NULL));
+        check_ovsdb_error(ovsdb_tool_parse_schema(txn_json, db_file_name,
+                                                  &schema));
+        puts(schema->name);
+        json_destroy(txn_json);
+        ovsdb_schema_destroy(schema);
+    }
+    ovsdb_storage_close(storage);
 }
 
 static void
 do_db_version(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    struct ovsdb_schema *schema;
-
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
+    struct ovsdb_schema *schema = ovsdb_tool_read_schema(ctx, db_file_name);
     puts(schema->version);
     ovsdb_schema_destroy(schema);
 }
@@ -302,9 +374,7 @@ static void
 do_db_cksum(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    struct ovsdb_schema *schema;
-
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
+    struct ovsdb_schema *schema = ovsdb_tool_read_schema(ctx, db_file_name);
     puts(schema->cksum);
     ovsdb_schema_destroy(schema);
 }

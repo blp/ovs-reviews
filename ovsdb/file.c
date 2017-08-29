@@ -59,66 +59,6 @@ static void ovsdb_file_txn_add_row(struct ovsdb_file_txn *,
                                    const struct ovsdb_row *new,
                                    const unsigned long int *changed);
 
-
-static struct ovsdb_error *
-ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
-                    int locking, struct ovsdb_log **logp,
-                    struct ovsdb_schema **schemap)
-{
-    struct ovsdb_schema *schema = NULL;
-    struct ovsdb_log *log = NULL;
-    struct ovsdb_error *error;
-    struct json *json = NULL;
-
-    ovs_assert(logp || schemap);
-
-    error = ovsdb_log_open(file_name, OVSDB_MAGIC, open_mode, locking, &log);
-    if (error) {
-        goto error;
-    }
-
-    error = ovsdb_log_read(log, &json);
-    if (error) {
-        goto error;
-    } else if (!json) {
-        error = ovsdb_io_error(EOF, "%s: database file contains no schema",
-                               file_name);
-        goto error;
-    }
-
-    if (schemap) {
-        error = ovsdb_schema_from_json(json, &schema);
-        if (error) {
-            error = ovsdb_wrap_error(error,
-                                     "failed to parse \"%s\" as ovsdb schema",
-                                     file_name);
-            goto error;
-        }
-    }
-    json_destroy(json);
-
-    if (logp) {
-        *logp = log;
-    } else {
-        ovsdb_log_close(log);
-    }
-    if (schemap) {
-        *schemap = schema;
-    }
-    return NULL;
-
-error:
-    ovsdb_log_close(log);
-    json_destroy(json);
-    if (logp) {
-        *logp = NULL;
-    }
-    if (schemap) {
-        *schemap = NULL;
-    }
-    return error;
-}
-
 static struct ovsdb_error *
 ovsdb_file_update_row_from_json(struct ovsdb_row *row, bool converting,
                                 const struct json *json)
@@ -274,18 +214,6 @@ ovsdb_file_txn_from_json(struct ovsdb *db, const struct json *json,
 error:
     ovsdb_txn_abort(txn);
     return error;
-}
-
-/* Opens database 'file_name', reads its schema, and closes it.  On success,
- * stores the schema into '*schemap' and returns NULL; the caller then owns the
- * schema.  On failure, returns an ovsdb_error (which the caller must destroy)
- * and sets '*dbp' to NULL. */
-struct ovsdb_error *
-ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
-{
-    ovs_assert(schemap != NULL);
-    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, false,
-                               NULL, schemap);
 }
 
 struct ovsdb_file {

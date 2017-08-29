@@ -31,6 +31,7 @@ struct ovsdb_storage *ovsdb_storage_create_unbacked(void);
 void ovsdb_storage_close(struct ovsdb_storage *);
 
 const char *ovsdb_storage_get_model(const struct ovsdb_storage *);
+bool ovsdb_storage_is_clustered(const struct ovsdb_storage *);
 bool ovsdb_storage_is_connected(const struct ovsdb_storage *);
 bool ovsdb_storage_is_leader(const struct ovsdb_storage *);
 
