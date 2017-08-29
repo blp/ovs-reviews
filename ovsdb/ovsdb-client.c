@@ -419,7 +419,9 @@ fetch_dbs(struct jsonrpc *rpc, struct svec *dbs)
         if (name->type != JSON_STRING) {
             ovs_fatal(0, "list_dbs response %"PRIuSIZE" is not string", i);
         }
-        svec_add(dbs, name->u.string);
+        if (name->u.string[0] != '_') {
+            svec_add(dbs, name->u.string);
+        }
     }
     jsonrpc_msg_destroy(reply);
     svec_sort(dbs);
