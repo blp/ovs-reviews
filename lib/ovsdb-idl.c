@@ -565,6 +565,7 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
     switch (idl->state) {
     case IDL_S_SERVER_MONITOR_REQUESTED:
         if (ok) {
+            VLOG_ABORT("<table-updates2>");
             /* parse <table-updates2> in response XXX */
         } else {
             ovsdb_idl_send_request(

@@ -1,8 +1,5 @@
-/_server-idl.ovsidl
 /_server.ovsschema.inc
 /_server.ovsschema.stamp
-/_server-idl.c
-/_server-idl.h
 /ovsdb-client
 /ovsdb-client.1
 /ovsdb-doc
