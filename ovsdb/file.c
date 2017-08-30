@@ -236,6 +236,26 @@ ovsdb_file_change_cb(const struct ovsdb_row *old,
     return true;
 }
 
+struct json *
+ovsdb_to_txn_json(const struct ovsdb *db, const char *comment)
+{
+    struct ovsdb_file_txn ftxn;
+
+    ovsdb_file_txn_init(&ftxn);
+
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, &db->tables) {
+        const struct ovsdb_table *table = node->data;
+        const struct ovsdb_row *row;
+
+        HMAP_FOR_EACH (row, hmap_node, &table->rows) {
+            ovsdb_file_txn_add_row(&ftxn, NULL, row, NULL);
+        }
+    }
+
+    return ovsdb_file_txn_annotate(ftxn.json, comment);
+}
+
 /* Returns 'txn' transformed into the JSON format that is used in OVSDB files.
  * (But the caller must use ovsdb_file_txn_annotate() to add the _comment the
  * _date members.)  If 'txn' doesn't actually change anything, returns NULL */

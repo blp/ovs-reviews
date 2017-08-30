@@ -31,8 +31,9 @@ struct ovsdb_error *ovsdb_file_read_schema(const char *file_name,
 
 void ovsdb_file_destroy(struct ovsdb_file *);
 
+struct json *ovsdb_to_txn_json(const struct ovsdb *, const char *comment);
 struct json *ovsdb_file_txn_to_json(const struct ovsdb_txn *);
-struct json *ovsdb_file_txn_annotate(struct json *, const char *comment);;
+struct json *ovsdb_file_txn_annotate(struct json *, const char *comment);
 struct ovsdb_error *ovsdb_file_txn_from_json(struct ovsdb *,
                                              const struct json *,
                                              bool converting,

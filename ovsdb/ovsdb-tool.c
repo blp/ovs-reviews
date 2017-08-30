@@ -259,6 +259,31 @@ read_schema(struct ovs_cmdl_context *ctx, const char *filename)
     ovsdb_storage_close(storage);
     return schema;
 }
+
+static struct ovsdb *
+read_ovsdb_txns(struct ovsdb_schema *schema, struct ovsdb_storage *storage,
+                bool converting)
+{
+    struct ovsdb *ovsdb = ovsdb_create(schema, storage);
+    for (;;) {
+        struct json *txn_json = read_txn_from_storage(storage);
+        if (!txn_json) {
+            break;
+        }
+
+        struct ovsdb_txn *txn;
+        check_ovsdb_error(ovsdb_file_txn_from_json(ovsdb, txn_json, converting,
+                                                   &txn));
+        json_destroy(txn_json);
+
+        struct ovsdb_error *error = ovsdb_txn_commit(txn, true, false);
+        if (error) {
+            ovsdb_storage_unread(storage);
+            break;
+        }
+    }
+    return ovsdb;
+}
 
 static void
 do_create(struct ovs_cmdl_context *ctx)
@@ -328,6 +353,118 @@ do_join_cluster(struct ovs_cmdl_context *ctx)
     check_ovsdb_error(raft_join_cluster(db_file_name, name, local,
                                         &ctx->argv[4], ctx->argc - 4,
                                         uuid_is_zero(&cid) ? NULL : &cid));
+}
+
+static struct ovsdb_error *
+write_and_free_json(struct ovsdb_log *log, struct json *json)
+{
+    struct ovsdb_error *error = ovsdb_log_write(log, json);
+    json_destroy(json);
+    return error;
+}
+
+static struct ovsdb_error *
+write_db(const char *file_name, const char *comment, const struct ovsdb *db)
+{
+    struct ovsdb_log *log;
+    struct ovsdb_error *error = ovsdb_log_open(file_name, OVSDB_MAGIC,
+                                               OVSDB_LOG_CREATE, false, &log);
+    if (error) {
+        return error;
+    }
+
+    error = write_and_free_json(log, ovsdb_schema_to_json(db->schema));
+    if (!error) {
+        error = write_and_free_json(log, ovsdb_to_txn_json(db, comment));
+    }
+    ovsdb_log_close(log);
+
+    if (error) {
+        remove(file_name);
+    }
+    return error;
+}
+
+static void
+compact_or_convert(struct ovs_cmdl_context *ctx,
+                   const char *src_name_, const char *dst_name_,
+                   struct ovsdb_schema *new_schema, const char *comment)
+{
+    bool in_place = dst_name_ == NULL;
+
+    /* Dereference symlinks for source and destination names.  In the in-place
+     * case this ensures that, if the source name is a symlink, we replace its
+     * target instead of replacing the symlink by a regular file.  In the
+     * non-in-place, this has the same effect for the destination name. */
+    char *src_name = follow_symlinks(src_name_);
+    char *dst_name = (in_place
+                      ? xasprintf("%s.tmp", src_name)
+                      : follow_symlinks(dst_name_));
+
+    /* Lock the source, if we will be replacing it. */
+    struct lockfile *src_lock = NULL;
+    if (in_place) {
+        int retval = lockfile_lock(src_name, &src_lock);
+        if (retval) {
+            ovs_fatal(retval, "%s: failed to lock lockfile", src_name);
+        }
+    }
+
+    /* Get (temporary) destination and lock it. */
+    struct lockfile *dst_lock = NULL;
+    int retval = lockfile_lock(dst_name, &dst_lock);
+    if (retval) {
+        ovs_fatal(retval, "%s: failed to lock lockfile", dst_name);
+    }
+
+    /* Save a copy. */
+    struct ovsdb_storage *storage = open_standalone_db(ctx, src_name, false);
+    struct ovsdb_schema *old_schema = read_schema_from_storage(storage);
+    struct ovsdb_schema *schema = new_schema ? new_schema : old_schema;
+    struct ovsdb *ovsdb = read_ovsdb_txns(schema, storage, true);
+    check_ovsdb_error(write_db(dst_name, comment, ovsdb));
+    ovsdb_destroy(ovsdb);
+
+    /* Replace source. */
+    if (in_place) {
+#ifdef _WIN32
+        unlink(src_name);
+#endif
+        if (rename(dst_name, src_name)) {
+            ovs_fatal(errno, "failed to rename \"%s\" to \"%s\"",
+                      dst_name, src_name);
+        }
+        fsync_parent_dir(dst_name);
+        lockfile_unlock(src_lock);
+    }
+
+    lockfile_unlock(dst_lock);
+
+    free(src_name);
+    free(dst_name);
+}
+
+static void
+do_compact(struct ovs_cmdl_context *ctx)
+{
+    const char *db = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    const char *target = ctx->argc >= 3 ? ctx->argv[2] : NULL;
+
+    compact_or_convert(ctx, db, target, NULL,
+                       "compacted by ovsdb-tool "VERSION);
+}
+
+static void
+do_convert(struct ovs_cmdl_context *ctx)
+{
+    const char *db = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    const char *schema = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
+    const char *target = ctx->argc >= 4 ? ctx->argv[3] : NULL;
+    struct ovsdb_schema *new_schema;
+
+    check_ovsdb_error(ovsdb_schema_from_file(schema, &new_schema));
+    compact_or_convert(ctx, db, target, new_schema,
+                       "converted by ovsdb-tool "VERSION);
 }
 
 static void
@@ -463,24 +600,7 @@ transact(struct ovs_cmdl_context *ctx, bool rw)
     struct ovsdb_storage *storage = open_standalone_db(ctx, db_file_name, rw);
     struct ovsdb_schema *schema = read_schema_from_storage(storage);
 
-    struct ovsdb *ovsdb = ovsdb_create(schema, storage);
-    for (;;) {
-        struct json *txn_json = read_txn_from_storage(storage);
-        if (!txn_json) {
-            break;
-        }
-
-        struct ovsdb_txn *txn;
-        check_ovsdb_error(ovsdb_file_txn_from_json(ovsdb, txn_json, false,
-                                                   &txn));
-        json_destroy(txn_json);
-
-        struct ovsdb_error *error = ovsdb_txn_commit(txn, true, false);
-        if (error) {
-            ovsdb_storage_unread(storage);
-            break;
-        }
-    }
+    struct ovsdb *ovsdb = read_ovsdb_txns(schema, storage, false);
 
     struct json *request = parse_json(transaction);
     struct json *result = ovsdb_execute(ovsdb, NULL, request, false, 0, NULL);
@@ -841,6 +961,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "create-cluster", "db contents local", 3, 3, do_create_cluster, OVS_RW },
     { "join-cluster", "db name local remote...", 4, INT_MAX, do_join_cluster,
       OVS_RW },
+    { "compact", "[db [dst]]", 0, 2, do_compact, OVS_RW },
+    { "convert", "[db [schema [dst]]]", 0, 3, do_convert, OVS_RW },
     { "needs-conversion", NULL, 0, 2, do_needs_conversion, OVS_RO },
     { "db-name", "[db]",  0, 1, do_db_name, OVS_RO },
     { "db-version", "[db]",  0, 1, do_db_version, OVS_RO },
