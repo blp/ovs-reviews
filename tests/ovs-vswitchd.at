@@ -176,6 +176,7 @@ dnl OVSDB server and make sure ovs-vswitchd can still work with it
 AT_SETUP([ovs-vswitchd -- Compatible with OVSDB server - w/o monitor_cond])
 OVS_VSWITCHD_START
 
+ovs-appctl vlog/set ovsdb_idl jsonrpc
 dnl defeature OVSDB server -- no monitor_cond
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/disable-monitor-cond])
 

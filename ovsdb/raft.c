@@ -1613,6 +1613,18 @@ raft_get_name(const struct raft *raft)
     return raft->name;
 }
 
+const struct uuid *
+raft_get_cid(const struct raft *raft)
+{
+    return &raft->cid;
+}
+
+const struct uuid *
+raft_get_sid(const struct raft *raft)
+{
+    return &raft->sid;
+}
+
 bool
 raft_is_connected(const struct raft *raft)
 {

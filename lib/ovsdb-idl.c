@@ -84,68 +84,82 @@ struct ovsdb_idl_arc {
  * the Database table in the _Server database and transitions to the
  * IDL_S_SERVER_MONITOR_COND_REQUESTED state.  If the session drops and
  * reconnects, the IDL starts over again in the same way. */
+#define OVSDB_IDL_STATES                                                \
+    /* Waits for "get_schema" reply, then sends "monitor_cond"          \
+     * request for the Database table in the _Server database, whose    \
+     * details are informed by the schema, and transitions to           \
+     * IDL_S_SERVER_MONITOR_COND_REQUESTED. */                          \
+    OVSDB_IDL_STATE(SERVER_SCHEMA_REQUESTED)                            \
+                                                                        \
+    /* Waits for "monitor_cond" reply for the Database table:           \
+     *                                                                  \
+     * - If the reply indicates success, and the Database table has a   \
+     *   row for the IDL database:                                      \
+     *                                                                  \
+     *   * If the row indicates that this is a clustered database       \
+     *     that is not connected to the cluster, closes the             \
+     *     connection.  The next connection attempt has a chance at     \
+     *     picking a connected server.                                  \
+     *                                                                  \
+     *   * Otherwise, sends a "monitor_cond" request for the IDL        \
+     *     database whose details are informed by the schema            \
+     *     (obtained from the row), and transitions to                  \
+     *     IDL_S_DATA_MONITOR_COND_REQUESTED.                           \
+     *                                                                  \
+     *     XXX Should also send set_db_change_aware and monitor the     \
+     *     database status                                              \
+     *                                                                  \
+     * - If the reply indicates success, but the Database table does    \
+     *   not have a row for the IDL database, transitions to            \
+     *   IDL_S_ERROR.                                                   \
+     *                                                                  \
+     * - If the reply indicates failure, sends a "get_schema" request   \
+     *   for the IDL database and transitions to                        \
+     *   IDL_S_DATA_SCHEMA_REQUESTED. */                                \
+    OVSDB_IDL_STATE(SERVER_MONITOR_COND_REQUESTED)                      \
+                                                                        \
+    /* Waits for "get_schema" reply, then sends "monitor_cond"          \
+     * request whose details are informed by the schema, and            \
+     * transitions to IDL_S_DATA_MONITOR_COND_REQUESTED. */             \
+    OVSDB_IDL_STATE(DATA_SCHEMA_REQUESTED)                              \
+                                                                        \
+    /* Waits for "monitor_cond" reply.  If successful, replaces the     \
+     * IDL contents by the data carried in the reply and transitions    \
+     * to IDL_S_MONITORING.  On failure, sends a "monitor" request      \
+     * and transitions to IDL_S_DATA_MONITOR_REQUESTED. */              \
+    OVSDB_IDL_STATE(DATA_MONITOR_COND_REQUESTED)                        \
+                                                                        \
+    /* Waits for "monitor" reply.  If successful, replaces the IDL      \
+     * contents by the data carried in the reply and transitions to     \
+     * IDL_S_MONITORING.  On failure, transitions to IDL_S_ERROR. */    \
+    OVSDB_IDL_STATE(DATA_MONITOR_REQUESTED)                             \
+                                                                        \
+    /* State that processes "update" or "update2" notifications for     \
+     * the main database (and the Database table in _Server if          \
+     * available).                                                      \
+     *                                                                  \
+     * If we're monitoring the Database table and we get notified       \
+     * that the IDL database has been deleted, we close the             \
+     * connection (which will restart the state machine). */            \
+    OVSDB_IDL_STATE(MONITORING)                                         \
+    OVSDB_IDL_STATE(MONITORING_COND)                                    \
+                                                                        \
+    /* Terminal error state that indicates that nothing useful can be   \
+     * done, for example beacuse the database server doesn't actually   \
+     * have the desired database.  We maintain the session with the     \
+     * database server anyway.  If it starts serving the database       \
+     * that we want, or if someone fixes and restarts the database,     \
+     * then it will kill the session and we will automatically          \
+     * reconnect and try again. */                                      \
+    OVSDB_IDL_STATE(ERROR)
+
 enum ovsdb_idl_state {
-    /* Waits for "get_schema" reply, then sends "monitor_cond" request for the
-     * Database table in the _Server database, whose details are informed by
-     * the schema, and transitions to IDL_S_SERVER_MONITOR_COND_REQUESTED. */
-    IDL_S_SERVER_SCHEMA_REQUESTED,
-
-    /* Waits for "monitor_cond" reply for the Database table:
-     *
-     * - If the reply indicates success, and the Database table has a row for
-     *   the IDL database:
-     *
-     *   * If the row indicates that this is a clustered database that is not
-     *     connected to the cluster, closes the connection.  The next
-     *     connection attempt has a chance at picking a connected server.
-     *
-     *   * Otherwise, sends a "monitor_cond" request for the IDL database whose
-     *     details are informed by the schema (obtained from the row), and
-     *     transitions to IDL_S_DATA_MONITOR_COND_REQUESTED.
-     *
-     *     XXX Should also send set_db_change_aware and monitor the database
-     *     status
-     *
-     * - If the reply indicates success, but the Database table does not have a
-     *   row for the IDL database, transitions to IDL_S_ERROR.
-     *
-     * - If the reply indicates failure, sends a "get_schema" request for the
-     *   IDL database and transitions to IDL_S_DATA_SCHEMA_REQUESTED. */
-    IDL_S_SERVER_MONITOR_COND_REQUESTED,
-
-    /* Waits for "get_schema" reply, then sends "monitor_cond" request whose
-     * details are informed by the schema, and transitions to
-     * IDL_S_DATA_MONITOR_COND_REQUESTED. */
-    IDL_S_DATA_SCHEMA_REQUESTED,
-
-    /* Waits for "monitor_cond" reply.  If successful, replaces the IDL
-     * contents by the data carried in the reply and transitions to
-     * IDL_S_MONITORING.  On failure, sends a "monitor" request and transitions
-     * to IDL_S_DATA_MONITOR_REQUESTED. */
-    IDL_S_DATA_MONITOR_COND_REQUESTED,
-
-    /* Waits for "monitor" reply.  If successful, replaces the IDL contents by
-     * the data carried in the reply and transitions to IDL_S_MONITORING.  On
-     * failure, transitions to IDL_S_ERROR. */
-    IDL_S_DATA_MONITOR_REQUESTED,
-
-    /* State that processes "update" or "update2" notifications for the main
-     * database (and the Database table in _Server if available).
-     *
-     * If we're monitoring the Database table and we get notified that the IDL
-     * database has been deleted, we close the connection (which will restart
-     * the state machine). */
-    IDL_S_MONITORING,
-    IDL_S_MONITORING_COND,
-
-    /* Terminal error state that indicates that nothing useful can be done, for
-     * example beacuse the database server doesn't actually have the desired
-     * database.  We maintain the session with the database server anyway.  If
-     * it starts serving the database that we want, or if someone fixes and
-     * restarts the database, then it will kill the session and we will
-     * automatically reconnect and try again. */
-    IDL_S_ERROR
+#define OVSDB_IDL_STATE(NAME) IDL_S_##NAME,
+    OVSDB_IDL_STATES
+#undef OVSDB_IDL_STATE
 };
+
+static const char *ovsdb_idl_state_to_string(enum ovsdb_idl_state);
 
 struct ovsdb_idl_db {
     struct ovsdb_idl *idl;
@@ -179,6 +193,10 @@ struct ovsdb_idl_db {
 static void ovsdb_idl_db_track_clear(struct ovsdb_idl_db *);
 static void ovsdb_idl_db_add_column(struct ovsdb_idl_db *,
                                     const struct ovsdb_idl_column *);
+static void ovsdb_idl_db_omit(struct ovsdb_idl_db *,
+                              const struct ovsdb_idl_column *);
+static void ovsdb_idl_db_omit_alert(struct ovsdb_idl_db *,
+                                    const struct ovsdb_idl_column *);
 static unsigned int ovsdb_idl_db_set_condition(
     struct ovsdb_idl_db *, const struct ovsdb_idl_table_class *,
     const struct ovsdb_idl_condition *);
@@ -204,8 +222,15 @@ struct ovsdb_idl {
     unsigned int state_seqno;        /* See above. */
     struct json *request_id;         /* JSON ID for request awaiting reply. */
 
+    struct uuid cid;
+
     bool use_monitor_cond;
 };
+
+static void ovsdb_idl_transition_at(struct ovsdb_idl *, enum ovsdb_idl_state,
+                                    const char *where);
+#define ovsdb_idl_transition(IDL, STATE) \
+    ovsdb_idl_transition_at(IDL, STATE, OVS_SOURCE_LOCATOR)
 
 struct ovsdb_idl_txn {
     struct hmap_node hmap_node;
@@ -358,14 +383,16 @@ ovsdb_idl_parse_remote(const char *s,
     }
 }
 
-static struct jsonrpc_session *
-ovsdb_idl_open_session(const char *remote, bool retry)
+static void
+ovsdb_idl_open_session(struct ovsdb_idl *idl, const char *remote, bool retry)
 {
+    ovs_assert(!idl->db.txn);
+    jsonrpc_session_close(idl->session);
+
     struct svec remotes = SVEC_EMPTY_INITIALIZER;
-    struct uuid cid;            /* XXX */
-    ovsdb_idl_parse_remote(remote, &remotes, &cid);
-    return jsonrpc_session_open_multiple((const char **) remotes.names,
-                                         remotes.n, retry);
+    ovsdb_idl_parse_remote(remote, &remotes, &idl->cid);
+    idl->session = jsonrpc_session_open_multiple((const char **) remotes.names,
+                                                 remotes.n, retry);
 }
 
 static void
@@ -439,16 +466,21 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl = xzalloc(sizeof *idl);
     ovsdb_idl_db_init(&idl->server, &serverrec_idl_class, idl, true);
     ovsdb_idl_db_init(&idl->db, class, idl, monitor_everything_by_default);
-    idl->session = ovsdb_idl_open_session(remote, retry);
+    ovsdb_idl_open_session(idl, remote, retry);
     idl->state_seqno = UINT_MAX;
     idl->request_id = NULL;
 
     /* Monitor the Database table in the _Server database.
      *
-     * We monitor only the row for 'class'. */
+     * We monitor only the row for 'class', or the row that has the
+     * desired 'cid'. */
     struct ovsdb_idl_condition cond;
     ovsdb_idl_condition_init(&cond);
-    serverrec_database_add_clause_name(&cond, OVSDB_F_EQ, class->database);
+    if (!uuid_is_zero(&idl->cid)) {
+        serverrec_database_add_clause_cid(&cond, OVSDB_F_EQ, &idl->cid, 1);
+    } else {
+        serverrec_database_add_clause_name(&cond, OVSDB_F_EQ, class->database);
+    }
     ovsdb_idl_db_set_condition(&idl->server, &serverrec_table_database, &cond);
     ovsdb_idl_condition_destroy(&cond);
 
@@ -461,9 +493,8 @@ ovsdb_idl_set_remote(struct ovsdb_idl *idl, const char *remote,
                      bool retry)
 {
     if (idl) {
-        ovs_assert(!idl->db.txn);
-        jsonrpc_session_close(idl->session);
-        idl->session = ovsdb_idl_open_session(remote, retry);
+        ovsdb_idl_open_session(idl, remote, retry);
+        /* XXX update condition */
         idl->state_seqno = UINT_MAX;
     }
 }
@@ -546,6 +577,29 @@ ovsdb_idl_db_clear(struct ovsdb_idl_db *db)
     }
 }
 
+static const char *
+ovsdb_idl_state_to_string(enum ovsdb_idl_state state)
+{
+    switch (state) {
+#define OVSDB_IDL_STATE(NAME) case IDL_S_##NAME: return #NAME;
+        OVSDB_IDL_STATES
+#undef OVSDB_IDL_STATE
+    default: return "<unknown>";
+    }
+}
+
+static void
+ovsdb_idl_transition_at(struct ovsdb_idl *idl, enum ovsdb_idl_state new_state,
+                        const char *where)
+{
+    VLOG_DBG("%s: %s -> %s at %s",
+             jsonrpc_session_get_name(idl->session),
+             ovsdb_idl_state_to_string(idl->state),
+             ovsdb_idl_state_to_string(new_state),
+             where);
+    idl->state = new_state;
+}
+
 static void
 ovsdb_idl_clear(struct ovsdb_idl *idl)
 {
@@ -569,7 +623,7 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
         && idl->state != IDL_S_SERVER_MONITOR_COND_REQUESTED
         && idl->state != IDL_S_DATA_MONITOR_COND_REQUESTED) {
         /* XXX Log error. */
-        idl->state = IDL_S_ERROR;
+        ovsdb_idl_transition(idl, IDL_S_ERROR);
         return;
     }
 
@@ -579,10 +633,10 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
             json_destroy(idl->server.schema);
             idl->server.schema = json_clone(msg->result);
             ovsdb_idl_send_monitor_request(idl, &idl->server, true);
-            idl->state = IDL_S_SERVER_MONITOR_COND_REQUESTED;
+            ovsdb_idl_transition(idl, IDL_S_SERVER_MONITOR_COND_REQUESTED);
         } else {
             ovsdb_idl_send_schema_request(idl, &idl->db);
-            idl->state = IDL_S_DATA_SCHEMA_REQUESTED;
+            ovsdb_idl_transition(idl, IDL_S_DATA_SCHEMA_REQUESTED);
         }
         break;
 
@@ -592,7 +646,10 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
 
             const struct serverrec_database *database;
             SERVERREC_DATABASE_FOR_EACH (database, idl) {
-                if (!strcmp(database->name, idl->db.class->database)) {
+                if (uuid_is_zero(&idl->cid)
+                    ? !strcmp(database->name, idl->db.class->database)
+                    : database->n_cid && uuid_equals(database->cid,
+                                                     &idl->cid)) {
                     break;
                 }
             }
@@ -602,41 +659,43 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
                     && !database->connected
                     && jsonrpc_session_get_n_remotes(idl->session) > 1) {
                     ovsdb_idl_force_reconnect(idl);
-                    idl->state = IDL_S_ERROR;
+                    ovsdb_idl_transition(idl, IDL_S_ERROR);
                 } else {
                     json_destroy(idl->db.schema);
                     idl->db.schema = json_from_string(database->schema);
                     ovsdb_idl_send_monitor_request(idl, &idl->db, true);
-                    idl->state = IDL_S_DATA_MONITOR_COND_REQUESTED;
+                    ovsdb_idl_transition(idl,
+                                         IDL_S_DATA_MONITOR_COND_REQUESTED);
                 }
             } else {
-                idl->state = IDL_S_ERROR;
+                ovsdb_idl_transition(idl, IDL_S_ERROR);
             }
         } else {
             ovsdb_idl_send_schema_request(idl, &idl->db);
-            idl->state = IDL_S_DATA_SCHEMA_REQUESTED;
+            ovsdb_idl_transition(idl, IDL_S_DATA_SCHEMA_REQUESTED);
         }
         break;
 
     case IDL_S_DATA_SCHEMA_REQUESTED:
         json_destroy(idl->db.schema);
+        idl->db.schema = json_clone(msg->result);
         ovsdb_idl_send_monitor_request(idl, &idl->db, true);
-        idl->state = IDL_S_DATA_MONITOR_COND_REQUESTED;
+        ovsdb_idl_transition(idl, IDL_S_DATA_MONITOR_COND_REQUESTED);
         break;
 
     case IDL_S_DATA_MONITOR_COND_REQUESTED:
         if (!ok) {
             /* "monitor_cond" not supported.  Try "monitor". */
             ovsdb_idl_send_monitor_request(idl, &idl->db, false);
-            idl->state = IDL_S_DATA_MONITOR_REQUESTED;
+            ovsdb_idl_transition(idl, IDL_S_DATA_MONITOR_REQUESTED);
         } else {
-            idl->state = IDL_S_MONITORING_COND;
+            ovsdb_idl_transition(idl, IDL_S_MONITORING_COND);
             ovsdb_idl_db_parse_monitor_reply(&idl->db, msg->result, true);
         }
         break;
 
     case IDL_S_DATA_MONITOR_REQUESTED:
-        idl->state = IDL_S_MONITORING;
+        ovsdb_idl_transition(idl, IDL_S_MONITORING);
         ovsdb_idl_db_parse_monitor_reply(&idl->db, msg->result, false);
         idl->db.change_seqno++;
         ovsdb_idl_clear(idl);
@@ -727,7 +786,7 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
             idl->state_seqno = seqno;
             ovsdb_idl_txn_abort_all(idl);
             ovsdb_idl_send_schema_request(idl, &idl->server);
-            idl->state = IDL_S_SERVER_SCHEMA_REQUESTED;
+            ovsdb_idl_transition(idl, IDL_S_SERVER_SCHEMA_REQUESTED);
 
             if (idl->db.lock_name) {
                 jsonrpc_session_send(
@@ -1441,11 +1500,30 @@ ovsdb_idl_send_cond_change(struct ovsdb_idl *idl)
  * This function should be called between ovsdb_idl_create() and the first call
  * to ovsdb_idl_run().
  */
+static void
+ovsdb_idl_db_omit_alert(struct ovsdb_idl_db *db,
+                        const struct ovsdb_idl_column *column)
+{
+    *ovsdb_idl_db_get_mode(db, column) &= ~OVSDB_IDL_ALERT;
+}
+
+/* Turns off OVSDB_IDL_ALERT for 'column' in 'idl'.
+ *
+ * This function should be called between ovsdb_idl_create() and the first call
+ * to ovsdb_idl_run().
+ */
 void
 ovsdb_idl_omit_alert(struct ovsdb_idl *idl,
                      const struct ovsdb_idl_column *column)
 {
-    *ovsdb_idl_db_get_mode(&idl->db, column) &= ~OVSDB_IDL_ALERT;
+    ovsdb_idl_db_omit_alert(&idl->db, column);
+}
+
+static void
+ovsdb_idl_db_omit(struct ovsdb_idl_db *db,
+                  const struct ovsdb_idl_column *column)
+{
+    *ovsdb_idl_db_get_mode(db, column) = 0;
 }
 
 /* Sets the mode for 'column' in 'idl' to 0.  See the big comment above
@@ -1457,7 +1535,7 @@ ovsdb_idl_omit_alert(struct ovsdb_idl *idl,
 void
 ovsdb_idl_omit(struct ovsdb_idl *idl, const struct ovsdb_idl_column *column)
 {
-    *ovsdb_idl_db_get_mode(&idl->db, column) = 0;
+    ovsdb_idl_db_omit(&idl->db, column);
 }
 
 /* Returns the most recent IDL change sequence number that caused a

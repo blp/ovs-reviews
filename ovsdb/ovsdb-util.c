@@ -22,6 +22,38 @@
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_util);
 
+static void
+ovsdb_util_clear_column(struct ovsdb_row *row, const char *column_name)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+    const struct ovsdb_table_schema *schema = row->table->schema;
+    const struct ovsdb_column *column;
+
+    column = ovsdb_table_schema_get_column(schema, column_name);
+    if (!column) {
+        VLOG_DBG_RL(&rl, "Table `%s' has no `%s' column",
+                    schema->name, column_name);
+        return;
+    }
+
+    if (column->type.n_min) {
+        if (!VLOG_DROP_DBG(&rl)) {
+            char *type_name = ovsdb_type_to_english(&column->type);
+            VLOG_DBG("Table `%s' column `%s' has type %s, which requires "
+                     "a value, when it was expected to be optional",
+                     schema->name, column_name, type_name);
+            free(type_name);
+        }
+        return;
+    }
+
+    struct ovsdb_datum *datum = &row->fields[column->index];
+    if (datum->n) {
+        ovsdb_datum_destroy(datum, &column->type);
+        ovsdb_datum_init_empty(datum);
+    }
+}
+
 struct ovsdb_datum *
 ovsdb_util_get_datum(struct ovsdb_row *row, const char *column_name,
                     const enum ovsdb_atomic_type key_type,
@@ -183,16 +215,24 @@ void
 ovsdb_util_write_uuid_column(struct ovsdb_row *row, const char *column_name,
                              const struct uuid *uuid)
 {
-    const union ovsdb_atom atom = { .uuid = *uuid };
-    ovsdb_util_write_singleton(row, column_name, &atom, OVSDB_TYPE_UUID);
+    if (uuid) {
+        const union ovsdb_atom atom = { .uuid = *uuid };
+        ovsdb_util_write_singleton(row, column_name, &atom, OVSDB_TYPE_UUID);
+    } else {
+        ovsdb_util_clear_column(row, column_name);
+    }
 }
 
 void
 ovsdb_util_write_string_column(struct ovsdb_row *row, const char *column_name,
                                const char *string)
 {
-    const union ovsdb_atom atom = { .string = CONST_CAST(char *, string) };
-    ovsdb_util_write_singleton(row, column_name, &atom, OVSDB_TYPE_STRING);
+    if (string) {
+        const union ovsdb_atom atom = { .string = CONST_CAST(char *, string) };
+        ovsdb_util_write_singleton(row, column_name, &atom, OVSDB_TYPE_STRING);
+    } else {
+        ovsdb_util_clear_column(row, column_name);
+    }
 }
 
 void

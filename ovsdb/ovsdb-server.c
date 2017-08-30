@@ -1087,6 +1087,10 @@ update_database_status(struct ovsdb_row *row, struct db *db)
                                  ovsdb_storage_is_connected(db->storage));
     ovsdb_util_write_bool_column(row, "leader",
                                  ovsdb_storage_is_leader(db->storage));
+    ovsdb_util_write_uuid_column(row, "cid",
+                                 ovsdb_storage_get_cid(db->storage));
+    ovsdb_util_write_uuid_column(row, "sid",
+                                 ovsdb_storage_get_sid(db->storage));
 
     struct uuid generation;
     ovsdb_util_read_uuid_column(row, "generation", &generation);
@@ -1763,7 +1767,9 @@ save_config(struct server_config *config)
     sset_init(&db_filenames);
     SHASH_FOR_EACH (node, config->all_dbs) {
         struct db *db = node->data;
-        sset_add(&db_filenames, db->filename);
+        if (node->name[0] != '_') {
+            sset_add(&db_filenames, db->filename);
+        }
     }
 
     save_config__(config->config_tmpfile, config->remotes, &db_filenames,

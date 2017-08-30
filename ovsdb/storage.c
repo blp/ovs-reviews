@@ -120,6 +120,18 @@ ovsdb_storage_is_leader(const struct ovsdb_storage *storage)
     return !storage->raft || raft_is_leaving(storage->raft);
 }
 
+const struct uuid *
+ovsdb_storage_get_cid(const struct ovsdb_storage *storage)
+{
+    return storage->raft ? raft_get_cid(storage->raft) : NULL;
+}
+
+const struct uuid *
+ovsdb_storage_get_sid(const struct ovsdb_storage *storage)
+{
+    return storage->raft ? raft_get_sid(storage->raft) : NULL;
+}
+
 void
 ovsdb_storage_run(struct ovsdb_storage *storage)
 {
@@ -252,7 +264,6 @@ ovsdb_storage_write_block(struct ovsdb_storage *storage,
                           const struct json *data, const struct uuid *prereq,
                           struct uuid *resultp, bool durable)
 {
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     struct ovsdb_write *w = ovsdb_storage_write(storage, data,
                                                 prereq, resultp, durable);
     while (!ovsdb_write_is_complete(w)) {
@@ -269,7 +280,6 @@ ovsdb_storage_write_block(struct ovsdb_storage *storage,
 
     struct ovsdb_error *error = ovsdb_error_clone(ovsdb_write_get_error(w));
     ovsdb_write_destroy(w);
-    VLOG_INFO("%s:%d", __FILE__, __LINE__);
     return error;
 }
 

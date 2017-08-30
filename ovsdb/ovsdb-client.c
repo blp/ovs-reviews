@@ -134,14 +134,23 @@ main(int argc, char *argv[])
         if (argc - optind > command->min_args
             && svec_contains(&dbs, argv[optind])) {
             database = xstrdup(argv[optind++]);
-        } else if (dbs.n == 1) {
-            database = xstrdup(dbs.names[0]);
         } else if (svec_contains(&dbs, "Open_vSwitch")) {
             database = xstrdup("Open_vSwitch");
         } else {
-            jsonrpc_close(rpc);
-            ovs_fatal(0, "no default database for `%s' command, please "
-                      "specify a database name", command->name);
+            size_t n = 0;
+            const char *best = NULL;
+            for (size_t i = 0; i < dbs.n; i++) {
+                if (dbs.names[i][0] != '_') {
+                    best = dbs.names[i];
+                    n++;
+                }
+            }
+            if (n != 1) {
+                jsonrpc_close(rpc);
+                ovs_fatal(0, "no default database for `%s' command, please "
+                          "specify a database name", command->name);
+            }
+            database = xstrdup(best);
         }
         svec_destroy(&dbs);
     } else {
@@ -419,9 +428,7 @@ fetch_dbs(struct jsonrpc *rpc, struct svec *dbs)
         if (name->type != JSON_STRING) {
             ovs_fatal(0, "list_dbs response %"PRIuSIZE" is not string", i);
         }
-        if (name->u.string[0] != '_') {
-            svec_add(dbs, name->u.string);
-        }
+        svec_add(dbs, name->u.string);
     }
     jsonrpc_msg_destroy(reply);
     svec_sort(dbs);

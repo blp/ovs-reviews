@@ -34,6 +34,8 @@ const char *ovsdb_storage_get_model(const struct ovsdb_storage *);
 bool ovsdb_storage_is_clustered(const struct ovsdb_storage *);
 bool ovsdb_storage_is_connected(const struct ovsdb_storage *);
 bool ovsdb_storage_is_leader(const struct ovsdb_storage *);
+const struct uuid *ovsdb_storage_get_cid(const struct ovsdb_storage *);
+const struct uuid *ovsdb_storage_get_sid(const struct ovsdb_storage *);
 
 void ovsdb_storage_run(struct ovsdb_storage *);
 void ovsdb_storage_wait(struct ovsdb_storage *);
