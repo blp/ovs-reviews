@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<database name="_server" title="ovsdb-server _Server schema">
+  <p>
+    Every <code>ovsdb-server</code> (version 2.9 or later) always hosts an
+    instance of this schema, which holds information on the status and
+    configuration of the server itself.  This database is read-only.
+  </p>
+
+  <table name="Database" title="Databases.">
+    <p>
+      The databases hosted by the database server, one row per database.  The
+      table is updated as the server's database configuration and status
+      changes.
+    </p>
+
+    <p>
+      The OVSDB protocol specified in RFC 7047 does not provide a way for an
+      OVSDB client to find out about some kinds of configuration changes, such
+      as about databases added or removed while a client is connected to the
+      server, or databases changing between read/write and read-only due to a
+      transition between active and backup roles.  This table provides a
+      solution: clients can monitor the table's contents to find out about
+      important changes.
+    </p>
+
+    <p>
+      Traditionally, <code>ovsdb-server</code> disconnects all of its clients
+      when a significant configuration change occurs, because this prompts a
+      well-written client to reassess what is available from the server when it
+      reconnects.  OVS 2.9 provides the <code>set_db_change_aware</code> RPC to
+      suppress this behavior (see <code>ovsdb-server</code>(1) for details).
+    </p>
+
+    <p>
+      When a database is removed from the server, in addition to
+      <code>Database</code> table updates, the server will send
+      <code>cancel</code> messages, as described in RFC 7047 section 4.1.4, on
+      sessions that have outstanding transactions for the removed database.
+      The server also cancels any outstanding monitoring initiated by
+      <code>monitor</code> or <code>monitor_cond</code> requested on the
+      removed database, sending the <code>monitor_canceled</code> extension
+      message described in <code>ovsdb-server</code>(5).
+    </p>
+
+    <column name="name">
+      The database's name, as specified in its schema.
+    </column>
+
+    <column name="generation">
+      A randomly generated UUID.  The server generates a fresh UUID every time
+      a database is added, so that removing and then re-adding a database to
+      the server causes this column to change.
+    </column>
+
+    <column name="model">
+      The storage model: <code>standalone</code> for a standalone or
+      active-backup database, <code>clustered</code> for a clustered database.
+    </column>
+
+    <column name="schema">
+      The database schema, as a JSON string.
+    </column>
+
+    <group title="Clustered Databases">
+      <p>
+        These columns are most interesting and in some cases only relevant for
+        clustered databases, that is, those where the <ref column="model"/>
+        column is <code>clustered</code>.
+      </p>
+
+      <column name="connected">
+        True if the database is connected to its storage.  For a standalone or
+        active-backup database, this is always true.  For a clustered database,
+        this is true if the server is connected to a majority of its cluster.
+        An unconnected database cannot be modified and its data might be
+        unavailable or stale.
+      </column>
+
+      <column name="leader">
+        True if the database is the leader in its cluster.  For a standalone or
+        active-backup database, this is always true.
+      </column>
+
+      <column name="cid">
+        The cluster ID for this database, shared across all of the servers that
+        host this particular clustered database.  For a standalone or
+        active-backup database, this is empty.
+      </column>
+
+      <column name="sid">
+        The server ID for this database, different for each server that hosts
+        this particular clustered database.  A server that hosts more than one
+        clustered database will have a different <code>sid</code> in each one.
+        For a standalone or active-backup database, this is empty.
+      </column>
+    </group>
+  </table>
+</database>
