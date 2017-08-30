@@ -22,6 +22,7 @@
 #include "openvswitch/json.h"
 #include "openvswitch/vlog.h"
 #include "poll-loop.h"
+#include "ovsdb.h"
 #include "raft.h"
 #include "util.h"
 
@@ -168,33 +169,83 @@ ovsdb_storage_get_name(const struct ovsdb_storage *storage)
  * If the read reaches end of file, returns NULL and stores NULL in
  * '*jsonp'. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-ovsdb_storage_read(struct ovsdb_storage *storage, struct json **jsonp,
+ovsdb_storage_read(struct ovsdb_storage *storage,
+                   struct ovsdb_schema **schemap,
+                   struct json **txnp,
                    struct uuid *txnid)
 {
-    struct ovsdb_error *error = NULL;
+    *schemap = NULL;
+    *txnp = NULL;
+    if (txnid) {
+        *txnid = UUID_ZERO;
+    }
+
+    struct json *json;
+    struct json *schema_json = NULL;
+    struct json *txn_json = NULL;
     if (storage->raft) {
         bool is_snapshot;
-        const struct json *data = raft_next_entry(storage->raft, txnid,
-                                                  &is_snapshot);
-        *jsonp = data ? json_clone(data) : NULL;
-    } else if (storage->log) {
-        error = ovsdb_log_read(storage->log, jsonp);
-        if (*jsonp) {
-            *jsonp = (!storage->n_read
-                      ? json_array_create_2(*jsonp, json_object_create())
-                      : json_array_create_2(json_null_create(), *jsonp));
+        json = json_nullable_clone(
+            raft_next_entry(storage->raft, txnid, &is_snapshot));
+        if (!json) {
+            return NULL;
+        } else if (json->type != JSON_ARRAY || json->u.array.n != 2) {
+            json_destroy(json);
+            return ovsdb_error(NULL, "invalid commit format");
         }
-        if (txnid) {
-            *txnid = UUID_ZERO;
+
+        struct json **e = json->u.array.elems;
+        schema_json = e[0]->type != JSON_NULL ? e[0] : NULL;
+        txn_json = e[1]->type != JSON_NULL ? e[1] : NULL;
+    } else if (storage->log) {
+        struct ovsdb_error *error = ovsdb_log_read(storage->log, &json);
+        if (error || !json) {
+            return error;
+        }
+
+        if (!storage->n_read++) {
+            schema_json = json;
+        } else {
+            txn_json = json;
         }
     } else {
-        *jsonp = NULL;
-        error = NULL;
+        /* Unbacked.  Nothing to do. */
+        return NULL;
     }
-    if (!error) {
-        storage->n_read++;
+
+    /* If we got this far then we must have at least a schema or a
+     * transaction. */
+    ovs_assert(schema_json || txn_json);
+
+    if (schema_json) {
+        struct ovsdb_schema *schema;
+        struct ovsdb_error *error = ovsdb_schema_from_json(schema_json,
+                                                           &schema);
+        if (error) {
+            json_destroy(json);
+            return error;
+        }
+
+        const char *storage_name = ovsdb_storage_get_name(storage);
+        const char *schema_name = schema->name;
+        if (storage_name && strcmp(storage_name, schema_name)) {
+            error = ovsdb_error(NULL, "name %s in header does not match "
+                                "name %s in schema",
+                                storage_name, schema_name);
+            json_destroy(json);
+            ovsdb_schema_destroy(schema);
+            return error;
+        }
+
+        *schemap = schema;
     }
-    return error;
+
+    if (txn_json) {
+        *txnp = json_clone(txn_json);
+    }
+
+    json_destroy(json);
+    return NULL;
 }
 
 bool

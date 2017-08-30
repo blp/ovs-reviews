@@ -521,46 +521,25 @@ close_db(struct db *db)
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 parse_txn(struct server_config *config, struct db *db,
-          const struct json *json, const struct uuid *txnid)
+          struct ovsdb_schema **schemap, struct json *txn_json,
+          const struct uuid *txnid)
 {
-    if (json->type != JSON_ARRAY || json->u.array.n != 2) {
-        return ovsdb_error(NULL, "%s: invalid commit format", db->filename);
-    }
-
-    const struct json *schema_json = json->u.array.elems[0];
-    const struct json *data_json = json->u.array.elems[1];
-
-    if (schema_json->type != JSON_NULL) {
+    if (*schemap) {
         if (db->db) {
             return ovsdb_error(NULL, "%s: changing schema not yet supported",
                                db->filename);
         }
 
-        struct ovsdb_schema *schema;
-        struct ovsdb_error *error;
-
-        error = ovsdb_schema_from_json(schema_json, &schema);
-        if (error) {
-            return ovsdb_wrap_error(error, "%s: invalid ovsdb schema",
-                                    db->filename);
-        }
-
-        const char *storage_name = ovsdb_storage_get_name(db->storage);
-        const char *schema_name = schema->name;
-        if (storage_name && strcmp(storage_name, schema_name)) {
-            ovsdb_schema_destroy(schema);
-            return ovsdb_error(NULL, "%s: name %s in file does not match "
-                               "name %s in schema", db->filename,
-                               storage_name, schema_name);
-        }
+        struct ovsdb_schema *schema = *schemap;
+        *schemap = NULL;
 
         db->db = ovsdb_create(schema, db->storage);
-        if (shash_find(config->all_dbs, schema_name)) {
+        if (shash_find(config->all_dbs, schema->name)) {
             ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
         }
     }
 
-    if (data_json) {
+    if (txn_json) {
         if (!db->db) {
             return ovsdb_error(NULL, "%s: data without schema", db->filename);
         }
@@ -568,7 +547,7 @@ parse_txn(struct server_config *config, struct db *db,
         struct ovsdb_txn *txn;
         struct ovsdb_error *error;
 
-        error = ovsdb_file_txn_from_json(db->db, data_json, false, &txn);
+        error = ovsdb_file_txn_from_json(db->db, txn_json, false, &txn);
         if (!error) {
             error = ovsdb_txn_commit(txn, true, false);
         }
@@ -590,17 +569,19 @@ read_db(struct server_config *config, struct db *db)
 {
     struct ovsdb_error *error;
     for (;;) {
-        struct json *json;
+        struct ovsdb_schema *schema;
+        struct json *txn_json;
         struct uuid txnid;
-        error = ovsdb_storage_read(db->storage, &json, &txnid);
+        error = ovsdb_storage_read(db->storage, &schema, &txn_json, &txnid);
         if (error) {
             break;
-        } else if (!json) {
+        } else if (!schema && !txn_json) {
             /* End of file. */
             return NULL;
         } else {
-            error = parse_txn(config, db, json, &txnid);
-            json_destroy(json);
+            error = parse_txn(config, db, &schema, txn_json, &txnid);
+            ovsdb_schema_destroy(schema);
+            json_destroy(txn_json);
             if (error) {
                 break;
             }

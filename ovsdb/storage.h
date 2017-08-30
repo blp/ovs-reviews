@@ -20,6 +20,7 @@
 #include "compiler.h"
 
 struct json;
+struct ovsdb_schema;
 struct ovsdb_storage;
 struct ovsdb_completion;
 struct uuid;
@@ -42,8 +43,10 @@ void ovsdb_storage_wait(struct ovsdb_storage *);
 
 const char *ovsdb_storage_get_name(const struct ovsdb_storage *);
 
-struct ovsdb_error *ovsdb_storage_read(struct ovsdb_storage *, struct json **,
-                                       struct uuid *)
+struct ovsdb_error *ovsdb_storage_read(struct ovsdb_storage *,
+                                       struct ovsdb_schema **schemap,
+                                       struct json **txnp,
+                                       struct uuid *txnid)
     OVS_WARN_UNUSED_RESULT;
 bool ovsdb_storage_read_wait(struct ovsdb_storage *);
 

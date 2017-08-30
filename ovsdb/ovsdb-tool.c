@@ -41,6 +41,7 @@
 #include "storage.h"
 #include "table.h"
 #include "timeval.h"
+#include "transaction.h"
 #include "util.h"
 #include "openvswitch/vlog.h"
 
@@ -185,6 +186,25 @@ default_schema(void)
     return schema;
 }
 
+static struct json *
+parse_json(const char *s)
+{
+    struct json *json = json_from_string(s);
+    if (json->type == JSON_STRING) {
+        ovs_fatal(0, "\"%s\": %s", s, json->u.string);
+    }
+    return json;
+}
+
+static void
+print_and_free_json(struct json *json)
+{
+    char *string = json_to_string(json, JSSF_SORT);
+    json_destroy(json);
+    puts(string);
+    free(string);
+}
+
 static void
 check_ovsdb_error(struct ovsdb_error *error)
 {
@@ -193,61 +213,50 @@ check_ovsdb_error(struct ovsdb_error *error)
     }
 }
 
-static struct ovsdb_error *
-ovsdb_tool_parse_schema(const struct json *txn_json, const char *filename,
-                        struct ovsdb_schema **schemap)
-{
-    *schemap = NULL;
-    if (!txn_json) {
-        return ovsdb_io_error(EOF, "%s: database file contains no schema",
-                              filename);
-    }
-
-    if (txn_json->type != JSON_ARRAY || txn_json->u.array.n != 2) {
-        return ovsdb_error(NULL, "%s: invalid commit format", filename);
-    }
-
-    const struct json *schema_json = txn_json->u.array.elems[0];
-    if (!schema_json->type) {
-        return ovsdb_error(NULL, "%s: missing schema", filename);
-    }
-
-    struct ovsdb_schema *schema;
-    struct ovsdb_error *error;
-
-    error = ovsdb_schema_from_json(schema_json, &schema);
-    if (error) {
-        return ovsdb_wrap_error(error, "%s: invalid ovsdb schema", filename);
-    }
-
-    *schemap = schema;
-    return NULL;
-}
-
-static struct ovsdb_schema *
-ovsdb_tool_read_schema(struct ovs_cmdl_context *ctx, const char *filename)
+static struct ovsdb_storage *
+open_standalone_db(struct ovs_cmdl_context *ctx, const char *filename, bool rw)
 {
     struct ovsdb_storage *storage;
-    check_ovsdb_error(ovsdb_storage_open(filename, false, &storage));
+    check_ovsdb_error(ovsdb_storage_open(filename, rw, &storage));
     if (ovsdb_storage_is_clustered(storage)) {
         ovs_fatal(0, "%s: cannot apply %s to clustered database "
                   "(use ovsdb-client against online database instead)",
                   filename, ctx->argv[0]);
     }
+    return storage;
+}
 
+static struct ovsdb_schema *
+read_schema_from_storage(struct ovsdb_storage *storage)
+{
     struct json *txn_json;
     struct ovsdb_schema *schema;
-    check_ovsdb_error(ovsdb_storage_read(storage, &txn_json, NULL));
-    check_ovsdb_error(ovsdb_tool_parse_schema(txn_json, filename, &schema));
-    json_destroy(txn_json);
-
-    const char *storage_name = ovsdb_storage_get_name(storage);
-    const char *schema_name = schema->name;
-    if (storage_name && strcmp(storage_name, schema_name)) {
-        ovs_fatal(0, "%s: name %s in file does not match "
-                  "name %s in schema", filename, storage_name, schema_name);
+    check_ovsdb_error(ovsdb_storage_read(storage, &schema, &txn_json, NULL));
+    if (!schema && !txn_json) {
+        ovs_fatal(0, "unexpected end of file reading schema");
     }
+    ovs_assert(schema && !txn_json);
 
+    return schema;
+}
+
+static struct json *
+read_txn_from_storage(struct ovsdb_storage *storage)
+{
+    struct json *txn_json;
+    struct ovsdb_schema *schema;
+    check_ovsdb_error(ovsdb_storage_read(storage, &schema, &txn_json, NULL));
+    ovs_assert(!schema);
+
+    return txn_json;
+}
+
+static struct ovsdb_schema *
+read_schema(struct ovs_cmdl_context *ctx, const char *filename)
+{
+    struct ovsdb_storage *storage = open_standalone_db(ctx, filename, false);
+    struct ovsdb_schema *schema = read_schema_from_storage(storage);
+    ovsdb_storage_close(storage);
     return schema;
 }
 
@@ -326,9 +335,9 @@ do_needs_conversion(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
     const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
-    struct ovsdb_schema *schema1, *schema2;
+    struct ovsdb_schema *schema1 = read_schema(ctx, db_file_name);
+    struct ovsdb_schema *schema2;
 
-    schema1 = ovsdb_tool_read_schema(ctx, db_file_name);
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema2));
     puts(ovsdb_schema_equal(schema1, schema2) ? "no" : "yes");
     ovsdb_schema_destroy(schema1);
@@ -349,13 +358,8 @@ do_db_name(struct ovs_cmdl_context *ctx)
         puts(name);
     } else {
         /* Standalone databases. */
-        struct json *txn_json;
-        struct ovsdb_schema *schema;
-        check_ovsdb_error(ovsdb_storage_read(storage, &txn_json, NULL));
-        check_ovsdb_error(ovsdb_tool_parse_schema(txn_json, db_file_name,
-                                                  &schema));
+        struct ovsdb_schema *schema = read_schema_from_storage(storage);
         puts(schema->name);
-        json_destroy(txn_json);
         ovsdb_schema_destroy(schema);
     }
     ovsdb_storage_close(storage);
@@ -365,7 +369,8 @@ static void
 do_db_version(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    struct ovsdb_schema *schema = ovsdb_tool_read_schema(ctx, db_file_name);
+    struct ovsdb_schema *schema = read_schema(ctx, db_file_name);
+
     puts(schema->version);
     ovsdb_schema_destroy(schema);
 }
@@ -374,7 +379,7 @@ static void
 do_db_cksum(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    struct ovsdb_schema *schema = ovsdb_tool_read_schema(ctx, db_file_name);
+    struct ovsdb_schema *schema = read_schema(ctx, db_file_name);
     puts(schema->cksum);
     ovsdb_schema_destroy(schema);
 }
@@ -447,6 +452,54 @@ do_schema_cksum(struct ovs_cmdl_context *ctx)
     check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
     puts(schema->cksum);
     ovsdb_schema_destroy(schema);
+}
+
+static void
+transact(struct ovs_cmdl_context *ctx, bool rw)
+{
+    const char *db_file_name = ctx->argc >= 3 ? ctx->argv[1] : default_db();
+    const char *transaction = ctx->argv[ctx->argc - 1];
+
+    struct ovsdb_storage *storage = open_standalone_db(ctx, db_file_name, rw);
+    struct ovsdb_schema *schema = read_schema_from_storage(storage);
+
+    struct ovsdb *ovsdb = ovsdb_create(schema, storage);
+    for (;;) {
+        struct json *txn_json = read_txn_from_storage(storage);
+        if (!txn_json) {
+            break;
+        }
+
+        struct ovsdb_txn *txn;
+        check_ovsdb_error(ovsdb_file_txn_from_json(ovsdb, txn_json, false,
+                                                   &txn));
+        json_destroy(txn_json);
+
+        struct ovsdb_error *error = ovsdb_txn_commit(txn, true, false);
+        if (error) {
+            ovsdb_storage_unread(storage);
+            break;
+        }
+    }
+
+    struct json *request = parse_json(transaction);
+    struct json *result = ovsdb_execute(ovsdb, NULL, request, false, 0, NULL);
+    json_destroy(request);
+
+    print_and_free_json(result);
+    ovsdb_destroy(ovsdb);
+}
+
+static void
+do_query(struct ovs_cmdl_context *ctx)
+{
+    transact(ctx, false);
+}
+
+static void
+do_transact(struct ovs_cmdl_context *ctx)
+{
+    transact(ctx, true);
 }
 
 static void
@@ -798,6 +851,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "schema-name", "[schema]", 0, 1, do_schema_name, OVS_RO },
     { "schema-version", "[schema]", 0, 1, do_schema_version, OVS_RO },
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum, OVS_RO },
+    { "query", "[db] trns", 1, 2, do_query, OVS_RO },
+    { "transact", "[db] trns", 1, 2, do_transact, OVS_RO },
     { "show-log", "[db]", 0, 1, do_show_log, OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { "list-commands", NULL, 0, INT_MAX, do_list_commands, OVS_RO },
