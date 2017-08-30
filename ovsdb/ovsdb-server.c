@@ -521,7 +521,7 @@ close_db(struct db *db)
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 parse_txn(struct server_config *config, struct db *db,
-          struct ovsdb_schema **schemap, struct json *txn_json,
+          struct ovsdb_schema **schemap, const struct json *txn_json,
           const struct uuid *txnid)
 {
     if (*schemap) {

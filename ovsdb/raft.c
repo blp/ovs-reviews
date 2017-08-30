@@ -609,31 +609,20 @@ raft_find_server(const struct raft *raft, const struct uuid *sid)
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_address_parse(const char *address,
-                   const char **classp, struct sockaddr_storage *ssp)
+raft_address_validate(const char *address)
 {
-    const char *class;
-    if (!strncmp(address, "ssl:", 4)) {
-        class = "ssl";
-    } else if (!strncmp(address, "tcp:", 4)) {
-        class = "tcp";
+    if (!strncmp(address, "unix:", 5)) {
+        return NULL;
+    } else if (!strncmp(address, "ssl:", 4) || !strncmp(address, "tcp:", 4)) {
+        struct sockaddr_storage ss;
+        if (!inet_parse_active(address + 4, 0, &ss)) {
+            return ovsdb_error(NULL, "%s: syntax error in address", address);
+        }
+        return NULL;
     } else {
         return ovsdb_error(NULL, "%s: expected \"tcp\" or \"ssl\" address",
                            address);
     }
-
-    struct sockaddr_storage ss;
-    if (!inet_parse_active(address + 4, 0, &ss)) {
-        return ovsdb_error(NULL, "%s: syntax error in address", address);
-    }
-
-    if (classp) {
-        *classp = class;
-    }
-    if (ssp) {
-        *ssp = ss;
-    }
-    return NULL;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -643,26 +632,30 @@ raft_address_validate_json(const struct json *address)
         return ovsdb_syntax_error(address, NULL,
                                   "server address is not string");
     }
-    return raft_address_parse(json_string(address), NULL, NULL);
+    return raft_address_validate(json_string(address));
 }
 
 static char *
 raft_make_address_passive(const char *address_)
 {
-    char *address = xstrdup(address_);
-    char *p = strchr(address, ':') + 1;
-    char *host = inet_parse_token(&p);
-    char *port = inet_parse_token(&p);
-
-    struct ds paddr = DS_EMPTY_INITIALIZER;
-    ds_put_format(&paddr, "p%.3s:%s:", address, port);
-    if (strchr(host, ':')) {
-        ds_put_format(&paddr, "[%s]", host);
+    if (!strncmp(address_, "unix:", 5)) {
+        return xasprintf("p%s", address_);
     } else {
-        ds_put_cstr(&paddr, host);
+        char *address = xstrdup(address_);
+        char *p = strchr(address, ':') + 1;
+        char *host = inet_parse_token(&p);
+        char *port = inet_parse_token(&p);
+
+        struct ds paddr = DS_EMPTY_INITIALIZER;
+        ds_put_format(&paddr, "p%.3s:%s:", address, port);
+        if (strchr(host, ':')) {
+            ds_put_format(&paddr, "[%s]", host);
+        } else {
+            ds_put_cstr(&paddr, host);
+        }
+        free(address);
+        return ds_steal_cstr(&paddr);
     }
-    free(address);
-    return ds_steal_cstr(&paddr);
 }
 
 static void
@@ -740,7 +733,7 @@ raft_create_cluster(const char *file_name, const char *name,
                     const char *local_address, const struct json *data)
 {
     /* Parse and verify validity of the local address. */
-    struct ovsdb_error *error = raft_address_parse(local_address, NULL, NULL);
+    struct ovsdb_error *error = raft_address_validate(local_address);
     if (error) {
         return error;
     }
@@ -824,12 +817,12 @@ raft_join_cluster(const char *file_name,
     ovs_assert(n_remotes > 0);
 
     /* Parse and verify validity of the addresses. */
-    struct ovsdb_error *error = raft_address_parse(local_address, NULL, NULL);
+    struct ovsdb_error *error = raft_address_validate(local_address);
     if (error) {
         return error;
     }
     for (size_t i = 0; i < n_remotes; i++) {
-        error = raft_address_parse(remotes[i], NULL, NULL);
+        error = raft_address_validate(remotes[i]);
         if (error) {
             return error;
         }
