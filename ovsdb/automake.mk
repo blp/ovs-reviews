@@ -14,6 +14,7 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/condition.c \
 	ovsdb/condition.h \
 	ovsdb/execution.c \
+	ovsdb/execution.h \
 	ovsdb/file.c \
 	ovsdb/file.h \
 	ovsdb/jsonrpc-server.c \

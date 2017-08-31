@@ -16,6 +16,7 @@
 #ifndef OVSDB_STORAGE_H
 #define OVSDB_STORAGE_H 1
 
+#include <stdint.h>
 #include <sys/types.h>
 #include "compiler.h"
 
@@ -37,6 +38,8 @@ bool ovsdb_storage_is_connected(const struct ovsdb_storage *);
 bool ovsdb_storage_is_leader(const struct ovsdb_storage *);
 const struct uuid *ovsdb_storage_get_cid(const struct ovsdb_storage *);
 const struct uuid *ovsdb_storage_get_sid(const struct ovsdb_storage *);
+uint64_t ovsdb_storage_get_commit_index(const struct ovsdb_storage *);
+uint64_t ovsdb_storage_get_applied_index(const struct ovsdb_storage *);
 
 void ovsdb_storage_run(struct ovsdb_storage *);
 void ovsdb_storage_wait(struct ovsdb_storage *);

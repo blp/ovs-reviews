@@ -3438,6 +3438,18 @@ raft_next_entry(struct raft *raft, struct uuid *eid, bool *is_snapshot)
     return data;
 }
 
+uint64_t
+raft_get_applied_index(const struct raft *raft)
+{
+    return raft->last_applied;
+}
+
+uint64_t
+raft_get_commit_index(const struct raft *raft)
+{
+    return raft->commit_index;
+}
+
 static void
 raft_handle_append_request(struct raft *raft,
                            const struct raft_append_request *rq)

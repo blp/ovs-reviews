@@ -108,6 +108,9 @@ const struct json *raft_next_entry(struct raft *, struct uuid *eid,
                                    bool *is_snapshot);
 bool raft_has_next_entry(const struct raft *);
 
+uint64_t raft_get_applied_index(const struct raft *);
+uint64_t raft_get_commit_index(const struct raft *);
+
 /* Writing log entries (executing commands). */
 enum raft_command_status {
     RAFT_CMD_INCOMPLETE,        /* In progress, please wait. */

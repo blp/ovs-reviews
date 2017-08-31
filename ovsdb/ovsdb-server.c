@@ -549,7 +549,11 @@ parse_txn(struct server_config *config, struct db *db,
 
         error = ovsdb_file_txn_from_json(db->db, txn_json, false, &txn);
         if (!error) {
-            error = ovsdb_txn_commit(txn, true, false);
+            error = ovsdb_txn_replay_commit(txn);
+            if (error) {
+                /* XXX */
+                VLOG_INFO("%s", ovsdb_error_to_string_free(error));
+            }
         }
         if (!error && !uuid_is_zero(txnid)) {
             db->db->prereq = *txnid;
@@ -678,7 +682,7 @@ add_server_db(struct server_config *config)
     struct db *db = xzalloc(sizeof *db);
     db->filename = xstrdup("<internal>");
     db->storage = ovsdb_storage_create_unbacked();
-    db->db = ovsdb_create(schema, NULL);
+    db->db = ovsdb_create(schema, db->storage);
     add_db(config, db->db->schema->name, db);
 }
 
@@ -1028,7 +1032,7 @@ update_remote_rows(const struct shash *all_dbs, const struct db *db_,
 static void
 commit_txn(struct ovsdb_txn *txn, const char *name)
 {
-    struct ovsdb_error *error = ovsdb_txn_commit(txn, true, false);
+    struct ovsdb_error *error = ovsdb_txn_propose_commit_block(txn, false);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         char *msg = ovsdb_error_to_string_free(error);

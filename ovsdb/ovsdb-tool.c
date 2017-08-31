@@ -26,6 +26,7 @@
 #include "command-line.h"
 #include "compiler.h"
 #include "dirs.h"
+#include "execution.h"
 #include "openvswitch/dynamic-string.h"
 #include "fatal-signal.h"
 #include "file.h"
@@ -276,7 +277,7 @@ read_ovsdb_txns(struct ovsdb_schema *schema, struct ovsdb_storage *storage,
                                                    &txn));
         json_destroy(txn_json);
 
-        struct ovsdb_error *error = ovsdb_txn_commit(txn, true, false);
+        struct ovsdb_error *error = ovsdb_txn_replay_commit(txn);
         if (error) {
             ovsdb_storage_unread(storage);
             break;

@@ -133,6 +133,18 @@ ovsdb_storage_get_sid(const struct ovsdb_storage *storage)
     return storage->raft ? raft_get_sid(storage->raft) : NULL;
 }
 
+uint64_t
+ovsdb_storage_get_commit_index(const struct ovsdb_storage *storage)
+{
+    return storage->raft ? raft_get_commit_index(storage->raft) : 0;
+}
+
+uint64_t
+ovsdb_storage_get_applied_index(const struct ovsdb_storage *storage)
+{
+    return storage->raft ? raft_get_applied_index(storage->raft) : 0;
+}
+
 void
 ovsdb_storage_run(struct ovsdb_storage *storage)
 {

@@ -14,15 +14,15 @@ AT_BANNER([OVSDB -- clustered transactions (1 server)])
 # same marker.
 #
 # TITLE is provided to AT_SETUP and KEYWORDS to AT_KEYWORDS.
-m4_define([OVSDB_CHECK_EXECUTION], 
+m4_define([OVSDB_CHECK_EXECUTION],
   [AT_SETUP([$1])
    AT_KEYWORDS([ovsdb server positive unix cluster $5])
    $2 > schema
    AT_CHECK([ovsdb-tool create-cluster db schema unix:cluster], [0], [stdout], [ignore])
    AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --log-file --remote=punix:socket db], [0], [ignore], [ignore])
    sleep 2
-   m4_foreach([txn], [$3], 
-     [AT_CHECK([echo; echo; echo; ovsdb-client transact unix:socket 'txn' && ovsdb-client dump unix:socket], [0], [stdout], [ignore],
+   m4_foreach([txn], [$3],
+     [AT_CHECK([ovsdb-client transact unix:socket 'txn'], [0], [stdout], [ignore],
      [test ! -e pid || kill `cat pid`])
 cat stdout >> output
 ])

@@ -532,7 +532,7 @@ reset_database(struct ovsdb *db)
         }
     }
 
-    return ovsdb_txn_commit(txn, false, false);
+    return ovsdb_txn_propose_commit_block(txn, false);
 }
 
 /* Create a monitor request for 'db'. The monitor request will include
@@ -611,7 +611,7 @@ process_notification(struct json *table_updates, struct ovsdb *db)
             return error;
         } else {
             /* Commit transaction. */
-            error = ovsdb_txn_commit(txn, false, false);
+            error = ovsdb_txn_propose_commit_block(txn, false);
         }
     }
 

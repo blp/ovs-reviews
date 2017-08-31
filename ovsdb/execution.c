@@ -15,6 +15,8 @@
 
 #include <config.h>
 
+#include "execution.h"
+
 #include <limits.h>
 
 #include "column.h"
@@ -94,10 +96,19 @@ lookup_executor(const char *name, bool *read_only)
     return NULL;
 }
 
-struct json *
-ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
-              const struct json *params, bool read_only,
-              long long int elapsed_msec, long long int *timeout_msec)
+/* On success, returns a transaction and stores the results to return to the
+ * client in '*resultsp'.
+ *
+ * On failure, returns NULL.  If '*resultsp' is nonnull, then it is the results
+ * to return to the client.  If '*resultsp' is null, then the execution failed
+ * due to an unsatisfied "wait" operation and '*timeout_msec' is the time at
+ * which the transaction will time out.  (If 'timeout_msec' is null, this case
+ * never occurs--instead, an unsatisfied "wait" unconditionally fails.) */
+struct ovsdb_txn *
+ovsdb_execute_compose(struct ovsdb *db, const struct ovsdb_session *session,
+                      const struct json *params, bool read_only,
+                      long long int elapsed_msec, long long int *timeout_msec,
+                      bool *durable, struct json **resultsp)
 {
     struct ovsdb_execution x;
     struct ovsdb_error *error;
@@ -105,6 +116,7 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
     size_t n_operations;
     size_t i;
 
+    *durable = false;
     if (params->type != JSON_ARRAY
         || !params->u.array.n
         || params->u.array.elems[0]->type != JSON_STRING
@@ -116,9 +128,9 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
                                        "as first parameter");
         }
 
-        results = ovsdb_error_to_json(error);
+        *resultsp = ovsdb_error_to_json(error);
         ovsdb_error_destroy(error);
-        return results;
+        return NULL;
     }
 
     x.db = db;
@@ -184,43 +196,56 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
         }
         if (error) {
             json_destroy(result);
-            result = ovsdb_error_to_json(error);
-        }
-        if (error && !strcmp(ovsdb_error_get_tag(error), "not supported")
-            && timeout_msec) {
-            ovsdb_txn_abort(x.txn);
-            *timeout_msec = x.timeout_msec;
-
-            json_destroy(result);
-            json_destroy(results);
-            results = NULL;
-            goto exit;
-        }
-
-        /* Add result to array. */
-        json_array_add(results, result);
-        if (error) {
+            json_array_add(results, ovsdb_error_to_json(error));
+            if (!strcmp(ovsdb_error_get_tag(error), "not supported")
+                && timeout_msec) {
+                *timeout_msec = x.timeout_msec;
+                json_destroy(result);
+                json_destroy(results);
+                results = NULL;
+                goto exit;
+            }
             break;
         }
+        json_array_add(results, result);
     }
-
-    if (!error) {
-        error = ovsdb_txn_commit(x.txn, false, x.durable);
-        if (error) {
-            json_array_add(results, ovsdb_error_to_json(error));
-        }
-    } else {
-        ovsdb_txn_abort(x.txn);
-    }
-
     while (json_array(results)->n < n_operations) {
         json_array_add(results, json_null_create());
     }
 
 exit:
-    ovsdb_error_destroy(error);
+    if (error) {
+        ovsdb_txn_abort(x.txn);
+        x.txn = NULL;
+
+        ovsdb_error_destroy(error);
+    }
+    *resultsp = results;
+    *durable = x.durable;
     ovsdb_symbol_table_destroy(x.symtab);
 
+    return x.txn;
+}
+
+struct json *
+ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
+              const struct json *params, bool read_only,
+              long long int elapsed_msec, long long int *timeout_msec)
+{
+    bool durable;
+    struct json *results;
+    struct ovsdb_txn *txn = ovsdb_execute_compose(
+        db, session, params, read_only, elapsed_msec, timeout_msec,
+        &durable, &results);
+    if (!txn) {
+        return results;
+    }
+
+    struct ovsdb_error *error = ovsdb_txn_propose_commit_block(txn, durable);
+    if (error) {
+        json_array_add(results, ovsdb_error_to_json(error));
+        ovsdb_error_destroy(error);
+    }
     return results;
 }
 
