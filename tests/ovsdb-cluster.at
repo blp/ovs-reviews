@@ -16,7 +16,7 @@ AT_BANNER([OVSDB -- clustered transactions (1 server)])
 # TITLE is provided to AT_SETUP and KEYWORDS to AT_KEYWORDS.
 m4_define([OVSDB_CHECK_EXECUTION],
   [AT_SETUP([$1])
-   AT_KEYWORDS([ovsdb server positive unix cluster $5])
+   AT_KEYWORDS([ovsdb server positive unix cluster1 $5])
    $2 > schema
    AT_CHECK([ovsdb-tool create-cluster db schema unix:cluster], [0], [stdout], [ignore])
    AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --log-file --remote=punix:socket db], [0], [ignore], [ignore])
@@ -29,6 +29,47 @@ cat stdout >> output
    AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
             [test ! -e pid || kill `cat pid`])
    OVSDB_SERVER_SHUTDOWN
+   AT_CLEANUP])
+
+EXECUTION_EXAMPLES
+
+AT_BANNER([OVSDB -- clustered transactions (3 servers)])
+
+# OVSDB_CHECK_EXECUTION(TITLE, SCHEMA, TRANSACTIONS, OUTPUT, [KEYWORDS])
+#
+# Creates a clustered database with the given SCHEMA and a single
+# server, starts an ovsdb-server on that database, and runs each of
+# the TRANSACTIONS (which should be a quoted list of quoted strings)
+# against it with ovsdb-client one at a time.
+#
+# Checks that the overall output is OUTPUT, but UUIDs in the output
+# are replaced by markers of the form <N> where N is a number.  The
+# first unique UUID is replaced by <0>, the next by <1>, and so on.
+# If a given UUID appears more than once it is always replaced by the
+# same marker.
+#
+# TITLE is provided to AT_SETUP and KEYWORDS to AT_KEYWORDS.
+m4_define([OVSDB_CHECK_EXECUTION],
+  [AT_SETUP([$1])
+   AT_KEYWORDS([ovsdb server positive unix cluster3 $5])
+   $2 > schema
+   schema=`ovsdb-tool schema-name schema`
+   AT_CHECK([ovsdb-tool create-cluster s1.db schema unix:s1.raft])
+   cid=`ovsdb-tool db-cid s1.db`
+   AT_CHECK([ovsdb-tool join-cluster s2.db $schema unix:s2.raft unix:s1.raft])
+   AT_CHECK([ovsdb-tool join-cluster s3.db $schema unix:s3.raft unix:s1.raft])
+
+   on_exit 'kill `cat *.pid`'
+   for i in 1 2 3; do
+       ovsdb-server --detach --no-chdir --log-file=s$i.log --pidfile=s$i.pid --remote=punix:s$i.ovsdb s$i.db
+   done
+   sleep 10
+   m4_foreach([txn], [$3],
+     [AT_CHECK([ovsdb-client transact unix:s1.ovsdb 'txn'], [0], [stdout])
+cat stdout >> output
+])
+   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+            [test ! -e pid || kill `cat pid`])
    AT_CLEANUP])
 
 EXECUTION_EXAMPLES

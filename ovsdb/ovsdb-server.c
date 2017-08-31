@@ -1051,6 +1051,10 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
         struct db *db = node->data;
         struct ovsdb_txn *txn = ovsdb_txn_create(db->db);
 
+        if (ovsdb_storage_is_clustered(db->storage)) {
+            continue;
+        }
+
         /* Iterate over --remote arguments given on command line. */
         const char *remote;
         SSET_FOR_EACH (remote, remotes) {
@@ -1109,7 +1113,7 @@ update_server_status(struct shash *all_dbs)
         const char *name;
         ovsdb_util_read_string_column(row, "name", &name);
         struct db *db = shash_find_data(all_dbs, name);
-        if (!db) {
+        if (!db || !db->db) {
             ovsdb_txn_row_delete(txn, row);
         } else {
             update_database_status(ovsdb_txn_row_modify(txn, row), db);
@@ -1122,6 +1126,10 @@ update_server_status(struct shash *all_dbs)
     struct shash_node *node;
     SHASH_FOR_EACH (node, all_dbs) {
         struct db *db = node->data;
+
+        if (!db->db) {
+            continue;
+        }
 
         HMAP_FOR_EACH (row, hmap_node, &database_table->rows) {
             const char *name;
