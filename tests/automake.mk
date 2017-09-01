@@ -14,6 +14,8 @@ EXTRA_DIST += \
 	tests/test-raft.sh \
 	tests/test-raft2.sh \
 	tests/test-raft3.sh \
+	tests/test-raft4.sh \
+	tests/torture-raft4.sh \
 	tests/mc/run-mc-raft.sh \
 	tests/mc/kill-mc-raft.sh \
 	tests/mc/raft-config.json \
