@@ -149,7 +149,7 @@ ovsdb_replication_init(const char *sync_from, const char *exclude,
     struct shash_node *node;
     SHASH_FOR_EACH (node, all_dbs) {
         struct db *db = node->data;
-        if (node->name[0] != '_') {
+        if (node->name[0] != '_' && db->db) {
             replication_add_local_db(node->name, db->db);
         }
     }
@@ -178,7 +178,9 @@ main_loop(struct server_config *config,
             ovsdb_monitor_get_memory_usage(&usage);
             SHASH_FOR_EACH(node, all_dbs) {
                 struct db *db = node->data;
-                ovsdb_get_memory_usage(db->db, &usage);
+                if (db->db) {
+                    ovsdb_get_memory_usage(db->db, &usage);
+                }
             }
             memory_report(&usage);
             simap_destroy(&usage);
@@ -1049,13 +1051,11 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
     struct shash_node *node;
     SHASH_FOR_EACH (node, all_dbs) {
         struct db *db = node->data;
-        struct ovsdb_txn *txn = ovsdb_txn_create(db->db);
-
-        if (ovsdb_storage_is_clustered(db->storage)) {
+        if (!db->db || ovsdb_storage_is_clustered(db->storage)) {
             continue;
         }
 
-        /* Iterate over --remote arguments given on command line. */
+        struct ovsdb_txn *txn = ovsdb_txn_create(db->db);
         const char *remote;
         SSET_FOR_EACH (remote, remotes) {
             update_remote_rows(all_dbs, db, remote, jsonrpc, txn);
@@ -1488,8 +1488,10 @@ ovsdb_server_remove_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
     }
     db = node->data;
 
-    ok = ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
-    ovs_assert(ok);
+    if (db->db) {
+        ok = ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
+        ovs_assert(ok);
+    }
 
     close_db(db);
     shash_delete(config->all_dbs, node);
