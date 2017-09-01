@@ -1517,7 +1517,11 @@ ovsdb_server_list_databases(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
     nodes = shash_sort(all_dbs);
     for (i = 0; i < shash_count(all_dbs); i++) {
-        ds_put_format(&s, "%s\n", nodes[i]->name);
+        const struct shash_node *node = nodes[i];
+        struct db *db = node->data;
+        if (db->db) {
+            ds_put_format(&s, "%s\n", node->name);
+        }
     }
     free(nodes);
 
