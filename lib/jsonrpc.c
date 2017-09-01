@@ -820,6 +820,7 @@ jsonrpc_session_open_multiple(const char **names, size_t n, bool retry)
     s->reconnect = reconnect_create(time_msec());
     jsonrpc_session_pick_remote(s);
     reconnect_enable(s->reconnect, time_msec());
+    reconnect_set_backoff_free_tries(s->reconnect, n);
     s->rpc = NULL;
     s->stream = NULL;
     s->pstream = NULL;
@@ -835,7 +836,7 @@ jsonrpc_session_open_multiple(const char **names, size_t n, bool retry)
          * because we have not yet tried to connect at all, whereas that
          * function assumes that we've tried once already and should not try
          * again. */
-        reconnect_set_max_tries(s->reconnect, 1);
+        reconnect_set_max_tries(s->reconnect, n);
         reconnect_set_backoff(s->reconnect, INT_MAX, INT_MAX);
     }
 
@@ -932,6 +933,7 @@ jsonrpc_session_connect(struct jsonrpc_session *s)
 
     if (error) {
         reconnect_connect_failed(s->reconnect, time_msec(), error);
+        jsonrpc_session_pick_remote(s);
     }
     s->seqno++;
 }
@@ -995,6 +997,7 @@ jsonrpc_session_run(struct jsonrpc_session *s)
             s->stream = NULL;
         } else if (error != EAGAIN) {
             reconnect_connect_failed(s->reconnect, time_msec(), error);
+            jsonrpc_session_pick_remote(s);
             stream_close(s->stream);
             s->stream = NULL;
             s->last_error = error;

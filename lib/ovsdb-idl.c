@@ -145,13 +145,18 @@ struct ovsdb_idl_arc {
     OVSDB_IDL_STATE(MONITORING_COND)                                    \
                                                                         \
     /* Terminal error state that indicates that nothing useful can be   \
-     * done, for example beacuse the database server doesn't actually   \
+     * done, for example because the database server doesn't actually   \
      * have the desired database.  We maintain the session with the     \
      * database server anyway.  If it starts serving the database       \
      * that we want, or if someone fixes and restarts the database,     \
      * then it will kill the session and we will automatically          \
      * reconnect and try again. */                                      \
-    OVSDB_IDL_STATE(ERROR)
+    OVSDB_IDL_STATE(ERROR)                                              \
+                                                                        \
+    /* Terminal state that indicates we connected to a useless server   \
+     * in a cluster, e.g. one that is partitioned from the rest of      \
+     * the cluster. We're waiting to retry. */                          \
+    OVSDB_IDL_STATE(RETRY)
 
 enum ovsdb_idl_state {
 #define OVSDB_IDL_STATE(NAME) IDL_S_##NAME,
@@ -658,8 +663,9 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
                 if (!strcmp(database->model, "clustered")
                     && !database->leader
                     && jsonrpc_session_get_n_remotes(idl->session) > 1) {
+                    VLOG_INFO("not leader, trying again"); /* XXX */
                     ovsdb_idl_force_reconnect(idl);
-                    ovsdb_idl_transition(idl, IDL_S_ERROR);
+                    ovsdb_idl_transition(idl, IDL_S_RETRY);
                 } else {
                     json_destroy(idl->db.schema);
                     idl->db.schema = json_from_string(database->schema);
@@ -714,6 +720,7 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
         break;
 
     case IDL_S_ERROR:
+    case IDL_S_RETRY:
         /* Nothing to do in this state. */
         break;
 

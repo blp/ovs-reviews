@@ -62,6 +62,7 @@ struct reconnect {
     long long int last_connected;
     long long int last_disconnected;
     unsigned int max_tries;
+    unsigned int backoff_free_tries;
 
     /* These values are simply for statistics reporting, not otherwise used
      * directly by anything internal. */
@@ -204,6 +205,15 @@ unsigned int
 reconnect_get_max_tries(struct reconnect *fsm)
 {
     return fsm->max_tries;
+}
+
+/* Sets the number of connection attempts that will be made without backoff to
+ * 'backoff_free_tries'.  Values 0 and 1 both represent a single attempt. */
+void
+reconnect_set_backoff_free_tries(struct reconnect *fsm,
+                                 unsigned int backoff_free_tries)
+{
+    fsm->backoff_free_tries = backoff_free_tries;
 }
 
 /* Configures the backoff parameters for 'fsm'.  'min_backoff' is the minimum
@@ -359,8 +369,17 @@ reconnect_disconnected(struct reconnect *fsm, long long int now, int error)
         if (fsm->state & (S_ACTIVE | S_IDLE)) {
             fsm->last_disconnected = now;
         }
+
+        if (!reconnect_may_retry(fsm)) {
+            reconnect_transition__(fsm, now, S_VOID);
+            return;
+        }
+
         /* Back off. */
-        if (fsm->state & (S_ACTIVE | S_IDLE)
+        if (fsm->backoff_free_tries > 1) {
+            fsm->backoff_free_tries--;
+            fsm->backoff = 0;
+        } else if (fsm->state & (S_ACTIVE | S_IDLE)
              && (fsm->last_activity - fsm->last_connected >= fsm->backoff
                  || fsm->passive)) {
             fsm->backoff = fsm->passive ? 0 : fsm->min_backoff;
@@ -380,9 +399,7 @@ reconnect_disconnected(struct reconnect *fsm, long long int now, int error)
                           fsm->name, fsm->backoff / 1000.0);
             }
         }
-
-        reconnect_transition__(fsm, now,
-                               reconnect_may_retry(fsm) ? S_BACKOFF : S_VOID);
+        reconnect_transition__(fsm, now, S_BACKOFF);
     }
 }
 
