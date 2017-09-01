@@ -178,18 +178,18 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
         t->progress = NULL;
 
         if (error) {
-            if (true /* XXX */) {
-                /* Permanent error.  Transition to "completed" state to report
-                 * it. */
-                json_array_add(t->result, ovsdb_error_to_json(error));
-                ovsdb_error_destroy(error);
-                ovsdb_trigger_complete(t);
-            } else {
+            if (!strcmp(ovsdb_error_get_tag(error), "cluster error")) {
                 /* Temporary error.  Transition back to "initialized" state to
                  * try again. */
                 json_destroy(t->result);
                 t->result = NULL;
+            } else {
+                /* Permanent error.  Transition to "completed" state to report
+                 * it. */
+                json_array_add(t->result, ovsdb_error_to_json(error));
+                ovsdb_trigger_complete(t);
             }
+            ovsdb_error_destroy(error);
         } else {
             /* Success. */
             ovsdb_trigger_complete(t);

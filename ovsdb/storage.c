@@ -362,7 +362,7 @@ ovsdb_write_get_error(const struct ovsdb_write *w_)
         enum raft_command_status status = raft_command_get_status(w->command);
         ovs_assert(status != RAFT_CMD_INCOMPLETE);
         if (status != RAFT_CMD_SUCCESS) {
-            w->error = ovsdb_error(NULL, "%s",
+            w->error = ovsdb_error("cluster error", "%s",
                                    raft_command_status_to_string(status));
         }
         raft_command_unref(w->command);

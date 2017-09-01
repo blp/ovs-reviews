@@ -935,7 +935,7 @@ ovsdb_txn_propose_commit(struct ovsdb_txn *txn, bool durable)
     struct uuid next;
     struct ovsdb_write *write = ovsdb_storage_write(
         txn->db->storage, txn_json, &txn->db->prereq, &next, durable);
-    txn->db->prereq = next;     /* XXX */
+    //txn->db->prereq = next;     /* XXX */
     if (!ovsdb_write_is_complete(write)) {
         progress->write = write;
         return progress;
