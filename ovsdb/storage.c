@@ -118,7 +118,7 @@ ovsdb_storage_is_connected(const struct ovsdb_storage *storage)
 bool
 ovsdb_storage_is_leader(const struct ovsdb_storage *storage)
 {
-    return !storage->raft || raft_is_leaving(storage->raft);
+    return !storage->raft || raft_is_leader(storage->raft);
 }
 
 const struct uuid *
