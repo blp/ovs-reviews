@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "ovs-atomic.h"
 #include "packets.h"
 #include "poll-loop.h"
 #include "socket-util.h"
@@ -116,7 +117,11 @@ punix_accept(int fd, const struct sockaddr_storage *ss, size_t ss_len,
     if (name_len > 0) {
         snprintf(name, sizeof name, "unix:%.*s", name_len, sun->sun_path);
     } else {
-        strcpy(name, "unix");
+        /* When a Unix socket connects to us without first binding a name, we
+         * don't get any name for it.  It's useful nevertheless to be able to
+         * distinguish separate sockets in log messages, so use a counter. */
+        static atomic_count next_idx = ATOMIC_COUNT_INIT(0);
+        snprintf(name, sizeof name, "unix#%u", atomic_count_inc(&next_idx));
     }
     return new_fd_stream(name, fd, 0, AF_UNIX, streamp);
 }
