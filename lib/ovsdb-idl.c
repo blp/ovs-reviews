@@ -656,7 +656,7 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
 
             if (database) {
                 if (!strcmp(database->model, "clustered")
-                    && !database->connected
+                    && !database->leader
                     && jsonrpc_session_get_n_remotes(idl->session) > 1) {
                     ovsdb_idl_force_reconnect(idl);
                     ovsdb_idl_transition(idl, IDL_S_ERROR);
