@@ -756,6 +756,7 @@ jsonrpc_msg_to_json(struct jsonrpc_msg *m)
 struct jsonrpc_session {
     char **remotes;
     size_t n_remotes;
+    size_t next_remote;
 
     struct reconnect *reconnect;
     struct jsonrpc *rpc;
@@ -769,7 +770,8 @@ struct jsonrpc_session {
 static void
 jsonrpc_session_pick_remote(struct jsonrpc_session *s)
 {
-    reconnect_set_name(s->reconnect, s->remotes[random_range(s->n_remotes)]);
+    reconnect_set_name(s->reconnect,
+                       s->remotes[s->next_remote++ % s->n_remotes]);
 }
 
 /* Creates and returns a jsonrpc_session to 'name', which should be a string
@@ -799,12 +801,21 @@ jsonrpc_session_open_multiple(const char **names, size_t n, bool retry)
 
     s = xmalloc(sizeof *s);
 
+    /* Set 'n' remotes from 'names', shuffling them into random order. */
     ovs_assert(n > 0);
     s->remotes = xmalloc(n * sizeof *s->remotes);
     for (size_t i = 0; i < n; i++) {
         s->remotes[i] = xstrdup(names[i]);
     }
     s->n_remotes = n;
+    for (size_t i = 0; i < n; i++) {
+        size_t j = i + random_range(n - i);
+        char **r = s->remotes;
+        char *tmp = r[i];
+        r[i] = r[j];
+        r[j] = tmp;
+    }
+    s->next_remote = 0;
 
     s->reconnect = reconnect_create(time_msec());
     jsonrpc_session_pick_remote(s);
