@@ -356,7 +356,7 @@ reconnect_disconnected(struct reconnect *fsm, long long int now, int error)
                 VLOG(fsm->info, "%s: error listening for connections",
                      fsm->name);
             }
-        } else {
+        } else if (fsm->backoff < fsm->max_backoff) {
             const char *type = fsm->passive ? "listen" : "connection";
             if (error > 0) {
                 VLOG_INFO("%s: %s attempt failed (%s)",
@@ -386,17 +386,18 @@ reconnect_disconnected(struct reconnect *fsm, long long int now, int error)
         } else {
             if (fsm->backoff < fsm->min_backoff) {
                 fsm->backoff = fsm->min_backoff;
-            } else if (fsm->backoff >= fsm->max_backoff / 2) {
-                fsm->backoff = fsm->max_backoff;
-            } else {
+            } else if (fsm->backoff < fsm->max_backoff / 2) {
                 fsm->backoff *= 2;
-            }
-            if (fsm->passive) {
-                VLOG(fsm->info, "%s: waiting %.3g seconds before trying to "
-                          "listen again", fsm->name, fsm->backoff / 1000.0);
+                VLOG(fsm->info, "%s: waiting %.3g seconds before %s",
+                     fsm->name, fsm->backoff / 1000.0,
+                     fsm->passive ? "trying to listen again" : "reconnect");
             } else {
-                VLOG(fsm->info, "%s: waiting %.3g seconds before reconnect",
-                          fsm->name, fsm->backoff / 1000.0);
+                if (fsm->backoff < fsm->max_backoff) {
+                    VLOG_INFO("%s: continuing to %s in the background but "
+                              "suppressing further logging", fsm->name,
+                              fsm->passive ? "try to listen" : "reconnect");
+                }
+                fsm->backoff = fsm->max_backoff;
             }
         }
         reconnect_transition__(fsm, now, S_BACKOFF);
@@ -414,7 +415,7 @@ reconnect_connecting(struct reconnect *fsm, long long int now)
     if (fsm->state != S_CONNECTING) {
         if (fsm->passive) {
             VLOG(fsm->info, "%s: listening...", fsm->name);
-        } else {
+        } else if (fsm->backoff < fsm->max_backoff) {
             VLOG(fsm->info, "%s: connecting...", fsm->name);
         }
         reconnect_transition__(fsm, now, S_CONNECTING);

@@ -1840,6 +1840,18 @@ raft_send_add_server_request(struct raft *raft, struct jsonrpc_session *js)
 }
 
 static void
+log_rpc(const union raft_rpc *rpc, const char *direction)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(120, 120);
+    if (!raft_rpc_is_heartbeat(rpc) && !VLOG_DROP_DBG(&rl)) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+        raft_rpc_format(rpc, &s);
+        VLOG_INFO("%s%s", direction, ds_cstr(&s));
+        ds_destroy(&s);
+    }
+}
+
+static void
 raft_run_session(struct raft *raft,
                  struct jsonrpc_session *js, unsigned int *seqno,
                  struct uuid *sid)
@@ -1887,13 +1899,7 @@ raft_run_session(struct raft *raft,
             break;
         }
 
-        if (!raft_rpc_is_heartbeat(&rpc)) {
-            struct ds s = DS_EMPTY_INITIALIZER;
-            raft_rpc_format(&rpc, &s);
-            VLOG_INFO("<--%s", ds_cstr(&s));
-            ds_destroy(&s);
-        }
-
+        log_rpc(&rpc, "<--");
         raft_handle_rpc(raft, &rpc);
         raft_rpc_destroy(&rpc);
     }
@@ -3507,7 +3513,6 @@ raft_update_match_index(struct raft *raft, struct raft_server *s,
                         uint64_t min_index)
 {
     ovs_assert(raft->role == RAFT_LEADER);
-    VLOG_INFO("min_index=%llu match_index=%llu", min_index, s->match_index);
     if (min_index > s->match_index) {
         s->match_index = min_index;
         raft_consider_updating_commit_index(raft);
@@ -4471,13 +4476,7 @@ static void
 raft_send__(struct raft *raft, const union raft_rpc *rpc,
             struct jsonrpc_session *js)
 {
-    if (!raft_rpc_is_heartbeat(rpc)) {
-        struct ds s = DS_EMPTY_INITIALIZER;
-        raft_rpc_format(rpc, &s);
-        VLOG_INFO("-->%s", ds_cstr(&s));
-        ds_destroy(&s);
-    }
-
+    log_rpc(rpc, "-->");
     mc_wrap_jsonrpc_session_send(js, raft_rpc_to_jsonrpc(raft, rpc),
 				 raft->mc_conn, MC_MAIN_TID,
 				 OVS_SOURCE_LOCATOR);
@@ -4508,6 +4507,6 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
     }
 
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-    VLOG_WARN_RL(&rl, "%04x: no connection, cannot send RPC",
+    VLOG_DBG_RL(&rl, "%04x: no connection, cannot send RPC",
                  uuid_prefix(&rpc->common.sid, 4));
 }
