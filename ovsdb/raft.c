@@ -21,6 +21,7 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include "hash.h"
 #include "jsonrpc.h"
 #include "lockfile.h"
 #include "openvswitch/dynamic-string.h"
@@ -42,6 +43,7 @@
 #include "tests/mc/mc.h"
 #include "timeval.h"
 #include "unicode.h"
+#include "unixctl.h"
 #include "util.h"
 #include "uuid.h"
 
@@ -108,6 +110,7 @@ struct raft_conn {
     struct ovs_list list_node;
     struct jsonrpc_session *js;
     struct uuid sid;
+    bool incoming;              /* True if incoming, false if outgoing. */
 
     /* Join. */
     unsigned int js_seqno;
@@ -157,6 +160,7 @@ static struct raft_waiter *raft_waiter_create(struct raft *,
 
 /* The Raft state machine. */
 struct raft {
+    struct hmap_node hmap_node; /* In 'all_rafts'. */
     struct ovsdb_log *storage;
 
 /* Persistent derived state.
@@ -222,7 +226,7 @@ struct raft {
     enum raft_role role;        /* Current role. */
     uint64_t commit_index;      /* Max log index known to be committed. */
     uint64_t last_applied;      /* Max log index applied to state machine. */
-    struct uuid leader_sid;     /* Session ID of leader (zero, if unknown). */
+    struct uuid leader_sid;     /* Server ID of leader (zero, if unknown). */
     struct raft_waiter *vote_waiter;
 
 #define ELECTION_TIME_BASE_MSEC 1024
@@ -276,6 +280,10 @@ struct raft {
     struct jsonrpc *mc_conn;
     char *mc_addr;
 };
+
+static struct hmap all_rafts = HMAP_INITIALIZER(&all_rafts);
+
+static void raft_init(void);
 
 static struct ovsdb_error *raft_read_header(struct raft *)
     OVS_WARN_UNUSED_RESULT;
@@ -674,7 +682,10 @@ raft_schedule_snapshot(struct raft *raft, bool quick)
 static struct raft *
 raft_alloc(void)
 {
+    raft_init();
+
     struct raft *raft = xzalloc(sizeof *raft);
+    hmap_node_nullify(&raft->hmap_node);
     hmap_init(&raft->servers);
     raft->log_start = raft->log_end = 1;
     raft->role = RAFT_FOLLOWER;
@@ -1171,6 +1182,14 @@ raft_get_term(const struct raft *raft, uint64_t index)
             : raft_get_entry(raft, index)->term);
 }
 
+static const struct uuid *
+raft_get_eid(const struct raft *raft, uint64_t index)
+{
+    return (index == raft->log_start - 1
+            ? &raft->snap.eid
+            : &raft_get_entry(raft, index)->eid);
+}
+
 static struct json *
 raft_servers_for_index(const struct raft *raft, uint64_t index)
 {
@@ -1434,6 +1453,14 @@ raft_read_header(struct raft *raft)
     if (remotes) {
         raft->joining = true;
         error = raft_remotes_from_json(remotes, &raft->remote_addresses);
+        if (!error
+            && sset_find_and_delete(&raft->remote_addresses,
+                                    raft->local_address)
+            && sset_is_empty(&raft->remote_addresses)) {
+            error = ovsdb_error(
+                NULL, "at least one remote address (other than the "
+                "local address) is required");
+        }
     } else {
         /* Parse required set of servers. */
         const struct json *servers = ovsdb_parser_member(
@@ -1512,10 +1539,11 @@ raft_reset_timer(struct raft *raft)
 }
 
 static void
-raft_add_conn(struct raft *raft, struct jsonrpc_session *js)
+raft_add_conn(struct raft *raft, struct jsonrpc_session *js, bool incoming)
 {
     struct raft_conn *conn = xzalloc(sizeof *conn);
     ovs_list_push_back(&raft->conns, &conn->list_node);
+    conn->incoming = incoming;
     conn->js = js;
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
@@ -1535,7 +1563,7 @@ raft_open(const char *file_name, struct raft **raftp, struct jsonrpc *mc_conn,
     
     struct ovsdb_log *log;
     struct ovsdb_error *error;
-    
+
     *raftp = NULL;
     error = mc_wrap_ovsdb_log_open(file_name, RAFT_MAGIC, OVSDB_LOG_READ_WRITE,
 				   -1, &log, mc_conn, MC_MAIN_TID,
@@ -1587,11 +1615,12 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp, struct jsonrpc *mc_conn,
         raft->join_timeout = time_msec() + 1000;
         const char *remote;
         SSET_FOR_EACH (remote, &raft->remote_addresses) {
-            raft_add_conn(raft, jsonrpc_session_open(remote, true));
+            raft_add_conn(raft, jsonrpc_session_open(remote, true), false);
         }
     }
     
     *raftp = raft;
+    hmap_insert(&all_rafts, &raft->hmap_node, hash_string(raft->name, 0));
     return NULL;
 
 error:
@@ -1744,6 +1773,9 @@ raft_close(struct raft *raft)
         return;
     }
 
+    if (!hmap_node_is_null(&raft->hmap_node)) {
+        hmap_remove(&all_rafts, &raft->hmap_node);
+    }
     raft_transfer_leadership(raft);
     raft_complete_all_commands(raft, RAFT_CMD_SHUTDOWN);
     
@@ -2094,6 +2126,18 @@ raft_start_election(struct raft *raft)
     /* XXX how do we handle outstanding waiters? */
 }
 
+static struct raft_conn *
+raft_find_conn_by_address(struct raft *raft, const char *address)
+{
+    struct raft_conn *conn;
+    LIST_FOR_EACH (conn, list_node, &raft->conns) {
+        if (!strcmp(jsonrpc_session_get_name(conn->js), address)) {
+            return conn;
+        }
+    }
+    return NULL;
+}
+
 void
 raft_run(struct raft *raft)
 {
@@ -2120,7 +2164,7 @@ raft_run(struct raft *raft)
         int error = pstream_accept(raft->listener, &stream);
         if (!error) {
             raft_add_conn(raft, jsonrpc_session_open_unreliably(
-                              jsonrpc_open(stream), DSCP_DEFAULT));
+                              jsonrpc_open(stream), DSCP_DEFAULT), true);
         } else if (error != EAGAIN) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
@@ -2132,7 +2176,15 @@ raft_run(struct raft *raft)
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (!s->js && !uuid_equals(&s->sid, &raft->sid)) {
-            s->js = jsonrpc_session_open(s->address, true);
+            struct raft_conn *conn = raft_find_conn_by_address(raft,
+                                                               s->address);
+            if (conn) {
+                s->js = conn->js;
+                ovs_list_remove(&conn->list_node);
+                free(conn);
+            } else {
+                s->js = jsonrpc_session_open(s->address, true);
+            }
         }
         if (s->js) {
             raft_run_session(raft, s->js, &s->js_seqno, &s->sid);
@@ -3891,11 +3943,15 @@ raft_handle_add_server_reply(struct raft *raft,
         if (raft->me) {
             raft->joining = false;
 
-            /* Disable reconnect on the initial remote connections.  Some of
-             * them might not even be correct. */
-            struct raft_conn *conn;
-            LIST_FOR_EACH (conn, list_node, &raft->conns) {
-                jsonrpc_session_disable_reconnect(conn->js);
+            /* Close outgoing connections not known to be to a server in the
+             * cluster.  */
+            struct raft_conn *conn, *next;
+            LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
+                if (conn->incoming && !raft_find_server(raft, &conn->sid)) {
+                    ovs_list_remove(&conn->list_node);
+                    jsonrpc_session_close(conn->js);
+                    free(conn);
+                }
             }
         } else {
             /* XXX we're not really part of the cluster? */
@@ -3906,8 +3962,9 @@ raft_handle_add_server_reply(struct raft *raft,
          * leader.) */
         const char *remote;
         SSET_FOR_EACH (remote, &rpy->remotes) {
-            if (sset_add(&raft->remote_addresses, remote)) {
-                raft_add_conn(raft, jsonrpc_session_open(remote, true));
+            if (strcmp(remote, raft->local_address)
+                && sset_add(&raft->remote_addresses, remote)) {
+                raft_add_conn(raft, jsonrpc_session_open(remote, true), false);
             }
         }
     }
@@ -4000,6 +4057,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
 
     /* Compose header record. */
     uint64_t prev_term = raft_get_term(raft, new_log_start - 1);
+    const struct uuid *prev_eid = raft_get_eid(raft, new_log_start - 1);
     uint64_t prev_index = new_log_start - 1;
     struct json *prev_servers = raft_servers_for_index(raft,
                                                        new_log_start - 1);
@@ -4009,6 +4067,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
     json_object_put_format(header, "server_id", UUID_FMT,
                            UUID_ARGS(&raft->sid));
     json_object_put_string(header, "name", raft->name);
+    json_object_put_string(header, "address", raft->local_address);
     json_object_put(header, "prev_servers", prev_servers);
     if (!uuid_is_zero(&raft->cid)) {
         json_object_put_format(header, "cluster_id", UUID_FMT,
@@ -4021,6 +4080,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
         json_object_put(header, "prev_data", json_clone(new_snapshot
                                                         ? new_snapshot
                                                         : raft->snap.data));
+        json_object_put_format(header, "prev_eid",
+                               UUID_FMT, UUID_ARGS(prev_eid));
     }
     struct ovsdb_error *error = mc_wrap_ovsdb_log_write(storage, header,
 							raft->mc_conn,
@@ -4509,4 +4570,148 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
     VLOG_DBG_RL(&rl, "%04x: no connection, cannot send RPC",
                  uuid_prefix(&rpc->common.sid, 4));
+}
+
+static struct raft *
+raft_lookup_by_name(const char *name)
+{
+    struct raft *raft;
+
+    HMAP_FOR_EACH_WITH_HASH (raft, hmap_node, hash_string(name, 0),
+                             &all_rafts) {
+        if (!strcmp(raft->name, name)) {
+            return raft;
+        }
+    }
+    return NULL;
+}
+
+static void
+raft_unixctl_cid(struct unixctl_conn *conn,
+                 int argc OVS_UNUSED, const char *argv[],
+                 void *aux OVS_UNUSED)
+{
+    struct raft *raft = raft_lookup_by_name(argv[1]);
+    if (!raft) {
+        unixctl_command_reply_error(conn, "unknown cluster");
+    } else if (uuid_is_zero(&raft->cid)) {
+        unixctl_command_reply_error(conn, "cluster id not yet known");
+    } else {
+        char *uuid = xasprintf(UUID_FMT, UUID_ARGS(&raft->cid));
+        unixctl_command_reply(conn, uuid);
+        free(uuid);
+    }
+}
+
+static void
+raft_unixctl_sid(struct unixctl_conn *conn,
+                 int argc OVS_UNUSED, const char *argv[],
+                 void *aux OVS_UNUSED)
+{
+    struct raft *raft = raft_lookup_by_name(argv[1]);
+    if (!raft) {
+        unixctl_command_reply_error(conn, "unknown cluster");
+    } else {
+        char *uuid = xasprintf(UUID_FMT, UUID_ARGS(&raft->sid));
+        unixctl_command_reply(conn, uuid);
+        free(uuid);
+    }
+}
+
+static void
+raft_put_sid(const char *title, const struct uuid *sid,
+             const struct raft *raft, struct ds *s)
+{
+    ds_put_format(s, "%s: ", title);
+    if (uuid_equals(sid, &raft->sid)) {
+        ds_put_cstr(s, "self");
+    } else if (uuid_is_zero(sid)) {
+        ds_put_cstr(s, "unknown");
+    } else {
+        ds_put_format(s, "%04x", uuid_prefix(sid, 4));
+    }
+    ds_put_char(s, '\n');
+}
+
+static void
+raft_unixctl_status(struct unixctl_conn *conn,
+                    int argc OVS_UNUSED, const char *argv[],
+                    void *aux OVS_UNUSED)
+{
+    struct raft *raft = raft_lookup_by_name(argv[1]);
+    if (!raft) {
+        unixctl_command_reply_error(conn, "unknown cluster");
+    }
+
+    struct ds s = DS_EMPTY_INITIALIZER;
+    ds_put_format(&s, "%04x\n", uuid_prefix(&raft->sid, 4));
+    ds_put_format(&s, "Name; %s\n", raft->name);
+    ds_put_format(&s, "Cluster ID: ");
+    if (!uuid_is_zero(&raft->cid)) {
+        ds_put_format(&s, UUID_FMT"\n", UUID_ARGS(&raft->cid));
+    } else {
+        ds_put_format(&s, "not yet known\n");
+    }
+    ds_put_format(&s, "Server ID: %04x ("UUID_FMT")\n",
+                  uuid_prefix(&raft->sid, 4), UUID_ARGS(&raft->sid));
+    ds_put_format(&s, "Address: %s\n", raft->local_address);
+    ds_put_format(&s, "Status: %s\n",
+                  raft->joining ? "joining cluster"
+                  : raft->leaving ? "leaving cluster"
+                  : raft->left ? "left cluster"
+                  : "cluster member");
+    if (raft->joining) {
+        ds_put_format(&s, "Remotes for joining:");
+        const char *address;
+        SSET_FOR_EACH (address, &raft->remote_addresses) {
+            ds_put_format(&s, " %s", address);
+        }
+        ds_put_char(&s, '\n');
+    }
+
+    ds_put_format(&s, "Role: %s\n",
+                  raft->role == RAFT_LEADER ? "leader"
+                  : raft->role == RAFT_CANDIDATE ? "candidate"
+                  : raft->role == RAFT_FOLLOWER ? "follower"
+                  : "<error>");
+    ds_put_format(&s, "Term: %"PRIu64"\n", raft->current_term);
+    raft_put_sid("Leader", &raft->leader_sid, raft, &s);
+    raft_put_sid("Voted for", &raft->voted_for, raft, &s);
+    ds_put_char(&s, '\n');
+
+    ds_put_format(&s, "Log: [%"PRIu64", %"PRIu64"]\n",
+                  raft->log_start, raft->log_end);
+
+    uint64_t n_uncommitted = raft->log_end - raft->commit_index - 1;
+    ds_put_format(&s, "Entries not yet committed: %"PRIu64"\n", n_uncommitted);
+
+    uint64_t n_unapplied = raft->log_end - raft->last_applied - 1;
+    ds_put_format(&s, "Entries not yet applied: %"PRIu64"\n", n_unapplied);
+
+    const struct raft_conn *c;
+    ds_put_cstr(&s, "Connections:");
+    LIST_FOR_EACH (c, list_node, &raft->conns) {
+        ds_put_format(&s, " %s%04x",
+                      c->incoming ? "<-" : "->", uuid_prefix(&c->sid, 4));
+    }
+    ds_put_char(&s, '\n');
+
+    unixctl_command_reply(conn, ds_cstr(&s));
+    ds_destroy(&s);
+}
+
+static void
+raft_init(void)
+{
+    static struct ovsthread_once once = OVSTHREAD_ONCE_INITIALIZER;
+    if (!ovsthread_once_start(&once)) {
+        return;
+    }
+    unixctl_command_register("cluster/cid", "DB", 1, 1,
+                             raft_unixctl_cid, NULL);
+    unixctl_command_register("cluster/sid", "DB", 1, 1,
+                             raft_unixctl_sid, NULL);
+    unixctl_command_register("cluster/status", "DB", 1, 1,
+                             raft_unixctl_status, NULL);
+    ovsthread_once_done(&once);
 }
