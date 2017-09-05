@@ -82,8 +82,6 @@ struct raft_server {
 
     struct uuid sid;            /* Server ID. */
     char *address;              /* "(tcp|ssl):1.2.3.4:5678" */
-    struct jsonrpc_session *js; /* Connection to this server. */
-    unsigned int js_seqno;
 
     /* Volatile state on candidates.  Reinitialized at start of election. */
     bool voted;              /* Has this server already voted? */
@@ -1027,7 +1025,6 @@ static void
 raft_server_destroy(struct raft_server *s)
 {
     if (s) {
-        jsonrpc_session_close(s->js);
         free(s->address);
         free(s);
     }
@@ -1539,12 +1536,16 @@ raft_reset_timer(struct raft *raft)
 }
 
 static void
-raft_add_conn(struct raft *raft, struct jsonrpc_session *js, bool incoming)
+raft_add_conn(struct raft *raft, struct jsonrpc_session *js,
+              const struct uuid *sid, bool incoming)
 {
     struct raft_conn *conn = xzalloc(sizeof *conn);
     ovs_list_push_back(&raft->conns, &conn->list_node);
-    conn->incoming = incoming;
     conn->js = js;
+    if (sid) {
+        conn->sid = *sid;
+    }
+    conn->incoming = incoming;
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
@@ -1613,12 +1614,8 @@ raft_open__(struct ovsdb_log *log, struct raft **raftp, struct jsonrpc *mc_conn,
         }
     } else {
         raft->join_timeout = time_msec() + 1000;
-        const char *remote;
-        SSET_FOR_EACH (remote, &raft->remote_addresses) {
-            raft_add_conn(raft, jsonrpc_session_open(remote, true), false);
-        }
     }
-    
+
     *raftp = raft;
     hmap_insert(&all_rafts, &raft->hmap_node, hash_string(raft->name, 0));
     return NULL;
@@ -1668,6 +1665,32 @@ raft_is_joining(const struct raft *raft)
     return raft->joining;
 }
 
+static struct raft_conn *
+raft_find_conn_by_sid(struct raft *raft, const struct uuid *sid)
+{
+    if (!uuid_is_zero(sid)) {
+        struct raft_conn *conn;
+        LIST_FOR_EACH (conn, list_node, &raft->conns) {
+            if (uuid_equals(sid, &raft->sid)) {
+                return conn;
+            }
+        }
+    }
+    return NULL;
+}
+
+static struct raft_conn *
+raft_find_conn_by_address(struct raft *raft, const char *address)
+{
+    struct raft_conn *conn;
+    LIST_FOR_EACH (conn, list_node, &raft->conns) {
+        if (!strcmp(jsonrpc_session_get_name(conn->js), address)) {
+            return conn;
+        }
+    }
+    return NULL;
+}
+
 /* If we're leader, try to transfer leadership to another server. */
 void
 raft_transfer_leadership(struct raft *raft)
@@ -1679,8 +1702,12 @@ raft_transfer_leadership(struct raft *raft)
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (!uuid_equals(&raft->sid, &s->sid)
-            && jsonrpc_session_is_connected(s->js)
             && s->phase == RAFT_PHASE_STABLE) {
+            struct raft_conn *conn = raft_find_conn_by_sid(raft, &s->sid);
+            if (!conn || !jsonrpc_session_is_connected(conn->js)) {
+                continue;
+            }
+
             union raft_rpc rpc = {
                 .become_leader = {
                     .common = {
@@ -1690,7 +1717,7 @@ raft_transfer_leadership(struct raft *raft)
                     .term = raft->current_term,
                 }
             };
-            raft_send__(raft, &rpc, s->js);
+            raft_send__(raft, &rpc, conn->js);
             break;
         }
     }
@@ -1724,7 +1751,7 @@ raft_send_remove_server_requests(struct raft *raft)
                     .sid = raft->sid,
                 },
             };
-            raft_send__(raft, &rpc, s->js);
+            raft_send(raft, &rpc);
         }
     }
 
@@ -2126,16 +2153,13 @@ raft_start_election(struct raft *raft)
     /* XXX how do we handle outstanding waiters? */
 }
 
-static struct raft_conn *
-raft_find_conn_by_address(struct raft *raft, const char *address)
+static void
+raft_open_conn(struct raft *raft, const char *address, const struct uuid *sid)
 {
-    struct raft_conn *conn;
-    LIST_FOR_EACH (conn, list_node, &raft->conns) {
-        if (!strcmp(jsonrpc_session_get_name(conn->js), address)) {
-            return conn;
-        }
+    if (strcmp(address, raft->local_address)
+        && !raft_find_conn_by_address(raft, address)) {
+        raft_add_conn(raft, jsonrpc_session_open(address, true), sid, false);
     }
-    return NULL;
 }
 
 void
@@ -2164,7 +2188,8 @@ raft_run(struct raft *raft)
         int error = pstream_accept(raft->listener, &stream);
         if (!error) {
             raft_add_conn(raft, jsonrpc_session_open_unreliably(
-                              jsonrpc_open(stream), DSCP_DEFAULT), true);
+                              jsonrpc_open(stream), DSCP_DEFAULT), NULL,
+                          true);
         } else if (error != EAGAIN) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
@@ -2173,31 +2198,41 @@ raft_run(struct raft *raft)
         }
     }
 
-    struct raft_server *s;
-    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        if (!s->js && !uuid_equals(&s->sid, &raft->sid)) {
-            struct raft_conn *conn = raft_find_conn_by_address(raft,
-                                                               s->address);
-            if (conn) {
-                s->js = conn->js;
-                ovs_list_remove(&conn->list_node);
-                free(conn);
-            } else {
-                s->js = jsonrpc_session_open(s->address, true);
-            }
-        }
-        if (s->js) {
-            raft_run_session(raft, s->js, &s->js_seqno, &s->sid);
-        }
+    /* Run RPCs for all open sessions. */
+    struct raft_conn *conn;
+    LIST_FOR_EACH (conn, list_node, &raft->conns) {
+        raft_run_session(raft, conn->js, &conn->js_seqno, &conn->sid);
     }
 
-    struct raft_conn *conn, *next;
+    /* Close unneeded sessions. */
+    struct raft_conn *next;
     LIST_FOR_EACH_SAFE (conn, next, list_node, &raft->conns) {
-        raft_run_session(raft, conn->js, &conn->js_seqno, &conn->sid);
-        if (!jsonrpc_session_is_alive(conn->js)) {
-            jsonrpc_session_close(conn->js);
-            ovs_list_remove(&conn->list_node);
-            free(conn);
+        /* Keep all incoming sessions (that are still alive) and outgoing
+         * sessions to a server in the current set or, if we're joining, to one
+         * of the remote addresses. */
+        if (jsonrpc_session_is_alive(conn->js)
+            && (conn->incoming
+                || raft_find_server(raft, &conn->sid)
+                || (raft->joining
+                    && sset_contains(&raft->remote_addresses,
+                                     jsonrpc_session_get_name(conn->js))))) {
+            continue;
+        }
+
+        jsonrpc_session_close(conn->js);
+        ovs_list_remove(&conn->list_node);
+        free(conn);
+    }
+
+    /* Open needed sessions. */
+    struct raft_server *server;
+    HMAP_FOR_EACH (server, hmap_node, &raft->servers) {
+        raft_open_conn(raft, server->address, &server->sid);
+    }
+    if (raft->joining) {
+        const char *address;
+        SSET_FOR_EACH (address, &raft->remote_addresses) {
+            raft_open_conn(raft, address, NULL);
         }
     }
 
@@ -2244,11 +2279,6 @@ raft_wait(struct raft *raft)
         pstream_wait(raft->listener);
     } else {
         poll_timer_wait_until(raft->listen_backoff);
-    }
-
-    struct raft_server *s;
-    HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        raft_wait_session(s->js);
     }
 
     struct raft_conn *conn;
@@ -3956,17 +3986,6 @@ raft_handle_add_server_reply(struct raft *raft,
         } else {
             /* XXX we're not really part of the cluster? */
         }
-    } else {
-        /* Connect to any additional servers that we found out about.  (This is
-         * particularly important if the server that we know about is not the
-         * leader.) */
-        const char *remote;
-        SSET_FOR_EACH (remote, &rpy->remotes) {
-            if (strcmp(remote, raft->local_address)
-                && sset_add(&raft->remote_addresses, remote)) {
-                raft_add_conn(raft, jsonrpc_session_open(remote, true), false);
-            }
-        }
     }
 }
 
@@ -4240,7 +4259,7 @@ raft_handle_install_snapshot_reply(
     }
 
     VLOG_INFO("cluster %04x: installed snapshot on server %04x "
-              " up to %"PRIu64":%"PRIu64,
+              "up to %"PRIu64":%"PRIu64,
               uuid_prefix(&raft->cid, 4), uuid_prefix(&s->sid, 4),
               rpy->last_term, rpy->last_index);
     s->next_index = raft->log_end;
@@ -4549,12 +4568,6 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
     if (uuid_equals(&rpc->common.sid, &raft->sid)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_WARN_RL(&rl, "attempting to send RPC to self");
-        return;
-    }
-
-    struct raft_server *s = raft_find_peer(raft, &rpc->common.sid);
-    if (s && s->js && jsonrpc_session_is_connected(s->js)) {
-        raft_send__(raft, rpc, s->js);
         return;
     }
 
