@@ -77,6 +77,8 @@ enum raft_server_phase {
     RAFT_PHASE_REMOVE,          /* To be removed. */
 };
 
+static const char *raft_server_phase_to_string(enum raft_server_phase phase);
+
 struct raft_server {
     struct hmap_node hmap_node; /* Hashed based on 'sid'. */
 
@@ -1549,6 +1551,19 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js,
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
 }
 
+static const char *
+raft_server_phase_to_string(enum raft_server_phase phase)
+{
+    switch (phase) {
+    case RAFT_PHASE_STABLE: return "stable";
+    case RAFT_PHASE_CATCHUP: return "adding: catchup";
+    case RAFT_PHASE_CAUGHT_UP: return "adding: caught up";
+    case RAFT_PHASE_COMMITTING: return "adding: committing";
+    case RAFT_PHASE_REMOVE: return "removing";
+    default: return "<error>";
+    }
+}
+
 struct jsonrpc *
 raft_get_mc_conn(struct raft *raft) {
     return raft->mc_conn;
@@ -2825,7 +2840,7 @@ raft_rpc_from_jsonrpc(struct raft *raft,
     if (parse_uuid__(&p, "to", is_add || is_hello, &to_sid)
         && !uuid_equals(&to_sid, &raft->sid)) {
         ovsdb_parser_raise_error(&p, "misrouted message (addressed to %04x "
-                                 " but we're %04x)",
+                                 "but we're %04x)",
                                  uuid_prefix(&to_sid, 4),
                                  uuid_prefix(&raft->sid, 4));
     }
@@ -4658,7 +4673,7 @@ raft_unixctl_status(struct unixctl_conn *conn,
 
     struct ds s = DS_EMPTY_INITIALIZER;
     ds_put_format(&s, "%04x\n", uuid_prefix(&raft->sid, 4));
-    ds_put_format(&s, "Name; %s\n", raft->name);
+    ds_put_format(&s, "Name: %s\n", raft->name);
     ds_put_format(&s, "Cluster ID: ");
     if (!uuid_is_zero(&raft->cid)) {
         ds_put_format(&s, UUID_FMT"\n", UUID_ARGS(&raft->cid));
@@ -4708,6 +4723,28 @@ raft_unixctl_status(struct unixctl_conn *conn,
                       c->incoming ? "<-" : "->", uuid_prefix(&c->sid, 4));
     }
     ds_put_char(&s, '\n');
+
+    ds_put_cstr(&s, "Servers:\n");
+    struct raft_server *server;
+    HMAP_FOR_EACH (server, hmap_node, &raft->servers) {
+        ds_put_format(&s, "    %04x at %s",
+                      uuid_prefix(&server->sid, 4), server->address);
+        if (server == raft->me) {
+            ds_put_cstr(&s, " (me)");
+        }
+        if (server->phase != RAFT_PHASE_STABLE) {
+            ds_put_format (&s, " (%s)",
+                           raft_server_phase_to_string(server->phase));
+        }
+        if (raft->role == RAFT_CANDIDATE) {
+            ds_put_format(&s, " (%s)",
+                          server->voted ? "voted" : "not yet voted");
+        } else if (raft->role == RAFT_LEADER) {
+            ds_put_format(&s, " next_index=%"PRIu64" match_index=%"PRIu64,
+                          server->next_index, server->match_index);
+        }
+        ds_put_char(&s, '\n');
+    }
 
     unixctl_command_reply(conn, ds_cstr(&s));
     ds_destroy(&s);
