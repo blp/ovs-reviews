@@ -861,6 +861,7 @@ jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp)
     s->remotes = xmalloc(sizeof *s->remotes);
     s->remotes[0] = xstrdup(jsonrpc_get_name(jsonrpc));
     s->n_remotes = 1;
+    s->next_remote = 0;
     s->reconnect = reconnect_create(time_msec());
     reconnect_set_quiet(s->reconnect, true);
     reconnect_set_name(s->reconnect, jsonrpc_get_name(jsonrpc));
