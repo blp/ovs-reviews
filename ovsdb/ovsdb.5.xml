@@ -267,6 +267,14 @@
     </dd>
   </dl>
 
+  <p>
+    When a server completes leaving its cluster (e.g. following the
+    <code>cluster/leave</code> command to <code>ovsdb-server</code>), it writes
+    a final record to its database that has the single member <code>"left":
+    true</code>.  This lets subsequent readers know that the server is not part
+    of the cluster and should not attempt to connect to it.
+  </p>
+
   <h3>Joining a Cluster</h3>
 
   <p>

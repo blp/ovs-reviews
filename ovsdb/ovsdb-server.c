@@ -113,6 +113,7 @@ static struct ovsdb_error *open_db(struct server_config *,
                                    const char *filename)
     OVS_WARN_UNUSED_RESULT;
 static void add_server_db(struct server_config *);
+static void remove_db(struct server_config *, struct shash_node *db);
 static void close_db(struct db *db);
 
 static void parse_options(int *argc, char **argvp[],
@@ -207,7 +208,8 @@ main_loop(struct server_config *config,
             }
         }
 
-        SHASH_FOR_EACH(node, all_dbs) {
+        struct shash_node *next;
+        SHASH_FOR_EACH_SAFE (node, next, all_dbs) {
             struct db *db = node->data;
             if (db->db) {
                 ovsdb_trigger_run(db->db, time_msec());
@@ -218,6 +220,11 @@ main_loop(struct server_config *config,
                 char *s = ovsdb_error_to_string_free(error);
                 VLOG_INFO("%s", s);
                 free(s);
+            }
+            if (ovsdb_storage_is_dead(db->storage)) {
+                VLOG_INFO("%s: removing database because storage disconnected "
+                          "permanently", node->name);
+                remove_db(config, node);
             }
         }
         if (run_process) {
@@ -1469,27 +1476,12 @@ ovsdb_server_add_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
-ovsdb_server_remove_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                             const char *argv[], void *config_)
+remove_db(struct server_config *config, struct shash_node *node)
 {
-    struct server_config *config = config_;
-    struct shash_node *node;
-    struct db *db;
-    bool ok;
-
-    node = shash_find(config->all_dbs, argv[1]);
-    if (!node)  {
-        unixctl_command_reply_error(conn, "Failed to find the database.");
-        return;
-    }
-    if (node->name[0] == '_') {
-        unixctl_command_reply_error(conn, "Cannot remove reserved database.");
-        return;
-    }
-    db = node->data;
+    struct db *db = node->data;
 
     if (db->db) {
-        ok = ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
+        bool ok = ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
         ovs_assert(ok);
     }
 
@@ -1503,6 +1495,26 @@ ovsdb_server_remove_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
         ovsdb_replication_init(*config->sync_from, *config->sync_exclude,
                                config->all_dbs, server_uuid);
     }
+}
+
+static void
+ovsdb_server_remove_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                             const char *argv[], void *config_)
+{
+    struct server_config *config = config_;
+    struct shash_node *node;
+
+    node = shash_find(config->all_dbs, argv[1]);
+    if (!node)  {
+        unixctl_command_reply_error(conn, "Failed to find the database.");
+        return;
+    }
+    if (node->name[0] == '_') {
+        unixctl_command_reply_error(conn, "Cannot remove reserved database.");
+        return;
+    }
+
+    remove_db(config, node);
     unixctl_command_reply(conn, NULL);
 }
 

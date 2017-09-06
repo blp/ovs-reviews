@@ -244,6 +244,7 @@ struct raft {
     /* Used for leaving a cluster. */
     bool leaving;
     bool left;
+    struct unixctl_conn *leave_conn; /* Waiting for leave to complete. */
 
     /* File synchronization. */
     bool fsync_thread_running;
@@ -1800,6 +1801,8 @@ raft_leave(struct raft *raft)
         return;
     }
 
+    VLOG_INFO("%04x: starting to leave cluster %04x",
+              uuid_prefix(&raft->sid, 4), uuid_prefix(&raft->cid, 4));
     raft->leaving = true;
     raft_transfer_leadership(raft);
     raft_become_follower(raft);
@@ -1854,6 +1857,11 @@ raft_close__(struct raft *raft)
         jsonrpc_session_close(conn->js);
         ovs_list_remove(&conn->list_node);
         free(conn);
+    }
+
+    if (raft->leave_conn) {
+        unixctl_command_reply_error(raft->leave_conn, NULL);
+        raft->leave_conn = NULL;
     }
 }
 
@@ -4161,7 +4169,7 @@ raft_handle_remove_server_reply(struct raft *raft,
                                 const struct raft_server_reply *rpc)
 {
     if (rpc->success) {
-        VLOG_INFO("%04x finished leaving cluster %04x",
+        VLOG_INFO("%04x: finished leaving cluster %04x",
                   uuid_prefix(&raft->sid, 4), uuid_prefix(&raft->cid, 4));
 
         /* Write a sentinel to prevent the cluster from restarting.  The
@@ -4176,6 +4184,11 @@ raft_handle_remove_server_reply(struct raft *raft,
             free(error_s);
         }
         json_destroy(json);
+
+        if (raft->leave_conn) {
+            unixctl_command_reply(raft->leave_conn, NULL);
+            raft->leave_conn = NULL;
+        }
 
         raft->leaving = false;
         raft->left = true;
@@ -4699,6 +4712,7 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
         }
     }
 
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
     VLOG_DBG_RL(&rl, "%04x: no connection to %04x, cannot send RPC",
                 uuid_prefix(&raft->sid, 4),
                 uuid_prefix(&rpc->common.sid, 4));
@@ -4860,23 +4874,30 @@ static void
 raft_unixctl_leave(struct unixctl_conn *conn, int argc, const char *argv[],
                    void *aux OVS_UNUSED)
 {
-    if (argc > 2 && strcmp(argv[1], "--force")) {
+    bool wait = !(argc > 2 && !strcmp(argv[1], "--no-wait"));
+    bool force = argc > 2 && !strcmp(argv[1], "--force");
+    if (argc > 2 && wait && !force) {
         unixctl_command_reply_error(conn, NULL);
         return;
     }
-    //bool force = argc > 2;
+
     struct raft *raft = raft_lookup_by_name(argv[argc - 1]);
     if (!raft) {
         unixctl_command_reply_error(conn, "unknown cluster");
     }
 
-    if (raft_is_leaving(raft)) {
-        unixctl_command_reply(conn, "already left cluster");
-    } else if (raft_is_leaving(raft)) {
-        unixctl_command_reply(conn, "already in progress leaving cluster");
+    if (raft_left(raft)) {
+        unixctl_command_reply(conn, NULL);
+    } else if (raft_is_leaving(raft) || raft->leave_conn) {
+        unixctl_command_reply_error(conn,
+                                    "already in progress leaving cluster");
     } else {
         raft_leave(raft);
-        unixctl_command_reply(conn, "started leaving cluster");
+        if (wait) {
+            raft->leave_conn = conn;
+        } else {
+            unixctl_command_reply(conn, NULL);
+        }
     }
 }
 
