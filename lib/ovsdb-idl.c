@@ -208,6 +208,8 @@ static unsigned int ovsdb_idl_db_set_condition(
 
 static void ovsdb_idl_send_schema_request(struct ovsdb_idl *,
                                           struct ovsdb_idl_db *);
+static void ovsdb_idl_send_db_change_aware(struct ovsdb_idl *);
+static bool ovsdb_idl_check_server_db(struct ovsdb_idl *);
 static void ovsdb_idl_send_monitor_request(struct ovsdb_idl *,
                                            struct ovsdb_idl_db *,
                                            bool use_monitor_cond);
@@ -230,6 +232,8 @@ struct ovsdb_idl {
     struct uuid cid;
 
     bool use_monitor_cond;
+    bool monitoring_server;
+    bool leader_only;
 };
 
 static void ovsdb_idl_transition_at(struct ovsdb_idl *, enum ovsdb_idl_state,
@@ -474,6 +478,7 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     ovsdb_idl_open_session(idl, remote, retry);
     idl->state_seqno = UINT_MAX;
     idl->request_id = NULL;
+    idl->leader_only = true;
 
     /* Monitor the Database table in the _Server database.
      *
@@ -534,6 +539,17 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
         ovsdb_idl_db_destroy(&idl->db);
         json_destroy(idl->request_id);
         free(idl);
+    }
+}
+
+void
+ovsdb_idl_set_leader_only(struct ovsdb_idl *idl, bool leader_only)
+{
+    idl->leader_only = leader_only;
+    if (leader_only
+        && idl->state == IDL_S_MONITORING_COND
+        && idl->monitoring_server) {
+        ovsdb_idl_check_server_db(idl);
     }
 }
 
@@ -647,34 +663,10 @@ ovsdb_idl_process_response(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
 
     case IDL_S_SERVER_MONITOR_COND_REQUESTED:
         if (ok) {
+            idl->monitoring_server = true;
             ovsdb_idl_db_parse_monitor_reply(&idl->server, msg->result, true);
-
-            const struct serverrec_database *database;
-            SERVERREC_DATABASE_FOR_EACH (database, idl) {
-                if (uuid_is_zero(&idl->cid)
-                    ? !strcmp(database->name, idl->db.class->database)
-                    : database->n_cid && uuid_equals(database->cid,
-                                                     &idl->cid)) {
-                    break;
-                }
-            }
-
-            if (database) {
-                if (!strcmp(database->model, "clustered")
-                    && !database->leader
-                    && jsonrpc_session_get_n_remotes(idl->session) > 1) {
-                    VLOG_INFO("not leader, trying again"); /* XXX */
-                    ovsdb_idl_force_reconnect(idl);
-                    ovsdb_idl_transition(idl, IDL_S_RETRY);
-                } else {
-                    json_destroy(idl->db.schema);
-                    idl->db.schema = json_from_string(database->schema);
-                    ovsdb_idl_send_monitor_request(idl, &idl->db, true);
-                    ovsdb_idl_transition(idl,
-                                         IDL_S_DATA_MONITOR_COND_REQUESTED);
-                }
-            } else {
-                ovsdb_idl_transition(idl, IDL_S_ERROR);
+            if (ovsdb_idl_check_server_db(idl)) {
+                ovsdb_idl_send_db_change_aware(idl);
             }
         } else {
             ovsdb_idl_send_schema_request(idl, &idl->db);
@@ -748,6 +740,10 @@ ovsdb_idl_process_msg(struct ovsdb_idl *idl, struct jsonrpc_msg *msg)
     if (ovsdb_idl_db_parse_update_rpc(&idl->db, msg)) {
         return;
     }
+    if (idl->monitoring_server
+        && ovsdb_idl_db_parse_update_rpc(&idl->server, msg)) {
+        ovsdb_idl_check_server_db(idl);
+    }
 
     /* Process "lock" replies and related notifications. */
     if (ovsdb_idl_db_process_lock_replies(&idl->db, msg)) {
@@ -794,6 +790,7 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
             ovsdb_idl_txn_abort_all(idl);
             ovsdb_idl_send_schema_request(idl, &idl->server);
             ovsdb_idl_transition(idl, IDL_S_SERVER_SCHEMA_REQUESTED);
+            idl->monitoring_server = false;
 
             if (idl->db.lock_name) {
                 jsonrpc_session_send(
@@ -1727,6 +1724,63 @@ ovsdb_idl_send_schema_request(struct ovsdb_idl *idl,
                                json_array_create_1(json_string_create(
                                                        db->class->database)),
                                NULL));
+}
+
+static void
+ovsdb_idl_send_db_change_aware(struct ovsdb_idl *idl)
+{
+    struct jsonrpc_msg *msg = jsonrpc_create_request(
+        "set_db_change_aware", json_array_create_1(json_boolean_create(true)),
+        NULL);
+    jsonrpc_session_send(idl->session, msg);
+}
+
+static bool
+ovsdb_idl_check_server_db(struct ovsdb_idl *idl)
+{
+    const struct serverrec_database *database;
+    SERVERREC_DATABASE_FOR_EACH (database, idl) {
+        if (uuid_is_zero(&idl->cid)
+            ? !strcmp(database->name, idl->db.class->database)
+            : database->n_cid && uuid_equals(database->cid, &idl->cid)) {
+            break;
+        }
+    }
+
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+    const char *server_name = jsonrpc_session_get_name(idl->session);
+    if (database) {
+        if (!strcmp(database->model, "clustered")
+            && jsonrpc_session_get_n_remotes(idl->session) > 1) {
+            bool ok = false;
+            if (!database->connected) {
+                VLOG_INFO("%s: clustered database server is disconnected "
+                          "from cluster; trying another server", server_name);
+            } else if (idl->leader_only && !database->leader) {
+                VLOG_INFO("%s: clustered database server is not cluster "
+                          "leader; trying another server", server_name);
+            } else {
+                ok = true;
+            }
+
+            if (!ok) {
+                ovsdb_idl_force_reconnect(idl);
+                ovsdb_idl_transition(idl, IDL_S_RETRY);
+                return false;
+            }
+        }
+
+        json_destroy(idl->db.schema);
+        idl->db.schema = json_from_string(database->schema);
+        ovsdb_idl_send_monitor_request(idl, &idl->db, true);
+        ovsdb_idl_transition(idl, IDL_S_DATA_MONITOR_COND_REQUESTED);
+        return true;
+    } else {
+        VLOG_INFO_RL(&rl, "%s: server does not have %s database",
+                     server_name, idl->db.class->database);
+        ovsdb_idl_transition(idl, IDL_S_ERROR);
+        return false;
+    }
 }
 
 static void

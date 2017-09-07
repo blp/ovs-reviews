@@ -2537,6 +2537,7 @@ raft_command_initiate(struct raft *raft,
     }
 
     struct raft_command *cmd = raft_command_create_incomplete(raft, index);
+    cmd->eid = *eid;
 
     if (!error) {
         raft_waiter_create(raft, RAFT_W_COMMAND)->command.index = cmd->index;
