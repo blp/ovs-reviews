@@ -574,8 +574,8 @@ static void raft_rpc_format(const union raft_rpc *, struct ds *);
 static bool raft_rpc_is_heartbeat(const union raft_rpc *);
 
 static void raft_handle_rpc(struct raft *, const union raft_rpc *);
-static void raft_send(struct raft *, const union raft_rpc *);
-static void raft_send__(struct raft *, const union raft_rpc *,
+static bool raft_send(struct raft *, const union raft_rpc *);
+static bool raft_send__(struct raft *, const union raft_rpc *,
                         struct jsonrpc_session *);
 static void raft_send_append_request(struct raft *,
                                      struct raft_server *, unsigned int n);
@@ -4748,31 +4748,30 @@ raft_rpc_is_heartbeat(const union raft_rpc *rpc)
 }
 
 
-static void
+static bool
 raft_send__(struct raft *raft, const union raft_rpc *rpc,
             struct jsonrpc_session *js)
 {
     log_rpc(raft, rpc, "-->");
-    mc_wrap_jsonrpc_session_send(js, raft_rpc_to_jsonrpc(raft, rpc),
-				 raft->mc_conn, MC_MAIN_TID,
-				 OVS_SOURCE_LOCATOR);
+    return !mc_wrap_jsonrpc_session_send(js, raft_rpc_to_jsonrpc(raft, rpc),
+                                         raft->mc_conn, MC_MAIN_TID,
+                                         OVS_SOURCE_LOCATOR);
 }
 
-static void
+static bool
 raft_send(struct raft *raft, const union raft_rpc *rpc)
 {
     if (uuid_equals(&rpc->common.sid, &raft->sid)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_WARN_RL(&rl, "attempting to send RPC to self");
-        return;
+        return false;
     }
 
     struct raft_conn *conn;
     LIST_FOR_EACH (conn, list_node, &raft->conns) {
         if (uuid_equals(&conn->sid, &rpc->common.sid)
             && jsonrpc_session_is_connected(conn->js)) {
-            raft_send__(raft, rpc, conn->js);
-            return;
+            return raft_send__(raft, rpc, conn->js);
         }
     }
 
@@ -4780,6 +4779,7 @@ raft_send(struct raft *raft, const union raft_rpc *rpc)
     VLOG_DBG_RL(&rl, "%04x: no connection to %04x, cannot send RPC",
                 uuid_prefix(&raft->sid, 4),
                 uuid_prefix(&rpc->common.sid, 4));
+    return false;
 }
 
 static struct raft *
