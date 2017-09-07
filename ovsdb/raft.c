@@ -2411,8 +2411,28 @@ raft_command_status_to_string(enum raft_command_status status)
         return "lost leadership";
     case RAFT_CMD_SHUTDOWN:
         return "server shutdown";
+    case RAFT_CMD_IO_ERROR:
+        return "I/O error";
+    case RAFT_CMD_TIMEOUT:
+        return "timeout";
     default:
-        OVS_NOT_REACHED();
+        return NULL;
+    }
+}
+
+bool
+raft_command_status_from_string(const char *s,
+                                enum raft_command_status *statusp)
+{
+    for (enum raft_command_status status = 0; ; status++) {
+        const char *s2 = raft_command_status_to_string(status);
+        if (!s2) {
+            *statusp = 0;
+            return false;
+        } else if (!strcmp(s, s2)) {
+            *statusp = status;
+            return true;
+        }
     }
 }
 

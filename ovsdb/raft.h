@@ -119,8 +119,11 @@ enum raft_command_status {
     RAFT_CMD_BAD_PREREQ,        /* Failed because prerequisite check failed. */
     RAFT_CMD_LOST_LEADERSHIP,   /* Leadership lost after command initiation. */
     RAFT_CMD_SHUTDOWN,          /* Raft server shut down. */
+    RAFT_CMD_IO_ERROR,          /* I/O error. */
+    RAFT_CMD_TIMEOUT,           /* Request to remote leader timed out. */
 };
 const char *raft_command_status_to_string(enum raft_command_status);
+bool raft_command_status_from_string(const char *, enum raft_command_status *);
 
 struct raft_command *raft_command_execute(struct raft *,
                                           const struct json *data,
