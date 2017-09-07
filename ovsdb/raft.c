@@ -2449,50 +2449,53 @@ raft_current_eid(const struct raft *raft)
     return &raft->snap.eid;
 }
 
-static struct raft_command * OVS_WARN_UNUSED_RESULT
-raft_command_execute__(struct raft *raft,
-                       const struct json *data, const struct json *servers,
-                       const struct uuid *prereq, struct uuid *result)
+static struct raft_command *
+raft_command_create_completed(enum raft_command_status status)
+{
+    ovs_assert(status != RAFT_CMD_INCOMPLETE);
+
+    struct raft_command *cmd = xzalloc(sizeof *cmd);
+    cmd->n_refs = 1;
+    cmd->status = status;
+    return cmd;
+}
+
+static struct raft_command *
+raft_command_create_incomplete(struct raft *raft, uint64_t index)
 {
     struct raft_command *cmd = xzalloc(sizeof *cmd);
     cmd->n_refs = 2;            /* One for client, one for raft->commands. */
-    cmd->index = raft->log_end;
+    cmd->index = index;
     cmd->status = RAFT_CMD_INCOMPLETE;
     hmap_insert(&raft->commands, &cmd->hmap_node, cmd->index);
+    return cmd;
+}
 
-    if (raft->role != RAFT_LEADER) {
-        raft_command_complete(raft, cmd, RAFT_CMD_NOT_LEADER);
-        return cmd;
-    }
-
-    if (prereq && !uuid_equals(prereq, raft_current_eid(raft))) {
-        raft_command_complete(raft, cmd, RAFT_CMD_BAD_PREREQ);
-        return cmd;
-    }
-
-    struct uuid eid = data ? uuid_random() : UUID_ZERO;
-    if (result) {
-        *result = eid;
-    }
-
-    /* Write to local log.
-     *
-     * XXX If this server is being removed from the configuration then we
-     * should not write to the local log; see section 4.2.2.  Or we could
-     * implement leadership transfer. */
+static struct raft_command * OVS_WARN_UNUSED_RESULT
+raft_command_initiate(struct raft *raft,
+                      const struct json *data, const struct json *servers,
+                      const struct uuid *eid)
+{
+    /* Write to local log. */
     struct ovsdb_error *error = raft_write_entry(
-        raft, raft->current_term, json_nullable_clone(data), &eid,
+        raft, raft->current_term, json_nullable_clone(data), eid,
         json_nullable_clone(servers));
-    if (!error) {
-        struct raft_waiter *w = raft_waiter_create(raft, RAFT_W_COMMAND);
-        w->command.index = cmd->index;
-    } else {
+    if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
         char *s = ovsdb_error_to_string_free(error);
         VLOG_WARN_RL(&rl, "%s", s);
         free(s);
 
-        /* XXX make this a hard failure if cluster has <=2 servers. */
+        if (hmap_count(&raft->servers) < 3) {
+            return raft_command_create_completed(RAFT_CMD_IO_ERROR);
+        }
+    }
+
+    struct raft_command *cmd = raft_command_create_incomplete(raft,
+                                                              raft->log_end);
+
+    if (!error) {
+        raft_waiter_create(raft, RAFT_W_COMMAND)->command.index = cmd->index;
     }
 
     /* Write to remote logs. */
@@ -2505,6 +2508,58 @@ raft_command_execute__(struct raft *raft,
     }
 
     return cmd;
+}
+
+static struct raft_command * OVS_WARN_UNUSED_RESULT
+raft_command_execute__(struct raft *raft,
+                       const struct json *data, const struct json *servers,
+                       const struct uuid *prereq, struct uuid *result)
+{
+    if (raft->role != RAFT_LEADER) {
+        /* Consider proxying the command to the leader.  We can only do that if
+         * we know the leader and the command does not change the set of
+         * servers.  We do not proxy commands without prerequisites, even
+         * though we could, because in an OVSDB context a log entry doesn't
+         * make sense without context. */
+        if (servers || !data
+            || raft->role != RAFT_FOLLOWER || uuid_is_zero(&raft->leader_sid)
+            || prereq) {
+            return raft_command_create_completed(RAFT_CMD_NOT_LEADER);
+        }
+    }
+
+    struct uuid eid = data ? uuid_random() : UUID_ZERO;
+    if (result) {
+        *result = eid;
+    }
+
+    if (raft->role == RAFT_FOLLOWER && prereq) {
+        const union raft_rpc rpc = {
+            .execute_command_request = {
+                .common = {
+                    .type = RAFT_RPC_EXECUTE_COMMAND_REQUEST,
+                    .sid = raft->leader_sid,
+                },
+                .data = CONST_CAST(struct json *, data),
+                .prereq = *prereq,
+                .result = eid,
+            }
+        };
+        if (!raft_send(raft, &rpc)) {
+            /* Couldn't send command, so it definitely failed. */
+            return raft_command_create_completed(RAFT_CMD_NOT_LEADER);
+        }
+
+        struct raft_command *cmd = raft_command_create_incomplete(raft, 0);
+        cmd->timestamp = time_msec();
+        return cmd;
+    }
+
+    if (prereq && !uuid_equals(prereq, raft_current_eid(raft))) {
+        return raft_command_create_completed(RAFT_CMD_BAD_PREREQ);
+    }
+
+    return raft_command_initiate(raft, data, servers, &eid);
 }
 
 struct raft_command * OVS_WARN_UNUSED_RESULT
