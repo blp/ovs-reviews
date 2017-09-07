@@ -578,7 +578,8 @@ static bool raft_send(struct raft *, const union raft_rpc *);
 static bool raft_send__(struct raft *, const union raft_rpc *,
                         struct jsonrpc_session *);
 static void raft_send_append_request(struct raft *,
-                                     struct raft_server *, unsigned int n);
+                                     struct raft_server *, unsigned int n,
+                                     const char *comment);
 static void raft_rpc_destroy(union raft_rpc *);
 static struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct raft *,
                                                const union raft_rpc *);
@@ -2478,7 +2479,7 @@ raft_command_execute__(struct raft *raft,
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s != raft->me && s->next_index == raft->log_end - 1) {
-            raft_send_append_request(raft, s, 1);
+            raft_send_append_request(raft, s, 1, "execute command");
             s->next_index++;    /* XXX Is this a valid way to pipeline? */
         }
     }
@@ -3084,16 +3085,17 @@ raft_become_follower(struct raft *raft)
 
 static void
 raft_send_append_request(struct raft *raft,
-                         struct raft_server *peer, unsigned int n)
+                         struct raft_server *peer, unsigned int n,
+                         const char *comment)
 {
     ovs_assert(raft->role == RAFT_LEADER);
 
-    union raft_rpc rq = {
+    const union raft_rpc rq = {
         .append_request = {
             .common = {
                 .type = RAFT_RPC_APPEND_REQUEST,
                 .sid = peer->sid,
-                .comment = "heartbeat",
+                .comment = CONST_CAST(char *, comment),
             },
             .term = raft->current_term,
             .prev_log_index = peer->next_index - 1,
@@ -3116,7 +3118,7 @@ raft_send_heartbeats(struct raft *raft)
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
         if (s != raft->me) {
             /* XXX should also retransmit unacknowledged append requests */
-            raft_send_append_request(raft, s, 0);
+            raft_send_append_request(raft, s, 0, "heartbeat");
         }
     }
     raft->ping_timeout = time_msec() + PING_TIME_MSEC;
@@ -3832,7 +3834,7 @@ raft_handle_append_reply(struct raft *raft,
         raft_send_install_snapshot_request(raft, s, NULL);
     } else if (s->next_index < raft->log_end) {
         /* Case 2. */
-        raft_send_append_request(raft, s, 1);
+        raft_send_append_request(raft, s, 1, NULL);
     } else {
         /* Case 3. */
         if (s->phase == RAFT_PHASE_CATCHUP) {
@@ -4129,7 +4131,7 @@ raft_handle_add_server_request(struct raft *raft,
      * leadership) then it will gracefully resume populating the log.
      *
      * See the last few paragraphs of section 4.2.1 for further insight. */
-    raft_send_append_request(raft, s, 0);
+    raft_send_append_request(raft, s, 0, "initialize new server");
 
     /* Reply will be sent later following waiter completion. */
 }
@@ -4458,7 +4460,7 @@ raft_handle_install_snapshot_reply(
               uuid_prefix(&raft->cid, 4), uuid_prefix(&s->sid, 4),
               rpy->last_term, rpy->last_index);
     s->next_index = raft->log_end;
-    raft_send_append_request(raft, s, 0);
+    raft_send_append_request(raft, s, 0, "snapshot installed");
 }
 
 bool
