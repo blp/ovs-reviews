@@ -8,9 +8,10 @@ for i in `seq 0 9`; do
 	echo "$i-$j=$i-$j" >> expected
     done
 done > expected
+rm -f ?-?.log
 for i in `seq 0 9`; do
     (for j in `seq 5`; do
-	 ovn-sbctl -voff add SB_Global . external_ids $i-$j=$i-$j
+	 ovn-sbctl --log-file=$i-$j.log -vfile add SB_Global . external_ids $i-$j=$i-$j
      done)&
 done
 sleep 5
