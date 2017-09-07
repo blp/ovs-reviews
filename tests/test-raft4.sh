@@ -15,13 +15,14 @@ wrapper () {
     : echo "valgrind --log-file=s$1.valgrind"
 }
 
-xterm -geometry 80x25-0+0 -T 1 -e `wrapper 1` ovsdb/ovsdb-server --log-file=s1.log --pidfile=s1.pid --unixctl=s1 --remote=punix:s1.ovsdb s1.db &
-xterm -geometry 80x25-0+350 -T 2 -e `wrapper 2` ovsdb/ovsdb-server --log-file=s2.log --pidfile=s2.pid --unixctl=s2 --remote=punix:s2.ovsdb s2.db &
-xterm -geometry 80x25-0+700 -T 3 -e `wrapper 3` ovsdb/ovsdb-server --log-file=s3.log --pidfile=s3.pid --unixctl=s3 --remote=punix:s3.ovsdb s3.db &
+OPTIONS=-vfile
+xterm -geometry 80x25-0+0 -T 1 -e `wrapper 1` ovsdb/ovsdb-server --log-file=s1.log --pidfile=s1.pid --unixctl=s1 --remote=punix:s1.ovsdb $OPTIONS s1.db &
+xterm -geometry 80x25-0+350 -T 2 -e `wrapper 2` ovsdb/ovsdb-server --log-file=s2.log --pidfile=s2.pid --unixctl=s2 --remote=punix:s2.ovsdb $OPTIONS s2.db &
+xterm -geometry 80x25-0+700 -T 3 -e `wrapper 3` ovsdb/ovsdb-server --log-file=s3.log --pidfile=s3.pid --unixctl=s3 --remote=punix:s3.ovsdb $OPTIONS s3.db &
 
 read line
 
-xterm -geometry 80x25-490+0 -T 4 -e `wrapper 4` ovsdb/ovsdb-server --log-file=s4.log --pidfile=s4.pid --unixctl=s4 --remote=punix:s4.ovsdb s4.db &
+xterm -geometry 80x25-490+0 -T 4 -e `wrapper 4` ovsdb/ovsdb-server --log-file=s4.log --pidfile=s4.pid --unixctl=s4 --remote=punix:s4.ovsdb $OPTIONS s4.db &
 
 read line
 
