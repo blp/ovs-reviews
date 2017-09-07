@@ -423,6 +423,15 @@ struct raft_append_request {
     unsigned int n_entries;
 };
 
+enum raft_append_result {
+    RAFT_APPEND_OK,             /* Success. */
+    RAFT_APPEND_INCONSISTENCY,  /* Failure due to log inconsistency. */
+    RAFT_APPEND_IO_ERROR,       /* Failure due to I/O error. */
+};
+
+const char *raft_append_result_to_string(enum raft_append_result);
+bool raft_append_result_from_string(const char *, enum raft_append_result *);
+
 struct raft_append_reply {
     struct raft_rpc_common common;
 
@@ -436,12 +445,13 @@ struct raft_append_reply {
     unsigned int n_entries;
 
     /* Result. */
-    bool success;
+    enum raft_append_result result;
 };
 
 static void raft_send_append_reply(struct raft *,
                                    const struct raft_append_request *,
-                                   bool success, const char *comment);
+                                   enum raft_append_result,
+                                   const char *comment);
 static void raft_update_match_index(struct raft *, struct raft_server *,
                                     uint64_t min_index);
 
@@ -1952,7 +1962,7 @@ static void
 log_rpc(const struct raft *raft, const union raft_rpc *rpc,
         const char *direction)
 {
-    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(120, 120);
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(600, 600);
     if (!raft_rpc_is_heartbeat(rpc) && !VLOG_DROP_DBG(&rl)) {
         struct ds s = DS_EMPTY_INITIALIZER;
         raft_rpc_format(rpc, &s);
@@ -2038,7 +2048,8 @@ raft_waiter_complete(struct raft *raft, struct raft_waiter *w)
         break;
 
     case RAFT_W_APPEND:
-        raft_send_append_reply(raft, w->append.rq, true, "log updated");
+        raft_send_append_reply(raft, w->append.rq, RAFT_APPEND_OK,
+                               "log updated");
         break;
 
     case RAFT_W_VOTE:
@@ -2585,6 +2596,36 @@ raft_rpc_destroy(union raft_rpc *rpc)
 
 /* raft_rpc_to/from_jsonrpc(). */
 
+const char *
+raft_append_result_to_string(enum raft_append_result result)
+{
+    switch (result) {
+    case RAFT_APPEND_OK:
+        return "OK";
+    case RAFT_APPEND_INCONSISTENCY:
+        return "inconsistency";
+    case RAFT_APPEND_IO_ERROR:
+        return "I/O error";
+    default:
+        return NULL;
+    }
+}
+
+bool
+raft_append_result_from_string(const char *s, enum raft_append_result *resultp)
+{
+    for (enum raft_append_result result = 0; ; result++) {
+        const char *s2 = raft_append_result_to_string(result);
+        if (!s2) {
+            *resultp = 0;
+            return false;
+        } else if (!strcmp(s, s2)) {
+            *resultp = result;
+            return true;
+        }
+    }
+}
+
 static void
 raft_append_request_to_jsonrpc(const struct raft_append_request *rq,
                                struct json *args)
@@ -2637,7 +2678,8 @@ raft_append_reply_to_jsonrpc(const struct raft_append_reply *rpy,
     json_object_put_uint(args, "prev_log_index", rpy->prev_log_index);
     json_object_put_uint(args, "prev_log_term", rpy->prev_log_term);
     json_object_put_uint(args, "n_entries", rpy->n_entries);
-    json_object_put(args, "success", json_boolean_create(rpy->success));
+    json_object_put_string(args, "result",
+                           raft_append_result_to_string(rpy->result));
 }
 
 static void
@@ -2649,7 +2691,11 @@ raft_append_reply_from_jsonrpc(struct ovsdb_parser *p,
     rpy->prev_log_index = parse_uint(p, "prev_log_index");
     rpy->prev_log_term = parse_uint(p, "prev_log_term");
     rpy->n_entries = parse_uint(p, "n_entries");
-    rpy->success = parse_required_boolean(p, "success");
+
+    const char *result = parse_required_string(p, "result");
+    if (result && !raft_append_result_from_string(result, &rpy->result)) {
+        ovsdb_parser_raise_error(p, "unknown result \"%s\"", result);
+    }
 }
 
 static void
@@ -3250,11 +3296,11 @@ raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
 /* This doesn't use rq->entries (but it does use rq->n_entries). */
 static void
 raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
-                       bool success, const char *comment)
+                       enum raft_append_result result, const char *comment)
 {
     /* Figure 3.1: "If leaderCommit > commitIndex, set commitIndex =
      * min(leaderCommit, index of last new entry)" */
-    if (success && rq->leader_commit > raft->commit_index) {
+    if (result == RAFT_APPEND_OK && rq->leader_commit > raft->commit_index) {
         raft_update_commit_index(
             raft, MIN(rq->leader_commit, rq->prev_log_index + rq->n_entries));
     }
@@ -3272,7 +3318,7 @@ raft_send_append_reply(struct raft *raft, const struct raft_append_request *rq,
             .prev_log_index = rq->prev_log_index,
             .prev_log_term = rq->prev_log_term,
             .n_entries = rq->n_entries,
-            .success = success,
+            .result = result,
         }
     };
     raft_send(raft, &reply);
@@ -3321,7 +3367,7 @@ raft_handle_append_entries(struct raft *raft,
         VLOG_INFO("rejecting append_request because previous entry "
                   "%"PRIu64",%"PRIu64" not in local log (%s)",
                   prev_log_term, prev_log_index, mismatch);
-        raft_send_append_reply(raft, rq, false, mismatch);
+        raft_send_append_reply(raft, rq, RAFT_APPEND_INCONSISTENCY, mismatch);
         return;
     }
 
@@ -3335,9 +3381,9 @@ raft_handle_append_entries(struct raft *raft,
             /* No change. */
             if (rq->common.comment
                 && !strcmp(rq->common.comment, "heartbeat")) {
-                raft_send_append_reply(raft, rq, true, "heartbeat");
+                raft_send_append_reply(raft, rq, RAFT_APPEND_OK, "heartbeat");
             } else {
-                raft_send_append_reply(raft, rq, true, "no change");
+                raft_send_append_reply(raft, rq, RAFT_APPEND_OK, "no change");
             }
             return;
         }
@@ -3377,7 +3423,7 @@ raft_handle_append_entries(struct raft *raft,
         char *s = ovsdb_error_to_string_free(error);
         VLOG_ERR("%s", s);
         free(s);
-        raft_send_append_reply(raft, rq, false, "I/O error");
+        raft_send_append_reply(raft, rq, RAFT_APPEND_IO_ERROR, "I/O error");
         return;
     }
 
@@ -3417,7 +3463,8 @@ raft_handle_append_request__(struct raft *raft,
     if (!raft_receive_term__(raft, &rq->common, rq->term)) {
         /* Section 3.3: "If a server receives a request with a stale term
          * number, it rejects the request." */
-        raft_send_append_reply(raft, rq, false, "stale term");
+        raft_send_append_reply(raft, rq, RAFT_APPEND_INCONSISTENCY,
+                               "stale term");
         return;
     }
 
@@ -3428,7 +3475,8 @@ raft_handle_append_request__(struct raft *raft,
      * never accept any log entries preceding the configuration entry that adds
      * the server)." */
     if (!raft_update_leader(raft, &rq->common.sid)) {
-        raft_send_append_reply(raft, rq, false, "usurped leadership");
+        raft_send_append_reply(raft, rq, RAFT_APPEND_INCONSISTENCY,
+                               "usurped leadership");
         return;
     }
     raft_reset_timer(raft);
@@ -3487,7 +3535,8 @@ raft_handle_append_request__(struct raft *raft,
      *                           log_start        log_end
      */
     if (nth_entry_index < raft->log_start - 1) {
-        raft_send_append_reply(raft, rq, true, "append before log start");
+        raft_send_append_reply(raft, rq, RAFT_APPEND_OK,
+                               "append before log start");
         return;
     }
 
@@ -3531,9 +3580,10 @@ raft_handle_append_request__(struct raft *raft,
         if (rq->n_entries
             ? raft->snap.term == rq->entries[rq->n_entries - 1].term
             : raft->snap.term == rq->prev_log_term) {
-            raft_send_append_reply(raft, rq, true, "no change");
+            raft_send_append_reply(raft, rq, RAFT_APPEND_OK, "no change");
         } else {
-            raft_send_append_reply(raft, rq, false, "term mismatch");
+            raft_send_append_reply(raft, rq, RAFT_APPEND_INCONSISTENCY,
+                                   "term mismatch");
         }
         return;
     }
@@ -3722,7 +3772,7 @@ raft_handle_append_reply(struct raft *raft,
         }
     }
 
-    if (rpy->success) {
+    if (rpy->result == RAFT_APPEND_OK) {
         /* Figure 3.1: "If successful, update nextIndex and matchIndex for
          * follower (section 3.5)." */
         uint64_t min_index = rpy->prev_log_index + rpy->n_entries + 1;
@@ -3746,6 +3796,19 @@ raft_handle_append_reply(struct raft *raft,
         } else {
             /* XXX log */
             VLOG_INFO("XXX");
+        }
+
+        if (rpy->result == RAFT_APPEND_IO_ERROR) {
+            /* Append failed but not because of a log inconsistency.  Because
+             * of the I/O error, there's no point in re-sending the append
+             * immediately.
+             *
+             * XXX We should fail the command if enough I/O errors occur that
+             * we can't get a majority. */
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+            VLOG_INFO_RL(&rl, "%04x reported I/O error",
+                         uuid_prefix(&s->sid, 4));
+            return;
         }
     }
 
@@ -4536,7 +4599,8 @@ raft_format_append_reply(const struct raft_append_reply *rpy, struct ds *s)
 {
     ds_put_format(s, " term=%"PRIu64, rpy->term);
     ds_put_format(s, " log_end=%"PRIu64, rpy->log_end);
-    ds_put_format(s, " %s", rpy->success ? "success" : "failure");
+    ds_put_format(s, " result=\"%s\"",
+                  raft_append_result_to_string(rpy->result));
 }
 
 static void
