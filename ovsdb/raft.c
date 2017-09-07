@@ -4903,8 +4903,11 @@ raft_unixctl_status(struct unixctl_conn *conn,
     const struct raft_conn *c;
     ds_put_cstr(&s, "Connections:");
     LIST_FOR_EACH (c, list_node, &raft->conns) {
-        ds_put_format(&s, " %s%04x",
-                      c->incoming ? "<-" : "->", uuid_prefix(&c->sid, 4));
+        bool connected = jsonrpc_session_is_connected(c->js);
+        ds_put_format(&s, " %s%s%04x%s",
+                      connected ? "" : "(",
+                      c->incoming ? "<-" : "->", uuid_prefix(&c->sid, 4),
+                      connected ? "" : ")");
     }
     ds_put_char(&s, '\n');
 
