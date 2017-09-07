@@ -122,6 +122,9 @@ struct raft_command {
 
     unsigned int n_refs;
     enum raft_command_status status;
+    struct uuid eid;
+    long long int timestamp;
+    struct uuid sid;
 };
 
 static void raft_command_complete(struct raft *, struct raft_command *,
@@ -129,7 +132,10 @@ static void raft_command_complete(struct raft *, struct raft_command *,
 
 static void raft_complete_all_commands(struct raft *,
                                        enum raft_command_status);
-static struct raft_command *raft_find_command(struct raft *, uint64_t index);
+static struct raft_command *raft_find_command_by_index(struct raft *,
+                                                       uint64_t index);
+static struct raft_command *raft_find_command_by_eid(struct raft *,
+                                                     const struct uuid *);
 
 enum raft_waiter_type {
     RAFT_W_COMMAND,
@@ -370,7 +376,11 @@ raft_fsync_thread(void *raft_)
     RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REPLY, "install_snapshot_reply") \
                                                                         \
     /* BecomeLeader RPC. */                                             \
-    RAFT_RPC(RAFT_RPC_BECOME_LEADER, "become_leader")
+    RAFT_RPC(RAFT_RPC_BECOME_LEADER, "become_leader")                   \
+                                                                        \
+    /* ExecuteCommand RPC. */                                           \
+    RAFT_RPC(RAFT_RPC_EXECUTE_COMMAND_REQUEST, "execute_command_request") \
+    RAFT_RPC(RAFT_RPC_EXECUTE_COMMAND_REPLY, "execute_command_reply")
 
 enum raft_rpc_type {
 #define RAFT_RPC(ENUM, NAME) ENUM,
@@ -557,6 +567,26 @@ struct raft_become_leader {
     uint64_t term;              /* Leader's term. */
 };
 
+struct raft_execute_command_request {
+    struct raft_rpc_common common;
+
+    struct json *data;
+    struct uuid prereq;
+    struct uuid result;
+};
+
+struct raft_execute_command_reply {
+    struct raft_rpc_common common;
+
+    struct uuid result;
+    enum raft_command_status status;
+};
+
+static void raft_send_execute_command_reply(struct raft *,
+                                            const struct uuid *sid,
+                                            const struct uuid *eid,
+                                            enum raft_command_status);
+
 union raft_rpc {
     struct raft_rpc_common common;
     struct raft_append_request append_request;
@@ -568,6 +598,8 @@ union raft_rpc {
     struct raft_install_snapshot_request install_snapshot_request;
     struct raft_install_snapshot_reply install_snapshot_reply;
     struct raft_become_leader become_leader;
+    struct raft_execute_command_request execute_command_request;
+    struct raft_execute_command_reply execute_command_reply;
 };
 
 static void raft_rpc_format(const union raft_rpc *, struct ds *);
@@ -710,6 +742,7 @@ raft_alloc(void)
     hmap_init(&raft->add_servers);
     hmap_init(&raft->commands);
     
+    raft->ping_timeout = time_msec() + PING_TIME_MSEC;
     raft_reset_timer(raft);
     raft_schedule_snapshot(raft, false);
     
@@ -2172,6 +2205,8 @@ raft_accept_vote(struct raft *raft, struct raft_server *s,
 static void
 raft_start_election(struct raft *raft, bool leadership_transfer)
 {
+    raft_complete_all_commands(raft, RAFT_CMD_LOST_LEADERSHIP);
+
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
     ovs_assert(raft->role != RAFT_LEADER);
@@ -2322,12 +2357,21 @@ raft_run(struct raft *raft)
         raft->join_timeout = time_msec() + 1000;
     }
 
-    if (raft->role == RAFT_LEADER) {
-        if (time_msec() >= raft->ping_timeout) {
+    if (time_msec() >= raft->ping_timeout) {
+        if (raft->role == RAFT_LEADER) {
             /* XXX send only if idle */
             raft_send_heartbeats(raft);
+        } else {
+            long long int now = time_msec();
+            struct raft_command *cmd, *next;
+            HMAP_FOR_EACH_SAFE (cmd, next, hmap_node, &raft->commands) {
+                if (cmd->timestamp
+                    && now - cmd->timestamp > ELECTION_BASE_MSEC) {
+                    raft_command_complete(raft, cmd, RAFT_CMD_TIMEOUT);
+                }
+            }
         }
-        
+        raft->ping_timeout = time_msec() + PING_TIME_MSEC;
     }
 
     /* Do this only at the end; if we did it as soon as we set raft->left in
@@ -2372,7 +2416,7 @@ raft_wait(struct raft *raft)
     } else {
         poll_timer_wait_until(raft->join_timeout);
     }
-    if (raft->role == RAFT_LEADER) {
+    if (raft->role == RAFT_LEADER || !hmap_is_empty(&raft->commands)) {
         poll_timer_wait_until(raft->ping_timeout);
     }
 }
@@ -2477,6 +2521,7 @@ raft_command_initiate(struct raft *raft,
                       const struct uuid *eid)
 {
     /* Write to local log. */
+    uint64_t index = raft->log_end;
     struct ovsdb_error *error = raft_write_entry(
         raft, raft->current_term, json_nullable_clone(data), eid,
         json_nullable_clone(servers));
@@ -2491,8 +2536,7 @@ raft_command_initiate(struct raft *raft,
         }
     }
 
-    struct raft_command *cmd = raft_command_create_incomplete(raft,
-                                                              raft->log_end);
+    struct raft_command *cmd = raft_command_create_incomplete(raft, index);
 
     if (!error) {
         raft_waiter_create(raft, RAFT_W_COMMAND)->command.index = cmd->index;
@@ -2501,7 +2545,7 @@ raft_command_initiate(struct raft *raft,
     /* Write to remote logs. */
     struct raft_server *s;
     HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
-        if (s != raft->me && s->next_index == raft->log_end - 1) {
+        if (s != raft->me && s->next_index == index) {
             raft_send_append_request(raft, s, 1, "execute command");
             s->next_index++;    /* XXX Is this a valid way to pipeline? */
         }
@@ -2523,7 +2567,7 @@ raft_command_execute__(struct raft *raft,
          * make sense without context. */
         if (servers || !data
             || raft->role != RAFT_FOLLOWER || uuid_is_zero(&raft->leader_sid)
-            || prereq) {
+            || !prereq) {
             return raft_command_create_completed(RAFT_CMD_NOT_LEADER);
         }
     }
@@ -2533,7 +2577,7 @@ raft_command_execute__(struct raft *raft,
         *result = eid;
     }
 
-    if (raft->role == RAFT_FOLLOWER && prereq) {
+    if (raft->role != RAFT_LEADER) {
         const union raft_rpc rpc = {
             .execute_command_request = {
                 .common = {
@@ -2600,6 +2644,10 @@ raft_command_complete(struct raft *raft,
                       struct raft_command *cmd,
                       enum raft_command_status status)
 {
+    if (!uuid_is_zero(&cmd->sid)) {
+        raft_send_execute_command_reply(raft, &cmd->sid, &cmd->eid, status);
+    }
+
     ovs_assert(cmd->status == RAFT_CMD_INCOMPLETE);
     ovs_assert(cmd->n_refs > 0);
     hmap_remove(&raft->commands, &cmd->hmap_node);
@@ -2617,12 +2665,25 @@ raft_complete_all_commands(struct raft *raft, enum raft_command_status status)
 }
 
 static struct raft_command *
-raft_find_command(struct raft *raft, uint64_t index)
+raft_find_command_by_index(struct raft *raft, uint64_t index)
 {
     struct raft_command *cmd;
 
     HMAP_FOR_EACH_IN_BUCKET (cmd, hmap_node, index, &raft->commands) {
         if (cmd->index == index) {
+            return cmd;
+        }
+    }
+    return NULL;
+}
+
+static struct raft_command *
+raft_find_command_by_eid(struct raft *raft, const struct uuid *eid)
+{
+    struct raft_command *cmd;
+
+    HMAP_FOR_EACH (cmd, hmap_node, &raft->commands) {
+        if (uuid_equals(&cmd->eid, eid)) {
             return cmd;
         }
     }
@@ -2666,6 +2727,11 @@ raft_rpc_destroy(union raft_rpc *rpc)
     case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
         break;
     case RAFT_RPC_BECOME_LEADER:
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
+        json_destroy(rpc->execute_command_request.data);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
         break;
     }
 }
@@ -2912,6 +2978,46 @@ raft_install_snapshot_reply_from_jsonrpc(
     rpy->last_term = parse_uint(p, "last_term");
 }
 
+static void
+raft_execute_command_request_to_jsonrpc(
+    const struct raft_execute_command_request *rq, struct json *args)
+{
+    json_object_put(args, "data", json_clone(rq->data));
+    json_object_put_format(args, "prereq", UUID_FMT, UUID_ARGS(&rq->prereq));
+    json_object_put_format(args, "result", UUID_FMT, UUID_ARGS(&rq->result));
+}
+
+static void
+raft_execute_command_request_from_jsonrpc(
+    struct ovsdb_parser *p, struct raft_execute_command_request *rq)
+{
+    rq->data = json_nullable_clone(ovsdb_parser_member(p, "data",
+                                                       OP_OBJECT | OP_ARRAY));
+    rq->prereq = parse_required_uuid(p, "prereq");
+    rq->result = parse_required_uuid(p, "result");
+}
+
+static void
+raft_execute_command_reply_to_jsonrpc(
+    const struct raft_execute_command_reply *rpy, struct json *args)
+{
+    json_object_put_format(args, "result", UUID_FMT, UUID_ARGS(&rpy->result));
+    json_object_put_string(args, "status",
+                           raft_command_status_to_string(rpy->status));
+}
+
+static void
+raft_execute_command_reply_from_jsonrpc(
+    struct ovsdb_parser *p, struct raft_execute_command_reply *rpy)
+{
+    rpy->result = parse_required_uuid(p, "result");
+
+    const char *status = parse_required_string(p, "status");
+    if (status && !raft_command_status_from_string(status, &rpy->status)) {
+        ovsdb_parser_raise_error(p, "unknown status \"%s\"", status);
+    }
+}
+
 static struct jsonrpc_msg *
 raft_rpc_to_jsonrpc(const struct raft *raft,
                     const union raft_rpc *rpc)
@@ -2968,6 +3074,14 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
         break;
     case RAFT_RPC_BECOME_LEADER:
         json_object_put_uint(args, "term", rpc->become_leader.term);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
+        raft_execute_command_request_to_jsonrpc(
+            &rpc->execute_command_request, args);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
+        raft_execute_command_reply_to_jsonrpc(
+            &rpc->execute_command_reply, args);
         break;
     default:
         OVS_NOT_REACHED();
@@ -3067,6 +3181,14 @@ raft_rpc_from_jsonrpc(struct raft *raft,
         break;
     case RAFT_RPC_BECOME_LEADER:
         rpc->become_leader.term = parse_uint(&p, "term");
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
+        raft_execute_command_request_from_jsonrpc(
+            &p, &rpc->execute_command_request);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
+        raft_execute_command_reply_from_jsonrpc(
+            &p, &rpc->execute_command_reply);
         break;
     default:
         OVS_NOT_REACHED();
@@ -3196,7 +3318,17 @@ raft_send_heartbeats(struct raft *raft)
             raft_send_append_request(raft, s, 0, "heartbeat");
         }
     }
-    raft->ping_timeout = time_msec() + PING_TIME_MSEC;
+
+    /* Send anyone waiting for a command to complete a ping to let them
+     * know we're still working on it. */
+    struct raft_command *cmd;
+    HMAP_FOR_EACH (cmd, hmap_node, &raft->commands) {
+        if (!uuid_is_zero(&cmd->sid)) {
+            raft_send_execute_command_reply(raft, &cmd->sid,
+                                            &cmd->eid,
+                                            RAFT_CMD_INCOMPLETE);
+        }
+    }
 }
 
 static void
@@ -3210,6 +3342,8 @@ raft_server_init_leader(struct raft *raft, struct raft_server *s)
 static void
 raft_become_leader(struct raft *raft)
 {
+    raft_complete_all_commands(raft, RAFT_CMD_LOST_LEADERSHIP);
+
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     VLOG_INFO_RL(&rl, "term %"PRIu64": elected leader by %d+ of "
                  "%"PRIuSIZE" servers", raft->current_term,
@@ -3362,7 +3496,7 @@ raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
             raft_run_reconfigure(raft);
         }
         if (e->data) {
-            struct raft_command *cmd = raft_find_command(raft, index);
+            struct raft_command *cmd = raft_find_command_by_index(raft, index);
             if (cmd) {
                 raft_command_complete(raft, cmd, RAFT_CMD_SUCCESS);
             }
@@ -4616,6 +4750,82 @@ raft_handle_become_leader(struct raft *raft,
 }
 
 static void
+raft_send_execute_command_reply(struct raft *raft,
+                                const struct uuid *sid,
+                                const struct uuid *eid,
+                                enum raft_command_status status)
+{
+    union raft_rpc rpc = {
+        .execute_command_reply = {
+            .common = {
+                .type = RAFT_RPC_EXECUTE_COMMAND_REPLY,
+                .sid = *sid,
+            },
+            .result = *eid,
+            .status = status,
+        },
+    };
+    raft_send(raft, &rpc);
+}
+
+static enum raft_command_status
+raft_handle_execute_command_request__(
+    struct raft *raft, const struct raft_execute_command_request *rq)
+{
+    if (raft->role != RAFT_LEADER) {
+        return RAFT_CMD_NOT_LEADER;
+    }
+
+    if (!uuid_equals(&rq->prereq, raft_current_eid(raft))) {
+        return RAFT_CMD_BAD_PREREQ;
+    }
+
+    struct raft_command *cmd = raft_command_initiate(raft, rq->data,
+                                                     NULL, &rq->result);
+    cmd->sid = rq->common.sid;
+
+    enum raft_command_status status = cmd->status;
+    if (status != RAFT_CMD_INCOMPLETE) {
+        raft_command_unref(cmd);
+    }
+    return status;
+}
+
+static void
+raft_handle_execute_command_request(
+    struct raft *raft, const struct raft_execute_command_request *rq)
+{
+    enum raft_command_status status
+        = raft_handle_execute_command_request__(raft, rq);
+    if (status != RAFT_CMD_INCOMPLETE) {
+        raft_send_execute_command_reply(raft, &rq->common.sid, &rq->result,
+                                        status);
+    }
+}
+
+static void
+raft_handle_execute_command_reply(
+    struct raft *raft, const struct raft_execute_command_reply *rpy)
+{
+    struct raft_command *cmd = raft_find_command_by_eid(raft, &rpy->result);
+    if (!cmd) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+        VLOG_INFO_RL(&rl,
+                     "%04x received %s reply from %04x for unknown command",
+                     uuid_prefix(&raft->sid, 4),
+                     raft_command_status_to_string(rpy->status),
+                     uuid_prefix(&rpy->common.sid, 4));
+        return;
+    }
+
+    if (rpy->status == RAFT_CMD_INCOMPLETE) {
+        cmd->timestamp = time_msec();
+    } else {
+        raft_command_complete(raft, cmd, rpy->status);
+    }
+}
+
+static void
 raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
 {
     switch (rpc->common.type) {
@@ -4654,6 +4864,13 @@ raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
         break;
     case RAFT_RPC_BECOME_LEADER:
         raft_handle_become_leader(raft, &rpc->become_leader);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
+        raft_handle_execute_command_request(raft,
+                                            &rpc->execute_command_request);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
+        raft_handle_execute_command_reply(raft, &rpc->execute_command_reply);
         break;
     default:
         OVS_NOT_REACHED();
@@ -4764,6 +4981,25 @@ raft_format_become_leader(const struct raft_become_leader *rq, struct ds *s)
 }
 
 static void
+raft_format_execute_command_request(
+    const struct raft_execute_command_request *rq, struct ds *s)
+{
+    ds_put_format(s, " prereq="UUID_FMT, UUID_ARGS(&rq->prereq));
+    ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rq->result));
+    ds_put_format(s, " data=");
+    json_to_ds(rq->data, JSSF_SORT, s);
+}
+
+static void
+raft_format_execute_command_reply(
+    const struct raft_execute_command_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rpy->result));
+    ds_put_format(s, " status=\"%s\"",
+                  raft_command_status_to_string(rpy->status));
+}
+
+static void
 raft_rpc_format(const union raft_rpc *rpc, struct ds *s)
 {
     ds_put_format(s, "%04x %s", uuid_prefix(&rpc->common.sid, 4),
@@ -4809,6 +5045,12 @@ raft_rpc_format(const union raft_rpc *rpc, struct ds *s)
         break;
     case RAFT_RPC_BECOME_LEADER:
         raft_format_become_leader(&rpc->become_leader, s);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
+        raft_format_execute_command_request(&rpc->execute_command_request, s);
+        break;
+    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
+        raft_format_execute_command_reply(&rpc->execute_command_reply, s);
         break;
     default:
         OVS_NOT_REACHED();

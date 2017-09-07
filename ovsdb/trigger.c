@@ -183,6 +183,7 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
                  * try again. */
                 json_destroy(t->result);
                 t->result = NULL;
+                t->db->run_triggers = true; /* XXX? */
             } else {
                 /* Permanent error.  Transition to "completed" state to report
                  * it. */
