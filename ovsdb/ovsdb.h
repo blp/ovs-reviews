@@ -78,4 +78,6 @@ void ovsdb_get_memory_usage(const struct ovsdb *, struct simap *usage);
 
 struct ovsdb_table *ovsdb_get_table(const struct ovsdb *, const char *);
 
+struct ovsdb_error *ovsdb_snapshot(struct ovsdb *) OVS_WARN_UNUSED_RESULT;
+
 #endif /* ovsdb/ovsdb.h */

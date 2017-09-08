@@ -148,8 +148,8 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
         /* If the transaction committed synchronously, complete it and
          * transition to "complete".  This is more than an optimization because
          * the file-based storage isn't implemented to read back the
-         * transactions that we write (which is an ugly way to break the
-         * abstraction). */
+         * transactions that we write (which is an ugly broken abstraction but
+         * it's what we have). */
         if (ovsdb_txn_progress_is_complete(t->progress)
             && !ovsdb_txn_progress_get_error(t->progress)) {
             ovsdb_txn_complete(txn);

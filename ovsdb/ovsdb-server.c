@@ -78,6 +78,7 @@ static char *ssl_ciphers;
 static bool bootstrap_ca_cert;
 
 static unixctl_cb_func ovsdb_server_exit;
+static unixctl_cb_func ovsdb_server_compact;
 static unixctl_cb_func ovsdb_server_reconnect;
 static unixctl_cb_func ovsdb_server_perf_counters_clear;
 static unixctl_cb_func ovsdb_server_perf_counters_show;
@@ -157,6 +158,16 @@ ovsdb_replication_init(const char *sync_from, const char *exclude,
 }
 
 static void
+log_and_free_error(struct ovsdb_error *error)
+{
+    if (error) {
+        char *s = ovsdb_error_to_string_free(error);
+        VLOG_INFO("%s", s);
+        free(s);
+    }
+}
+
+static void
 main_loop(struct server_config *config,
           struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
           struct unixctl_server *unixctl, struct sset *remotes,
@@ -215,16 +226,13 @@ main_loop(struct server_config *config,
                 ovsdb_trigger_run(db->db, time_msec());
             }
             ovsdb_storage_run(db->storage);
-            struct ovsdb_error *error = read_db(config, db);
-            if (error) {
-                char *s = ovsdb_error_to_string_free(error);
-                VLOG_INFO("%s", s);
-                free(s);
-            }
+            log_and_free_error(read_db(config, db));
             if (ovsdb_storage_is_dead(db->storage)) {
                 VLOG_INFO("%s: removing database because storage disconnected "
                           "permanently", node->name);
                 remove_db(config, node);
+            } else if (db->db && ovsdb_storage_should_snapshot(db->storage)) {
+                log_and_free_error(ovsdb_snapshot(db->db));
             }
         }
         if (run_process) {
@@ -401,6 +409,8 @@ main(int argc, char *argv[])
     }
 
     unixctl_command_register("exit", "", 0, 0, ovsdb_server_exit, &exiting);
+    unixctl_command_register("ovsdb-server/compact", "", 0, 1,
+                             ovsdb_server_compact, &all_dbs);
     unixctl_command_register("ovsdb-server/reconnect", "", 0, 0,
                              ovsdb_server_reconnect, jsonrpc);
 
@@ -558,11 +568,7 @@ parse_txn(struct server_config *config, struct db *db,
 
         error = ovsdb_file_txn_from_json(db->db, txn_json, false, &txn);
         if (!error) {
-            error = ovsdb_txn_replay_commit(txn);
-            if (error) {
-                /* XXX */
-                VLOG_INFO("%s", ovsdb_error_to_string_free(error));
-            }
+            log_and_free_error(ovsdb_txn_replay_commit(txn));
         }
         if (!error && !uuid_is_zero(txnid)) {
             db->db->prereq = *txnid;
@@ -1368,6 +1374,47 @@ ovsdb_server_disable_monitor_cond(struct unixctl_conn *conn,
     ovsdb_jsonrpc_disable_monitor_cond();
     ovsdb_jsonrpc_server_reconnect(jsonrpc, true);
     unixctl_command_reply(conn, NULL);
+}
+
+static void
+ovsdb_server_compact(struct unixctl_conn *conn, int argc,
+                     const char *argv[], void *dbs_)
+{
+    struct shash *all_dbs = dbs_;
+    struct ds reply;
+    struct db *db;
+    struct shash_node *node;
+    int n = 0;
+
+    ds_init(&reply);
+    SHASH_FOR_EACH(node, all_dbs) {
+        db = node->data;
+        if (argc < 2 || !strcmp(argv[1], node->name)) {
+            if (db->db) {
+                VLOG_INFO("compacting %s database by user request",
+                          node->name);
+
+                struct ovsdb_error *error = ovsdb_snapshot(db->db);
+                if (error) {
+                    char *s = ovsdb_error_to_string(error);
+                    ds_put_format(&reply, "%s\n", s);
+                    free(s);
+                    ovsdb_error_destroy(error);
+                }
+
+                n++;
+            }
+        }
+    }
+
+    if (!n) {
+        unixctl_command_reply_error(conn, "no database by that name");
+    } else if (reply.length) {
+        unixctl_command_reply_error(conn, ds_cstr(&reply));
+    } else {
+        unixctl_command_reply(conn, NULL);
+    }
+    ds_destroy(&reply);
 }
 
 /* "ovsdb-server/reconnect": makes ovsdb-server drop all of its JSON-RPC

@@ -180,7 +180,6 @@ ovsdb_storage_wait(struct ovsdb_storage *storage)
     if (storage->raft) {
         raft_wait(storage->raft);
     }
-    poll_timer_wait_until(storage->next_snapshot);
 }
 
 /* Returns 'storage''s embedded name, if it has one, otherwise null.
@@ -449,7 +448,7 @@ ovsdb_storage_should_snapshot(const struct ovsdb_storage *storage)
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
                              const struct json *schema,
-                             const struct json *snapshot)
+                             const struct json *data)
 {
     struct ovsdb_error *error;
     if (storage->raft) {
@@ -457,8 +456,8 @@ ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
         if (schema) {
             json_array_add(entries, json_clone(schema));
         }
-        if (snapshot) {
-            json_array_add(entries, json_clone(snapshot));
+        if (data) {
+            json_array_add(entries, json_clone(data));
         }
         error = raft_store_snapshot(storage->raft, entries);
         json_destroy(entries);
@@ -468,14 +467,15 @@ ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
         if (schema) {
             entries[n++] = CONST_CAST(struct json *, schema);
         }
-        if (snapshot) {
-            entries[n++] = CONST_CAST(struct json *, snapshot);
+        if (data) {
+            entries[n++] = CONST_CAST(struct json *, data);
         }
         error = ovsdb_log_replace(storage->log, entries, n);
     } else {
         return NULL;
     }
 
-    storage->next_snapshot = next_snapshot_time(error != NULL);
+    bool retry_quickly = error != NULL;
+    storage->next_snapshot = next_snapshot_time(retry_quickly);
     return error;
 }

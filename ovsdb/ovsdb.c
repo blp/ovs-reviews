@@ -412,3 +412,19 @@ ovsdb_get_table(const struct ovsdb *db, const char *name)
 {
     return shash_find_data(&db->tables, name);
 }
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_snapshot(struct ovsdb *db)
+{
+    if (!db->storage) {
+        return NULL;
+    }
+
+    struct json *schema = ovsdb_schema_to_json(db->schema);
+    struct json *data = ovsdb_to_txn_json(db, "compacting database online");
+    struct ovsdb_error *error = ovsdb_storage_store_snapshot(db->storage,
+                                                             schema, data);
+    json_destroy(schema);
+    json_destroy(data);
+    return error;
+}
