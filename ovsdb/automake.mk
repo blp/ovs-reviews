@@ -31,6 +31,10 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/query.h \
 	ovsdb/raft.c \
 	ovsdb/raft.h \
+	ovsdb/raft-private.c \
+	ovsdb/raft-private.h \
+	ovsdb/raft-rpc.c \
+	ovsdb/raft-rpc.h \
 	ovsdb/replication.c \
 	ovsdb/replication.h \
 	ovsdb/row.c \
