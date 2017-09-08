@@ -255,7 +255,7 @@ union raft_rpc {
 };
 
 void raft_rpc_destroy(union raft_rpc *);
-void raft_rpc_format(const union raft_rpc *, struct ds *);
+
 struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct uuid *cid,
                                         const struct uuid *sid,
                                         const union raft_rpc *);
@@ -265,5 +265,6 @@ struct ovsdb_error *raft_rpc_from_jsonrpc(struct uuid *cid,
                                           union raft_rpc *)
     OVS_WARN_UNUSED_RESULT;
 
+void raft_rpc_format(const union raft_rpc *, struct ds *);
 
 #endif /* lib/raft-rpc.h */

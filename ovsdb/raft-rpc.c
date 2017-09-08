@@ -29,6 +29,17 @@
 
 VLOG_DEFINE_THIS_MODULE(raft_rpc);
 
+#define RAFT_RPC(ENUM, NAME)                                            \
+    static void raft_##NAME##_destroy(struct raft_##NAME *);            \
+    static void raft_##NAME##_to_jsonrpc(const struct raft_##NAME *,    \
+                                         struct json *);                \
+    static void raft_##NAME##_from_jsonrpc(struct ovsdb_parser *,       \
+                                           struct raft_##NAME *);       \
+    static void raft_format_##NAME(const struct raft_##NAME *, struct ds *);
+RAFT_RPC_TYPES
+#undef RAFT_RPC
+
+/* raft_rpc_type. */
 const char *
 raft_rpc_type_to_string(enum raft_rpc_type status)
 {
@@ -52,98 +63,10 @@ raft_rpc_type_from_string(const char *s, enum raft_rpc_type *status)
 #undef RAFT_RPC
         return false;
 }
-
-#define RAFT_RPC(ENUM, NAME)                                            \
-    static void raft_##NAME##_destroy(struct raft_##NAME *);            \
-    static void raft_##NAME##_to_jsonrpc(const struct raft_##NAME *,    \
-                                         struct json *);                \
-    static void raft_##NAME##_from_jsonrpc(struct ovsdb_parser *,       \
-                                           struct raft_##NAME *);
-RAFT_RPC_TYPES
-#undef RAFT_RPC
-
+
+/* raft_hello_request. */
 static void
 raft_hello_request_destroy(struct raft_hello_request *rq OVS_UNUSED)
-{
-}
-
-static void
-raft_append_request_destroy(struct raft_append_request *rq)
-{
-    for (size_t i = 0; i < rq->n_entries; i++) {
-        json_destroy(rq->entries[i].data);
-    }
-    free(rq->entries);
-}
-
-static void
-raft_append_reply_destroy(struct raft_append_reply *rpy OVS_UNUSED)
-{
-}
-
-static void
-raft_vote_request_destroy(struct raft_vote_request *rq OVS_UNUSED)
-{
-}
-
-static void
-raft_vote_reply_destroy(struct raft_vote_reply *rpy OVS_UNUSED)
-{
-}
-
-static void
-raft_add_server_request_destroy(struct raft_add_server_request *rq)
-{
-    free(rq->address);
-}
-
-static void
-raft_add_server_reply_destroy(struct raft_add_server_reply *rpy)
-{
-    sset_destroy(&rpy->remotes);
-}
-
-static void
-raft_remove_server_reply_destroy(
-    struct raft_remove_server_reply *rpy OVS_UNUSED)
-{
-}
-
-static void
-raft_install_snapshot_request_destroy(
-    struct raft_install_snapshot_request *rq)
-{
-    json_destroy(rq->last_servers);
-    json_destroy(rq->data);
-}
-
-static void
-raft_install_snapshot_reply_destroy(
-    struct raft_install_snapshot_reply *rpy OVS_UNUSED)
-{
-}
-
-static void
-raft_execute_command_request_destroy(
-    struct raft_execute_command_request *rq)
-{
-    json_destroy(rq->data);
-}
-
-static void
-raft_execute_command_reply_destroy(
-    struct raft_execute_command_reply *rpy OVS_UNUSED)
-{
-}
-
-static void
-raft_remove_server_request_destroy(
-    struct raft_remove_server_request *rq OVS_UNUSED)
-{
-}
-
-static void
-raft_become_leader_destroy(struct raft_become_leader *rpc OVS_UNUSED)
 {
 }
 
@@ -159,34 +82,21 @@ raft_hello_request_from_jsonrpc(struct ovsdb_parser *p OVS_UNUSED,
 {
 }
 
-const char *
-raft_append_result_to_string(enum raft_append_result result)
+static void
+raft_format_hello_request(const struct raft_hello_request *hello OVS_UNUSED,
+                          struct ds *s OVS_UNUSED)
 {
-    switch (result) {
-    case RAFT_APPEND_OK:
-        return "OK";
-    case RAFT_APPEND_INCONSISTENCY:
-        return "inconsistency";
-    case RAFT_APPEND_IO_ERROR:
-        return "I/O error";
-    default:
-        return NULL;
-    }
 }
+
+/* raft_append_request. */
 
-bool
-raft_append_result_from_string(const char *s, enum raft_append_result *resultp)
+static void
+raft_append_request_destroy(struct raft_append_request *rq)
 {
-    for (enum raft_append_result result = 0; ; result++) {
-        const char *s2 = raft_append_result_to_string(result);
-        if (!s2) {
-            *resultp = 0;
-            return false;
-        } else if (!strcmp(s, s2)) {
-            *resultp = result;
-            return true;
-        }
+    for (size_t i = 0; i < rq->n_entries; i++) {
+        json_destroy(rq->entries[i].data);
     }
+    free(rq->entries);
 }
 
 static void
@@ -233,6 +143,54 @@ raft_append_request_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 static void
+raft_format_append_request(const struct raft_append_request *rq,
+                           struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+    ds_put_format(s, " prev_log_index=%"PRIu64, rq->prev_log_index);
+    ds_put_format(s, " prev_log_term=%"PRIu64, rq->prev_log_term);
+    ds_put_format(s, " leader_commit=%"PRIu64, rq->leader_commit);
+    ds_put_format(s, " n_entries=%u", rq->n_entries);
+}
+
+/* raft_append_reply. */
+
+const char *
+raft_append_result_to_string(enum raft_append_result result)
+{
+    switch (result) {
+    case RAFT_APPEND_OK:
+        return "OK";
+    case RAFT_APPEND_INCONSISTENCY:
+        return "inconsistency";
+    case RAFT_APPEND_IO_ERROR:
+        return "I/O error";
+    default:
+        return NULL;
+    }
+}
+
+bool
+raft_append_result_from_string(const char *s, enum raft_append_result *resultp)
+{
+    for (enum raft_append_result result = 0; ; result++) {
+        const char *s2 = raft_append_result_to_string(result);
+        if (!s2) {
+            *resultp = 0;
+            return false;
+        } else if (!strcmp(s, s2)) {
+            *resultp = result;
+            return true;
+        }
+    }
+}
+
+static void
+raft_append_reply_destroy(struct raft_append_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
 raft_append_reply_to_jsonrpc(const struct raft_append_reply *rpy,
                              struct json *args)
 {
@@ -262,6 +220,22 @@ raft_append_reply_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 static void
+raft_format_append_reply(const struct raft_append_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rpy->term);
+    ds_put_format(s, " log_end=%"PRIu64, rpy->log_end);
+    ds_put_format(s, " result=\"%s\"",
+                  raft_append_result_to_string(rpy->result));
+}
+
+/* raft_vote_request. */
+
+static void
+raft_vote_request_destroy(struct raft_vote_request *rq OVS_UNUSED)
+{
+}
+
+static void
 raft_vote_request_to_jsonrpc(const struct raft_vote_request *rq,
                              struct json *args)
 {
@@ -286,6 +260,21 @@ raft_vote_request_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 static void
+raft_format_vote_request(const struct raft_vote_request *rq, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+    ds_put_format(s, " last_log_index=%"PRIu64, rq->last_log_index);
+    ds_put_format(s, " last_log_term=%"PRIu64, rq->last_log_term);
+}
+
+/* raft_vote_reply. */
+
+static void
+raft_vote_reply_destroy(struct raft_vote_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
 raft_vote_reply_to_jsonrpc(const struct raft_vote_reply *rpy,
                            struct json *args)
 {
@@ -302,6 +291,50 @@ raft_vote_reply_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 static void
+raft_format_vote_reply(const struct raft_vote_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rpy->term);
+    ds_put_format(s, " vote="SID_FMT, SID_ARGS(&rpy->vote));
+}
+
+/* raft_add_server_request */
+
+static void
+raft_add_server_request_destroy(struct raft_add_server_request *rq)
+{
+    free(rq->address);
+}
+
+static void
+raft_add_server_request_to_jsonrpc(const struct raft_add_server_request *rq,
+                                   struct json *args)
+{
+    json_object_put_string(args, "address", rq->address);
+}
+
+static void
+raft_add_server_request_from_jsonrpc(struct ovsdb_parser *p,
+                                     struct raft_add_server_request *rq)
+{
+    rq->address = nullable_xstrdup(raft_parse_required_string(p, "address"));
+}
+
+static void
+raft_format_add_server_request(const struct raft_add_server_request *rq,
+                               struct ds *s)
+{
+    ds_put_format(s, " address=\"%s\"", rq->address);
+}
+
+/* raft_add_server_reply. */
+
+static void
+raft_add_server_reply_destroy(struct raft_add_server_reply *rpy)
+{
+    sset_destroy(&rpy->remotes);
+}
+
+static void
 raft_add_server_reply_to_jsonrpc(const struct raft_add_server_reply *rpy,
                                  struct json *args)
 {
@@ -309,13 +342,6 @@ raft_add_server_reply_to_jsonrpc(const struct raft_add_server_reply *rpy,
     if (!sset_is_empty(&rpy->remotes)) {
         json_object_put(args, "remotes", raft_remotes_to_json(&rpy->remotes));
     }
-}
-
-static void
-raft_remove_server_reply_to_jsonrpc(const struct raft_remove_server_reply *rpy,
-                                    struct json *args)
-{
-    json_object_put(args, "success", json_boolean_create(rpy->success));
 }
 
 static void
@@ -337,10 +363,62 @@ raft_add_server_reply_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 static void
+raft_format_add_server_reply(const struct raft_add_server_reply *rpy,
+                             struct ds *s)
+{
+    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
+    if (!sset_is_empty(&rpy->remotes)) {
+        ds_put_cstr(s, " remotes=[");
+
+        const char *remote;
+        int i = 0;
+        SSET_FOR_EACH (remote, &rpy->remotes) {
+            if (i++ > 0) {
+                ds_put_cstr(s, ", ");
+            }
+            ds_put_cstr(s, remote);
+        }
+        ds_put_char(s, ']');
+    }
+}
+
+/* raft_remove_server_reply. */
+
+static void
+raft_remove_server_reply_destroy(
+    struct raft_remove_server_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
+raft_remove_server_reply_to_jsonrpc(const struct raft_remove_server_reply *rpy,
+                                    struct json *args)
+{
+    json_object_put(args, "success", json_boolean_create(rpy->success));
+}
+
+static void
 raft_remove_server_reply_from_jsonrpc(struct ovsdb_parser *p,
                                       struct raft_remove_server_reply *rpy)
 {
     rpy->success = raft_parse_required_boolean(p, "success");
+}
+
+static void
+raft_format_remove_server_reply(const struct raft_remove_server_reply *rpy,
+                                struct ds *s)
+{
+    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
+}
+
+/* raft_install_snapshot_request. */
+
+static void
+raft_install_snapshot_request_destroy(
+    struct raft_install_snapshot_request *rq)
+{
+    json_destroy(rq->last_servers);
+    json_destroy(rq->data);
 }
 
 static void
@@ -372,6 +450,35 @@ raft_install_snapshot_request_from_jsonrpc(
 }
 
 static void
+raft_format_install_snapshot_request(
+    const struct raft_install_snapshot_request *rq, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+    ds_put_format(s, " last_index=%"PRIu64, rq->last_index);
+    ds_put_format(s, " last_term=%"PRIu64, rq->last_term);
+    ds_put_cstr(s, " last_servers=");
+
+    struct hmap servers;
+    struct ovsdb_error *error =
+        raft_servers_from_json(rq->last_servers, &servers);
+    if (!error) {
+        raft_servers_format(&servers, s);
+        raft_servers_destroy(&servers);
+    } else {
+        ds_put_cstr(s, "***error***");
+        ovsdb_error_destroy(error);
+    }
+}
+
+/* raft_install_snapshot_reply. */
+
+static void
+raft_install_snapshot_reply_destroy(
+    struct raft_install_snapshot_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
 raft_install_snapshot_reply_to_jsonrpc(
     const struct raft_install_snapshot_reply *rpy, struct json *args)
 {
@@ -391,6 +498,78 @@ raft_install_snapshot_reply_from_jsonrpc(
 }
 
 static void
+raft_format_install_snapshot_reply(
+    const struct raft_install_snapshot_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rpy->term);
+}
+
+/* raft_remove_server_request. */
+
+static void
+raft_remove_server_request_destroy(
+    struct raft_remove_server_request *rq OVS_UNUSED)
+{
+}
+
+static void
+raft_remove_server_request_to_jsonrpc(
+    const struct raft_remove_server_request *rq, struct json *args)
+{
+    json_object_put_format(args, "server_id", SID_FMT, SID_ARGS(&rq->sid));
+}
+
+static void
+raft_remove_server_request_from_jsonrpc(struct ovsdb_parser *p,
+                                        struct raft_remove_server_request *rq)
+{
+    rq->sid = raft_parse_required_uuid(p, "server_id");
+}
+
+static void
+raft_format_remove_server_request(const struct raft_remove_server_request *rq,
+                                  struct ds *s)
+{
+    ds_put_format(s, " server="SID_FMT, SID_ARGS(&rq->sid));
+}
+
+/* raft_become_leader. */
+
+static void
+raft_become_leader_destroy(struct raft_become_leader *rpc OVS_UNUSED)
+{
+}
+
+static void
+raft_become_leader_to_jsonrpc(const struct raft_become_leader *rpc,
+                              struct json *args)
+{
+    json_object_put_uint(args, "term", rpc->term);
+}
+
+static void
+raft_become_leader_from_jsonrpc(struct ovsdb_parser *p,
+                                struct raft_become_leader *rpc)
+{
+    rpc->term = raft_parse_uint(p, "term");
+}
+
+static void
+raft_format_become_leader(const struct raft_become_leader *rq, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+}
+
+/* raft_execute_command_request. */
+
+static void
+raft_execute_command_request_destroy(
+    struct raft_execute_command_request *rq)
+{
+    json_destroy(rq->data);
+}
+
+static void
 raft_execute_command_request_to_jsonrpc(
     const struct raft_execute_command_request *rq, struct json *args)
 {
@@ -407,6 +586,24 @@ raft_execute_command_request_from_jsonrpc(
                                                        OP_OBJECT | OP_ARRAY));
     rq->prereq = raft_parse_required_uuid(p, "prereq");
     rq->result = raft_parse_required_uuid(p, "result");
+}
+
+static void
+raft_format_execute_command_request(
+    const struct raft_execute_command_request *rq, struct ds *s)
+{
+    ds_put_format(s, " prereq="UUID_FMT, UUID_ARGS(&rq->prereq));
+    ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rq->result));
+    ds_put_format(s, " data=");
+    json_to_ds(rq->data, JSSF_SORT, s);
+}
+
+/* raft_execute_command_reply. */
+
+static void
+raft_execute_command_reply_destroy(
+    struct raft_execute_command_reply *rpy OVS_UNUSED)
+{
 }
 
 static void
@@ -431,186 +628,31 @@ raft_execute_command_reply_from_jsonrpc(
 }
 
 static void
-raft_add_server_request_to_jsonrpc(const struct raft_add_server_request *rq,
-                                   struct json *args)
-{
-    json_object_put_string(args, "address", rq->address);
-}
-
-static void
-raft_remove_server_request_to_jsonrpc(
-    const struct raft_remove_server_request *rq, struct json *args)
-{
-    json_object_put_format(args, "server_id", SID_FMT, SID_ARGS(&rq->sid));
-}
-
-static void
-raft_become_leader_to_jsonrpc(const struct raft_become_leader *rpc,
-                              struct json *args)
-{
-    json_object_put_uint(args, "term", rpc->term);
-}
-
-static void
-raft_add_server_request_from_jsonrpc(struct ovsdb_parser *p,
-                                     struct raft_add_server_request *rq)
-{
-    rq->address = nullable_xstrdup(raft_parse_required_string(p, "address"));
-}
-
-static void
-raft_remove_server_request_from_jsonrpc(struct ovsdb_parser *p,
-                                        struct raft_remove_server_request *rq)
-{
-    rq->sid = raft_parse_required_uuid(p, "server_id");
-}
-
-static void
-raft_become_leader_from_jsonrpc(struct ovsdb_parser *p,
-                                struct raft_become_leader *rpc)
-{
-    rpc->term = raft_parse_uint(p, "term");
-}
-
-
-#define RAFT_RPC(ENUM, NAME) \
-    static void raft_format_##NAME(const struct raft_##NAME *, struct ds *);
-RAFT_RPC_TYPES
-#undef RAFT_RPC
-
-static void
-raft_format_hello_request(const struct raft_hello_request *hello OVS_UNUSED,
-                          struct ds *s OVS_UNUSED)
-{
-}
-
-static void
-raft_format_append_request(const struct raft_append_request *rq,
-                           struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rq->term);
-    ds_put_format(s, " prev_log_index=%"PRIu64, rq->prev_log_index);
-    ds_put_format(s, " prev_log_term=%"PRIu64, rq->prev_log_term);
-    ds_put_format(s, " leader_commit=%"PRIu64, rq->leader_commit);
-    ds_put_format(s, " n_entries=%u", rq->n_entries);
-}
-
-static void
-raft_format_append_reply(const struct raft_append_reply *rpy, struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rpy->term);
-    ds_put_format(s, " log_end=%"PRIu64, rpy->log_end);
-    ds_put_format(s, " result=\"%s\"",
-                  raft_append_result_to_string(rpy->result));
-}
-
-static void
-raft_format_vote_request(const struct raft_vote_request *rq, struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rq->term);
-    ds_put_format(s, " last_log_index=%"PRIu64, rq->last_log_index);
-    ds_put_format(s, " last_log_term=%"PRIu64, rq->last_log_term);
-}
-
-static void
-raft_format_vote_reply(const struct raft_vote_reply *rpy, struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rpy->term);
-    ds_put_format(s, " vote="SID_FMT, SID_ARGS(&rpy->vote));
-}
-
-static void
-raft_format_add_server_request(const struct raft_add_server_request *rq,
-                               struct ds *s)
-{
-    ds_put_format(s, " address=\"%s\"", rq->address);
-}
-
-static void
-raft_format_add_server_reply(const struct raft_add_server_reply *rpy,
-                             struct ds *s)
-{
-    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
-    if (!sset_is_empty(&rpy->remotes)) {
-        ds_put_cstr(s, " remotes=[");
-
-        const char *remote;
-        int i = 0;
-        SSET_FOR_EACH (remote, &rpy->remotes) {
-            if (i++ > 0) {
-                ds_put_cstr(s, ", ");
-            }
-            ds_put_cstr(s, remote);
-        }
-        ds_put_char(s, ']');
-    }
-}
-
-static void
-raft_format_remove_server_request(const struct raft_remove_server_request *rq,
-                                  struct ds *s)
-{
-    ds_put_format(s, " server="SID_FMT, SID_ARGS(&rq->sid));
-}
-
-static void
-raft_format_remove_server_reply(const struct raft_remove_server_reply *rpy,
-                                struct ds *s)
-{
-    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
-}
-
-static void
-raft_format_install_snapshot_request(
-    const struct raft_install_snapshot_request *rq, struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rq->term);
-    ds_put_format(s, " last_index=%"PRIu64, rq->last_index);
-    ds_put_format(s, " last_term=%"PRIu64, rq->last_term);
-    ds_put_cstr(s, " last_servers=");
-
-    struct hmap servers;
-    struct ovsdb_error *error =
-        raft_servers_from_json(rq->last_servers, &servers);
-    if (!error) {
-        raft_servers_format(&servers, s);
-        raft_servers_destroy(&servers);
-    } else {
-        ds_put_cstr(s, "***error***");
-        ovsdb_error_destroy(error);
-    }
-}
-
-static void
-raft_format_install_snapshot_reply(
-    const struct raft_install_snapshot_reply *rpy, struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rpy->term);
-}
-
-static void
-raft_format_become_leader(const struct raft_become_leader *rq, struct ds *s)
-{
-    ds_put_format(s, " term=%"PRIu64, rq->term);
-}
-
-static void
-raft_format_execute_command_request(
-    const struct raft_execute_command_request *rq, struct ds *s)
-{
-    ds_put_format(s, " prereq="UUID_FMT, UUID_ARGS(&rq->prereq));
-    ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rq->result));
-    ds_put_format(s, " data=");
-    json_to_ds(rq->data, JSSF_SORT, s);
-}
-
-static void
 raft_format_execute_command_reply(
     const struct raft_execute_command_reply *rpy, struct ds *s)
 {
     ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rpy->result));
     ds_put_format(s, " status=\"%s\"",
                   raft_command_status_to_string(rpy->status));
+}
+
+void
+raft_rpc_destroy(union raft_rpc *rpc)
+{
+    if (!rpc) {
+        return;
+    }
+
+    free(rpc->common.comment);
+
+    switch (rpc->common.type) {
+#define RAFT_RPC(ENUM, NAME)                    \
+        case ENUM:                              \
+            raft_##NAME##_destroy(&rpc->NAME);  \
+            break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
+    }
 }
 
 struct jsonrpc_msg *
@@ -717,25 +759,6 @@ raft_rpc_from_jsonrpc(struct uuid *cidp,
         raft_rpc_destroy(rpc);
     }
     return error;
-}
-
-void
-raft_rpc_destroy(union raft_rpc *rpc)
-{
-    if (!rpc) {
-        return;
-    }
-
-    free(rpc->common.comment);
-
-    switch (rpc->common.type) {
-#define RAFT_RPC(ENUM, NAME)                    \
-        case ENUM:                              \
-            raft_##NAME##_destroy(&rpc->NAME);  \
-            break;
-    RAFT_RPC_TYPES
-#undef RAFT_RPC
-    }
 }
 
 void
