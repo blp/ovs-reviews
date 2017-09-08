@@ -26,6 +26,8 @@
 #include "raft-private.h"
 #include "sset.h"
 
+struct ds;
+
 #define RAFT_RPC_TYPES                                                  \
     /* Hello RPC. */                                                    \
     RAFT_RPC(RAFT_RPC_HELLO_REQUEST, hello_request)                     \
@@ -253,6 +255,7 @@ union raft_rpc {
 };
 
 void raft_rpc_destroy(union raft_rpc *);
+void raft_rpc_format(const union raft_rpc *, struct ds *);
 struct jsonrpc_msg *raft_rpc_to_jsonrpc(const struct uuid *cid,
                                         const struct uuid *sid,
                                         const union raft_rpc *);

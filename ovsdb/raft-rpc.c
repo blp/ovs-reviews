@@ -22,6 +22,7 @@
 #include "compiler.h"
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
+#include "openvswitch/dynamic-string.h"
 #include "openvswitch/json.h"
 #include "openvswitch/vlog.h"
 #include "sset.h"
@@ -472,6 +473,146 @@ raft_become_leader_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 
+#define RAFT_RPC(ENUM, NAME) \
+    static void raft_format_##NAME(const struct raft_##NAME *, struct ds *);
+RAFT_RPC_TYPES
+#undef RAFT_RPC
+
+static void
+raft_format_hello_request(const struct raft_hello_request *hello OVS_UNUSED,
+                          struct ds *s OVS_UNUSED)
+{
+}
+
+static void
+raft_format_append_request(const struct raft_append_request *rq,
+                           struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+    ds_put_format(s, " prev_log_index=%"PRIu64, rq->prev_log_index);
+    ds_put_format(s, " prev_log_term=%"PRIu64, rq->prev_log_term);
+    ds_put_format(s, " leader_commit=%"PRIu64, rq->leader_commit);
+    ds_put_format(s, " n_entries=%u", rq->n_entries);
+}
+
+static void
+raft_format_append_reply(const struct raft_append_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rpy->term);
+    ds_put_format(s, " log_end=%"PRIu64, rpy->log_end);
+    ds_put_format(s, " result=\"%s\"",
+                  raft_append_result_to_string(rpy->result));
+}
+
+static void
+raft_format_vote_request(const struct raft_vote_request *rq, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+    ds_put_format(s, " last_log_index=%"PRIu64, rq->last_log_index);
+    ds_put_format(s, " last_log_term=%"PRIu64, rq->last_log_term);
+}
+
+static void
+raft_format_vote_reply(const struct raft_vote_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rpy->term);
+    ds_put_format(s, " vote="SID_FMT, SID_ARGS(&rpy->vote));
+}
+
+static void
+raft_format_add_server_request(const struct raft_add_server_request *rq,
+                               struct ds *s)
+{
+    ds_put_format(s, " address=\"%s\"", rq->address);
+}
+
+static void
+raft_format_add_server_reply(const struct raft_add_server_reply *rpy,
+                             struct ds *s)
+{
+    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
+    if (!sset_is_empty(&rpy->remotes)) {
+        ds_put_cstr(s, " remotes=[");
+
+        const char *remote;
+        int i = 0;
+        SSET_FOR_EACH (remote, &rpy->remotes) {
+            if (i++ > 0) {
+                ds_put_cstr(s, ", ");
+            }
+            ds_put_cstr(s, remote);
+        }
+        ds_put_char(s, ']');
+    }
+}
+
+static void
+raft_format_remove_server_request(const struct raft_remove_server_request *rq,
+                                  struct ds *s)
+{
+    ds_put_format(s, " server="SID_FMT, SID_ARGS(&rq->sid));
+}
+
+static void
+raft_format_remove_server_reply(const struct raft_remove_server_reply *rpy,
+                                struct ds *s)
+{
+    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
+}
+
+static void
+raft_format_install_snapshot_request(
+    const struct raft_install_snapshot_request *rq, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+    ds_put_format(s, " last_index=%"PRIu64, rq->last_index);
+    ds_put_format(s, " last_term=%"PRIu64, rq->last_term);
+    ds_put_cstr(s, " last_servers=");
+
+    struct hmap servers;
+    struct ovsdb_error *error =
+        raft_servers_from_json(rq->last_servers, &servers);
+    if (!error) {
+        raft_servers_format(&servers, s);
+        raft_servers_destroy(&servers);
+    } else {
+        ds_put_cstr(s, "***error***");
+        ovsdb_error_destroy(error);
+    }
+}
+
+static void
+raft_format_install_snapshot_reply(
+    const struct raft_install_snapshot_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rpy->term);
+}
+
+static void
+raft_format_become_leader(const struct raft_become_leader *rq, struct ds *s)
+{
+    ds_put_format(s, " term=%"PRIu64, rq->term);
+}
+
+static void
+raft_format_execute_command_request(
+    const struct raft_execute_command_request *rq, struct ds *s)
+{
+    ds_put_format(s, " prereq="UUID_FMT, UUID_ARGS(&rq->prereq));
+    ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rq->result));
+    ds_put_format(s, " data=");
+    json_to_ds(rq->data, JSSF_SORT, s);
+}
+
+static void
+raft_format_execute_command_reply(
+    const struct raft_execute_command_reply *rpy, struct ds *s)
+{
+    ds_put_format(s, " result="UUID_FMT, UUID_ARGS(&rpy->result));
+    ds_put_format(s, " status=\"%s\"",
+                  raft_command_status_to_string(rpy->status));
+}
+
 struct jsonrpc_msg *
 raft_rpc_to_jsonrpc(const struct uuid *cid,
                     const struct uuid *sid,
@@ -594,5 +735,27 @@ raft_rpc_destroy(union raft_rpc *rpc)
             break;
     RAFT_RPC_TYPES
 #undef RAFT_RPC
+    }
+}
+
+void
+raft_rpc_format(const union raft_rpc *rpc, struct ds *s)
+{
+    ds_put_format(s, SID_FMT" %s", SID_ARGS(&rpc->common.sid),
+                  raft_rpc_type_to_string(rpc->common.type));
+    if (rpc->common.comment) {
+        ds_put_format(s, " \"%s\"", rpc->common.comment);
+    }
+    ds_put_char(s, ':');
+
+    switch (rpc->common.type) {
+#define RAFT_RPC(ENUM, NAME)                    \
+    case ENUM:                                  \
+        raft_format_##NAME(&rpc->NAME, s);      \
+        break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
+    default:
+        OVS_NOT_REACHED();
     }
 }

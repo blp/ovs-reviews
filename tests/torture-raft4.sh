@@ -15,7 +15,7 @@ for i in `seq 0 9`; do
      done)&
 done
 sleep 5
-kill `cat s3.pid` || true
+kill `cat s1.pid` || true
 wait
 ovn-sbctl --bare get SB_Global . external-ids | sed 's/, /\n/g; s/[{}"]//g;' > output
 if diff -u expected output; then

@@ -12,7 +12,7 @@ ovsdb/ovsdb-tool join-cluster s3.db $schema_name unix:s3.raft unix:s1.raft
 ovsdb/ovsdb-tool join-cluster s4.db $schema_name unix:s4.raft unix:s1.raft
 
 wrapper () {
-    : echo "valgrind --log-file=s$1.valgrind"
+    echo "valgrind --log-file=s$1.valgrind"
 }
 
 OPTIONS=-vfile
