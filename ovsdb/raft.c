@@ -255,12 +255,6 @@ struct raft {
     /* Candidates only.  Reinitialized at start of election. */
     int n_votes;                /* Number of votes for me. */
 
-    /* Parameters for deciding when to take next snapshot. */
-#define SNAPSHOT_TIME_BASE_MSEC (10 * 60 * 1000)  /* 10 minutes. */
-#define SNAPSHOT_TIME_RANGE_MSEC (10 * 60 * 1000) /* 10 minutes. */
-    long long int next_snapshot; /* Minimum time for next snapshot, in ms. */
-    off_t snapshot_size;         /* Size of previous snapshot, in bytes. */
-
     /* Model Checker connection (for main thread only) 
      * Other threads must create their own connections using mc_addr */
     struct jsonrpc *mc_conn;
@@ -406,19 +400,6 @@ raft_make_address_passive(const char *address_)
     }
 }
 
-static void
-raft_schedule_snapshot(struct raft *raft, bool quick)
-{
-    unsigned int base = SNAPSHOT_TIME_BASE_MSEC;
-    unsigned int range = SNAPSHOT_TIME_RANGE_MSEC;
-    if (quick) {
-        base /= 10;
-        range /= 10;
-    }
-
-    raft->next_snapshot = time_msec() + base + random_range(range);
-}
-
 static struct raft *
 raft_alloc(void)
 {
@@ -442,24 +423,8 @@ raft_alloc(void)
     
     raft->ping_timeout = time_msec() + PING_TIME_MSEC;
     raft_reset_timer(raft);
-    raft_schedule_snapshot(raft, false);
     
     return raft;
-}
-
-static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_write_header(struct ovsdb_log *log,
-                  const struct uuid *cid, const struct uuid *sid,
-		  struct jsonrpc *mc_conn)
-{
-    struct json *header = json_object_create();
-    json_object_put_format(header, "cluster_id", UUID_FMT, UUID_ARGS(cid));
-    json_object_put_format(header, "server_id", UUID_FMT, UUID_ARGS(sid));
-    struct ovsdb_error *error = mc_wrap_ovsdb_log_write(log, header,
-							mc_conn, MC_MAIN_TID,
-							OVS_SOURCE_LOCATOR);
-    json_destroy(header);
-    return error;
 }
 
 /* Creates an on-disk file thar represents a new Raft cluster and initializes
@@ -927,6 +892,8 @@ raft_read_header(struct raft *raft)
         /* Report error or end-of-file. */
         return error;
     }
+    ovsdb_log_mark_base(raft->log);
+
     struct ovsdb_parser p;
     ovsdb_parser_init(&p, header, "raft header");
 
@@ -977,7 +944,6 @@ raft_read_header(struct raft *raft)
             raft->commit_index = raft->log_start - 1;
             raft->last_applied = raft->log_start - 2;
             raft->snap.data = json_clone(snapshot);
-            raft->snapshot_size = ovsdb_log_get_offset(raft->log);
         }
     }
 
@@ -1484,16 +1450,6 @@ raft_run_session(struct raft *raft,
         log_rpc(raft, &rpc, "<--");
         raft_handle_rpc(raft, &rpc);
         raft_rpc_destroy(&rpc);
-    }
-
-    if (ovsdb_log_get_offset(raft->log) == 0
-        && !uuid_is_zero(&raft->cid)) {
-        struct ovsdb_error *error = raft_write_header(raft->log, &raft->cid,
-						      &raft->sid,
-						      raft->mc_conn);
-        if (error) {
-            /* XXX */
-        }
     }
 }
 
@@ -3583,7 +3539,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *log,
     if (error) {
         return error;
     }
-    raft->snapshot_size = ovsdb_log_get_offset(log);
+    ovsdb_log_mark_base(raft->log);
 
     /* Write log records. */
     for (uint64_t index = new_log_start; index < raft->log_end; index++) {
@@ -3741,45 +3697,38 @@ raft_handle_install_snapshot_reply(
 }
 
 bool
-raft_should_snapshot(const struct raft *raft)
+raft_has_grown(const struct raft *raft)
 {
-    if (raft->joining) {
-        return false;
-    }
-
-    /* If it has been at least SNAPSHOT_TIME_BASE_MSEC (plus up to
-     * SNAPSHOT_TIME_RANGE_MSEC) ms since the last time we took a snapshot, and
-     * if there are at least 100 log entries, and if the log is at least 10 MB,
-     * and the log is at least 4x the size of the previous snapshot, then we
-     * should take a snapshot. */
-    off_t log_size = ovsdb_log_get_offset(raft->log);
-    return (time_msec() >= raft->next_snapshot
+    return (!raft->joining
+            && !raft->leaving
+            && !raft->left
             && raft->last_applied - raft->log_start >= 100
-            && log_size >= 10 * 1024 * 1024
-            && log_size / 4 >= raft->snapshot_size);
+            && ovsdb_log_has_grown(raft->log));
 }
 
-static bool
-raft_try_store_snapshot(struct raft *raft, const struct json *new_snapshot)
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_store_snapshot(struct raft *raft, const struct json *new_snapshot)
 {
     if (raft->joining) {
-        VLOG_WARN("cannot store a snapshot while joining");
-        return false;
+        return ovsdb_error(NULL,
+                           "cannot store a snapshot while joining cluster");
+    } else if (raft->leaving) {
+        return ovsdb_error(NULL,
+                           "cannot store a snapshot while leaving cluster");
+    } else if (raft->left) {
+        return ovsdb_error(NULL,
+                           "cannot store a snapshot after leaving cluster");
     }
 
     if (raft->last_applied < raft->log_start) {
-        VLOG_WARN("not storing a duplicate snapshot");
-        return false;
+        return ovsdb_error(NULL, "not storing a duplicate snapshot");
     }
 
     uint64_t new_log_start = raft->last_applied + 1;
     struct ovsdb_error *error = raft_save_snapshot(raft, new_log_start,
                                                    new_snapshot);
     if (error) {
-        char *error_s = ovsdb_error_to_string_free(error);
-        VLOG_WARN("saving snapshot failed (%s)", error_s);
-        free(error_s);
-        return false;
+        return error;
     }
 
     raft->snap.term = raft_get_term(raft, new_log_start - 1);
@@ -3792,14 +3741,7 @@ raft_try_store_snapshot(struct raft *raft, const struct json *new_snapshot)
     memmove(&raft->entries[0], &raft->entries[new_log_start - raft->log_start],
             (raft->log_end - new_log_start) * sizeof *raft->entries);
     raft->log_start = new_log_start;
-    return true;
-}
-
-void
-raft_store_snapshot(struct raft *raft, const struct json *data)
-{
-    bool ok = raft_try_store_snapshot(raft, data);
-    raft_schedule_snapshot(raft, !ok);
+    return NULL;
 }
 
 static void

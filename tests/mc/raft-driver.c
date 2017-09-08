@@ -311,8 +311,13 @@ test_raft_store_snapshot(struct unixctl_conn *conn,
         struct raft *raft = raft_;
 	mc_wrap_noexecute_server_transact(raft_get_mc_conn(raft), 0,
 					  OVS_SOURCE_LOCATOR);
-        raft_store_snapshot(raft, data);
-        unixctl_command_reply(conn, NULL);
+        char *s = ovsdb_error_to_string_free(raft_store_snapshot(raft, data));
+        if (s) {
+            unixctl_command_reply_error(conn, s);
+            free(s);
+        } else {
+            unixctl_command_reply(conn, NULL);
+        }
     }
     json_destroy(data);
 }

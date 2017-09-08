@@ -18,7 +18,6 @@
 
 #include <stdbool.h>
 #include "compiler.h"
-#include "log.h"
 
 struct ovsdb;
 struct ovsdb_txn;

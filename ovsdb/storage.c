@@ -24,23 +24,35 @@
 #include "poll-loop.h"
 #include "ovsdb.h"
 #include "raft.h"
+#include "random.h"
+#include "timeval.h"
 #include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(storage);
 
-/* There are three kinds of storage:
- *
- *    - Standalone, backed by a disk file.  'log' is nonnull, 'raft' is null.
- *
- *    - Clustered, backed by a Raft cluster.  'log' is null, 'raft' is nonnull.
- *
- *    - Memory only, unbacked.  'log' and 'raft' are null. */
 struct ovsdb_storage {
+    /* There are three kinds of storage:
+     *
+     *    - Standalone, backed by a disk file.  'log' is nonnull, 'raft' is
+     *      null.
+     *
+     *    - Clustered, backed by a Raft cluster.  'log' is null, 'raft' is
+     *      nonnull.
+     *
+     *    - Memory only, unbacked.  'log' and 'raft' are null. */
     struct ovsdb_log *log;
     struct raft *raft;
-    struct ovsdb_error *error;
+
+    /* All kinds of storage. */
+    struct ovsdb_error *error;  /* If nonnull, a permanent error. */
+    long long next_snapshot;    /* Time at which to take next snapshot. */
+
+    /* Standalone only. */
     unsigned int n_read;
+    unsigned int n_written;
 };
+
+static long long int next_snapshot_time(bool quick);
 
 /* Opens 'filename' for use as storage.  If 'rw', opens it for read/write access,
  * otherwise read-only.  If successful, stores the new storage in '*storagep'
@@ -74,6 +86,7 @@ ovsdb_storage_open(const char *filename, bool rw,
     struct ovsdb_storage *storage = xzalloc(sizeof *storage);
     storage->log = log;
     storage->raft = raft;
+    storage->next_snapshot = next_snapshot_time(false);
     *storagep = storage;
     return NULL;
 }
@@ -83,7 +96,9 @@ ovsdb_storage_open(const char *filename, bool rw,
 struct ovsdb_storage *
 ovsdb_storage_create_unbacked(void)
 {
-    return xzalloc(sizeof(struct ovsdb_storage));
+    struct ovsdb_storage *storage = xzalloc(sizeof *storage);
+    storage->next_snapshot = LLONG_MAX;
+    return storage;
 }
 
 void
@@ -165,6 +180,7 @@ ovsdb_storage_wait(struct ovsdb_storage *storage)
     if (storage->raft) {
         raft_wait(storage->raft);
     }
+    poll_timer_wait_until(storage->next_snapshot);
 }
 
 /* Returns 'storage''s embedded name, if it has one, otherwise null.
@@ -221,10 +237,11 @@ ovsdb_storage_read(struct ovsdb_storage *storage,
             return error;
         }
 
-        if (!storage->n_read++) {
-            schema_json = json;
-        } else {
-            txn_json = json;
+        unsigned int n = storage->n_read++;
+        struct json **jsonp = !n ? &schema_json : &txn_json;
+        *jsonp = json;
+        if (n == 1) {
+            ovsdb_log_mark_base(storage->log);
         }
     } else {
         /* Unbacked.  Nothing to do. */
@@ -314,8 +331,11 @@ ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
                                           prereq, &result);
     } else if (storage->log) {
         w->error = ovsdb_log_write(storage->log, data->u.array.elems[1]);
-        if (!w->error && durable) {
-            w->error = ovsdb_log_commit(storage->log);
+        if (!w->error) {
+            storage->n_written++;
+            if (durable) {
+                w->error = ovsdb_log_commit(storage->log);
+            }
         }
     } else {
         /* When 'error' and 'command' are both null, it indicates that the
@@ -396,19 +416,66 @@ ovsdb_write_destroy(struct ovsdb_write *w)
     }
 }
 
-off_t
-ovsdb_storage_get_offset(const struct ovsdb_storage *storage)
+static long long int
+next_snapshot_time(bool quick)
 {
-    if (storage->raft) {
-        /* XXX */
-        return 1000000;
-    } else if (storage->log) {
-        return ovsdb_log_get_offset(storage->log);
-    } else {
-        /* XXX */
-        return 1000000;
+    unsigned int base = 10 * 60 * 1000;  /* 10 minutes */
+    unsigned int range = 10 * 60 * 1000; /* 10 minutes */
+    if (quick) {
+        base /= 10;
+        range /= 10;
     }
+
+    return time_msec() + base + random_range(range);
 }
 
-struct ovsdb_error *ovsdb_storage_replace(struct ovsdb_storage *,
-                                          const struct json **, size_t n);
+bool
+ovsdb_storage_should_snapshot(const struct ovsdb_storage *storage)
+{
+    if (time_msec() < storage->next_snapshot) {
+        return false;
+    }
+
+    if (storage->raft) {
+        return raft_has_grown(storage->raft);
+    } else if (storage->log) {
+        return (storage->n_read + storage->n_written >= 100
+                && ovsdb_log_has_grown(storage->log));
+    }
+
+    return false;
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
+                             const struct json *schema,
+                             const struct json *snapshot)
+{
+    struct ovsdb_error *error;
+    if (storage->raft) {
+        struct json *entries = json_array_create_empty();
+        if (schema) {
+            json_array_add(entries, json_clone(schema));
+        }
+        if (snapshot) {
+            json_array_add(entries, json_clone(snapshot));
+        }
+        error = raft_store_snapshot(storage->raft, entries);
+        json_destroy(entries);
+    } else if (storage->log) {
+        struct json *entries[2];
+        size_t n = 0;
+        if (schema) {
+            entries[n++] = CONST_CAST(struct json *, schema);
+        }
+        if (snapshot) {
+            entries[n++] = CONST_CAST(struct json *, snapshot);
+        }
+        error = ovsdb_log_replace(storage->log, entries, n);
+    } else {
+        return NULL;
+    }
+
+    storage->next_snapshot = next_snapshot_time(error != NULL);
+    return error;
+}

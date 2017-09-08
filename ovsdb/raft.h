@@ -136,8 +136,10 @@ void raft_command_unref(struct raft_command *);
 void raft_command_wait(const struct raft_command *);
 
 /* Replacing the local log by a snapshot. */
-bool raft_should_snapshot(const struct raft *);
-void raft_store_snapshot(struct raft *, const struct json *data);
+bool raft_has_grown(const struct raft *);
+struct ovsdb_error *raft_store_snapshot(struct raft *,
+                                        const struct json *new_snapshot)
+    OVS_WARN_UNUSED_RESULT;
 
 /* Cluster management. */
 void raft_take_leadership(struct raft *);
