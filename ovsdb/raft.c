@@ -183,7 +183,7 @@ struct raft {
      * The log continues to grow:                  log_start=N, log_end=N+1...
      *
      * Must be updated on stable storage before responding to RPCs. */
-    struct raft_entry *log;     /* Log entry i is in log[i - log_start]. */
+    struct raft_entry *entries; /* Log entry i is in log[i - log_start]. */
     uint64_t log_start;         /* Index of first entry in log. */
     uint64_t log_end;           /* Index of last entry in log, plus 1. */
     size_t allocated_log;       /* Allocated entries in 'log'. */
@@ -668,8 +668,8 @@ static struct json *
 raft_entry_to_json_with_index(const struct raft *raft, uint64_t index)
 {
     ovs_assert(index >= raft->log_start && index < raft->log_end);
-    struct json *json = raft_entry_to_json(&raft->log[index
-                                                      - raft->log_start]);
+    struct json *json = raft_entry_to_json(&raft->entries[index
+                                                          - raft->log_start]);
     json_object_put_uint(json, "index", index);
     return json;
 }
@@ -679,7 +679,7 @@ raft_get_entry(const struct raft *raft, uint64_t index)
 {
     ovs_assert(index >= raft->log_start);
     ovs_assert(index < raft->log_end);
-    return &raft->log[index - raft->log_start];
+    return &raft->entries[index - raft->log_start];
 }
 
 static uint64_t
@@ -759,11 +759,12 @@ raft_add_entry(struct raft *raft,
                struct json *servers)
 {
     if (raft->log_end - raft->log_start >= raft->allocated_log) {
-        raft->log = x2nrealloc(raft->log, &raft->allocated_log,
-                               sizeof *raft->log);
+        raft->entries = x2nrealloc(raft->entries, &raft->allocated_log,
+                                   sizeof *raft->entries);
     }
 
-    struct raft_entry *entry = &raft->log[raft->log_end++ - raft->log_start];
+    struct raft_entry *entry
+        = &raft->entries[raft->log_end++ - raft->log_start];
     entry->term = term;
     entry->data = data;
     entry->eid = eid ? *eid : UUID_ZERO;
@@ -788,7 +789,7 @@ raft_write_entry(struct raft *raft, uint64_t term, struct json *data,
 
     if (error) {
         /* XXX? */
-        raft_entry_destroy(&raft->log[--raft->log_end]);
+        raft_entry_destroy(&raft->entries[--raft->log_end]);
     }
 
     return error;
@@ -875,7 +876,8 @@ raft_parse_log_record__(struct raft *raft, struct ovsdb_parser *p)
      * the term or marking a vote.  Therefore, the term must not precede the
      * term of the previous log entry. */
     uint64_t prev_term = (raft->log_end > raft->log_start
-                          ? raft->log[raft->log_end - raft->log_start - 1].term
+                          ? raft->entries[raft->log_end
+                                          - raft->log_start - 1].term
                           : raft->snap.term);
     if (term < prev_term) {
         ovsdb_parser_raise_error(p, "log entry index %"PRIu64" term "
@@ -1348,10 +1350,10 @@ raft_close(struct raft *raft)
     raft_servers_destroy(&raft->servers);
 
     for (uint64_t index = raft->log_start; index < raft->log_end; index++) {
-        struct raft_entry *e = &raft->log[index - raft->log_start];
+        struct raft_entry *e = &raft->entries[index - raft->log_start];
         raft_entry_destroy(e);
     }
-    free(raft->log);
+    free(raft->entries);
 
     raft_entry_destroy(&raft->snap);
 
@@ -1672,7 +1674,7 @@ raft_start_election(struct raft *raft, bool leadership_transfer)
                 .last_log_index = raft->log_end - 1,
                 .last_log_term = (
                     raft->log_end > raft->log_start
-                    ? raft->log[raft->log_end - raft->log_start - 1].term
+                    ? raft->entries[raft->log_end - raft->log_start - 1].term
                     : raft->snap.term),
                 .leadership_transfer = leadership_transfer,
             },
@@ -1913,7 +1915,7 @@ raft_current_eid(const struct raft *raft)
 {
     for (uint64_t index = raft->log_end - 1; index >= raft->log_start;
          index--) {
-        struct raft_entry *e = &raft->log[index - raft->log_start];
+        struct raft_entry *e = &raft->entries[index - raft->log_start];
         if (e->data) {
             return &e->eid;
         }
@@ -2329,11 +2331,11 @@ raft_send_append_request(struct raft *raft,
             .term = raft->current_term,
             .prev_log_index = peer->next_index - 1,
             .prev_log_term = (peer->next_index - 1 >= raft->log_start
-                              ? raft->log[peer->next_index - 1
-                                          - raft->log_start].term
+                              ? raft->entries[peer->next_index - 1
+                                              - raft->log_start].term
                               : raft->snap.term),
             .leader_commit = raft->commit_index,
-            .entries = &raft->log[peer->next_index - raft->log_start],
+            .entries = &raft->entries[peer->next_index - raft->log_start],
             .n_entries = n,
         },
     };
@@ -2436,7 +2438,7 @@ raft_get_servers_from_log(struct raft *raft)
     const struct json *servers_json = raft->snap.servers;
     for (uint64_t index = raft->log_end - 1; index >= raft->log_start;
          index--) {
-        struct raft_entry *e = &raft->log[index - raft->log_start];
+        struct raft_entry *e = &raft->entries[index - raft->log_start];
         if (e->servers) {
             servers_json = e->servers;
             break;
@@ -2463,8 +2465,8 @@ raft_truncate(struct raft *raft, uint64_t new_end)
 
     bool servers_changed = false;
     while (raft->log_end > new_end) {
-        struct raft_entry *entry = &raft->log[--raft->log_end
-                                              - raft->log_start];
+        struct raft_entry *entry = &raft->entries[--raft->log_end
+                                                  - raft->log_start];
         if (entry->servers) {
             servers_changed = true;
         }
@@ -2580,7 +2582,7 @@ match_index_and_term(const struct raft *raft,
             return "prev_term mismatch";
         }
     } else if (prev_log_index < raft->log_end) {
-        if (raft->log[prev_log_index - raft->log_start].term
+        if (raft->entries[prev_log_index - raft->log_start].term
             != prev_log_term) {
             return "term mismatch";
         }
@@ -2635,7 +2637,8 @@ raft_handle_append_entries(struct raft *raft,
         if (log_index >= raft->log_end) {
             break;
         }
-        if (raft->log[log_index - raft->log_start].term != entries[i].term) {
+        if (raft->entries[log_index - raft->log_start].term
+            != entries[i].term) {
             if (raft_truncate(raft, log_index)) {
                 servers_changed = true;
             }
@@ -2833,7 +2836,7 @@ raft_handle_append_request__(struct raft *raft,
 
     /*
      * We now know that the data in rq->entries[] overlaps the data in
-     * raft->log[], as shown below, with some positive 'ofs':
+     * raft->entries[], as shown below, with some positive 'ofs':
      *
      *     rq->prev_log_index
      *       | first_entry_index
@@ -2940,7 +2943,7 @@ raft_consider_updating_commit_index(struct raft *raft)
     ovs_assert(raft->role == RAFT_LEADER);
     for (uint64_t n = MAX(raft->commit_index + 1, raft->log_start);
          n < raft->log_end; n++) {
-        if (raft->log[n - raft->log_start].term == raft->current_term) {
+        if (raft->entries[n - raft->log_start].term == raft->current_term) {
             size_t count = 0;
             struct raft_server *s2;
             HMAP_FOR_EACH (s2, hmap_node, &raft->servers) {
@@ -3158,7 +3161,8 @@ raft_handle_vote_request__(struct raft *raft,
      * up-to-date.  If the logs end with the same term, then whichever log is
      * longer is more up-to-date." */
     uint64_t last_term = (raft->log_end > raft->log_start
-                          ? raft->log[raft->log_end - 1 - raft->log_start].term
+                          ? raft->entries[raft->log_end - 1
+                                          - raft->log_start].term
                           : raft->snap.term);
     if (last_term > rq->last_log_term
         || (last_term == rq->last_log_term
@@ -3234,7 +3238,7 @@ raft_has_uncommitted_configuration(const struct raft *raft)
 {
     for (uint64_t i = raft->commit_index + 1; i < raft->log_end; i++) {
         ovs_assert(i >= raft->log_start);
-        const struct raft_entry *e = &raft->log[i - raft->log_start];
+        const struct raft_entry *e = &raft->entries[i - raft->log_start];
         if (e->servers) {
             return true;
         }
@@ -3651,8 +3655,9 @@ raft_handle_install_snapshot_request__(
          * first 'new_log_start - raft->log_start' entries in the log.
          *
          * XXX we can validate last_term and last_servers exactly */
-        memmove(&raft->log[0], &raft->log[new_log_start - raft->log_start],
-                (raft->log_end - new_log_start) * sizeof *raft->log);
+        memmove(&raft->entries[0],
+                &raft->entries[new_log_start - raft->log_start],
+                (raft->log_end - new_log_start) * sizeof *raft->entries);
         raft->log_start = new_log_start;
     }
     raft->commit_index = raft->log_start - 1;
@@ -3785,8 +3790,8 @@ raft_try_store_snapshot(struct raft *raft, const struct json *new_snapshot)
     json_destroy(raft->snap.servers);
     raft->snap.servers = raft_servers_for_index(raft, new_log_start - 1);
 
-    memmove(&raft->log[0], &raft->log[new_log_start - raft->log_start],
-            (raft->log_end - new_log_start) * sizeof *raft->log);
+    memmove(&raft->entries[0], &raft->entries[new_log_start - raft->log_start],
+            (raft->log_end - new_log_start) * sizeof *raft->entries);
     raft->log_start = new_log_start;
     return true;
 }
