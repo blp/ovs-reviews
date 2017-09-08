@@ -551,10 +551,15 @@ struct raft_remove_server_request {
  * of the possibility that they could fail.)  */
 #define RAFT_SERVER_EMPTY "empty"
 
-struct raft_server_reply {
+struct raft_add_server_reply {
     struct raft_rpc_common common;
     bool success;
     struct sset remotes;
+};
+
+struct raft_remove_server_reply {
+    struct raft_rpc_common common;
+    bool success;
 };
 
 static void raft_send_remove_server_reply__(
@@ -618,8 +623,9 @@ union raft_rpc {
     struct raft_vote_request vote_request;
     struct raft_vote_reply vote_reply;
     struct raft_add_server_request add_server_request;
+    struct raft_add_server_reply add_server_reply;
     struct raft_remove_server_request remove_server_request;
-    struct raft_server_reply server_reply;
+    struct raft_remove_server_reply remove_server_reply;
     struct raft_install_snapshot_request install_snapshot_request;
     struct raft_install_snapshot_reply install_snapshot_reply;
     struct raft_become_leader become_leader;
@@ -2754,8 +2760,9 @@ raft_rpc_destroy(union raft_rpc *rpc)
     case RAFT_RPC_REMOVE_SERVER_REQUEST:
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
+        sset_destroy(&rpc->add_server_reply.remotes);
+        break;
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        sset_destroy(&rpc->server_reply.remotes);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
         json_destroy(rpc->install_snapshot_request.last_servers);
@@ -2918,8 +2925,8 @@ raft_vote_reply_from_jsonrpc(struct ovsdb_parser *p,
 }
 
 static void
-raft_server_reply_to_jsonrpc(const struct raft_server_reply *rpy,
-                             struct json *args)
+raft_add_server_reply_to_jsonrpc(const struct raft_add_server_reply *rpy,
+                                 struct json *args)
 {
     json_object_put(args, "success", json_boolean_create(rpy->success));
     if (!sset_is_empty(&rpy->remotes)) {
@@ -2928,8 +2935,15 @@ raft_server_reply_to_jsonrpc(const struct raft_server_reply *rpy,
 }
 
 static void
-raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
-                               struct raft_server_reply *rpy)
+raft_remove_server_reply_to_jsonrpc(const struct raft_remove_server_reply *rpy,
+                                    struct json *args)
+{
+    json_object_put(args, "success", json_boolean_create(rpy->success));
+}
+
+static void
+raft_add_server_reply_from_jsonrpc(struct ovsdb_parser *p,
+                                   struct raft_add_server_reply *rpy)
 {
     rpy->success = parse_required_boolean(p, "success");
 
@@ -2943,6 +2957,13 @@ raft_server_reply_from_jsonrpc(struct ovsdb_parser *p,
             ovsdb_parser_put_error(p, error);
         }
     }
+}
+
+static void
+raft_remove_server_reply_from_jsonrpc(struct ovsdb_parser *p,
+                                      struct raft_remove_server_reply *rpy)
+{
+    rpy->success = parse_required_boolean(p, "success");
 }
 
 static void
@@ -3071,14 +3092,14 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
                                rpc->add_server_request.address);
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        raft_add_server_reply_to_jsonrpc(&rpc->add_server_reply, args);
         break;
     case RAFT_RPC_REMOVE_SERVER_REQUEST:
         json_object_put_format(args, "server_id", UUID_FMT,
                                UUID_ARGS(&rpc->remove_server_request.sid));
         break;
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_server_reply_to_jsonrpc(&rpc->server_reply, args);
+        raft_remove_server_reply_to_jsonrpc(&rpc->remove_server_reply, args);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
         raft_install_snapshot_request_to_jsonrpc(
@@ -3180,13 +3201,13 @@ raft_rpc_from_jsonrpc(struct raft *raft,
             parse_required_string(&p, "address"));
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_server_reply_from_jsonrpc(&p, &rpc->server_reply);
+        raft_add_server_reply_from_jsonrpc(&p, &rpc->add_server_reply);
         break;
     case RAFT_RPC_REMOVE_SERVER_REQUEST:
         rpc->remove_server_request.sid = parse_required_uuid(&p, "server_id");
         break;
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_server_reply_from_jsonrpc(&p, &rpc->server_reply);
+        raft_remove_server_reply_from_jsonrpc(&p, &rpc->remove_server_reply);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
         raft_install_snapshot_request_from_jsonrpc(
@@ -3246,7 +3267,7 @@ raft_send_add_server_reply__(struct raft *raft, const struct uuid *sid,
     }
 
     union raft_rpc rpy = {
-        .server_reply = {
+        .add_server_reply = {
             .common = {
                 .type = RAFT_RPC_ADD_SERVER_REPLY,
                 .sid = *sid,
@@ -3256,7 +3277,7 @@ raft_send_add_server_reply__(struct raft *raft, const struct uuid *sid,
         }
     };
 
-    struct sset *remotes = &rpy.server_reply.remotes;
+    struct sset *remotes = &rpy.add_server_reply.remotes;
     sset_init(remotes);
     if (!raft->joining) {
         struct raft_server *s;
@@ -3277,14 +3298,13 @@ raft_send_remove_server_reply_rpc(struct raft *raft, const struct uuid *sid,
                                   bool success, const char *comment)
 {
     const union raft_rpc rpy = {
-        .server_reply = {
+        .remove_server_reply = {
             .common = {
                 .type = RAFT_RPC_REMOVE_SERVER_REPLY,
                 .sid = *sid,
                 .comment = CONST_CAST(char *, comment),
             },
             .success = success,
-            .remotes = SSET_INITIALIZER(&rpy.server_reply.remotes),
         }
     };
     raft_send(raft, &rpy);
@@ -4474,7 +4494,7 @@ raft_handle_add_server_request(struct raft *raft,
 
 static void
 raft_handle_add_server_reply(struct raft *raft,
-                             const struct raft_server_reply *rpy)
+                             const struct raft_add_server_reply *rpy)
 {
     if (!raft->joining) {
         VLOG_WARN("received add_server_reply even though we're already "
@@ -4581,7 +4601,7 @@ raft_handle_remove_server_request(struct raft *raft,
 
 static void
 raft_handle_remove_server_reply(struct raft *raft,
-                                const struct raft_server_reply *rpc)
+                                const struct raft_remove_server_reply *rpc)
 {
     if (rpc->success) {
         VLOG_INFO("%04x: finished leaving cluster %04x",
@@ -4989,14 +5009,14 @@ raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
         raft_handle_add_server_request(raft, &rpc->add_server_request);
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_handle_add_server_reply(raft, &rpc->server_reply);
+        raft_handle_add_server_reply(raft, &rpc->add_server_reply);
         break;
     case RAFT_RPC_REMOVE_SERVER_REQUEST:
         raft_handle_remove_server_request(raft, &rpc->remove_server_request,
                                           true);
         break;
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_handle_remove_server_reply(raft, &rpc->server_reply);
+        raft_handle_remove_server_reply(raft, &rpc->remove_server_reply);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
         raft_handle_install_snapshot_request(raft,
@@ -5063,7 +5083,8 @@ raft_format_add_server_request(const struct raft_add_server_request *rq,
 }
 
 static void
-raft_format_server_reply(const struct raft_server_reply *rpy, struct ds *s)
+raft_format_add_server_reply(const struct raft_add_server_reply *rpy,
+                             struct ds *s)
 {
     ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
     if (!sset_is_empty(&rpy->remotes)) {
@@ -5079,6 +5100,13 @@ raft_format_server_reply(const struct raft_server_reply *rpy, struct ds *s)
         }
         ds_put_char(s, ']');
     }
+}
+
+static void
+raft_format_remove_server_reply(const struct raft_remove_server_reply *rpy,
+                                struct ds *s)
+{
+    ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
 }
 
 static void
@@ -5163,12 +5191,12 @@ raft_rpc_format(const union raft_rpc *rpc, struct ds *s)
         raft_format_add_server_request(&rpc->add_server_request, s);
         break;
     case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_format_server_reply(&rpc->server_reply, s);
+        raft_format_add_server_reply(&rpc->add_server_reply, s);
         break;
     case RAFT_RPC_REMOVE_SERVER_REQUEST:
         break;
     case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_format_server_reply(&rpc->server_reply, s);
+        raft_format_remove_server_reply(&rpc->remove_server_reply, s);
         break;
     case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
         raft_format_install_snapshot_request(&rpc->install_snapshot_request,
