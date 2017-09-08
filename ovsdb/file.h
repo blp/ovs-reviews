@@ -21,15 +21,7 @@
 #include "log.h"
 
 struct ovsdb;
-struct ovsdb_file;
-struct ovsdb_schema;
 struct ovsdb_txn;
-
-struct ovsdb_error *ovsdb_file_read_schema(const char *file_name,
-                                           struct ovsdb_schema **)
-    OVS_WARN_UNUSED_RESULT;
-
-void ovsdb_file_destroy(struct ovsdb_file *);
 
 struct json *ovsdb_to_txn_json(const struct ovsdb *, const char *comment);
 struct json *ovsdb_file_txn_to_json(const struct ovsdb_txn *);

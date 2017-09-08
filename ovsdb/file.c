@@ -39,13 +39,6 @@
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_file);
 
-/* Minimum number of milliseconds between database compactions. */
-#define COMPACT_MIN_MSEC        (10 * 60 * 1000) /* 10 minutes. */
-
-/* Minimum number of milliseconds between trying to compact the database if
- * compacting fails. */
-#define COMPACT_RETRY_MSEC      (60 * 1000)      /* 1 minute. */
-
 /* A transaction being converted to JSON for writing to a file. */
 struct ovsdb_file_txn {
     struct json *json;          /* JSON for the whole transaction. */
@@ -216,15 +209,6 @@ error:
     return error;
 }
 
-struct ovsdb_file {
-    struct ovsdb *db;
-    struct ovsdb_log *log;
-    long long int last_compact;
-    long long int next_compact;
-    unsigned int n_transactions;
-    off_t snapshot_size;
-};
-
 static bool
 ovsdb_file_change_cb(const struct ovsdb_row *old,
                      const struct ovsdb_row *new,
@@ -280,13 +264,6 @@ ovsdb_file_txn_annotate(struct json *json, const char *comment)
     }
     json_object_put(json, "_date", json_integer_create(time_wall_msec()));
     return json;
-}
-
-void
-ovsdb_file_destroy(struct ovsdb_file *file)
-{
-    ovsdb_log_close(file->log);
-    free(file);
 }
 
 static void
