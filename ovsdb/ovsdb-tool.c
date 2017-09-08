@@ -354,9 +354,14 @@ do_join_cluster(struct ovs_cmdl_context *ctx)
     }
 
     /* Create database file. */
+    struct sset remote_addrs = SSET_INITIALIZER(&remote_addrs);
+    for (size_t i = 4; i < ctx->argc; i++) {
+        sset_add(&remote_addrs, ctx->argv[i]);
+    }
     check_ovsdb_error(raft_join_cluster(db_file_name, name, local,
-                                        &ctx->argv[4], ctx->argc - 4,
+                                        &remote_addrs,
                                         uuid_is_zero(&cid) ? NULL : &cid));
+    sset_destroy(&remote_addrs);
 }
 
 static struct ovsdb_error *

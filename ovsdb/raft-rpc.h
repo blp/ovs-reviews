@@ -195,7 +195,7 @@ struct raft_remove_server_request {
 struct raft_add_server_reply {
     struct raft_rpc_common common;
     bool success;
-    struct sset remotes;
+    struct sset remote_addresses;
 };
 
 struct raft_remove_server_reply {

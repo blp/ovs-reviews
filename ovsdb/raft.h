@@ -48,6 +48,7 @@
 struct json;
 struct ovsdb_log;
 struct raft;
+struct sset;
 
 #define RAFT_MAGIC "CLUSTER"
 
@@ -57,12 +58,12 @@ struct raft;
 /* Setting up a new cluster. */
 struct ovsdb_error *raft_create_cluster(const char *file_name,
                                         const char *name,
-                                        const char *local,
+                                        const char *local_address,
                                         const struct json *snapshot)
     OVS_WARN_UNUSED_RESULT;
-struct ovsdb_error *raft_join_cluster(const char *file_name,
-                                      const char *name, const char *local,
-                                      char *remotes[], size_t n_remotes,
+struct ovsdb_error *raft_join_cluster(const char *file_name, const char *name,
+                                      const char *local_address,
+                                      const struct sset *remote_addrs,
                                       const struct uuid *cid)
     OVS_WARN_UNUSED_RESULT;
 

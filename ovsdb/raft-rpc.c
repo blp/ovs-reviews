@@ -331,7 +331,7 @@ raft_format_add_server_request(const struct raft_add_server_request *rq,
 static void
 raft_add_server_reply_destroy(struct raft_add_server_reply *rpy)
 {
-    sset_destroy(&rpy->remotes);
+    sset_destroy(&rpy->remote_addresses);
 }
 
 static void
@@ -339,8 +339,9 @@ raft_add_server_reply_to_jsonrpc(const struct raft_add_server_reply *rpy,
                                  struct json *args)
 {
     json_object_put(args, "success", json_boolean_create(rpy->success));
-    if (!sset_is_empty(&rpy->remotes)) {
-        json_object_put(args, "remotes", raft_remotes_to_json(&rpy->remotes));
+    if (!sset_is_empty(&rpy->remote_addresses)) {
+        json_object_put(args, "remote_addresses",
+                        raft_addresses_to_json(&rpy->remote_addresses));
     }
 }
 
@@ -350,15 +351,13 @@ raft_add_server_reply_from_jsonrpc(struct ovsdb_parser *p,
 {
     rpy->success = raft_parse_required_boolean(p, "success");
 
-    sset_init(&rpy->remotes);
-    const struct json *json = ovsdb_parser_member(p, "remotes",
+    const struct json *json = ovsdb_parser_member(p, "remote_addresses",
                                                   OP_ARRAY | OP_OPTIONAL);
     if (json) {
-        struct ovsdb_error *error = raft_remotes_from_json(json,
-                                                           &rpy->remotes);
-        if (error) {
-            ovsdb_parser_put_error(p, error);
-        }
+        ovsdb_parser_put_error(p, raft_addresses_from_json(
+                                   json, &rpy->remote_addresses));
+    } else {
+        sset_init(&rpy->remote_addresses);
     }
 }
 
@@ -367,16 +366,16 @@ raft_format_add_server_reply(const struct raft_add_server_reply *rpy,
                              struct ds *s)
 {
     ds_put_format(s, " success=%s", rpy->success ? "true" : "false");
-    if (!sset_is_empty(&rpy->remotes)) {
-        ds_put_cstr(s, " remotes=[");
+    if (!sset_is_empty(&rpy->remote_addresses)) {
+        ds_put_cstr(s, " remote_addresses=[");
 
-        const char *remote;
+        const char *address;
         int i = 0;
-        SSET_FOR_EACH (remote, &rpy->remotes) {
+        SSET_FOR_EACH (address, &rpy->remote_addresses) {
             if (i++ > 0) {
                 ds_put_cstr(s, ", ");
             }
-            ds_put_cstr(s, remote);
+            ds_put_cstr(s, address);
         }
         ds_put_char(s, ']');
     }

@@ -27,16 +27,26 @@
 struct ds;
 struct ovsdb_parser;
 struct sset;
+
+/* Formatting server IDs and cluster IDs for use in human-readable logs.  Do
+ * not use these in cases where the whole server or cluster ID is needed; use
+ * UUID_FMT and UUID_ARGS in that case.*/
 
+#define SID_FMT "%04x"
+#define SID_ARGS(SID) uuid_prefix(SID, 4)
+
+#define CID_FMT "%04x"
+#define CID_ARGS(CID) uuid_prefix(CID, 4)
+
 struct ovsdb_error *raft_address_validate(const char *address)
     OVS_WARN_UNUSED_RESULT;
 struct ovsdb_error *raft_address_validate_json(const struct json *address)
     OVS_WARN_UNUSED_RESULT;
 
-struct ovsdb_error *raft_remotes_from_json(const struct json *,
-                                           struct sset *remotes)
+struct ovsdb_error *raft_addresses_from_json(const struct json *,
+                                             struct sset *addresses)
     OVS_WARN_UNUSED_RESULT;
-struct json *raft_remotes_to_json(const struct sset *);
+struct json *raft_addresses_to_json(const struct sset *addresses);
 
 enum raft_server_phase {
     RAFT_PHASE_STABLE,          /* Not being changed. */
@@ -75,10 +85,6 @@ void raft_servers_destroy(struct hmap *servers);
 struct raft_server *raft_server_add(struct hmap *servers,
                                     const struct uuid *sid,
                                     const char *address);
-struct ovsdb_error *raft_servers_from_json__(const struct json *,
-                                             struct hmap *servers)
-    OVS_WARN_UNUSED_RESULT;
-
 struct ovsdb_error *raft_servers_from_json(const struct json *,
                                            struct hmap *servers)
     OVS_WARN_UNUSED_RESULT;
@@ -86,9 +92,6 @@ struct ovsdb_error *raft_servers_validate_json(const struct json *);
     OVS_WARN_UNUSED_RESULT
 struct json *raft_servers_to_json(const struct hmap *servers);
 void raft_servers_format(const struct hmap *servers, struct ds *ds);
-
-struct ovsdb_error *raft_servers_validate_json(const struct json *)
-    OVS_WARN_UNUSED_RESULT;
 
 struct raft_entry {
     uint64_t term;
@@ -101,13 +104,7 @@ void raft_entry_destroy(struct raft_entry *);
 struct json *raft_entry_to_json(const struct raft_entry *);
 struct ovsdb_error *raft_entry_from_json(struct json *, struct raft_entry *)
     OVS_WARN_UNUSED_RESULT;
-
-#define SID_FMT "%04x"
-#define SID_ARGS(SID) uuid_prefix(SID, 4)
-
-#define CID_FMT "%04x"
-#define CID_ARGS(CID) uuid_prefix(CID, 4)
-
+
 uint64_t raft_parse_uint(struct ovsdb_parser *, const char *name);
 bool raft_parse_required_boolean(struct ovsdb_parser *, const char *name);
 int raft_parse_optional_boolean(struct ovsdb_parser *, const char *name);

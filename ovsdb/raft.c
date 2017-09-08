@@ -509,7 +509,7 @@ raft_create_cluster(const char *file_name, const char *name,
 
     struct json *snapshot = json_object_create();
     json_object_put_string(snapshot, "server_id", sid_s);
-    json_object_put_string(snapshot, "address", local_address);
+    json_object_put_string(snapshot, "local_address", local_address);
     json_object_put_string(snapshot, "name", name);
 
     struct json *prev_servers = json_object_create();
@@ -547,12 +547,12 @@ raft_create_cluster(const char *file_name, const char *name,
  * square bracket enclosed IPv6 address.  PORT, if present, is a port number
  * that defaults to RAFT_PORT.
  *
- * Joining the cluster requiring contacting it.  Thus, the 'n_remotes'
- * addresses in 'remote_addresses' specify the addresses of existing servers in
- * the cluster.  One server out of the existing cluster is sufficient, as long
- * as that server is reachable and not partitioned from the current cluster
- * leader.  If multiple servers from the cluster are specified, then it is
- * sufficient for any of them to meet this criterion.
+ * Joining the cluster requiring contacting it.  Thus, 'remote_addresses'
+ * specifies the addresses of existing servers in the cluster.  One server out
+ * of the existing cluster is sufficient, as long as that server is reachable
+ * and not partitioned from the current cluster leader.  If multiple servers
+ * from the cluster are specified, then it is sufficient for any of them to
+ * meet this criterion.
  *
  * This only creates the on-disk file and does no network access.  Use
  * raft_open() to start operating the new server.  (Until this happens, the
@@ -563,20 +563,25 @@ raft_create_cluster(const char *file_name, const char *name,
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_join_cluster(const char *file_name,
                   const char *name, const char *local_address,
-                  char *remotes[], size_t n_remotes,
+                  const struct sset *remote_addresses,
                   const struct uuid *cid)
 {
-    ovs_assert(n_remotes > 0);
+    ovs_assert(!sset_is_empty(remote_addresses));
 
     /* Parse and verify validity of the addresses. */
     struct ovsdb_error *error = raft_address_validate(local_address);
     if (error) {
         return error;
     }
-    for (size_t i = 0; i < n_remotes; i++) {
-        error = raft_address_validate(remotes[i]);
+    const char *addr;
+    SSET_FOR_EACH (addr, remote_addresses) {
+        error = raft_address_validate(addr);
         if (error) {
             return error;
+        }
+        if (!strcmp(addr, local_address)) {
+            return ovsdb_error(NULL, "remote addresses cannot be the same "
+                               "as the local address");
         }
     }
 
@@ -597,19 +602,12 @@ raft_join_cluster(const char *file_name,
     struct uuid sid;
     uuid_generate(&sid);
 
-    char sid_s[UUID_LEN + 1];
-    sprintf(sid_s, UUID_FMT, UUID_ARGS(&sid));
-
-    struct json *remotes_json = json_array_create_empty();
-    for (size_t i = 0; i < n_remotes; i++) {
-        json_array_add(remotes_json, json_string_create(remotes[i]));
-    }
-
     struct json *snapshot = json_object_create();
-    json_object_put_string(snapshot, "server_id", sid_s);
-    json_object_put_string(snapshot, "address", local_address);
+    json_object_put_format(snapshot, "server_id", UUID_FMT, UUID_ARGS(&sid));
+    json_object_put_string(snapshot, "local_address", local_address);
     json_object_put_string(snapshot, "name", name);
-    json_object_put(snapshot, "remotes", remotes_json);
+    json_object_put(snapshot, "remote_addresses",
+                    raft_addresses_to_json(remote_addresses));
     if (cid) {
         json_object_put_format(snapshot, "cluster_id",
                                UUID_FMT, UUID_ARGS(cid));
@@ -664,21 +662,6 @@ raft_metadata_destroy(struct raft_metadata *md)
         free(md->name);
         free(md->local);
     }
-}
-
-struct json *
-raft_entry_to_json(const struct raft_entry *e)
-{
-    struct json *json = json_object_create();
-    json_object_put_uint(json, "term", e->term);
-    if (e->data) {
-        json_object_put(json, "data", json_clone(e->data));
-        json_object_put_format(json, "eid", UUID_FMT, UUID_ARGS(&e->eid));
-    }
-    if (e->servers) {
-        json_object_put(json, "servers", json_clone(e->servers));
-    }
-    return json;
 }
 
 static struct json *
@@ -949,18 +932,19 @@ raft_read_header(struct raft *raft)
     raft->sid = raft_parse_required_uuid(&p, "server_id");
     raft->name = nullable_xstrdup(raft_parse_required_string(&p, "name"));
     raft->local_address = nullable_xstrdup(
-        raft_parse_required_string(&p, "address"));
+        raft_parse_required_string(&p, "local_address"));
 
     /* Parse "remotes", if present.
      *
      * If this is present, then this database file is for the special case of a
      * server that was created with "ovsdb-tool join-cluster" and has not yet
      * joined its cluster, */
-    const struct json *remotes = ovsdb_parser_member(&p, "remotes",
-                                                     OP_ARRAY | OP_OPTIONAL);
-    if (remotes) {
+    const struct json *remote_addresses
+        = ovsdb_parser_member(&p, "remote_addresses", OP_ARRAY | OP_OPTIONAL);
+    if (remote_addresses) {
         raft->joining = true;
-        error = raft_remotes_from_json(remotes, &raft->remote_addresses);
+        error = raft_addresses_from_json(remote_addresses,
+                                         &raft->remote_addresses);
         if (!error
             && sset_find_and_delete(&raft->remote_addresses,
                                     raft->local_address)
@@ -2188,20 +2172,20 @@ raft_send_add_server_reply__(struct raft *raft, const struct uuid *sid,
         }
     };
 
-    struct sset *remotes = &rpy.add_server_reply.remotes;
-    sset_init(remotes);
+    struct sset *remote_addresses = &rpy.add_server_reply.remote_addresses;
+    sset_init(remote_addresses);
     if (!raft->joining) {
         struct raft_server *s;
         HMAP_FOR_EACH (s, hmap_node, &raft->servers) {
             if (s != raft->me) {
-                sset_add(remotes, s->address);
+                sset_add(remote_addresses, s->address);
             }
         }
     }
 
     raft_send(raft, &rpy);
 
-    sset_destroy(remotes);
+    sset_destroy(remote_addresses);
 }
 
 static void
@@ -3572,7 +3556,7 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *storage,
     json_object_put_format(header, "server_id", UUID_FMT,
                            UUID_ARGS(&raft->sid));
     json_object_put_string(header, "name", raft->name);
-    json_object_put_string(header, "address", raft->local_address);
+    json_object_put_string(header, "local_address", raft->local_address);
     json_object_put(header, "prev_servers", prev_servers);
     if (!uuid_is_zero(&raft->cid)) {
         json_object_put_format(header, "cluster_id", UUID_FMT,

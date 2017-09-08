@@ -23,6 +23,8 @@
 #include "ovsdb-parser.h"
 #include "socket-util.h"
 #include "sset.h"
+
+/* Addresses of Raft servers. */
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_address_validate(const char *address)
@@ -50,44 +52,13 @@ raft_address_validate_json(const struct json *address)
     }
     return raft_address_validate(json_string(address));
 }
-
-void
-raft_entry_destroy(struct raft_entry *e)
-{
-    if (e) {
-        json_destroy(e->data);
-        json_destroy(e->servers);
-    }
-}
+
+/* Sets of Raft server addresses. */
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_entry_from_json(struct json *json, struct raft_entry *e)
+raft_addresses_from_json(const struct json *json, struct sset *addresses)
 {
-    memset(e, 0, sizeof *e);
-
-    struct ovsdb_parser p;
-    ovsdb_parser_init(&p, json, "raft log entry");
-    e->term = raft_parse_uint(&p, "term");
-    e->data = json_nullable_clone(
-        ovsdb_parser_member(&p, "data", OP_OBJECT | OP_ARRAY | OP_OPTIONAL));
-    e->eid = e->data ? raft_parse_required_uuid(&p, "eid") : UUID_ZERO;
-    e->servers = json_nullable_clone(
-        ovsdb_parser_member(&p, "servers", OP_OBJECT | OP_OPTIONAL));
-    if (e->servers) {
-        ovsdb_parser_put_error(&p, raft_servers_validate_json(e->servers));
-    }
-
-    struct ovsdb_error *error = ovsdb_parser_finish(&p);
-    if (error) {
-        raft_entry_destroy(e);
-    }
-    return error;
-}
-
-struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_remotes_from_json(const struct json *json, struct sset *remotes)
-{
-    sset_init(remotes);
+    sset_init(addresses);
 
     const struct json_array *array = json_array(json);
     if (!array->n) {
@@ -100,13 +71,13 @@ raft_remotes_from_json(const struct json *json, struct sset *remotes)
         if (error) {
             return error;
         }
-        sset_add(remotes, json_string(address));
+        sset_add(addresses, json_string(address));
     }
     return NULL;
 }
 
 struct json *
-raft_remotes_to_json(const struct sset *sset)
+raft_addresses_to_json(const struct sset *sset)
 {
     struct json *array;
     const char *s;
@@ -118,6 +89,8 @@ raft_remotes_to_json(const struct sset *sset)
     return array;
 }
 
+/* raft_server. */
+
 const char *
 raft_server_phase_to_string(enum raft_server_phase phase)
 {
@@ -162,7 +135,7 @@ raft_server_add(struct hmap *servers, const struct uuid *sid,
     return s;
 }
 
-struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_servers_from_json__(const struct json *json, struct hmap *servers)
 {
     if (!json || json->type != JSON_OBJECT) {
@@ -237,6 +210,56 @@ raft_servers_format(const struct hmap *servers, struct ds *ds)
         }
         ds_put_format(ds, SID_FMT"(%s)", SID_ARGS(&s->sid), s->address);
     }
+}
+
+/* Raft log entries. */
+
+void
+raft_entry_destroy(struct raft_entry *e)
+{
+    if (e) {
+        json_destroy(e->data);
+        json_destroy(e->servers);
+    }
+}
+
+struct json *
+raft_entry_to_json(const struct raft_entry *e)
+{
+    struct json *json = json_object_create();
+    json_object_put_uint(json, "term", e->term);
+    if (e->data) {
+        json_object_put(json, "data", json_clone(e->data));
+        json_object_put_format(json, "eid", UUID_FMT, UUID_ARGS(&e->eid));
+    }
+    if (e->servers) {
+        json_object_put(json, "servers", json_clone(e->servers));
+    }
+    return json;
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_entry_from_json(struct json *json, struct raft_entry *e)
+{
+    memset(e, 0, sizeof *e);
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "raft log entry");
+    e->term = raft_parse_uint(&p, "term");
+    e->data = json_nullable_clone(
+        ovsdb_parser_member(&p, "data", OP_OBJECT | OP_ARRAY | OP_OPTIONAL));
+    e->eid = e->data ? raft_parse_required_uuid(&p, "eid") : UUID_ZERO;
+    e->servers = json_nullable_clone(
+        ovsdb_parser_member(&p, "servers", OP_OBJECT | OP_OPTIONAL));
+    if (e->servers) {
+        ovsdb_parser_put_error(&p, raft_servers_validate_json(e->servers));
+    }
+
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        raft_entry_destroy(e);
+    }
+    return error;
 }
 
 uint64_t

@@ -187,7 +187,7 @@
       The server's own UUID, which must be unique within the cluster.
     </dd>
 
-    <dt>"address": &lt;address&gt;</dt>
+    <dt>"local_address": &lt;address&gt;</dt>
     <dd>
       The address on which the server listens for connections from other
       servers in the cluster.
@@ -287,7 +287,7 @@
 
   <dl>
     <dt>"server_id": &lt;raw-uuid&gt;</dt>
-    <dt>"address": &lt;address&gt;</dt>
+    <dt>"local_address": &lt;address&gt;</dt>
     <dt>"name": &lt;id&gt;</dt>
     <dd>
       These have the same semantics described above in the general description
@@ -300,7 +300,7 @@
       <code>join-cluster</code>.  It has the same semantics described above.
     </dd>
 
-    <dt>"remotes"; [&lt;address&gt;*]</dt>
+    <dt>"remote_addresses"; [&lt;address&gt;*]</dt>
     <dd>
       One or more remote servers to contact for joining the cluster.
     </dd>
