@@ -362,34 +362,34 @@ raft_fsync_thread(void *raft_)
 
 #define RAFT_RPC_TYPES                                                  \
     /* Hello RPC. */                                                    \
-    RAFT_RPC(RAFT_RPC_HELLO_REQUEST, "hello_request")                   \
+    RAFT_RPC(RAFT_RPC_HELLO_REQUEST, hello_request)                     \
                                                                         \
     /* AppendEntries RPC. */                                            \
-    RAFT_RPC(RAFT_RPC_APPEND_REQUEST, "append_request")                 \
-    RAFT_RPC(RAFT_RPC_APPEND_REPLY, "append_reply")                     \
+    RAFT_RPC(RAFT_RPC_APPEND_REQUEST, append_request)                   \
+    RAFT_RPC(RAFT_RPC_APPEND_REPLY, append_reply)                       \
                                                                         \
     /* RequestVote RPC. */                                              \
-    RAFT_RPC(RAFT_RPC_VOTE_REQUEST, "vote_request")                     \
-    RAFT_RPC(RAFT_RPC_VOTE_REPLY, "vote_reply")                         \
+    RAFT_RPC(RAFT_RPC_VOTE_REQUEST, vote_request)                       \
+    RAFT_RPC(RAFT_RPC_VOTE_REPLY, vote_reply)                           \
                                                                         \
     /* AddServer RPC. */                                                \
-    RAFT_RPC(RAFT_RPC_ADD_SERVER_REQUEST, "add_server_request")         \
-    RAFT_RPC(RAFT_RPC_ADD_SERVER_REPLY, "add_server_reply")             \
+    RAFT_RPC(RAFT_RPC_ADD_SERVER_REQUEST, add_server_request)           \
+    RAFT_RPC(RAFT_RPC_ADD_SERVER_REPLY, add_server_reply)               \
                                                                         \
     /* RemoveServer RPC. */                                             \
-    RAFT_RPC(RAFT_RPC_REMOVE_SERVER_REQUEST, "remove_server_request")   \
-    RAFT_RPC(RAFT_RPC_REMOVE_SERVER_REPLY, "remove_server_reply")       \
+    RAFT_RPC(RAFT_RPC_REMOVE_SERVER_REQUEST, remove_server_request)     \
+    RAFT_RPC(RAFT_RPC_REMOVE_SERVER_REPLY, remove_server_reply)         \
                                                                         \
     /* InstallSnapshot RPC. */                                          \
-    RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REQUEST, "install_snapshot_request") \
-    RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REPLY, "install_snapshot_reply") \
+    RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REQUEST, install_snapshot_request) \
+    RAFT_RPC(RAFT_RPC_INSTALL_SNAPSHOT_REPLY, install_snapshot_reply)   \
                                                                         \
     /* BecomeLeader RPC. */                                             \
-    RAFT_RPC(RAFT_RPC_BECOME_LEADER, "become_leader")                   \
+    RAFT_RPC(RAFT_RPC_BECOME_LEADER, become_leader)                     \
                                                                         \
     /* ExecuteCommand RPC. */                                           \
-    RAFT_RPC(RAFT_RPC_EXECUTE_COMMAND_REQUEST, "execute_command_request") \
-    RAFT_RPC(RAFT_RPC_EXECUTE_COMMAND_REPLY, "execute_command_reply")
+    RAFT_RPC(RAFT_RPC_EXECUTE_COMMAND_REQUEST, execute_command_request) \
+    RAFT_RPC(RAFT_RPC_EXECUTE_COMMAND_REPLY, execute_command_reply)
 
 enum raft_rpc_type {
 #define RAFT_RPC(ENUM, NAME) ENUM,
@@ -401,7 +401,7 @@ static const char *
 raft_rpc_type_to_string(enum raft_rpc_type status)
 {
     switch (status) {
-#define RAFT_RPC(ENUM, NAME) case ENUM: return NAME;
+#define RAFT_RPC(ENUM, NAME) case ENUM: return #NAME;
         RAFT_RPC_TYPES
 #undef RAFT_RPC
             }
@@ -412,7 +412,7 @@ static bool
 raft_rpc_type_from_string(const char *s, enum raft_rpc_type *status)
 {
 #define RAFT_RPC(ENUM, NAME)                    \
-    if (!strcmp(s, NAME)) {                     \
+    if (!strcmp(s, #NAME)) {                    \
         *status = ENUM;                         \
         return true;                            \
     }
@@ -425,6 +425,10 @@ struct raft_rpc_common {
     enum raft_rpc_type type;    /* One of RAFT_RPC_*. */
     struct uuid sid;            /* SID of peer server. */
     char *comment;
+};
+
+struct raft_hello_request {
+    struct raft_rpc_common common;
 };
 
 struct raft_append_request {
@@ -618,19 +622,9 @@ static void raft_send_execute_command_reply(struct raft *,
 
 union raft_rpc {
     struct raft_rpc_common common;
-    struct raft_append_request append_request;
-    struct raft_append_reply append_reply;
-    struct raft_vote_request vote_request;
-    struct raft_vote_reply vote_reply;
-    struct raft_add_server_request add_server_request;
-    struct raft_add_server_reply add_server_reply;
-    struct raft_remove_server_request remove_server_request;
-    struct raft_remove_server_reply remove_server_reply;
-    struct raft_install_snapshot_request install_snapshot_request;
-    struct raft_install_snapshot_reply install_snapshot_reply;
-    struct raft_become_leader become_leader;
-    struct raft_execute_command_request execute_command_request;
-    struct raft_execute_command_reply execute_command_reply;
+#define RAFT_RPC(ENUM, NAME) struct raft_##NAME NAME;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
 };
 
 static void raft_rpc_format(const union raft_rpc *, struct ds *);
@@ -2733,6 +2727,91 @@ raft_find_command_by_eid(struct raft *raft, const struct uuid *eid)
 }
 
 static void
+raft_hello_request_destroy(struct raft_hello_request *rq OVS_UNUSED)
+{
+}
+
+static void
+raft_append_request_destroy(struct raft_append_request *rq)
+{
+    for (size_t i = 0; i < rq->n_entries; i++) {
+        json_destroy(rq->entries[i].data);
+    }
+    free(rq->entries);
+}
+
+static void
+raft_append_reply_destroy(struct raft_append_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
+raft_vote_request_destroy(struct raft_vote_request *rq OVS_UNUSED)
+{
+}
+
+static void
+raft_vote_reply_destroy(struct raft_vote_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
+raft_add_server_request_destroy(struct raft_add_server_request *rq)
+{
+    free(rq->address);
+}
+
+static void
+raft_add_server_reply_destroy(struct raft_add_server_reply *rpy)
+{
+    sset_destroy(&rpy->remotes);
+}
+
+static void
+raft_remove_server_reply_destroy(
+    struct raft_remove_server_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
+raft_install_snapshot_request_destroy(
+    struct raft_install_snapshot_request *rq)
+{
+    json_destroy(rq->last_servers);
+    json_destroy(rq->data);
+}
+
+static void
+raft_install_snapshot_reply_destroy(
+    struct raft_install_snapshot_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
+raft_execute_command_request_destroy(
+    struct raft_execute_command_request *rq)
+{
+    json_destroy(rq->data);
+}
+
+static void
+raft_execute_command_reply_destroy(
+    struct raft_execute_command_reply *rpy OVS_UNUSED)
+{
+}
+
+static void
+raft_remove_server_request_destroy(
+    struct raft_remove_server_request *rq OVS_UNUSED)
+{
+}
+
+static void
+raft_become_leader_destroy(struct raft_become_leader *rpc OVS_UNUSED)
+{
+}
+
+static void
 raft_rpc_destroy(union raft_rpc *rpc)
 {
     if (!rpc) {
@@ -2742,45 +2821,36 @@ raft_rpc_destroy(union raft_rpc *rpc)
     free(rpc->common.comment);
 
     switch (rpc->common.type) {
-    case RAFT_RPC_HELLO_REQUEST:
-        break;
-    case RAFT_RPC_APPEND_REQUEST:
-        for (size_t i = 0; i < rpc->append_request.n_entries; i++) {
-            json_destroy(rpc->append_request.entries[i].data);
-        }
-        free(rpc->append_request.entries);
-        break;
-    case RAFT_RPC_APPEND_REPLY:
-    case RAFT_RPC_VOTE_REQUEST:
-    case RAFT_RPC_VOTE_REPLY:
-        break;
-    case RAFT_RPC_ADD_SERVER_REQUEST:
-        free(rpc->add_server_request.address);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REQUEST:
-        break;
-    case RAFT_RPC_ADD_SERVER_REPLY:
-        sset_destroy(&rpc->add_server_reply.remotes);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REPLY:
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        json_destroy(rpc->install_snapshot_request.last_servers);
-        json_destroy(rpc->install_snapshot_request.data);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
-        break;
-    case RAFT_RPC_BECOME_LEADER:
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
-        json_destroy(rpc->execute_command_request.data);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
-        break;
+#define RAFT_RPC(ENUM, NAME)                    \
+        case ENUM:                              \
+            raft_##NAME##_destroy(&rpc->NAME);  \
+            break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
     }
 }
 
 /* raft_rpc_to/from_jsonrpc(). */
+
+#define RAFT_RPC(ENUM, NAME)                                            \
+    static void raft_##NAME##_to_jsonrpc(const struct raft_##NAME *,    \
+                                         struct json *);                \
+    static void raft_##NAME##_from_jsonrpc(struct ovsdb_parser *,       \
+                                           struct raft_##NAME *);
+RAFT_RPC_TYPES
+#undef RAFT_RPC
+
+static void
+raft_hello_request_to_jsonrpc(const struct raft_hello_request *rq OVS_UNUSED,
+                              struct json *args OVS_UNUSED)
+{
+}
+
+static void
+raft_hello_request_from_jsonrpc(struct ovsdb_parser *p OVS_UNUSED,
+                                struct raft_hello_request *rq OVS_UNUSED)
+{
+}
 
 const char *
 raft_append_result_to_string(enum raft_append_result result)
@@ -3053,6 +3123,49 @@ raft_execute_command_reply_from_jsonrpc(
     }
 }
 
+static void
+raft_add_server_request_to_jsonrpc(const struct raft_add_server_request *rq,
+                                   struct json *args)
+{
+    json_object_put_string(args, "address", rq->address);
+}
+
+static void
+raft_remove_server_request_to_jsonrpc(
+    const struct raft_remove_server_request *rq, struct json *args)
+{
+    json_object_put_format(args, "server_id", SID_FMT, SID_ARGS(&rq->sid));
+}
+
+static void
+raft_become_leader_to_jsonrpc(const struct raft_become_leader *rpc,
+                              struct json *args)
+{
+    json_object_put_uint(args, "term", rpc->term);
+}
+
+static void
+raft_add_server_request_from_jsonrpc(struct ovsdb_parser *p,
+                                     struct raft_add_server_request *rq)
+{
+    rq->address = nullable_xstrdup(parse_required_string(p, "address"));
+}
+
+static void
+raft_remove_server_request_from_jsonrpc(struct ovsdb_parser *p,
+                                        struct raft_remove_server_request *rq)
+{
+    rq->sid = parse_required_uuid(p, "server_id");
+}
+
+static void
+raft_become_leader_from_jsonrpc(struct ovsdb_parser *p,
+                                struct raft_become_leader *rpc)
+{
+    rpc->term = parse_uint(p, "term");
+}
+
+
 static struct jsonrpc_msg *
 raft_rpc_to_jsonrpc(const struct raft *raft,
                     const union raft_rpc *rpc)
@@ -3072,54 +3185,12 @@ raft_rpc_to_jsonrpc(const struct raft *raft,
     }
 
     switch (rpc->common.type) {
-    case RAFT_RPC_HELLO_REQUEST:
+#define RAFT_RPC(ENUM, NAME)                        \
+    case ENUM:                                      \
+        raft_##NAME##_to_jsonrpc(&rpc->NAME, args); \
         break;
-    case RAFT_RPC_APPEND_REQUEST:
-        raft_append_request_to_jsonrpc(&rpc->append_request,
-                                       args);
-        break;
-    case RAFT_RPC_APPEND_REPLY:
-        raft_append_reply_to_jsonrpc(&rpc->append_reply, args);
-        break;
-    case RAFT_RPC_VOTE_REQUEST:
-        raft_vote_request_to_jsonrpc(&rpc->vote_request, args);
-        break;
-    case RAFT_RPC_VOTE_REPLY:
-        raft_vote_reply_to_jsonrpc(&rpc->vote_reply, args);
-        break;
-    case RAFT_RPC_ADD_SERVER_REQUEST:
-        json_object_put_string(args, "address",
-                               rpc->add_server_request.address);
-        break;
-    case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_add_server_reply_to_jsonrpc(&rpc->add_server_reply, args);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REQUEST:
-        json_object_put_format(args, "server_id", UUID_FMT,
-                               UUID_ARGS(&rpc->remove_server_request.sid));
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_remove_server_reply_to_jsonrpc(&rpc->remove_server_reply, args);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_install_snapshot_request_to_jsonrpc(
-            &rpc->install_snapshot_request, args);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
-        raft_install_snapshot_reply_to_jsonrpc(
-            &rpc->install_snapshot_reply, args);
-        break;
-    case RAFT_RPC_BECOME_LEADER:
-        json_object_put_uint(args, "term", rpc->become_leader.term);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
-        raft_execute_command_request_to_jsonrpc(
-            &rpc->execute_command_request, args);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
-        raft_execute_command_reply_to_jsonrpc(
-            &rpc->execute_command_reply, args);
-        break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
     default:
         OVS_NOT_REACHED();
     }
@@ -3182,52 +3253,13 @@ raft_rpc_from_jsonrpc(struct raft *raft,
         parse_optional_string(&p, "comment"));
 
     switch (rpc->common.type) {
-    case RAFT_RPC_HELLO_REQUEST:
-        break;
-    case RAFT_RPC_APPEND_REQUEST:
-        raft_append_request_from_jsonrpc(&p, &rpc->append_request);
-        break;
-    case RAFT_RPC_APPEND_REPLY:
-        raft_append_reply_from_jsonrpc(&p, &rpc->append_reply);
-        break;
-    case RAFT_RPC_VOTE_REQUEST:
-        raft_vote_request_from_jsonrpc(&p, &rpc->vote_request);
-        break;
-    case RAFT_RPC_VOTE_REPLY:
-        raft_vote_reply_from_jsonrpc(&p, &rpc->vote_reply);
-        break;
-    case RAFT_RPC_ADD_SERVER_REQUEST:
-        rpc->add_server_request.address = nullable_xstrdup(
-            parse_required_string(&p, "address"));
-        break;
-    case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_add_server_reply_from_jsonrpc(&p, &rpc->add_server_reply);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REQUEST:
-        rpc->remove_server_request.sid = parse_required_uuid(&p, "server_id");
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_remove_server_reply_from_jsonrpc(&p, &rpc->remove_server_reply);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_install_snapshot_request_from_jsonrpc(
-            &p, &rpc->install_snapshot_request);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
-        raft_install_snapshot_reply_from_jsonrpc(
-            &p, &rpc->install_snapshot_reply);
-        break;
-    case RAFT_RPC_BECOME_LEADER:
-        rpc->become_leader.term = parse_uint(&p, "term");
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
-        raft_execute_command_request_from_jsonrpc(
-            &p, &rpc->execute_command_request);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
-        raft_execute_command_reply_from_jsonrpc(
-            &p, &rpc->execute_command_reply);
-        break;
+#define RAFT_RPC(ENUM, NAME)                            \
+        case ENUM:                                      \
+            raft_##NAME##_from_jsonrpc(&p, &rpc->NAME); \
+            break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
+
     default:
         OVS_NOT_REACHED();
     }
@@ -3239,6 +3271,17 @@ raft_rpc_from_jsonrpc(struct raft *raft,
     return error;
 }
 
+#define RAFT_RPC(ENUM, NAME) \
+    static void raft_handle_##NAME(struct raft *, const struct raft_##NAME *);
+RAFT_RPC_TYPES
+#undef RAFT_RPC
+
+static void
+raft_handle_hello_request(struct raft *raft OVS_UNUSED,
+                          const struct raft_hello_request *hello OVS_UNUSED)
+{
+}
+
 /* 'type' is RAFT_RPC_ADD_SERVER_REPLY or RAFT_RPC_REMOVE_SERVER_REPLY,
  * 'target_sid' is the server being added or removed.
  * 'requester_sid' is the server that requested the action and should receive
@@ -4524,9 +4567,10 @@ raft_handle_add_server_reply(struct raft *raft,
 
 /* This is called by raft_unixctl_kick() as well as via RPC. */
 static void
-raft_handle_remove_server_request(struct raft *raft,
-                                  const struct raft_remove_server_request *rq,
-                                  bool wait)
+raft_handle_remove_server_request__(
+    struct raft *raft,
+    const struct raft_remove_server_request *rq,
+    bool wait)
 {
     /* Figure 4.1: "1. Reply NOT_LEADER if not leader (section 6.2)." */
     if (raft->role != RAFT_LEADER) {
@@ -4597,6 +4641,13 @@ raft_handle_remove_server_request(struct raft *raft,
 
     raft_run_reconfigure(raft);
     /* Operation in progress, reply will be sent later. */
+}
+
+static void
+raft_handle_remove_server_request(struct raft *raft,
+                                  const struct raft_remove_server_request *rq)
+{
+    raft_handle_remove_server_request__(raft, rq, true);
 }
 
 static void
@@ -4991,55 +5042,28 @@ static void
 raft_handle_rpc(struct raft *raft, const union raft_rpc *rpc)
 {
     switch (rpc->common.type) {
-    case RAFT_RPC_HELLO_REQUEST:
+#define RAFT_RPC(ENUM, NAME)                    \
+        case ENUM:                              \
+        raft_handle_##NAME(raft, &rpc->NAME);   \
         break;
-    case RAFT_RPC_APPEND_REQUEST:
-        raft_handle_append_request(raft, &rpc->append_request);
-        break;
-    case RAFT_RPC_APPEND_REPLY:
-        raft_handle_append_reply(raft, &rpc->append_reply);
-        break;
-    case RAFT_RPC_VOTE_REQUEST:
-        raft_handle_vote_request(raft, &rpc->vote_request);
-        break;
-    case RAFT_RPC_VOTE_REPLY:
-        raft_handle_vote_reply(raft, &rpc->vote_reply);
-        break;
-    case RAFT_RPC_ADD_SERVER_REQUEST:
-        raft_handle_add_server_request(raft, &rpc->add_server_request);
-        break;
-    case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_handle_add_server_reply(raft, &rpc->add_server_reply);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REQUEST:
-        raft_handle_remove_server_request(raft, &rpc->remove_server_request,
-                                          true);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_handle_remove_server_reply(raft, &rpc->remove_server_reply);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_handle_install_snapshot_request(raft,
-                                             &rpc->install_snapshot_request);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
-        raft_handle_install_snapshot_reply(raft, &rpc->install_snapshot_reply);
-        break;
-    case RAFT_RPC_BECOME_LEADER:
-        raft_handle_become_leader(raft, &rpc->become_leader);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
-        raft_handle_execute_command_request(raft,
-                                            &rpc->execute_command_request);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
-        raft_handle_execute_command_reply(raft, &rpc->execute_command_reply);
-        break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
     default:
         OVS_NOT_REACHED();
     }
 }
 
+#define RAFT_RPC(ENUM, NAME) \
+    static void raft_format_##NAME(const struct raft_##NAME *, struct ds *);
+RAFT_RPC_TYPES
+#undef RAFT_RPC
+
+static void
+raft_format_hello_request(const struct raft_hello_request *hello OVS_UNUSED,
+                          struct ds *s OVS_UNUSED)
+{
+}
+
 static void
 raft_format_append_request(const struct raft_append_request *rq,
                            struct ds *s)
@@ -5100,6 +5124,13 @@ raft_format_add_server_reply(const struct raft_add_server_reply *rpy,
         }
         ds_put_char(s, ']');
     }
+}
+
+static void
+raft_format_remove_server_request(const struct raft_remove_server_request *rq,
+                                  struct ds *s)
+{
+    ds_put_format(s, " server="SID_FMT, SID_ARGS(&rq->sid));
 }
 
 static void
@@ -5173,47 +5204,12 @@ raft_rpc_format(const union raft_rpc *rpc, struct ds *s)
     ds_put_char(s, ':');
 
     switch (rpc->common.type) {
-    case RAFT_RPC_HELLO_REQUEST:
+#define RAFT_RPC(ENUM, NAME)                    \
+    case ENUM:                                  \
+        raft_format_##NAME(&rpc->NAME, s);      \
         break;
-    case RAFT_RPC_APPEND_REQUEST:
-        raft_format_append_request(&rpc->append_request, s);
-        break;
-    case RAFT_RPC_APPEND_REPLY:
-        raft_format_append_reply(&rpc->append_reply, s);
-        break;
-    case RAFT_RPC_VOTE_REQUEST:
-        raft_format_vote_request(&rpc->vote_request, s);
-        break;
-    case RAFT_RPC_VOTE_REPLY:
-        raft_format_vote_reply(&rpc->vote_reply, s);
-        break;
-    case RAFT_RPC_ADD_SERVER_REQUEST:
-        raft_format_add_server_request(&rpc->add_server_request, s);
-        break;
-    case RAFT_RPC_ADD_SERVER_REPLY:
-        raft_format_add_server_reply(&rpc->add_server_reply, s);
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REQUEST:
-        break;
-    case RAFT_RPC_REMOVE_SERVER_REPLY:
-        raft_format_remove_server_reply(&rpc->remove_server_reply, s);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REQUEST:
-        raft_format_install_snapshot_request(&rpc->install_snapshot_request,
-                                             s);
-        break;
-    case RAFT_RPC_INSTALL_SNAPSHOT_REPLY:
-        raft_format_install_snapshot_reply(&rpc->install_snapshot_reply, s);
-        break;
-    case RAFT_RPC_BECOME_LEADER:
-        raft_format_become_leader(&rpc->become_leader, s);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REQUEST:
-        raft_format_execute_command_request(&rpc->execute_command_request, s);
-        break;
-    case RAFT_RPC_EXECUTE_COMMAND_REPLY:
-        raft_format_execute_command_reply(&rpc->execute_command_reply, s);
-        break;
+    RAFT_RPC_TYPES
+#undef RAFT_RPC
     default:
         OVS_NOT_REACHED();
     }
@@ -5536,7 +5532,7 @@ raft_unixctl_kick(struct unixctl_conn *conn, int argc,
             .sid = server->sid,
             .requester_conn = conn,
         };
-        raft_handle_remove_server_request(raft, &rq, wait);
+        raft_handle_remove_server_request__(raft, &rq, wait);
     } else {
         const union raft_rpc rpc = {
             .remove_server_request = {
