@@ -1,11 +1,10 @@
 {"name": "_Server",
  "version": "1.0.0",
- "cksum": "3466153824 595",
+ "cksum": "2408996349 556",
  "tables": {
    "Database": {
      "columns": {
        "name": {"type": "string"},
-       "generation": {"type": "uuid"},
        "model": {
          "type": {"key": {"type": "string",
 	                  "enum": ["set", ["standalone", "clustered"]]}}},

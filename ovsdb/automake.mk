@@ -146,9 +146,9 @@ CLEANFILES += ovsdb/_server.ovsschema.stamp
 
 # _Server schema documentation
 EXTRA_DIST += ovsdb/_server.xml
-CLEANFILES += ovsdb/_ovsdb-server.5
-man_MANS += ovsdb/_ovsdb-server.5
-ovsdb/_ovsdb-server.5: \
+CLEANFILES += ovsdb/ovsdb-server.5
+man_MANS += ovsdb/ovsdb-server.5
+ovsdb/ovsdb-server.5: \
 	ovsdb/ovsdb-doc ovsdb/_server.xml ovsdb/_server.ovsschema \
 	$(VSWITCH_PIC)
 	$(AM_V_GEN)$(OVSDB_DOC) \

@@ -66,7 +66,7 @@ struct db {
     char *filename;
     struct ovsdb_storage *storage;
     struct ovsdb *db;
-    struct uuid generation;
+    struct uuid row_uuid;
 };
 
 /* SSL configuration. */
@@ -620,7 +620,7 @@ read_db(struct server_config *config, struct db *db)
 static void
 add_db(struct server_config *config, const char *name, struct db *db)
 {
-    uuid_generate(&db->generation);
+    db->row_uuid = UUID_ZERO;
     shash_add_assert(config->all_dbs, name, db);
     if (db->db) {
         bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc,
@@ -1094,10 +1094,9 @@ update_database_status(struct ovsdb_row *row, struct db *db)
     ovsdb_util_write_uuid_column(row, "sid",
                                  ovsdb_storage_get_sid(db->storage));
 
-    struct uuid generation;
-    ovsdb_util_read_uuid_column(row, "generation", &generation);
-    if (!uuid_equals(&generation, &db->generation)) {
-        ovsdb_util_write_uuid_column(row, "generation", &db->generation);
+    const struct uuid *row_uuid = ovsdb_row_get_uuid(row);
+    if (!uuid_equals(row_uuid, &db->row_uuid)) {
+        db->row_uuid = *row_uuid;
 
         /* The schema can only change if the generation changes, so only update
          * it in that case.  (Schemas are often kilobytes in size and expensive
