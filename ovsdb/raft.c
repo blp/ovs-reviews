@@ -1311,6 +1311,8 @@ raft_close(struct raft *raft)
 
     raft_transfer_leadership(raft);
 
+    raft_close__(raft);
+
     ovsdb_log_close(raft->log);
 
     raft_servers_destroy(&raft->servers);

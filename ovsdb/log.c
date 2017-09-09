@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "openvswitch/dynamic-string.h"
 #include "openvswitch/json.h"
 #include "lockfile.h"
 #include "ovsdb.h"
@@ -463,62 +464,63 @@ ovsdb_log_truncate(struct ovsdb_log *file)
     return error;
 }
 
+void
+ovsdb_log_compose_record(const struct json *json,
+                         const char *magic, struct ds *header, struct ds *data)
+{
+    ovs_assert(json->type == JSON_OBJECT || json->type == JSON_ARRAY);
+    ovs_assert(!header->length);
+    ovs_assert(!data->length);
+
+    /* Compose content.  Add a new-line (replacing the null terminator) to make
+     * the file easier to read, even though it has no semantic value.  */
+    json_to_ds(json, 0, data);
+    ds_put_char(data, '\n');
+
+    /* Compose header. */
+    uint8_t sha1[SHA1_DIGEST_SIZE];
+    sha1_bytes(data->string, data->length, sha1);
+    ds_put_format(header, "OVSDB %s %"PRIuSIZE" "SHA1_FMT"\n",
+                  magic, data->length, SHA1_ARGS(sha1));
+}
+
 struct ovsdb_error *
 ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
 {
-    uint8_t sha1[SHA1_DIGEST_SIZE];
-    struct ovsdb_error *error;
-    char *json_string;
-    char header[128];
-    size_t length;
-
-    json_string = NULL;
-
     if (file->mode == OVSDB_LOG_READ || file->write_error) {
-        error = ovsdb_log_truncate(file);
+        struct ovsdb_error *error = ovsdb_log_truncate(file);
         if (error) {
-            goto error;
+            file->write_error = true;
+            return error;
         }
     }
 
     if (json->type != JSON_OBJECT && json->type != JSON_ARRAY) {
-        error = OVSDB_BUG("bad JSON type");
-        goto error;
+        return OVSDB_BUG("bad JSON type");
     }
 
-    /* Compose content.  Add a new-line (replacing the null terminator) to make
-     * the file easier to read, even though it has no semantic value.  */
-    json_string = json_to_string(json, 0);
-    length = strlen(json_string) + 1;
-    json_string[length - 1] = '\n';
-
-    /* Compose header. */
-    sha1_bytes(json_string, length, sha1);
-    snprintf(header, sizeof header, "OVSDB %s %"PRIuSIZE" "SHA1_FMT"\n",
-             file->magic, length, SHA1_ARGS(sha1));
+    struct ds header = DS_EMPTY_INITIALIZER;
+    struct ds data = DS_EMPTY_INITIALIZER;
+    ovsdb_log_compose_record(json, file->magic, &header, &data);
+    size_t total_length = header.length + data.length;
 
     /* Write. */
-    if (fwrite(header, strlen(header), 1, file->stream) != 1
-        || fwrite(json_string, length, 1, file->stream) != 1
-        || fflush(file->stream))
-    {
-        error = ovsdb_io_error(errno, "%s: write failed", file->rel_name);
-
+    bool ok = (fwrite(header.string, header.length, 1, file->stream) == 1
+               && fwrite(data.string, data.length, 1, file->stream) == 1
+               && fflush(file->stream) == 0);
+    ds_destroy(&header);
+    ds_destroy(&data);
+    if (!ok) {
         /* Remove any partially written data, ignoring errors since there is
          * nothing further we can do. */
         ignore(ftruncate(fileno(file->stream), file->offset));
 
-        goto error;
+        file->write_error = true;
+        return ovsdb_io_error(errno, "%s: write failed", file->rel_name);
     }
 
-    file->offset += strlen(header) + length;
-    free(json_string);
+    file->offset += total_length;
     return NULL;
-
-error:
-    file->write_error = true;
-    free(json_string);
-    return error;
 }
 
 struct ovsdb_error *
