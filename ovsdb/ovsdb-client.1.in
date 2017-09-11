@@ -126,12 +126,12 @@ specification, from \fIschema\fR, then connects to \fIserver\fR and
 requests the server to convert the database whose name is specified in
 \fIschema\fR to the schema also specified in \fIschema\fR.
 .IP
-The conversion is atomic, consistent, isolated, and durable.  The
-OVSDB protocol does not provide a way for the server to notify a
-client that a database's schema has changed, so currently
-\fBovsdb\-server\fR disconnects any clients connected when the
-conversion takes place.  Upon reconnction, clients will discover that
-the schema has changed.
+The conversion is atomic, consistent, isolated, and durable.
+Following the schema change, the server notifies clients that use the
+\fBset_db_change_aware\fR RPC introduced in Open vSwitch 2.9 and
+cancel their outstanding transactions and monitors.  The server
+disconnects other clients, enabling them to notify the change when
+they reconnect.
 .IP
 This command can do simple ``upgrades'' and ``downgrades'' on a
 database's schema.  The data in the database must be valid when
@@ -147,8 +147,8 @@ or table to one that does not will delete all data in that column or
 table.  Back up critical databases before converting them.
 .IP
 This command works with clustered and standalone databases.
-Standalone databases may also be converted with \fBovsdb\-tool\fR's
-\fBconvert\fR command.
+Standalone databases may also be converted (offline) with
+\fBovsdb\-tool\fR's \fBconvert\fR command.
 .
 .IP "\fBneeds\-conversion \fR[\fIserver\fR] \fIschema\fR"
 Reads the schema from \fIschema\fR, then connects to \fIserver\fR and
