@@ -208,6 +208,14 @@ ovsdb_error_to_json(const struct ovsdb_error *error)
     return json;
 }
 
+struct json *
+ovsdb_error_to_json_free(struct ovsdb_error *error)
+{
+    struct json *json = ovsdb_error_to_json(error);
+    ovsdb_error_destroy(error);
+    return json;
+}
+
 char *
 ovsdb_error_to_string(const struct ovsdb_error *error)
 {

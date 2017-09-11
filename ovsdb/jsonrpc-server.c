@@ -82,7 +82,7 @@ static void ovsdb_jsonrpc_session_send(struct ovsdb_jsonrpc_session *,
 /* Triggers. */
 static void ovsdb_jsonrpc_trigger_create(struct ovsdb_jsonrpc_session *,
                                          struct ovsdb *,
-                                         struct json *id, struct json *params);
+                                         struct jsonrpc_msg *request);
 static struct ovsdb_jsonrpc_trigger *ovsdb_jsonrpc_trigger_find(
     struct ovsdb_jsonrpc_session *, const struct json *id, size_t hash);
 static void ovsdb_jsonrpc_trigger_complete(struct ovsdb_jsonrpc_trigger *);
@@ -894,11 +894,21 @@ ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *waiter)
 }
 
 static struct jsonrpc_msg *
+syntax_error_reply(const struct jsonrpc_msg *request, const char *details)
+{
+    struct ovsdb_error *error = ovsdb_syntax_error(
+        request->params, NULL, "%s: %s", request->method, details);
+    struct jsonrpc_msg *msg = jsonrpc_create_error(ovsdb_error_to_json(error),
+                                                   request->id);
+    ovsdb_error_destroy(error);
+    return msg;
+}
+
+static struct jsonrpc_msg *
 ovsdb_jsonrpc_session_unlock(struct ovsdb_jsonrpc_session *s,
                              struct jsonrpc_msg *request)
 {
     struct ovsdb_lock_waiter *waiter;
-    struct jsonrpc_msg *reply;
     struct ovsdb_error *error;
     const char *lock_name;
 
@@ -908,26 +918,21 @@ ovsdb_jsonrpc_session_unlock(struct ovsdb_jsonrpc_session *s,
 
     error = ovsdb_jsonrpc_session_parse_lock_name(request, &lock_name);
     if (error) {
-        goto error;
+        return jsonrpc_create_error(ovsdb_error_to_json_free(error),
+                                    request->id);
     }
 
     /* Report error if this session has not issued a "lock" or "steal" for this
      * lock. */
     waiter = ovsdb_session_get_lock_waiter(&s->up, lock_name);
     if (!waiter) {
-        error = ovsdb_syntax_error(
-            request->params, NULL, "\"unlock\" without \"lock\" or \"steal\"");
-        goto error;
+        return syntax_error_reply(request,
+                                  "\"unlock\" without \"lock\" or \"steal\"");
     }
 
     ovsdb_jsonrpc_session_unlock__(waiter);
 
     return jsonrpc_create_reply(json_object_create(), request->id);
-
-error:
-    reply = jsonrpc_create_error(ovsdb_error_to_json(error), request->id);
-    ovsdb_error_destroy(error);
-    return reply;
 }
 
 static struct jsonrpc_msg *
@@ -938,23 +943,11 @@ ovsdb_jsonrpc_session_set_db_change_aware(struct ovsdb_jsonrpc_session *s,
     if (params->n != 1
         || (params->elems[0]->type != JSON_TRUE &&
             params->elems[0]->type != JSON_FALSE)) {
-        return jsonrpc_create_error(json_string_create("invalid parameters"),
-                                    request->id);
+        return syntax_error_reply(request, "true or false parameter expected");
     }
 
     s->db_change_aware = json_boolean(params->elems[0]);
     return jsonrpc_create_reply(json_object_create(), request->id);
-}
-
-static struct jsonrpc_msg *
-execute_transaction(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
-                    struct jsonrpc_msg *request)
-{
-    ovsdb_jsonrpc_trigger_create(s, db, request->id, request->params);
-    request->id = NULL;
-    request->params = NULL;
-    jsonrpc_msg_destroy(request);
-    return NULL;
 }
 
 static void
@@ -963,10 +956,11 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
 {
     struct jsonrpc_msg *reply;
 
-    if (!strcmp(request->method, "transact")) {
+    if (!strcmp(request->method, "transact") ||
+        !strcmp(request->method, "convert_db")) {
         struct ovsdb *db = ovsdb_jsonrpc_lookup_db(s, request, &reply);
         if (!reply) {
-            reply = execute_transaction(s, db, request);
+            ovsdb_jsonrpc_trigger_create(s, db, request);
         }
     } else if (!strcmp(request->method, "monitor") ||
                (monitor_cond_enable__ && !strcmp(request->method,
@@ -1078,30 +1072,24 @@ struct ovsdb_jsonrpc_trigger {
 
 static void
 ovsdb_jsonrpc_trigger_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
-                             struct json *id, struct json *params)
+                             struct jsonrpc_msg *request)
 {
-    struct ovsdb_jsonrpc_trigger *t;
-    size_t hash;
-
     /* Check for duplicate ID. */
-    hash = json_hash(id, 0);
-    t = ovsdb_jsonrpc_trigger_find(s, id, hash);
+    size_t hash = json_hash(request->id, 0);
+    struct ovsdb_jsonrpc_trigger *t
+        = ovsdb_jsonrpc_trigger_find(s, request->id, hash);
     if (t) {
-        struct jsonrpc_msg *msg;
-
-        msg = jsonrpc_create_error(json_string_create("duplicate request ID"),
-                                   id);
-        ovsdb_jsonrpc_session_send(s, msg);
-        json_destroy(id);
-        json_destroy(params);
+        ovsdb_jsonrpc_session_send(
+            s, syntax_error_reply(request, "duplicate request ID"));
+        jsonrpc_msg_destroy(request);
         return;
     }
 
     /* Insert into trigger table. */
     t = xmalloc(sizeof *t);
-    ovsdb_trigger_init(&s->up, db, &t->trigger, params, time_msec(),
+    ovsdb_trigger_init(&s->up, db, &t->trigger, request, time_msec(),
                        s->read_only);
-    t->id = id;
+    t->id = json_clone(request->id);
     hmap_insert(&s->triggers, &t->hmap_node, hash);
 
     /* Complete early if possible. */

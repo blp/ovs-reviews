@@ -1520,7 +1520,10 @@ do_trigger(struct ovs_cmdl_context *ctx)
             json_destroy(params);
         } else {
             struct test_trigger *t = xmalloc(sizeof *t);
-            ovsdb_trigger_init(&session, db, &t->trigger, params, now, false);
+            ovsdb_trigger_init(&session, db, &t->trigger,
+                               jsonrpc_create_request("transact", params,
+                                                      NULL),
+                               now, false);
             t->number = number++;
             if (ovsdb_trigger_is_complete(&t->trigger)) {
                 do_trigger_dump(t, now, "immediate");

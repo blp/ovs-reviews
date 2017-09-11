@@ -20,6 +20,7 @@
 #include "compiler.h"
 
 struct ovsdb;
+struct ovsdb_schema;
 struct ovsdb_txn;
 
 struct json *ovsdb_to_txn_json(const struct ovsdb *, const char *comment);
@@ -29,6 +30,11 @@ struct ovsdb_error *ovsdb_file_txn_from_json(struct ovsdb *,
                                              const struct json *,
                                              bool converting,
                                              struct ovsdb_txn **)
+    OVS_WARN_UNUSED_RESULT;
+
+struct ovsdb_error *ovsdb_convert(const struct ovsdb *src,
+                                  const struct ovsdb_schema *new_schema,
+                                  struct ovsdb **dstp)
     OVS_WARN_UNUSED_RESULT;
 
 #endif /* ovsdb/file.h */

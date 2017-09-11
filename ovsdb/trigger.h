@@ -46,7 +46,7 @@ struct ovsdb_trigger {
     struct ovs_list node;
     struct ovsdb_session *session; /* Session that owns this trigger. */
     struct ovsdb *db;           /* Database on which trigger acts. */
-    struct json *request;       /* Database request. */
+    struct jsonrpc_msg *request; /* Database request. */
     struct json *result;        /* Result (null if none yet). */
     struct ovsdb_txn_progress *progress;
     long long int created;      /* Time created. */
@@ -56,7 +56,7 @@ struct ovsdb_trigger {
 
 void ovsdb_trigger_init(struct ovsdb_session *, struct ovsdb *,
                         struct ovsdb_trigger *,
-                        struct json *request, long long int now,
+                        struct jsonrpc_msg *request, long long int now,
                         bool read_only);
 void ovsdb_trigger_destroy(struct ovsdb_trigger *);
 

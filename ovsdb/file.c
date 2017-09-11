@@ -30,6 +30,7 @@
 #include "ovsdb-error.h"
 #include "row.h"
 #include "socket-util.h"
+#include "storage.h"
 #include "table.h"
 #include "timeval.h"
 #include "transaction.h"
@@ -206,6 +207,91 @@ ovsdb_file_txn_from_json(struct ovsdb *db, const struct json *json,
 
 error:
     ovsdb_txn_abort(txn);
+    return error;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_convert_table(struct ovsdb_txn *txn,
+                    const struct ovsdb_table *src_table,
+                    struct ovsdb_table *dst_table)
+{
+    const struct ovsdb_row *src_row;
+    HMAP_FOR_EACH (src_row, hmap_node, &src_table->rows) {
+        struct ovsdb_row *dst_row = ovsdb_row_create(dst_table);
+
+        struct shash_node *node;
+        SHASH_FOR_EACH (node, &src_table->schema->columns) {
+            const struct ovsdb_column *src_column = node->data;
+            if (src_column->index == OVSDB_COL_UUID ||
+                src_column->index == OVSDB_COL_VERSION) {
+                continue;
+            }
+
+            const struct ovsdb_column *dst_column
+                = shash_find_data(&dst_table->schema->columns,
+                                  src_column->name);
+            if (!dst_column) {
+                continue;
+            }
+
+            struct ovsdb_error *error = ovsdb_datum_convert(
+                &dst_row->fields[dst_column->index], &dst_column->type,
+                &src_row->fields[src_column->index], &src_column->type);
+            if (error) {
+                ovsdb_row_destroy(dst_row);
+                return error;
+            }
+        }
+
+        ovsdb_txn_row_insert(txn, dst_row);
+    }
+    return NULL;
+}
+
+/* Copies the data in 'src', converts it into the schema specified in
+ * 'new_schema', and puts it into a newly created, unbacked database, and
+ * stores a pointer to the new database in '*dstp'.  Returns null if
+ * successful, otherwise an error; on error, stores NULL in '*dstp'. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_convert(const struct ovsdb *src, const struct ovsdb_schema *new_schema,
+              struct ovsdb **dstp)
+{
+    struct ovsdb *dst = ovsdb_create(ovsdb_schema_clone(new_schema),
+                                     ovsdb_storage_create_unbacked());
+    struct ovsdb_txn *txn = ovsdb_txn_create(dst);
+    struct ovsdb_error *error = NULL;
+
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, &src->tables) {
+        const char *table_name = node->name;
+        struct ovsdb_table *src_table = node->data;
+        struct ovsdb_table *dst_table = shash_find_data(&dst->tables,
+                                                        table_name);
+        if (!dst_table) {
+            continue;
+        }
+
+        error = ovsdb_convert_table(txn, src_table, dst_table);
+        if (error) {
+            goto error;
+        }
+    }
+
+    error = ovsdb_txn_replay_commit(txn);
+    if (error) {
+        txn = NULL;            /* ovsdb_txn_replay_commit() already aborted. */
+        goto error;
+    }
+
+    *dstp = dst;
+    return NULL;
+
+error:
+    ovsdb_destroy(dst);
+    if (txn) {
+        ovsdb_txn_abort(txn);
+    }
+    *dstp = NULL;
     return error;
 }
 

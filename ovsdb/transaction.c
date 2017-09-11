@@ -882,7 +882,8 @@ ovsdb_txn_complete(struct ovsdb_txn *txn)
 /* Applies 'txn' to the internal representation of the database.  This is for
  * transactions that don't need to be written to storage; probably, they came
  * from storage.  These transactions shouldn't ordinarily fail because storage
- * should contain only consistent transactions. */
+ * should contain only consistent transactions.  (One exception is for database
+ * conversion in ovsdb_convert().) */
 struct ovsdb_error *
 ovsdb_txn_replay_commit(struct ovsdb_txn *txn)
 {
@@ -914,6 +915,27 @@ struct ovsdb_txn_progress {
 };
 
 struct ovsdb_txn_progress *
+ovsdb_txn_propose_schema_change(struct ovsdb *db,
+                                const struct json *schema,
+                                const struct json *data)
+{
+    struct ovsdb_txn_progress *progress = xzalloc(sizeof *progress);
+    progress->storage = db->storage;
+
+    struct uuid next;
+    struct ovsdb_write *write = ovsdb_storage_write_schema_change(
+        db->storage, schema, data, &db->prereq, &next);
+    //txn->db->prereq = next;     /* XXX */
+    if (!ovsdb_write_is_complete(write)) {
+        progress->write = write;
+    } else {
+        progress->error = ovsdb_error_clone(ovsdb_write_get_error(write));
+        ovsdb_write_destroy(write);
+    }
+    return progress;
+}
+
+struct ovsdb_txn_progress *
 ovsdb_txn_propose_commit(struct ovsdb_txn *txn, bool durable)
 {
     struct ovsdb_txn_progress *progress = xzalloc(sizeof *progress);
@@ -923,7 +945,7 @@ ovsdb_txn_propose_commit(struct ovsdb_txn *txn, bool durable)
         return progress;
     }
 
-    /* Send the commit to each replica. */
+    /* Turn the commit into the format used for the storage logs.. */
     struct json *txn_json = ovsdb_file_txn_to_json(txn);
     if (!txn_json) {
         /* Nothing to do, so success. */
@@ -938,12 +960,11 @@ ovsdb_txn_propose_commit(struct ovsdb_txn *txn, bool durable)
     //txn->db->prereq = next;     /* XXX */
     if (!ovsdb_write_is_complete(write)) {
         progress->write = write;
-        return progress;
     } else {
         progress->error = ovsdb_error_clone(ovsdb_write_get_error(write));
         ovsdb_write_destroy(write);
-        return progress;
     }
+    return progress;
 }
 
 /* Proposes 'txn' for commitment and then waits for the commit to succeed or

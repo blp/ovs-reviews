@@ -20,6 +20,7 @@
 #include <limits.h>
 
 #include "execution.h"
+#include "file.h"
 #include "openvswitch/json.h"
 #include "jsonrpc.h"
 #include "ovsdb.h"
@@ -37,9 +38,11 @@ static void ovsdb_trigger_complete(struct ovsdb_trigger *);
 void
 ovsdb_trigger_init(struct ovsdb_session *session, struct ovsdb *db,
                    struct ovsdb_trigger *trigger,
-                   struct json *request, long long int now,
+                   struct jsonrpc_msg *request, long long int now,
                    bool read_only)
 {
+    ovs_assert(!strcmp(request->method, "transact") ||
+               !strcmp(request->method, "convert_db"));
     trigger->session = session;
     trigger->db = db;
     ovs_list_push_back(&trigger->db->triggers, &trigger->node);
@@ -56,7 +59,7 @@ void
 ovsdb_trigger_destroy(struct ovsdb_trigger *trigger)
 {
     ovs_list_remove(&trigger->node);
-    json_destroy(trigger->request);
+    jsonrpc_msg_destroy(trigger->request);
     json_destroy(trigger->result);
 }
 
@@ -127,23 +130,70 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
     if (!t->result) {
         ovs_assert(!t->progress);
 
-        bool durable;
-        struct ovsdb_txn *txn = ovsdb_execute_compose(
-            t->db, t->session, t->request, t->read_only,
-            now - t->created, &t->timeout_msec, &durable, &t->result);
-        if (!txn) {
-            if (t->result) {
-                /* Complete (with error). */
-                ovsdb_trigger_complete(t);
-            } else {
-                /* Unsatisfied "wait" condition.  Take no action now, retry
-                 * later. */
+        struct ovsdb_txn *txn = NULL;
+        if (!strcmp(t->request->method, "transact")) {
+            bool durable;
+            txn = ovsdb_execute_compose(
+                t->db, t->session, t->request->params, t->read_only,
+                now - t->created, &t->timeout_msec, &durable, &t->result);
+            if (!txn) {
+                if (t->result) {
+                    /* Complete (with error). */
+                    ovsdb_trigger_complete(t);
+                } else {
+                    /* Unsatisfied "wait" condition.  Take no action now, retry
+                     * later. */
+                }
+                return;
             }
-            return;
-        }
 
-        /* Transition to "committing" state. */
-        t->progress = ovsdb_txn_propose_commit(txn, durable);
+            /* Transition to "committing" state. */
+            t->progress = ovsdb_txn_propose_commit(txn, durable);
+        } else if (!strcmp(t->request->method, "convert_db")) {
+            /* Validate parameters. */
+            const struct json *params = t->request->params;
+            if (params->type != JSON_ARRAY || params->u.array.n != 2) {
+                t->result = ovsdb_error_to_json_free(
+                    ovsdb_syntax_error(params, NULL, "array expected"));
+                ovsdb_trigger_complete(t);
+                return;
+            }
+
+            /* Parse new schema and make a converted copy. */
+            const struct json *new_schema_json = params->u.array.elems[1];
+            struct ovsdb_schema *new_schema;
+            struct ovsdb_error *error
+                = ovsdb_schema_from_json(new_schema_json, &new_schema);
+            struct ovsdb *dst;
+            if (!error && strcmp(new_schema->name, t->db->schema->name)) {
+                error = ovsdb_error("invalid parameters",
+                                    "new schema name (%s) does not match "
+                                    "database name (%s)",
+                                    new_schema->name, t->db->schema->name);
+            }
+            if (!error) {
+                error = ovsdb_convert(t->db, new_schema, &dst);
+            }
+            if (error) {
+                ovsdb_schema_destroy(new_schema);
+                t->result = ovsdb_error_to_json(error);
+                ovsdb_trigger_complete(t);
+                return;
+            }
+
+            /* Make the new copy into a transaction log record. */
+            struct json *txn_json = ovsdb_to_txn_json(
+                dst, "converted by ovsdb-server");
+            ovsdb_destroy(dst);
+
+            /* Propose the change. */
+            t->progress = ovsdb_txn_propose_schema_change(
+                t->db, new_schema_json, txn_json);
+            json_destroy(txn_json);
+            t->result = json_object_create();
+        } else {
+            abort();
+        }
 
         /* If the transaction committed synchronously, complete it and
          * transition to "complete".  This is more than an optimization because
@@ -152,7 +202,9 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
          * it's what we have). */
         if (ovsdb_txn_progress_is_complete(t->progress)
             && !ovsdb_txn_progress_get_error(t->progress)) {
-            ovsdb_txn_complete(txn);
+            if (txn) {
+                ovsdb_txn_complete(txn);
+            }
             ovsdb_txn_progress_destroy(t->progress);
             t->progress = NULL;
             ovsdb_trigger_complete(t);
@@ -162,7 +214,9 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
         /* Fall through to the general handling for the "committing" state.  We
          * abort the transaction--if and when it eventually commits, we'll read
          * it back from storage and replay it locally. */
-        ovsdb_txn_abort(txn);
+        if (txn) {
+            ovsdb_txn_abort(txn);
+        }
     }
 
     /* Handle "committing" state. */

@@ -453,6 +453,24 @@ do_list_dbs(struct jsonrpc *rpc, const char *database OVS_UNUSED,
 }
 
 static void
+do_convert(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+           int argc OVS_UNUSED, char *argv[])
+{
+    struct ovsdb_schema *new_schema;
+    check_ovsdb_error(ovsdb_schema_from_file(argv[0], &new_schema));
+
+    struct jsonrpc_msg *request, *reply;
+    request = jsonrpc_create_request(
+        "convert_db",
+        json_array_create_2(json_string_create(new_schema->name),
+                            ovsdb_schema_to_json(new_schema)), NULL);
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    print_json(reply->result);
+    putchar('\n');
+    jsonrpc_msg_destroy(reply);
+}
+
+static void
 do_get_schema(struct jsonrpc *rpc, const char *database,
               int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
 {
@@ -1762,6 +1780,7 @@ do_lock_unlock(struct jsonrpc *rpc, const char *database OVS_UNUSED,
  * global variable 'rpc'. */
 static const struct ovsdb_client_command all_commands[] = {
     { "list-dbs",           NEED_RPC,      0, 0,       do_list_dbs },
+    { "convert",            NEED_RPC,      1, 1,       do_convert },
     { "get-schema",         NEED_DATABASE, 0, 0,       do_get_schema },
     { "get-schema-version", NEED_DATABASE, 0, 0,       do_get_schema_version },
     { "list-tables",        NEED_DATABASE, 0, 0,       do_list_tables },

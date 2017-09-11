@@ -14,7 +14,7 @@ for i in `seq 0 9`; do
 	 ovn-sbctl --log-file=$i-$j.log -vfile add SB_Global . external_ids $i-$j=$i-$j
      done)&
 done
-sleep 5
+sleep 2
 kill `cat s1.pid` || true
 wait
 ovn-sbctl --bare get SB_Global . external-ids | sed 's/, /\n/g; s/[{}"]//g;' > output
