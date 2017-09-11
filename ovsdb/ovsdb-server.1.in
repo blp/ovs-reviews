@@ -732,122 +732,6 @@ The response object contains the following members:
 the running OVSDB server process. A fresh UUID is generated when the
 process restarts.
 .
-.IP "4.1.16. Database Status Subscription"
-.IP
-This operation allows a client to subscribe to the list of databases
-accessible over the management protocol, obtaining an initial list and
-ongoing notifications of changes.  The information reported includes
-database names plus additional status information.
-.IP
-When an OVSDB session does not subscribe to database status updates,
-the OVSDB server can only hint to a client that a database has been
-added or removed by closing the client's JSON-RPC connection.  When a
-client subscribes to status updates, the server can directly report
-these changes, so it suppresses the connection close.
-.IP
-To subscribe to notifications, a client sends the following request:
-.
-.PP
-.RS
-.nf
-"method": "db_monitor"
-"params": []
-"id": <nonnull-json-value>
-.fi
-.RE
-.
-.IP
-The response includes the current status for all of the databases
-currently accessible over the database protocol:
-.
-.PP
-.RS
-.nf
-"result": <db-updates>
-"error": null
-"id": same "id" as request
-.fi
-.RE
-.
-.IP
-Following a "db_monitor" reply, when a database's status changes, the
-server sends a notification that includes information for the
-databases that changed:
-.
-.PP
-.RS
-.nf
-"method": "db_update"
-"params": [<db-updates>]
-"id": null
-.fi
-.RE
-.
-.IP
-To unsubscribe from notifications, a client sends the following
-request:
-.
-.PP
-.RS
-.nf
-"method": "db_cancel"
-"params": []
-"id": <nonnull-json-value>
-.fi
-.RE
-.
-.IP
-Following the response, as follows, the client will not receive any
-further database status updates:
-.
-.PP
-.RS
-.nf
-"result": {}
-"error": null
-"id": same "id" as request
-.fi
-.RE
-.
-.IP
-<db-updates> is a JSON object that maps from a <db-name> to a
-<db-update>.  A <db-update> is a JSON object with the following
-members:
-.
-.RS
-.TP
-"status": one of "added" or "removed"
-This is "removed" for a notification that indicates that a database is
-no longer accessible over this connection.  This serves as a
-notification to the client that any outstanding "monitor" or
-"monitor_cond" for the removed database is canceled.  Otherwise, it is
-"added".
-.
-.TP
-"model": one of "standalone" or "clustered"
-This is "standalone" for a standalone or active-backup database,
-"clustered" for a clustered database.  (\fBovsdb\-server\fR cannot
-distinguish between running truly standalone or as the active server
-in an active-backup pair.)
-.
-.TP
-"backup": <boolean>
-This is true if the database is acting as the backup server in an
-active-backup pair, false otherwise..
-.
-.TP
-"storage": one of "connected" or "disconnected"
-This is "connected" for a database that has a healthy connection to
-its storage, otherwise "disconnected".  For a standalone or
-active-backup database, it is always "connected".
-.
-.TP
-"leader": <boolean>
-For a clustered database, this is "true" on the server that is the
-cluster leader and "false" on other servers.  For a standalone or
-active-backup database, it is always "true".
-.RE
-.
 .IP "4.1.16. Database Change Awareness"
 .IP
 RFC 7047 does not provide a way for a client to find out about some
@@ -861,7 +745,7 @@ when it reconnects.
 .IP
 OVS 2.9 provides a way for clients to keep track of these kinds of
 changes, by monitoring the \fBDatabase\fR table in the \fB_Server\fR
-database introduced in this release.  See \fBovsdb-_server\fR(5) for
+database introduced in this release.  See \fBovsdb-server\fR(5) for
 details.  By itself, this does not suppress \fBovsdb\-server\fR
 disconnection behavior, because a client might monitor this database
 without understanding its special semantics.  Instead,
@@ -877,7 +761,7 @@ without understanding its special semantics.  Instead,
 .IP
 If the boolean in the request is true, it suppresses the
 connection-closing behavior for the current connection, and false
-restores the default behavior.  The reply is always the same
+restores the default behavior.  The reply is always the same:
 .PP
 .RS
 .nf
@@ -886,6 +770,50 @@ restores the default behavior.  The reply is always the same
 "id": same "id" as request
 .fi
 .RE
+.
+.IP "4.1.17. Online Database Schema Conversion"
+.IP
+Before Open vSwitch 2.9, a database's schema could be changed only by
+taking its server offline, converting it using \fBovsdb\-tool
+convert\fR, and then bringing it back online.  Open vSwitch 2.9
+introduces the following RPC to convert the schema of a database
+without taking it offline.
+.PP
+.RS
+.nf
+"method": "convert_db"
+"params": [<database-schema>]
+"id": <nonnull-json-value>
+.fi
+.RE
+.IP
+If the server successfully converts the database, the server replies
+with:
+.PP
+.RS
+.nf
+"result": {}
+"error": null
+"id": same "id" as request
+.fi
+.RE
+.IP
+If the server cannot convert the database, it replies with an error:
+.PP
+.RS
+.nf
+"result": null
+"error": <error>
+"id": same "id" as request
+.fi
+.RE
+.IP
+If the new schema and the old schema are identical, the server does
+not disrupt clients.  Otherwise, when a database's schema changes, the
+server disconnects all clients that are not database change aware and
+sends \fBcancel\fR RPCs for outstanding transactions and
+\fBmonitor_cancel\fR RPCs for ongoing monitors against the database
+that changed.
 .IP "5.1. Notation"
 For <condition>, RFC 7047 only allows the use of \fB!=\fR, \fB==\fR,
 \fBincludes\fR, and \fBexcludes\fR operators with set types.  Open

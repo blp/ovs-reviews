@@ -930,11 +930,11 @@ ovsdb_txn_propose_commit(struct ovsdb_txn *txn, bool durable)
         return progress;
     }
     txn_json = ovsdb_file_txn_annotate(txn_json, ovsdb_txn_get_comment(txn));
-    txn_json = json_array_create_2(json_null_create(), txn_json);
 
     struct uuid next;
     struct ovsdb_write *write = ovsdb_storage_write(
         txn->db->storage, txn_json, &txn->db->prereq, &next, durable);
+    json_destroy(txn_json);
     //txn->db->prereq = next;     /* XXX */
     if (!ovsdb_write_is_complete(write)) {
         progress->write = write;

@@ -540,18 +540,15 @@ close_db(struct db *db)
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 parse_txn(struct server_config *config, struct db *db,
-          struct ovsdb_schema **schemap, const struct json *txn_json,
+          struct ovsdb_schema *schema, const struct json *txn_json,
           const struct uuid *txnid)
 {
-    if (*schemap) {
+    if (schema) {
+        /* XXX There is some real confusion here regarding schema and database
+         * names. */
         if (db->db) {
-            return ovsdb_error(NULL, "%s: changing schema not yet supported",
-                               db->filename);
+            ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
         }
-
-        struct ovsdb_schema *schema = *schemap;
-        *schemap = NULL;
-
         db->db = ovsdb_create(schema, db->storage);
         if (shash_find(config->all_dbs, schema->name)) {
             ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
@@ -598,8 +595,7 @@ read_db(struct server_config *config, struct db *db)
             /* End of file. */
             return NULL;
         } else {
-            error = parse_txn(config, db, &schema, txn_json, &txnid);
-            ovsdb_schema_destroy(schema);
+            error = parse_txn(config, db, schema, txn_json, &txnid);
             json_destroy(txn_json);
             if (error) {
                 break;
@@ -1527,8 +1523,7 @@ remove_db(struct server_config *config, struct shash_node *node)
     struct db *db = node->data;
 
     if (db->db) {
-        bool ok = ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
-        ovs_assert(ok);
+        ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
     }
 
     close_db(db);

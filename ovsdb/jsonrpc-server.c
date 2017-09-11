@@ -167,9 +167,8 @@ ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *svr, struct ovsdb *db)
     return ovsdb_server_add_db(&svr->up, db);
 }
 
-/* Removes 'db' from the set of databases served out by 'svr'.  Returns
- * true if successful, false if there is no database associated with 'db'. */
-bool
+/* Removes 'db' from the set of databases served out by 'svr'. */
+void
 ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *svr,
                                struct ovsdb *db)
 {
@@ -182,7 +181,7 @@ ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *svr,
 
     ovsdb_jsonrpc_server_reconnect(svr, false);
 
-    return ovsdb_server_remove_db(&svr->up, db);
+    ovsdb_server_remove_db(&svr->up, db);
 }
 
 void

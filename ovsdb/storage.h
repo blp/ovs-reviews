@@ -79,4 +79,10 @@ struct ovsdb_error *ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
                                                  const struct json *snapshot)
     OVS_WARN_UNUSED_RESULT;
 
+struct ovsdb_write *ovsdb_storage_write_schema_change(
+    struct ovsdb_storage *,
+    const struct json *schema, const struct json *data,
+    const struct uuid *prereq, struct uuid *result)
+    OVS_WARN_UNUSED_RESULT;
+
 #endif /* ovsdb/storage.h */

@@ -27,7 +27,7 @@ struct uuid;
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(bool read_only);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
                                  struct ovsdb *);
-bool ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *,
+void ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *,
                                      struct ovsdb *);
 void ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *);
 

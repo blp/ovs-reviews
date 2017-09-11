@@ -314,22 +314,24 @@ struct ovsdb_write {
     struct raft_command *command;
 };
 
+/* Not suitable for writing transactions that change the schema. */
 struct ovsdb_write * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
                     const struct uuid *prereq, struct uuid *resultp,
                     bool durable)
 {
-    ovs_assert(data->type == JSON_ARRAY && data->u.array.n == 2);
-
     struct ovsdb_write *w = xzalloc(sizeof *w);
     struct uuid result = UUID_ZERO;
     if (storage->error) {
         w->error = ovsdb_error_clone(storage->error);
     } else if (storage->raft) {
-        w->command = raft_command_execute(storage->raft, data,
+        struct json *txn_json = json_array_create_2(json_null_create(),
+                                                    json_clone(data));
+        w->command = raft_command_execute(storage->raft, txn_json,
                                           prereq, &result);
+        json_destroy(txn_json);
     } else if (storage->log) {
-        w->error = ovsdb_log_write(storage->log, data->u.array.elems[1]);
+        w->error = ovsdb_log_write(storage->log, data);
         if (!w->error) {
             storage->n_written++;
             if (durable) {
@@ -347,6 +349,7 @@ ovsdb_storage_write(struct ovsdb_storage *storage, const struct json *data,
     return w;
 }
 
+/* Not suitable for writing transactions that change the schema. */
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_storage_write_block(struct ovsdb_storage *storage,
                           const struct json *data, const struct uuid *prereq,
@@ -445,12 +448,11 @@ ovsdb_storage_should_snapshot(const struct ovsdb_storage *storage)
     return false;
 }
 
-struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
-                             const struct json *schema,
-                             const struct json *data)
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_storage_store_snapshot__(struct ovsdb_storage *storage,
+                               const struct json *schema,
+                               const struct json *data)
 {
-    struct ovsdb_error *error;
     if (storage->raft) {
         struct json *entries = json_array_create_empty();
         if (schema) {
@@ -459,8 +461,10 @@ ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
         if (data) {
             json_array_add(entries, json_clone(data));
         }
-        error = raft_store_snapshot(storage->raft, entries);
+        struct ovsdb_error *error = raft_store_snapshot(storage->raft,
+                                                        entries);
         json_destroy(entries);
+        return error;
     } else if (storage->log) {
         struct json *entries[2];
         size_t n = 0;
@@ -470,12 +474,55 @@ ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
         if (data) {
             entries[n++] = CONST_CAST(struct json *, data);
         }
-        error = ovsdb_log_replace(storage->log, entries, n);
+        return ovsdb_log_replace(storage->log, entries, n);
     } else {
         return NULL;
     }
+}
 
+/* 'schema' and 'data' should faithfully represent the current schema and data,
+ * otherwise the two storing backing formats will yield divergent results.  Use
+ * ovsdb_storage_write_schema_change() to change the schema. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_storage_store_snapshot(struct ovsdb_storage *storage,
+                             const struct json *schema,
+                             const struct json *data)
+{
+    struct ovsdb_error *error = ovsdb_storage_store_snapshot__(storage,
+                                                               schema, data);
     bool retry_quickly = error != NULL;
     storage->next_snapshot = next_snapshot_time(retry_quickly);
     return error;
+}
+
+struct ovsdb_write * OVS_WARN_UNUSED_RESULT
+ovsdb_storage_write_schema_change(struct ovsdb_storage *storage,
+                                  const struct json *schema,
+                                  const struct json *data,
+                                  const struct uuid *prereq,
+                                  struct uuid *resultp)
+{
+    struct ovsdb_write *w = xzalloc(sizeof *w);
+    struct uuid result = UUID_ZERO;
+    if (storage->error) {
+        w->error = ovsdb_error_clone(storage->error);
+    } else if (storage->raft) {
+        struct json *txn_json = json_array_create_2(json_clone(schema),
+                                                    json_clone(data));
+        w->command = raft_command_execute(storage->raft, txn_json,
+                                          prereq, &result);
+        json_destroy(txn_json);
+    } else if (storage->log) {
+        w->error = ovsdb_storage_store_snapshot__(storage, schema, data);
+    } else {
+        /* When 'error' and 'command' are both null, it indicates that the
+         * command is complete.  This is fine since this unbacked storage drops
+         * writes. */
+    }
+    if (resultp) {
+        *resultp = result;
+    }
+    return w;
+
+
 }

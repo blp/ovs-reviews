@@ -174,6 +174,35 @@
       A JSON object whose names are &lt;raw-uuid&gt;s that identify servers and
       whose values are &lt;address&gt;es that specify those servers' addresses.
     </dd>
+
+    <dt>&lt;cluster-txn&gt;</dt>
+    <dd>
+      <p>
+        A JSON array with two elements:
+      </p>
+
+      <ul>
+        <li>
+          The first element is either a &lt;database-schema&gt; or null.  It is
+          always present in the first of a clustered database to indicate the
+          database's initial schema.  If it is present in a later record, it
+          indicates a change of schema for the database.
+        </li>
+
+        <li>
+          The second element is either a transaction record in the format
+          described under ``Transaction Records'' above, or null.
+        </li>
+      </ul>
+
+      <p>
+        When a schema is present, the transaction record is relative to an
+        empty database.  That is, a schema change effectively resets the
+        database to empty and the transaction record represents the full
+        database contents.  This allows readers to be ignorant of the full
+        semantics of schema change.
+      </p>
+    </dd>
   </dl>
 
   <p>
@@ -223,7 +252,8 @@
     <dt>"prev_eid": &lt;raw-uuid&gt;</dt>
     <dd>
       A snapshot of the data in the database at index "prev_index" and term
-      "prev_term", and the entry ID for that data.
+      "prev_term", and the entry ID for that data.  The snapshot must contain a
+      schema.
     </dd>
   </dl>
 
