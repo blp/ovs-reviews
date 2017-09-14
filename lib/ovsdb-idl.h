@@ -59,6 +59,8 @@ struct ovsdb_idl *ovsdb_idl_create(const char *remote,
 void ovsdb_idl_set_remote(struct ovsdb_idl *, const char *, bool);
 void ovsdb_idl_destroy(struct ovsdb_idl *);
 
+void ovsdb_idl_set_leader_only(struct ovsdb_idl *, bool leader_only);
+
 void ovsdb_idl_run(struct ovsdb_idl *);
 void ovsdb_idl_wait(struct ovsdb_idl *);
 
@@ -162,7 +164,7 @@ const struct ovsdb_idl_row *ovsdb_idl_track_get_first(
 const struct ovsdb_idl_row *ovsdb_idl_track_get_next(const struct ovsdb_idl_row *);
 bool ovsdb_idl_track_is_updated(const struct ovsdb_idl_row *row,
                                 const struct ovsdb_idl_column *column);
-void ovsdb_idl_track_clear(const struct ovsdb_idl *);
+void ovsdb_idl_track_clear(struct ovsdb_idl *);
 
 
 /* Reading the database replica. */
