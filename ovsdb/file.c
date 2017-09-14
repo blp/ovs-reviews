@@ -572,6 +572,19 @@ ovsdb_file_txn_to_json(const struct ovsdb_txn *txn)
     return ftxn.json;
 }
 
+struct json *
+ovsdb_file_txn_annotate(struct json *json, const char *comment)
+{
+    if (!json) {
+        json = json_object_create();
+    }
+    if (comment) {
+        json_object_put_string(json, "_comment", comment);
+    }
+    json_object_put(json, "_date", json_integer_create(time_wall_msec()));
+    return json;
+}
+
 struct ovsdb_error *
 ovsdb_file_commit(struct ovsdb_file *file,
                   const struct ovsdb_txn *txn, bool durable)
@@ -832,14 +845,7 @@ ovsdb_file_txn_commit(struct json *json, const char *comment,
 {
     struct ovsdb_error *error;
 
-    if (!json) {
-        json = json_object_create();
-    }
-    if (comment) {
-        json_object_put_string(json, "_comment", comment);
-    }
-    json_object_put(json, "_date", json_integer_create(time_wall_msec()));
-
+    json = ovsdb_file_txn_annotate(json, comment);
     error = ovsdb_log_write(log, json);
     json_destroy(json);
     if (error) {
