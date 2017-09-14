@@ -699,6 +699,45 @@ The response object contains the following members:
 the running OVSDB server process. A fresh UUID is generated when the
 process restarts.
 .
+.IP "4.1.16. Database Change Awareness"
+.IP
+RFC 7047 does not provide a way for a client to find out about some
+kinds of configuration changes, such as about databases added or
+removed while a client is connected to the server, or databases
+changing between read/write and read-only due to a transition between
+active and backup roles.  Traditionally, \fBovsdb\-server\fR
+disconnects all of its clients when this happens, because this prompts
+a well-written client to reassess what is available from the server
+when it reconnects.
+.IP
+OVS 2.9 provides a way for clients to keep track of these kinds of
+changes, by monitoring the \fBDatabase\fR table in the \fB_Server\fR
+database introduced in this release.  See \fBovsdb-server\fR(5) for
+details.  By itself, this does not suppress \fBovsdb\-server\fR
+disconnection behavior, because a client might monitor this database
+without understanding its special semantics.  Instead,
+\fBovsdb\-server\fR provides a special request:
+.PP
+.RS
+.nf
+"method": "set_db_change_aware"
+"params": [<boolean>]
+"id": <nonnull-json-value>
+.fi
+.RE
+.IP
+If the boolean in the request is true, it suppresses the
+connection-closing behavior for the current connection, and false
+restores the default behavior.  The reply is always the same:
+.PP
+.RS
+.nf
+"result": {}
+"error": null
+"id": same "id" as request
+.fi
+.RE
+.
 .IP "5.1. Notation"
 For <condition>, RFC 7047 only allows the use of \fB!=\fR, \fB==\fR,
 \fBincludes\fR, and \fBexcludes\fR operators with set types.  Open
