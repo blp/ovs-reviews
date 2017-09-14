@@ -351,7 +351,7 @@ ovsdb_log_unread(struct ovsdb_log *file)
 }
 
 struct ovsdb_error *
-ovsdb_log_write(struct ovsdb_log *file, struct json *json)
+ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
 {
     uint8_t sha1[SHA1_DIGEST_SIZE];
     struct ovsdb_error *error;
