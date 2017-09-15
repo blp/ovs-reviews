@@ -11,3 +11,5 @@
 /ovsdb-tool
 /ovsdb-tool.1
 /libovsdb.pc
+/ovsdb.5
+/ovsdb.7

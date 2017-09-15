@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include "ovsdb-parser.h"
 #include "ovsdb-types.h"
 #include "simap.h"
+#include "storage.h"
 #include "table.h"
 #include "transaction.h"
 
@@ -322,15 +323,16 @@ ovsdb_set_ref_table(const struct shash *tables,
     }
 }
 
+/* XXX add prereq parameter? */
 struct ovsdb *
-ovsdb_create(struct ovsdb_schema *schema)
+ovsdb_create(struct ovsdb_schema *schema, struct ovsdb_storage *storage)
 {
     struct shash_node *node;
     struct ovsdb *db;
 
-    db = xmalloc(sizeof *db);
+    db = xzalloc(sizeof *db);
     db->schema = schema;
-    db->file = NULL;
+    db->storage = storage;
     ovs_list_init(&db->monitors);
     ovs_list_init(&db->triggers);
     db->run_triggers = false;
@@ -361,30 +363,13 @@ ovsdb_create(struct ovsdb_schema *schema)
 }
 
 void
-ovsdb_replace(struct ovsdb *dst, struct ovsdb *src)
-{
-    /* XXX monitors, triggers, ... */
-    struct ovsdb_schema *tmp_schema = dst->schema;
-    dst->schema = src->schema;
-    src->schema = tmp_schema;
-
-    shash_swap(&dst->tables, &src->tables);
-
-    dst->rbac_role = ovsdb_get_table(dst, "RBAC_Role");
-
-    ovsdb_destroy(src);
-}
-
-void
 ovsdb_destroy(struct ovsdb *db)
 {
     if (db) {
         struct shash_node *node;
 
         /* Close the log. */
-        if (db->file) {
-            ovsdb_file_destroy(db->file);
-        }
+        ovsdb_storage_close(db->storage);
 
         /* Remove all the monitors. */
         ovsdb_monitors_remove(db);
@@ -429,4 +414,20 @@ struct ovsdb_table *
 ovsdb_get_table(const struct ovsdb *db, const char *name)
 {
     return shash_find_data(&db->tables, name);
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_snapshot(struct ovsdb *db)
+{
+    if (!db->storage) {
+        return NULL;
+    }
+
+    struct json *schema = ovsdb_schema_to_json(db->schema);
+    struct json *data = ovsdb_to_txn_json(db, "compacting database online");
+    struct ovsdb_error *error = ovsdb_storage_store_snapshot(db->storage,
+                                                             schema, data);
+    json_destroy(schema);
+    json_destroy(data);
+    return error;
 }

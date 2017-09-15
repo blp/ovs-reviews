@@ -49,6 +49,7 @@
 #include "stream-ssl.h"
 #include "stream.h"
 #include "sset.h"
+#include "storage.h"
 #include "table.h"
 #include "timeval.h"
 #include "transaction.h"
@@ -63,7 +64,7 @@ VLOG_DEFINE_THIS_MODULE(ovsdb_server);
 
 struct db {
     char *filename;
-    struct ovsdb_file *file;
+    struct ovsdb_storage *storage;
     struct ovsdb *db;
     struct uuid row_uuid;
 };
@@ -107,8 +108,13 @@ static unixctl_cb_func ovsdb_server_add_database;
 static unixctl_cb_func ovsdb_server_remove_database;
 static unixctl_cb_func ovsdb_server_list_databases;
 
-static char *open_db(struct server_config *config, const char *filename);
+static struct ovsdb_error *read_db(struct server_config *, struct db *)
+    OVS_WARN_UNUSED_RESULT;
+static struct ovsdb_error *open_db(struct server_config *,
+                                   const char *filename)
+    OVS_WARN_UNUSED_RESULT;
 static void add_server_db(struct server_config *);
+static void remove_db(struct server_config *, struct shash_node *db);
 static void close_db(struct db *db);
 
 static void parse_options(int *argc, char **argvp[],
@@ -152,7 +158,18 @@ ovsdb_replication_init(const char *sync_from, const char *exclude,
 }
 
 static void
-main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
+log_and_free_error(struct ovsdb_error *error)
+{
+    if (error) {
+        char *s = ovsdb_error_to_string_free(error);
+        VLOG_INFO("%s", s);
+        free(s);
+    }
+}
+
+static void
+main_loop(struct server_config *config,
+          struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
           struct unixctl_server *unixctl, struct sset *remotes,
           struct process *run_process, bool *exiting, bool *is_backup)
 {
@@ -173,7 +190,9 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
             ovsdb_monitor_get_memory_usage(&usage);
             SHASH_FOR_EACH(node, all_dbs) {
                 struct db *db = node->data;
-                ovsdb_get_memory_usage(db->db, &usage);
+                if (db->db) {
+                    ovsdb_get_memory_usage(db->db, &usage);
+                }
             }
             memory_report(&usage);
             simap_destroy(&usage);
@@ -200,9 +219,21 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
             }
         }
 
-        SHASH_FOR_EACH(node, all_dbs) {
+        struct shash_node *next;
+        SHASH_FOR_EACH_SAFE (node, next, all_dbs) {
             struct db *db = node->data;
-            ovsdb_trigger_run(db->db, time_msec());
+            if (db->db) {
+                ovsdb_trigger_run(db->db, time_msec());
+            }
+            ovsdb_storage_run(db->storage);
+            log_and_free_error(read_db(config, db));
+            if (ovsdb_storage_is_dead(db->storage)) {
+                VLOG_INFO("%s: removing database because storage disconnected "
+                          "permanently", node->name);
+                remove_db(config, node);
+            } else if (db->db && ovsdb_storage_should_snapshot(db->storage)) {
+                log_and_free_error(ovsdb_snapshot(db->db));
+            }
         }
         if (run_process) {
             process_run();
@@ -228,7 +259,11 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
         unixctl_server_wait(unixctl);
         SHASH_FOR_EACH(node, all_dbs) {
             struct db *db = node->data;
-            ovsdb_trigger_wait(db->db, time_msec());
+            if (db->db) {
+                ovsdb_trigger_wait(db->db, time_msec());
+            }
+            ovsdb_storage_wait(db->storage);
+            ovsdb_storage_read_wait(db->storage);
         }
         if (run_process) {
             process_wait(run_process);
@@ -264,7 +299,6 @@ main(int argc, char *argv[])
     struct server_config server_config;
     struct shash all_dbs;
     struct shash_node *node, *next;
-    char *error;
     int i;
 
     ovs_cmdl_proctitle_init(argc, argv);
@@ -328,14 +362,15 @@ main(int argc, char *argv[])
     perf_counters_init();
 
     SSET_FOR_EACH (db_filename, &db_filenames) {
-        error = open_db(&server_config, db_filename);
+        struct ovsdb_error *error = open_db(&server_config, db_filename);
         if (error) {
-            ovs_fatal(0, "%s", error);
+            char *s = ovsdb_error_to_string_free(error);
+            ovs_fatal(0, "%s", s);
         }
     }
     add_server_db(&server_config);
 
-    error = reconfigure_remotes(jsonrpc, &all_dbs, &remotes);
+    char *error = reconfigure_remotes(jsonrpc, &all_dbs, &remotes);
     if (!error) {
         error = reconfigure_ssl(&all_dbs);
     }
@@ -429,8 +464,8 @@ main(int argc, char *argv[])
         ovsdb_replication_init(sync_from, sync_exclude, &all_dbs, server_uuid);
     }
 
-    main_loop(jsonrpc, &all_dbs, unixctl, &remotes, run_process, &exiting,
-              &is_backup);
+    main_loop(&server_config, jsonrpc, &all_dbs, unixctl, &remotes,
+              run_process, &exiting, &is_backup);
 
     ovsdb_jsonrpc_server_destroy(jsonrpc);
     SHASH_FOR_EACH_SAFE(node, next, &all_dbs) {
@@ -491,9 +526,91 @@ is_already_open(struct server_config *config OVS_UNUSED,
 static void
 close_db(struct db *db)
 {
-    ovsdb_destroy(db->db);
-    free(db->filename);
-    free(db);
+    if (db) {
+        if (db->db) {
+            ovsdb_destroy(db->db);
+            /* ovsdb_destroy() already closed db->storage. */
+        } else {
+            ovsdb_storage_close(db->storage);
+        }
+        free(db->filename);
+        free(db);
+    }
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+parse_txn(struct server_config *config, struct db *db,
+          struct ovsdb_schema *schema, const struct json *txn_json,
+          const struct uuid *txnid)
+{
+    if (schema) {
+        /* XXX There is some real confusion here regarding schema and database
+         * names. */
+        if (db->db) {
+            ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
+        }
+        db->db = ovsdb_create(schema, db->storage);
+        if (shash_find(config->all_dbs, schema->name)) {
+            ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db);
+        }
+    }
+
+    if (txn_json) {
+        if (!db->db) {
+            return ovsdb_error(NULL, "%s: data without schema", db->filename);
+        }
+
+        struct ovsdb_txn *txn;
+        struct ovsdb_error *error;
+
+        error = ovsdb_file_txn_from_json(db->db, txn_json, false, &txn);
+        if (!error) {
+            log_and_free_error(ovsdb_txn_replay_commit(txn));
+        }
+        if (!error && !uuid_is_zero(txnid)) {
+            db->db->prereq = *txnid;
+        }
+        if (error) {
+            ovsdb_storage_unread(db->storage);
+            return error;
+        }
+    }
+
+    return NULL;
+}
+
+/* XXX how to describe the return value for this function? */
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+read_db(struct server_config *config, struct db *db)
+{
+    struct ovsdb_error *error;
+    for (;;) {
+        struct ovsdb_schema *schema;
+        struct json *txn_json;
+        struct uuid txnid;
+        error = ovsdb_storage_read(db->storage, &schema, &txn_json, &txnid);
+        if (error) {
+            break;
+        } else if (!schema && !txn_json) {
+            /* End of file. */
+            return NULL;
+        } else {
+            error = parse_txn(config, db, schema, txn_json, &txnid);
+            json_destroy(txn_json);
+            if (error) {
+                break;
+            }
+        }
+    }
+
+    /* Log error but otherwise ignore it.  Probably the database just
+     * got truncated due to power failure etc. and we should use its
+     * current contents. */
+    char *msg = ovsdb_error_to_string_free(error);
+    VLOG_ERR("%s", msg);
+    free(msg);
+
+    return NULL;
 }
 
 static void
@@ -501,44 +618,61 @@ add_db(struct server_config *config, const char *name, struct db *db)
 {
     db->row_uuid = UUID_ZERO;
     shash_add_assert(config->all_dbs, name, db);
-    bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc,
-                                                     db->db);
-    ovs_assert(ok);
+    if (db->db) {
+        bool ok OVS_UNUSED = ovsdb_jsonrpc_server_add_db(config->jsonrpc,
+                                                         db->db);
+        ovs_assert(ok);
+    }
 }
 
-static char *
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 open_db(struct server_config *config, const char *filename)
 {
-    struct ovsdb_error *db_error;
     struct db *db;
-    char *error;
 
     /* If we know that the file is already open, return a good error message.
      * Otherwise, if the file is open, we'll fail later on with a harder to
      * interpret file locking error. */
     if (is_already_open(config, filename)) {
-        return xasprintf("%s: already open", filename);
+        return ovsdb_error(NULL, "%s: already open", filename);
+    }
+
+    struct ovsdb_storage *storage;
+    struct ovsdb_error *error;
+    error = ovsdb_storage_open(filename, true, &storage);
+    if (error) {
+        return error;
     }
 
     db = xzalloc(sizeof *db);
     db->filename = xstrdup(filename);
+    db->storage = storage;
 
-    db_error = ovsdb_file_open(db->filename, false, &db->db, &db->file);
-    if (db_error) {
-        error = ovsdb_error_to_string(db_error);
-    } else if (db->db->schema->name[0] == '_') {
-        error = xasprintf("%s: names beginning with \"_\" are reserved",
-                          db->db->schema->name);
-    } else if (!ovsdb_jsonrpc_server_add_db(config->jsonrpc, db->db)) {
-        error = xasprintf("%s: duplicate database name", db->db->schema->name);
-    } else {
-        shash_add_assert(config->all_dbs, db->db->schema->name, db);
-        return NULL;
+    error = read_db(config, db);
+    if (error) {
+        close_db(db);
+        return error;
     }
 
-    ovsdb_error_destroy(db_error);
-    close_db(db);
-    return error;
+    const char *name = (db->db
+                        ? db->db->schema->name
+                        : ovsdb_storage_get_name(db->storage));
+    error = (!name
+             ? ovsdb_error(NULL, "%s: cannot determine database name",
+                           filename)
+             : name[0] == '_'
+             ? ovsdb_error(NULL, "%s: names beginning with \"_\" are reserved",
+                           name)
+             : shash_find(config->all_dbs, name)
+             ? ovsdb_error(NULL, "%s: duplicate database name", name)
+             : NULL);
+    if (error) {
+        close_db(db);
+        return error;
+    }
+
+    add_db(config, name, db);
+    return NULL;
 }
 
 /* Add the internal _Server database to the server configuration. */
@@ -558,7 +692,8 @@ add_server_db(struct server_config *config)
 
     struct db *db = xzalloc(sizeof *db);
     db->filename = xstrdup("<internal>");
-    db->db = ovsdb_create(schema);
+    db->storage = ovsdb_storage_create_unbacked();
+    db->db = ovsdb_create(schema, db->storage);
     add_db(config, db->db->schema->name, db);
 }
 
@@ -914,7 +1049,7 @@ update_remote_rows(const struct shash *all_dbs, const struct db *db_,
 static void
 commit_txn(struct ovsdb_txn *txn, const char *name)
 {
-    struct ovsdb_error *error = ovsdb_txn_commit(txn, false);
+    struct ovsdb_error *error = ovsdb_txn_propose_commit_block(txn, false);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         char *msg = ovsdb_error_to_string_free(error);
@@ -931,15 +1066,16 @@ update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
     struct shash_node *node;
     SHASH_FOR_EACH (node, all_dbs) {
         struct db *db = node->data;
-        struct ovsdb_txn *txn = ovsdb_txn_create(db->db);
+        if (!db->db || ovsdb_storage_is_clustered(db->storage)) {
+            continue;
+        }
 
-        /* Iterate over --remote arguments given on command line. */
+        struct ovsdb_txn *txn = ovsdb_txn_create(db->db);
         const char *remote;
         SSET_FOR_EACH (remote, remotes) {
             update_remote_rows(all_dbs, db, remote, jsonrpc, txn);
         }
-
-        commit_txn(txn, node->name);
+        commit_txn(txn, "remote status");
     }
 }
 
@@ -949,6 +1085,16 @@ static void
 update_database_status(struct ovsdb_row *row, struct db *db)
 {
     ovsdb_util_write_string_column(row, "name", db->db->schema->name);
+    ovsdb_util_write_string_column(row, "model",
+                                   ovsdb_storage_get_model(db->storage));
+    ovsdb_util_write_bool_column(row, "connected",
+                                 ovsdb_storage_is_connected(db->storage));
+    ovsdb_util_write_bool_column(row, "leader",
+                                 ovsdb_storage_is_leader(db->storage));
+    ovsdb_util_write_uuid_column(row, "cid",
+                                 ovsdb_storage_get_cid(db->storage));
+    ovsdb_util_write_uuid_column(row, "sid",
+                                 ovsdb_storage_get_sid(db->storage));
 
     const struct uuid *row_uuid = ovsdb_row_get_uuid(row);
     if (!uuid_equals(row_uuid, &db->row_uuid)) {
@@ -1237,7 +1383,6 @@ ovsdb_server_compact(struct unixctl_conn *conn, int argc,
 {
     struct shash *all_dbs = dbs_;
     struct ds reply;
-    struct db *db;
     struct shash_node *node;
     int n = 0;
 
@@ -1248,22 +1393,24 @@ ovsdb_server_compact(struct unixctl_conn *conn, int argc,
 
     ds_init(&reply);
     SHASH_FOR_EACH(node, all_dbs) {
-        db = node->data;
+        struct db *db = node->data;
         if (argc < 2
             ? node->name[0] != '_'
             : !strcmp(argv[1], node->name)) {
-            struct ovsdb_error *error;
+            if (db->db) {
+                VLOG_INFO("compacting %s database by user request",
+                          node->name);
 
-            VLOG_INFO("compacting %s database by user request", node->name);
+                struct ovsdb_error *error = ovsdb_snapshot(db->db);
+                if (error) {
+                    char *s = ovsdb_error_to_string(error);
+                    ds_put_format(&reply, "%s\n", s);
+                    free(s);
+                    ovsdb_error_destroy(error);
+                }
 
-            error = ovsdb_file_compact(db->file);
-            if (error) {
-                char *s = ovsdb_error_to_string_free(error);
-                ds_put_format(&reply, "%s\n", s);
-                free(s);
+                n++;
             }
-
-            n++;
         }
     }
 
@@ -1365,9 +1512,8 @@ ovsdb_server_add_database(struct unixctl_conn *conn, int argc OVS_UNUSED,
 {
     struct server_config *config = config_;
     const char *filename = argv[1];
-    char *error;
 
-    error = open_db(config, filename);
+    char *error = ovsdb_error_to_string_free(open_db(config, filename));
     if (!error) {
         save_config(config);
         if (*config->is_backup) {
@@ -1388,7 +1534,9 @@ remove_db(struct server_config *config, struct shash_node *node)
 {
     struct db *db = node->data;
 
-    ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
+    if (db->db) {
+        ovsdb_jsonrpc_server_remove_db(config->jsonrpc, db->db);
+    }
 
     close_db(db);
     shash_delete(config->all_dbs, node);
@@ -1436,7 +1584,11 @@ ovsdb_server_list_databases(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
     nodes = shash_sort(all_dbs);
     for (i = 0; i < shash_count(all_dbs); i++) {
-        ds_put_format(&s, "%s\n", nodes[i]->name);
+        const struct shash_node *node = nodes[i];
+        struct db *db = node->data;
+        if (db->db) {
+            ds_put_format(&s, "%s\n", node->name);
+        }
     }
     free(nodes);
 

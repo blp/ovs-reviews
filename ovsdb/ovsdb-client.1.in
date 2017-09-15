@@ -18,8 +18,6 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 .IP "Database Schema Commands:"
 \fBovsdb\-client \fR[\fIoptions\fR] \fBget\-schema \fR[\fIserver\fR] \fR[\fIdatabase\fR]
 .br
-\fBovsdb\-client \fR[\fIoptions\fR] \fBget\-schema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
-.br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBlist\-tables\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
 .br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBlist\-columns\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] [\fItable\fR]
@@ -28,6 +26,9 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 .br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBneeds\-conversion \fR[\fIserver\fR] \fIschema\fR
 .br
+\fBovsdb\-client \fR[\fIoptions\fR] \fBschema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
+.br
+\fBovsdb\-client \fR[\fIoptions\fR] \fBschema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]
 .IP "Data Management Commands:"
 \fBovsdb\-client \fR[\fIoptions\fR] \fBtransact\fI \fR[\fIserver\fR] \fItransaction\fR
 .br
@@ -37,6 +38,9 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 \fBovsdb\-client \fR[\fIoptions\fR]
 \fBbackup\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] > \fIsnapshot\fR
 .br
+\fBovsdb\-client \fR[\fIoptions\fR]
+\fBrestore\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] < \fIsnapshot\fR
+.br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBmonitor\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fItable\fR
 [\fIcolumn\fR[\fB,\fIcolumn\fR]...]...
 .br
@@ -45,7 +49,6 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 \fBovsdb\-client \fR[\fIoptions\fR] \fBmonitor-cond\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fIconditions
 \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]...
 .IP "Testing Commands:"
-.br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBlock\fI \fR[\fIserver\fR] \fIlock\fR
 .br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBsteal\fI \fR[\fIserver\fR] \fIlock\fR
@@ -99,19 +102,6 @@ of it.
 .IP "\fBget\-schema \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
 Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
 prints it in JSON format.
-.
-.IP "\fBget\-schema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
-Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
-prints its version number on stdout.  A schema version number has the form
-\fIx\fB.\fIy\fB.\fIz\fR.  See \fBovs\-vswitchd.conf.db\fR(5) for
-details.
-.IP
-Schema version numbers and Open vSwitch version numbers are
-independent.
-.IP
-If \fIdatabase\fR was created before schema versioning was introduced,
-then it will not have a version number and this command will print a
-blank line.
 .
 .IP "\fBlist\-tables\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
 Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
@@ -216,6 +206,23 @@ database is in use.
 .IP
 The output does not include ephemeral columns, which by design do not
 survive across restarts of \fBovsdb\-server\fR.
+.
+.IP "\fBrestore\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] < \fIsnapshot\fR"
+Reads \fIsnapshot\fR, which must be in the format used for OVSDB
+standalone and active-backup databases.  Then, connects to
+\fIserver\fR, verifies that \fIdatabase\fR and \fIsnapshot\fR have the
+same schema, then deletes all of the data in \fIdatabase\fR and
+replaces it by \fIsnapshot\fR.  The replacement happens atomically, in a
+single transaction.
+.IP
+UUIDs for rows in the restored database will differ from those in
+\fIsnapshot\fR, because the OVSDB protocol does not allow clients to
+specify row UUIDs.  Another way to restore a standalone or
+active-backup database, which does also restore row UUIDs, is to stop
+the server or servers, replace the database file by the snapshot, then
+restart the database.  Either way, ephemeral columns are not restored,
+since by design they do not survive across restarts of
+\fBovsdb\-server\fR.
 .
 .IP "\fBmonitor\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]..."
 .IQ "\fBmonitor-cond\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fIconditions\fR \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]..."

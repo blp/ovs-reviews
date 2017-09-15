@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,13 +31,16 @@ enum ovsdb_log_open_mode {
     OVSDB_LOG_CREATE            /* Create or open file, read/write. */
 };
 
-#define OVSDB_MAGIC "OVSDB JSON"
+#define OVSDB_MAGIC "JSON"
 
 struct ovsdb_error *ovsdb_log_open(const char *name, const char *magic,
                                    enum ovsdb_log_open_mode,
                                    int locking, struct ovsdb_log **)
     OVS_WARN_UNUSED_RESULT;
 void ovsdb_log_close(struct ovsdb_log *);
+
+const char *ovsdb_log_get_name(const struct ovsdb_log *);
+const char *ovsdb_log_get_magic(const struct ovsdb_log *);
 
 struct ovsdb_error *ovsdb_log_read(struct ovsdb_log *, struct json **)
     OVS_WARN_UNUSED_RESULT;
@@ -51,7 +54,8 @@ struct ovsdb_error *ovsdb_log_write(struct ovsdb_log *, const struct json *)
 struct ovsdb_error *ovsdb_log_commit(struct ovsdb_log *)
     OVS_WARN_UNUSED_RESULT;
 
-off_t ovsdb_log_get_offset(const struct ovsdb_log *);
+void ovsdb_log_mark_base(struct ovsdb_log *);
+bool ovsdb_log_has_grown(const struct ovsdb_log *);
 
 struct ovsdb_error *ovsdb_log_replace(struct ovsdb_log *,
                                       struct json **entries, size_t n)

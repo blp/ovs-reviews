@@ -1,0 +1,23 @@
+#! /bin/sh -ex
+
+export OVS_RUNDIR=$PWD
+export OVN_SB_DB=unix:s1.ovsdb,unix:s2.ovsdb,unix:s3.ovsdb
+PATH=$PATH:$PWD/ovn/utilities
+for i in `seq 0 9`; do
+    for j in `seq 5`; do
+	echo "$i-$j=$i-$j" >> expected
+    done
+done > expected
+rm -f ?-?.log
+for i in `seq 0 9`; do
+    (for j in `seq 5`; do
+	 ovn-sbctl --log-file=$i-$j.log -vfile add SB_Global . external_ids $i-$j=$i-$j
+     done)&
+done
+sleep 2
+kill `cat s1.pid` || true
+wait
+ovn-sbctl --bare get SB_Global . external-ids | sed 's/, /\n/g; s/[{}"]//g;' > output
+if diff -u expected output; then
+    echo "success"
+fi
