@@ -19,22 +19,26 @@
 
 #include <limits.h>
 
+#include "file.h"
+#include "log.h"
 #include "openvswitch/json.h"
 #include "jsonrpc.h"
 #include "ovsdb.h"
+#include "ovsdb-error.h"
 #include "poll-loop.h"
 #include "server.h"
 
-static bool ovsdb_trigger_try(struct ovsdb_trigger *, long long int now);
+static void ovsdb_trigger_try(struct ovsdb_trigger *, long long int now);
 static void ovsdb_trigger_complete(struct ovsdb_trigger *);
 
 void
 ovsdb_trigger_init(struct ovsdb_session *session, struct ovsdb *db,
                    struct ovsdb_trigger *trigger,
-                   struct json *request, long long int now,
-                   bool read_only, const char *role,
-                   const char *id)
+                   struct jsonrpc_msg *request, long long int now,
+                   bool read_only, const char *role, const char *id)
 {
+    ovs_assert(!strcmp(request->method, "transact") ||
+               !strcmp(request->method, "convert_db"));
     trigger->session = session;
     trigger->db = db;
     ovs_list_push_back(&trigger->db->triggers, &trigger->node);
@@ -52,7 +56,7 @@ void
 ovsdb_trigger_destroy(struct ovsdb_trigger *trigger)
 {
     ovs_list_remove(&trigger->node);
-    json_destroy(trigger->request);
+    jsonrpc_msg_destroy(trigger->request);
     json_destroy(trigger->result);
     free(trigger->role);
     free(trigger->id);
@@ -114,18 +118,52 @@ ovsdb_trigger_wait(struct ovsdb *db, long long int now)
     }
 }
 
-static bool
+static struct json *
+ovsdb_trigger_try__(struct ovsdb_trigger *t, long long int now)
+{
+    if (!strcmp(t->request->method, "transact")) {
+        return ovsdb_execute(t->db, t->session,
+                             t->request->params, t->read_only,
+                             t->role, t->id,
+                             now - t->created, &t->timeout_msec);
+    } else if (!strcmp(t->request->method, "convert_db")) {
+        /* Validate parameters. */
+        const struct json *params = t->request->params;
+        if (params->type != JSON_ARRAY || params->u.array.n != 2) {
+            return ovsdb_error_to_json_free(
+                ovsdb_syntax_error(params, NULL, "array expected"));
+        }
+
+        /* Parse new schema and make a converted copy. */
+        const struct json *new_schema_json = params->u.array.elems[1];
+        struct ovsdb_schema *new_schema;
+        struct ovsdb_error *error
+            = ovsdb_schema_from_json(new_schema_json, &new_schema);
+        if (!error && strcmp(new_schema->name, t->db->schema->name)) {
+            error = ovsdb_error("invalid parameters",
+                                "new schema name (%s) does not match "
+                                "database name (%s)",
+                                new_schema->name, t->db->schema->name);
+        }
+        if (!error) {
+            error = ovsdb_file_convert(t->db->file, new_schema);
+        }
+        ovsdb_schema_destroy(new_schema);
+        if (error) {
+            return ovsdb_error_to_json_free(error);
+        }
+        return json_object_create();
+    } else {
+        OVS_NOT_REACHED();
+    }
+}
+
+static void
 ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
 {
-    t->result = ovsdb_execute(t->db, t->session,
-                              t->request, t->read_only,
-                              t->role, t->id,
-                              now - t->created, &t->timeout_msec);
+    t->result = ovsdb_trigger_try__(t, now);
     if (t->result) {
         ovsdb_trigger_complete(t);
-        return true;
-    } else {
-        return false;
     }
 }
 

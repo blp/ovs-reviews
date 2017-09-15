@@ -162,7 +162,7 @@ root_set_size(const struct ovsdb_schema *schema)
 }
 
 struct ovsdb_error *
-ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
+ovsdb_schema_from_json(const struct json *json, struct ovsdb_schema **schemap)
 {
     struct ovsdb_schema *schema;
     const struct json *name, *tables, *version_json, *cksum;
@@ -358,6 +358,21 @@ ovsdb_create(struct ovsdb_schema *schema)
     db->rbac_role = ovsdb_get_table(db, "RBAC_Role");
 
     return db;
+}
+
+void
+ovsdb_replace(struct ovsdb *dst, struct ovsdb *src)
+{
+    /* XXX monitors, triggers, ... */
+    struct ovsdb_schema *tmp_schema = dst->schema;
+    dst->schema = src->schema;
+    src->schema = tmp_schema;
+
+    shash_swap(&dst->tables, &src->tables);
+
+    dst->rbac_role = ovsdb_get_table(dst, "RBAC_Role");
+
+    ovsdb_destroy(src);
 }
 
 void

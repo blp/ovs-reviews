@@ -791,6 +791,118 @@ _uuid                                name  number
 OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
 
+AT_SETUP([schema conversion online -- removing a column])
+AT_KEYWORDS([ovsdb server convert])
+ordinal_schema > schema
+AT_DATA([new-schema], 
+  [[{"name": "ordinals",
+     "tables": {
+       "ordinals": {
+         "columns": {
+           "number": {"type": "integer"}}}}}
+]])
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db schema])
+dnl Put some data in the database.
+AT_CHECK(
+  [[for pair in 'zero 0' 'one 1' 'two 2' 'three 3' 'four 4' 'five 5'; do
+      set -- $pair
+      ovsdb-tool transact db '
+        ["ordinals",
+         {"op": "insert",
+          "table": "ordinals",
+          "row": {"name": "'$1'", "number": '$2'}},
+         {"op": "comment",
+          "comment": "add row for '"$pair"'"}]'
+    done | ${PERL} $srcdir/uuidfilt.pl]], [0],
+[[[{"uuid":["uuid","<0>"]},{}]
+[{"uuid":["uuid","<1>"]},{}]
+[{"uuid":["uuid","<2>"]},{}]
+[{"uuid":["uuid","<3>"]},{}]
+[{"uuid":["uuid","<4>"]},{}]
+[{"uuid":["uuid","<5>"]},{}]
+]], [ignore])
+dnl Dump out and check the actual database contents.
+AT_CHECK([[ovsdb-server -vfile -vvlog:off --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db]],
+  [0])
+AT_CAPTURE_FILE([ovsdb-server.log])
+AT_CHECK([ovsdb-client dump unix:db.sock ordinals], [0], [stdout])
+AT_CHECK([${PERL} $srcdir/uuidfilt.pl stdout], [0], [dnl
+ordinals table
+_uuid                                name  number
+------------------------------------ ----- ------
+<0> five  5
+<1> four  4
+<2> one   1
+<3> three 3
+<4> two   2
+<5> zero  0
+])
+dnl Now convert the database.
+AT_CHECK([ovsdb-client convert new-schema])
+dnl We can't fully re-check the contents of the database log, because the
+dnl order of the records is not predictable, but there should only be 4 lines
+dnl in it now.
+AT_CAPTURE_FILE([db])
+AT_CHECK([test `wc -l < db` -eq 4])
+dnl And check that the dumped data is the same except for the removed column:
+AT_CHECK([ovsdb-client dump unix:db.sock ordinals | ${PERL} $srcdir/uuidfilt.pl], [0], [dnl
+ordinals table
+_uuid                                number
+------------------------------------ ------
+<0> 0
+<1> 1
+<2> 2
+<3> 3
+<4> 4
+<5> 5
+])
+dnl Now check that the converted database is still online and can be modified,
+dnl then check that the database log has one more record and that the data
+dnl is as expected.
+AT_CHECK(
+  [[ovsdb-client transact '
+     ["ordinals",
+      {"op": "insert",
+       "table": "ordinals",
+       "row": {"number": 6}},
+      {"op": "comment",
+       "comment": "add row for 6"}]' | ${PERL} $srcdir/uuidfilt.pl]], [0],
+  [[[{"uuid":["uuid","<0>"]},{}]
+]])
+AT_CHECK([test `wc -l < db` -eq 6])
+AT_CHECK([ovsdb-client dump unix:db.sock ordinals | ${PERL} $srcdir/uuidfilt.pl], [0], [dnl
+ordinals table
+_uuid                                number
+------------------------------------ ------
+<0> 0
+<1> 1
+<2> 2
+<3> 3
+<4> 4
+<5> 5
+<6> 6
+])
+dnl Now kill and restart the database server to ensure that the data is
+dnl correct on disk as well as in memory.
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+AT_CHECK([[ovsdb-server -vfile -vvlog:off --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db]],
+  [0])
+AT_CHECK([ovsdb-client dump unix:db.sock ordinals | ${PERL} $srcdir/uuidfilt.pl], [0], [dnl
+ordinals table
+_uuid                                number
+------------------------------------ ------
+<0> 0
+<1> 1
+<2> 2
+<3> 3
+<4> 4
+<5> 5
+<6> 6
+])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+AT_CLEANUP
+
 AT_SETUP([ovsdb-server combines updates on backlogged connections])
 on_exit 'kill `cat *.pid`'
 

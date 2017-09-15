@@ -24,6 +24,9 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 .br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBlist\-columns\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] [\fItable\fR]
 .IP "Database Version Management Commands:"
+\fBovsdb\-client \fR[\fIoptions\fR] \fBconvert \fR[\fIserver\fR] \fIschema\fR
+.br
+\fBovsdb\-client \fR[\fIoptions\fR] \fBneeds\-conversion \fR[\fIserver\fR] \fIschema\fR
 .br
 .IP "Data Management Commands:"
 \fBovsdb\-client \fR[\fIoptions\fR] \fBtransact\fI \fR[\fIserver\fR] \fItransaction\fR
@@ -124,12 +127,54 @@ listed; otherwise, the tables include columns in all tables.
 These commands work with different versions of OVSDB schemas and
 databases.
 .
+.IP "\fBconvert \fR[\fIserver\fR] \fIschema\fR"
+Reads an OVSDB schema in JSON format, as specified in the OVSDB
+specification, from \fIschema\fR, then connects to \fIserver\fR and
+requests the server to convert the database whose name is specified in
+\fIschema\fR to the schema also specified in \fIschema\fR.
+.IP
+The conversion is atomic, consistent, isolated, and durable.
+Following the schema change, the server notifies clients that use the
+\fBset_db_change_aware\fR RPC introduced in Open vSwitch 2.9 and
+cancel their outstanding transactions and monitors.  The server
+disconnects other clients, enabling them to notify the change when
+they reconnect.
+.IP
+This command can do simple ``upgrades'' and ``downgrades'' on a
+database's schema.  The data in the database must be valid when
+interpreted under \fIschema\fR, with only one exception: data for
+tables and columns that do not exist in \fIschema\fR are ignored.
+Columns that exist in \fIschema\fR but not in the database are set to
+their default values.  All of \fIschema\fR's constraints apply in
+full.
+.IP
+Some uses of this command can cause unrecoverable data loss.  For
+example, converting a database from a schema that has a given column
+or table to one that does not will delete all data in that column or
+table.  Back up critical databases before converting them.
+.IP
+This command works with clustered and standalone databases.
+Standalone databases may also be converted (offline) with
+\fBovsdb\-tool\fR's \fBconvert\fR command.
+.
+.IP "\fBneeds\-conversion \fR[\fIserver\fR] \fIschema\fR"
+Reads the schema from \fIschema\fR, then connects to \fIserver\fR and
+requests the schema from the database whose name is specified in
+\fIschema\fR.  If the two schemas are the same, prints \fBno\fR on
+stdout; if they differ, prints \fByes\fR.
+.
 .IP "\fBschema\-version\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
 Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
 prints its version number on stdout.
 If \fIdatabase\fR was created before schema versioning was introduced,
 then it will not have a version number and this command will print a
 blank line.
+.
+.IP "\fBschema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
+Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
+prints its checksum on stdout.  If \fIdatabase\fR does not include a
+checksum, prints a blank line.
+.
 .SS "Data Management Commands"
 .PP
 These commands read or modify the data in a database.

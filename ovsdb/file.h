@@ -49,4 +49,8 @@ struct ovsdb_error *ovsdb_file_commit(struct ovsdb_file *,
                                       const struct ovsdb_txn *, bool durable);
 void ovsdb_file_destroy(struct ovsdb_file *);
 
+struct ovsdb_error *ovsdb_file_convert(const struct ovsdb_file *,
+                                       const struct ovsdb_schema *)
+    OVS_WARN_UNUSED_RESULT;
+
 #endif /* ovsdb/file.h */

@@ -288,6 +288,8 @@ usage(void)
            "    DATABASE on SERVER.\n"
            "    COLUMNs may include !initial, !insert, !delete, !modify\n"
            "    to avoid seeing the specified kinds of changes.\n"
+           "\n  convert [SERVER] SCHEMA\n"
+           "    convert database on SERVER named in SCHEMA to SCHEMA.\n"
            "\n  monitor [SERVER] [DATABASE] ALL\n"
            "    monitor all changes to all columns in all tables\n"
            "    in DATBASE on SERVER.\n"
@@ -1160,6 +1162,37 @@ do_monitor_cond(struct jsonrpc *rpc, const char *database,
     ovsdb_schema_destroy(schema);
 }
 
+static void
+do_convert(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+           int argc OVS_UNUSED, char *argv[])
+{
+    struct ovsdb_schema *new_schema;
+    check_ovsdb_error(ovsdb_schema_from_file(argv[0], &new_schema));
+
+    struct jsonrpc_msg *request, *reply;
+    request = jsonrpc_create_request(
+        "convert_db",
+        json_array_create_2(json_string_create(new_schema->name),
+                            ovsdb_schema_to_json(new_schema)), NULL);
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    jsonrpc_msg_destroy(reply);
+}
+
+static void
+do_needs_conversion(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+                    int argc OVS_UNUSED, char *argv[])
+{
+    struct ovsdb_schema *schema1;
+    check_ovsdb_error(ovsdb_schema_from_file(argv[0], &schema1));
+
+    struct ovsdb_schema *schema2 = fetch_schema(rpc, schema1->name);
+    if (ovsdb_schema_equal(schema1, schema2)) {
+        puts(ovsdb_schema_equal(schema1, schema2) ? "no" : "yes");
+    }
+    ovsdb_schema_destroy(schema1);
+    ovsdb_schema_destroy(schema2);
+}
+
 struct dump_table_aux {
     struct ovsdb_datum **data;
     const struct ovsdb_column **columns;
@@ -1617,6 +1650,8 @@ static const struct ovsdb_client_command all_commands[] = {
     { "transact",           NEED_RPC,      1, 1,       do_transact },
     { "monitor",            NEED_DATABASE, 1, INT_MAX, do_monitor },
     { "monitor-cond",       NEED_DATABASE, 2, 3,       do_monitor_cond },
+    { "convert",            NEED_RPC,      1, 1,       do_convert },
+    { "needs-conversion",   NEED_RPC,      1, 1,       do_needs_conversion },
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },
     { "lock",               NEED_RPC,      1, 1,       do_lock_create },
     { "steal",              NEED_RPC,      1, 1,       do_lock_steal },

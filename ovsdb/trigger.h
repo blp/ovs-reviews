@@ -25,7 +25,7 @@ struct ovsdb_trigger {
     struct ovsdb *db;           /* Database on which trigger acts. */
     struct ovs_list node;       /* !result: in db->triggers;
                                  * result: in session->completions. */
-    struct json *request;       /* Database request. */
+    struct jsonrpc_msg *request; /* Database request. */
     struct json *result;        /* Result (null if none yet). */
     long long int created;      /* Time created. */
     long long int timeout_msec; /* Max wait duration. */
@@ -36,9 +36,8 @@ struct ovsdb_trigger {
 
 void ovsdb_trigger_init(struct ovsdb_session *, struct ovsdb *,
                         struct ovsdb_trigger *,
-                        struct json *request, long long int now,
-                        bool read_only, const char *role,
-                        const char *id);
+                        struct jsonrpc_msg *request, long long int now,
+                        bool read_only, const char *role, const char *id);
 void ovsdb_trigger_destroy(struct ovsdb_trigger *);
 
 bool ovsdb_trigger_is_complete(const struct ovsdb_trigger *);
