@@ -410,9 +410,16 @@
   </p>
 
   <p>
-    To restore from a backup, stop the database server or servers, overwrite
-    the database file with the backup (e.g. with <code>cp</code>), and then
-    restart the servers.
+    Multiple options are also available when the time comes to restore a
+    database from a backup.  One option is to stop the database server or
+    servers, overwrite the database file with the backup (e.g. with
+    <code>cp</code>), and then restart the servers.  Another way is to use
+    <code>ovsdb-client restore</code>, which connects to a running database
+    server and replaces the data in one of its databases by a provided
+    snapshot.  Using <code>ovsdb-client restore</code> has the disadvantage
+    that UUIDs of rows in the restored database will differ from those in the
+    snapshot, because the OVSDB protocol does not allow clients to specify row
+    UUIDs.
   </p>
 
   <p>
