@@ -1613,7 +1613,7 @@ ovsdb_monitors_remove(struct ovsdb *db)
          * end monitor will also destroy the corresponding 'ovsdb_monitor'.
          * ovsdb monitor will also be destroied.  */
         LIST_FOR_EACH_SAFE (jm, next_jm, node, &m->jsonrpc_monitors) {
-            ovsdb_jsonrpc_monitor_destroy(jm->jsonrpc_monitor);
+            ovsdb_jsonrpc_monitor_destroy(jm->jsonrpc_monitor, false);
         }
     }
 }
@@ -1628,5 +1628,22 @@ ovsdb_monitor_get_memory_usage(struct simap *usage)
 
     HMAP_FOR_EACH(dbmon, hmap_node,  &ovsdb_monitors) {
         simap_increase(usage, "json-caches", hmap_count(&dbmon->json_cache));
+    }
+}
+
+void
+ovsdb_monitor_prereplace_db(struct ovsdb *db)
+{
+    struct ovsdb_monitor *m, *next_m;
+
+    LIST_FOR_EACH_SAFE (m, next_m, list_node, &db->monitors) {
+        struct jsonrpc_monitor_node *jm, *next_jm;
+
+        /* Delete all front end monitors. Removing the last front
+         * end monitor will also destroy the corresponding 'ovsdb_monitor'.
+         * ovsdb monitor will also be destroied.  */
+        LIST_FOR_EACH_SAFE (jm, next_jm, node, &m->jsonrpc_monitors) {
+            ovsdb_jsonrpc_monitor_destroy(jm->jsonrpc_monitor, true);
+        }
     }
 }

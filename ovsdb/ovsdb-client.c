@@ -71,11 +71,17 @@ struct ovsdb_client_command {
 /* --timestamp: Print a timestamp before each update on "monitor" command? */
 static bool timestamp;
 
-/* --db-change-aware: Enable db_change_aware feature for "monitor" command?
+/* --db-change-aware, --no-db-change-aware: Enable db_change_aware feature for
+ * "monitor" command?
  *
- * (This option is undocumented because it is expected to be useful only for
- * testing that the db_change_aware feature actually works.) */
-static bool db_change_aware;
+ * -1 (default): Use db_change_aware if available.
+ * 0: Disable db_change_aware.
+ * 1: Require db_change_aware.
+ *
+ * (This option is undocumented because anything other than the default is
+ * expected to be useful only for testing that the db_change_aware feature
+ * actually works.) */
+static int db_change_aware = -1;
 
 /* Format for table output. */
 static struct table_style table_style = TABLE_STYLE_DEFAULT;
@@ -188,7 +194,6 @@ parse_options(int argc, char *argv[])
     enum {
         OPT_BOOTSTRAP_CA_CERT = UCHAR_MAX + 1,
         OPT_TIMESTAMP,
-        OPT_DB_CHANGE_AWARE,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS,
         TABLE_OPTION_ENUMS,
@@ -198,7 +203,8 @@ parse_options(int argc, char *argv[])
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {"timestamp", no_argument, NULL, OPT_TIMESTAMP},
-        {"db-change-aware", no_argument, NULL, OPT_DB_CHANGE_AWARE},
+        {"db-change-aware", no_argument, &db_change_aware, 1},
+        {"no-db-change-aware", no_argument, &db_change_aware, 0},
         VLOG_LONG_OPTIONS,
         DAEMON_LONG_OPTIONS,
 #ifdef HAVE_OPENSSL
@@ -239,10 +245,6 @@ parse_options(int argc, char *argv[])
 
         case OPT_TIMESTAMP:
             timestamp = true;
-            break;
-
-        case OPT_DB_CHANGE_AWARE:
-            db_change_aware = true;
             break;
 
         case '?':
@@ -288,6 +290,8 @@ usage(void)
            "    DATABASE on SERVER.\n"
            "    COLUMNs may include !initial, !insert, !delete, !modify\n"
            "    to avoid seeing the specified kinds of changes.\n"
+           "\n  convert [SERVER] SCHEMA\n"
+           "    convert database on SERVER named in SCHEMA to SCHEMA.\n"
            "\n  monitor [SERVER] [DATABASE] ALL\n"
            "    monitor all changes to all columns in all tables\n"
            "    in DATBASE on SERVER.\n"
@@ -530,6 +534,28 @@ do_list_columns(struct jsonrpc *rpc, const char *database,
 }
 
 static void
+send_db_change_aware(struct jsonrpc *rpc)
+{
+    if (db_change_aware != 0) {
+        struct jsonrpc_msg *request = jsonrpc_create_request(
+            "set_db_change_aware",
+            json_array_create_1(json_boolean_create(true)),
+            NULL);
+        struct jsonrpc_msg *reply;
+        int error = jsonrpc_transact_block(rpc, request, &reply);
+        if (error) {
+            ovs_fatal(error, "%s: error setting db_change_aware",
+                      jsonrpc_get_name(rpc));
+        }
+        if (reply->type == JSONRPC_ERROR && db_change_aware == 1) {
+            ovs_fatal(0, "%s: set_db_change_aware failed (%s)",
+                      jsonrpc_get_name(rpc), json_to_string(reply->error, 0));
+        }
+        jsonrpc_msg_destroy(reply);
+    }
+}
+
+static void
 do_transact(struct jsonrpc *rpc, const char *database OVS_UNUSED,
             int argc OVS_UNUSED, char *argv[])
 {
@@ -537,6 +563,13 @@ do_transact(struct jsonrpc *rpc, const char *database OVS_UNUSED,
     struct json *transaction;
 
     transaction = parse_json(argv[0]);
+
+    if (db_change_aware == 1) {
+        send_db_change_aware(rpc);
+    }
+    daemon_save_fd(STDOUT_FILENO);
+    daemon_save_fd(STDERR_FILENO);
+    daemonize();
 
     request = jsonrpc_create_request("transact", transaction, NULL);
     check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
@@ -971,6 +1004,7 @@ do_monitor__(struct jsonrpc *rpc, const char *database,
     ovs_assert(version < OVSDB_MONITOR_VERSION_MAX);
 
     daemon_save_fd(STDOUT_FILENO);
+    daemon_save_fd(STDERR_FILENO);
     daemonize_start(false);
     if (get_detach()) {
         int error;
@@ -1028,22 +1062,7 @@ do_monitor__(struct jsonrpc *rpc, const char *database,
         free(nodes);
     }
 
-    if (db_change_aware) {
-        struct jsonrpc_msg *request = jsonrpc_create_request(
-            "set_db_change_aware",
-            json_array_create_1(json_boolean_create(true)),
-            NULL);
-        struct jsonrpc_msg *reply;
-        int error = jsonrpc_transact_block(rpc, request, &reply);
-        if (error) {
-            ovs_fatal(error, "%s: error setting db_change_aware", server);
-        }
-        if (reply->type == JSONRPC_ERROR) {
-            ovs_fatal(0, "%s: set_db_change_aware failed (%s)",
-                      server, json_to_string(reply->error, 0));
-        }
-        jsonrpc_msg_destroy(reply);
-    }
+    send_db_change_aware(rpc);
 
     monitor = json_array_create_3(json_string_create(database),
                                   json_null_create(), monitor_requests);
@@ -1105,6 +1124,10 @@ do_monitor__(struct jsonrpc *rpc, const char *database,
                     monitor2_print(params->u.array.elems[1], mts, n_mts);
                     fflush(stdout);
                 }
+            } else if (msg->type == JSONRPC_NOTIFY
+                       && !strcmp(msg->method, "monitor_canceled")) {
+                ovs_fatal(0, "%s: %s database was removed",
+                          server, database);
             }
             jsonrpc_msg_destroy(msg);
         }
@@ -1158,6 +1181,37 @@ do_monitor_cond(struct jsonrpc *rpc, const char *database,
     ovsdb_condition_destroy(&cnd);
     do_monitor__(rpc, database, OVSDB_MONITOR_V2, --argc, ++argv, condition);
     ovsdb_schema_destroy(schema);
+}
+
+static void
+do_convert(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+           int argc OVS_UNUSED, char *argv[])
+{
+    struct ovsdb_schema *new_schema;
+    check_ovsdb_error(ovsdb_schema_from_file(argv[0], &new_schema));
+
+    struct jsonrpc_msg *request, *reply;
+    request = jsonrpc_create_request(
+        "convert_db",
+        json_array_create_2(json_string_create(new_schema->name),
+                            ovsdb_schema_to_json(new_schema)), NULL);
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    jsonrpc_msg_destroy(reply);
+}
+
+static void
+do_needs_conversion(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+                    int argc OVS_UNUSED, char *argv[])
+{
+    struct ovsdb_schema *schema1;
+    check_ovsdb_error(ovsdb_schema_from_file(argv[0], &schema1));
+
+    struct ovsdb_schema *schema2 = fetch_schema(rpc, schema1->name);
+    if (ovsdb_schema_equal(schema1, schema2)) {
+        puts(ovsdb_schema_equal(schema1, schema2) ? "no" : "yes");
+    }
+    ovsdb_schema_destroy(schema1);
+    ovsdb_schema_destroy(schema2);
 }
 
 struct dump_table_aux {
@@ -1617,6 +1671,8 @@ static const struct ovsdb_client_command all_commands[] = {
     { "transact",           NEED_RPC,      1, 1,       do_transact },
     { "monitor",            NEED_DATABASE, 1, INT_MAX, do_monitor },
     { "monitor-cond",       NEED_DATABASE, 2, 3,       do_monitor_cond },
+    { "convert",            NEED_RPC,      1, 1,       do_convert },
+    { "needs-conversion",   NEED_RPC,      1, 1,       do_needs_conversion },
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },
     { "lock",               NEED_RPC,      1, 1,       do_lock_create },
     { "steal",              NEED_RPC,      1, 1,       do_lock_steal },

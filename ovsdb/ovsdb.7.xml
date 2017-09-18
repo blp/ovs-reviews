@@ -461,11 +461,10 @@
     OVSDB also supports online database schema conversion, for any of its
     database service models.  To convert a database online, use
     <code>ovsdb-client convert</code>.  The conversion is atomic, consistent,
-    isolated, and durable.  The OVSDB protocol does not provide a way for the
-    server to notify a client that a database's schema has changed, so
-    currently <code>ovsdb-server</code> disconnects any clients connected when
-    the conversion takes place.  Upon reconnction, clients will discover that
-    the schema has changed.
+    isolated, and durable.  <code>ovsdb-server</code> disconnects any clients
+    connected when the conversion takes place (except clients that use the
+    <code>set_db_change_aware</code> Open vSwitch extension RPC).  Upon
+    reconnection, clients will discover that the schema has changed.
   </p>
 
   <p>
