@@ -1,7 +1,7 @@
 AT_BANNER([OVSDB -- ovsdb-client commands])
 
 AT_SETUP([ovsdb-client get-schema-version])
-AT_KEYWORDS([ovsdb server positive])
+AT_KEYWORDS([ovsdb client positive])
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db schema], [0], [ignore], [ignore])
 AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --remote=punix:socket db], [0], [ignore], [ignore])
@@ -11,7 +11,7 @@ OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP
 
 AT_SETUP([ovsdb-client get-schema-version - tcp socket])
-AT_KEYWORDS([ovsdb server positive tcp])
+AT_KEYWORDS([ovsdb client positive tcp])
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db schema], [0], [ignore], [ignore])
 AT_CHECK([ovsdb-server --log-file --detach --no-chdir --pidfile --remote=ptcp:0:127.0.0.1 db], [0], [ignore], [ignore])
@@ -20,3 +20,54 @@ AT_CHECK([ovsdb-client get-schema-version tcp:127.0.0.1:$TCP_PORT ordinals], [0]
 ])
 OVSDB_SERVER_SHUTDOWN
 AT_CLEANUP])
+
+AT_SETUP([ovsdb-client backup])
+AT_KEYWORDS([ovsdb client positive])
+
+on_exit 'kill `cat *.pid`'
+
+dnl Create a database.
+ordinal_schema > schema
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db schema])
+
+dnl Put some data in the database.
+AT_CHECK(
+  [[for pair in 'zero 0' 'one 1' 'two 2' 'three 3' 'four 4' 'five 5'; do
+      set -- $pair
+      ovsdb-tool transact db '
+        ["ordinals",
+         {"op": "insert",
+          "table": "ordinals",
+          "row": {"name": "'$1'", "number": '$2'}},
+         {"op": "comment",
+          "comment": "add row for '"$pair"'"}]'
+    done | ${PERL} $srcdir/uuidfilt.pl]], [0],
+[[[{"uuid":["uuid","<0>"]},{}]
+[{"uuid":["uuid","<1>"]},{}]
+[{"uuid":["uuid","<2>"]},{}]
+[{"uuid":["uuid","<3>"]},{}]
+[{"uuid":["uuid","<4>"]},{}]
+[{"uuid":["uuid","<5>"]},{}]
+]], [ignore])
+
+dnl Start the database server.
+AT_CHECK([ovsdb-server -vfile -vvlog:off --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db], [0])
+AT_CAPTURE_FILE([ovsdb-server.log])
+
+dnl Dump a copy of the data and a backup of it.
+AT_CHECK([ovsdb-client dump > dump1])
+AT_CHECK([ovsdb-client backup > backup])
+
+dnl Stop the database server, then re-start it based on the backup.
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+AT_CHECK([ovsdb-server -vfile -vvlog:off --detach --no-chdir --pidfile --log-file --remote=punix:db.sock backup], [0])
+
+dnl Dump a new copy of the data.
+AT_CHECK([ovsdb-client dump > dump2])
+sort dump2 > expout
+
+dnl Verify that the two dumps are the same.
+AT_CHECK([sort dump1], [0], [expout])
+
+AT_CLEANUP

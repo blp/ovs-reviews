@@ -404,6 +404,12 @@
   </p>
 
   <p>
+    Another way to make a backup is to use <code>ovsdb-client backup</code>,
+    which connects to a running database server and outputs an atomic snapshot
+    of its schema and content, in the same format used for on-disk databases.
+  </p>
+
+  <p>
     To restore from a backup, stop the database server or servers, overwrite
     the database file with the backup (e.g. with <code>cp</code>), and then
     restart the servers.
