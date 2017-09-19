@@ -7,7 +7,10 @@
   <p>
     OVSDB, the Open vSwitch Database, is a database system whose network
     protocol is specified by RFC 7047.  The RFC does not specify an on-disk
-    storage format. This manpage documents the format used by Open vSwitch.
+    storage format.  The OVSDB implementation in Open vSwitch implements two
+    storage formats: one for standalone (and active-backup) databases, and the
+    other for clustered databases.  This manpage documents both of these
+    formats.
   </p>
 
   <p>
@@ -29,18 +32,22 @@
     OVSDB files do not include the values of ephemeral columns.
   </p>
 
+  <h2>Common Features</h2>
+
   <p>
-    Database files are text files encoded in UTF-8 with LF (U+000A) line ends,
-    organized as append-only series of records.  Each record consists of 2
-    lines of text.
+    Standalone and clustered database files share the common structure
+    described here.  They are text files encoded in UTF-8 with LF (U+000A) line
+    ends, organized as append-only series of records.  Each record consists of
+    2 lines of text.
   </p>
 
   <p>
-    The first line in each record has the format <code>OVSDB JSON
-    <var>length</var> <var>hash</var></code>, where <var>length</var> is a
-    positive decimal integer and <var>hash</var> is a SHA-1 checksum expressed
-    as 40 hexadecimal digits.  Words in the first line must be separated by
-    exactly one space.
+    The first line in each record has the format <code>OVSDB <var>magic</var>
+    <var>length</var> <var>hash</var></code>, where <var>magic</var> is
+    <code>JSON</code> for standalone databases or <code>CLUSTER</code> for
+    clustered databases, <var>length</var> is a positive decimal integer, and
+    <var>hash</var> is a SHA-1 checksum expressed as 40 hexadecimal digits.
+    Words in the first line must be separated by exactly one space.
   </p>
 
   <p>
@@ -147,5 +154,199 @@
       </p>
     </dd>
   </dl>
+
+  <h2>Clustered Format</h2>
+
+  <p>
+    The clustered format has the following additional notation:
+  </p>
+
+  <dl>
+    <dt>&lt;uint64&gt;</dt>
+    <dd>
+      A JSON integer that represents a 64-bit unsigned integer.  The OVS JSON
+      implementation only supports integers in the range -2**63 through
+      2**63-1, so 64-bit unsigned integer values from 2**63 through 2**64-1 are
+      expressed as negative numbers.
+    </dd>
+    
+    <dt>&lt;address&gt;</dt>
+    <dd>
+      A JSON string that represents a network address to support clustering, in
+      the <code><var>protocol</var>:<var>ip</var>:<var>port</var></code> syntax
+      described in <code>ovsdb-tool</code>(1).
+    </dd>
+
+    <dt>&lt;servers&gt;</dt>
+    <dd>
+      A JSON object whose names are &lt;raw-uuid&gt;s that identify servers and
+      whose values are &lt;address&gt;es that specify those servers' addresses.
+    </dd>
+
+    <dt>&lt;cluster-txn&gt;</dt>
+    <dd>
+      <p>
+        A JSON array with two elements:
+      </p>
+
+      <ul>
+        <li>
+          The first element is either a &lt;database-schema&gt; or null.  It is
+          always present in the first of a clustered database to indicate the
+          database's initial schema.  If it is present in a later record, it
+          indicates a change of schema for the database.
+        </li>
+
+        <li>
+          The second element is either a transaction record in the format
+          described under ``Transaction Records'' above, or null.
+        </li>
+      </ul>
+
+      <p>
+        When a schema is present, the transaction record is relative to an
+        empty database.  That is, a schema change effectively resets the
+        database to empty and the transaction record represents the full
+        database contents.  This allows readers to be ignorant of the full
+        semantics of schema change.
+      </p>
+    </dd>
+  </dl>
+
+  <p>
+    The first record in a clustered database contains the following members,
+    all of which are required:
+  </p>
+
+  <dl>
+    <dt>"server_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      The server's own UUID, which must be unique within the cluster.
+    </dd>
+
+    <dt>"local_address": &lt;address&gt;</dt>
+    <dd>
+      The address on which the server listens for connections from other
+      servers in the cluster.
+    </dd>
+
+    <dt>"name": &lt;id&gt;</dt>
+    <dd>
+      The database schema name.  It is only important when a server is in the
+      process of a joining a cluster: a server will only join a cluster if the
+      name matches.  (If the database schema name were unique, then we would
+      not also need a cluster ID.)
+    </dd>
+
+    <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      The cluster's UUID.  The all-zeros UUID is not a valid cluster ID.
+    </dd>
+
+    <dt>"prev_term": &lt;uint64&gt;</dt>
+    <dt>"prev_index": &lt;uint64&gt;</dt>
+    <dd>
+      The Raft term and index just before the beginning of the log.
+    </dd>
+
+    <dt>"prev_servers": &lt;servers&gt;</dt>
+    <dd>
+      The set of one or more servers in the cluster at index "prev_index" and
+      term "prev_term".  It might not include this server, if it was not the
+      initial server in the cluster.
+    </dd>
+
+    <dt>"prev_data": &lt;json-value&gt;</dt>
+    <dt>"prev_eid": &lt;raw-uuid&gt;</dt>
+    <dd>
+      A snapshot of the data in the database at index "prev_index" and term
+      "prev_term", and the entry ID for that data.  The snapshot must contain a
+      schema.
+    </dd>
+  </dl>
+
+  <p>
+    The second and subsequent records, if present, in a clustered database
+    represent changes to the database, to the cluster state, or both.  They
+    have the following members:
+  </p>
+
+  <dl>
+    <dt>"term": &lt;uint64&gt;</dt>
+    <dd>
+      Always present.
+    </dd>
+
+    <dt>"index": &lt;uint64&gt;</dt>
+    <dd>
+      Optional.  If this member is present, exactly one of <code>data</code> or
+      <code>servers</code> is also present, and <code>vote</code> must be
+      omitted.
+    </dd>
+
+    <dt>"data": &lt;json-value&gt;</dt>
+    <dt>"eid": &lt;raw-uuid&gt;</dt>
+    <dd>
+      Optional, but if either is present then both must be.  If these members
+      are present, <code>index</code> must also be present.
+    </dd>
+
+    <dt>"servers": &lt;servers&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code> must also be
+      present.
+    </dd>
+
+    <dt>"vote": &lt;raw-uuid&gt;</dt>
+    <dd>
+      Optional.  If this member is present, <code>index</code>,
+      <code>data</code>, <code>eid</code>, and <code>servers</code> must be
+      omitted.
+    </dd>
+  </dl>
+
+  <p>
+    When a server completes leaving its cluster (e.g. following the
+    <code>cluster/leave</code> command to <code>ovsdb-server</code>), it writes
+    a final record to its database that has the single member <code>"left":
+    true</code>.  This lets subsequent readers know that the server is not part
+    of the cluster and should not attempt to connect to it.
+  </p>
+
+  <h3>Joining a Cluster</h3>
+
+  <p>
+    In addition to general format for a clustered database, there is also a
+    special case for a database file created by <code>ovsdb-tool
+    join-cluster</code>.  Such a file contains exactly one record, which
+    conveys the information passed to the <code>join-cluster</code> command.
+    It has the following members:
+  </p>
+
+  <dl>
+    <dt>"server_id": &lt;raw-uuid&gt;</dt>
+    <dt>"local_address": &lt;address&gt;</dt>
+    <dt>"name": &lt;id&gt;</dt>
+    <dd>
+      These have the same semantics described above in the general description
+      of the format.
+    </dd>
+
+    <dt>"cluster_id": &lt;raw-uuid&gt;</dt>
+    <dd>
+      This is provided only if the user gave the <code>--cid</code> option to
+      <code>join-cluster</code>.  It has the same semantics described above.
+    </dd>
+
+    <dt>"remote_addresses"; [&lt;address&gt;*]</dt>
+    <dd>
+      One or more remote servers to contact for joining the cluster.
+    </dd>
+  </dl>
+
+  <p>
+    When the server successfully joins the cluster, the database file is
+    replaced by one in the general format described earlier.
+  </p>
 
 </manpage>

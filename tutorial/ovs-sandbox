@@ -393,7 +393,7 @@ if test ! -e "$sandbox"/db.sock; then
 fi
 
 # Initialize database.
-run ovs-vsctl --no-wait -- init
+run ovs-vsctl -vjsonrpc -vovsdb_idl --no-wait -- init
 
 # Start ovs-vswitchd.
 rungdb $gdb_vswitchd $gdb_vswitchd_ex ovs-vswitchd --detach --no-chdir --pidfile -vconsole:off --log-file \

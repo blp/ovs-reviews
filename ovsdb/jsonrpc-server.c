@@ -770,6 +770,15 @@ ovsdb_jsonrpc_lookup_db(const struct ovsdb_jsonrpc_session *s,
         goto error;
     }
 
+    if (!db->schema) {
+        error = ovsdb_error("database not available",
+                            "%s request specifies database %s which is not "
+                            "yet available because it has not completed "
+                            "joining its cluster",
+                            request->method, db_name);
+        goto error;
+    }
+
     *replyp = NULL;
     return db;
 

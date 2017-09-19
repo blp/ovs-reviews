@@ -124,9 +124,14 @@
   <h1>Service Models</h1>
 
   <p>
-    OVSDB supports two service models for databases: <dfn>standalone</dfn>, and
-    <dfn>active-backup</dfn>.  The service models provide different compromises
-    among consistency and availability.
+    OVSDB supports three service models for databases: <dfn>standalone</dfn>,
+    <dfn>active-backup</dfn>, and <dfn>clustered</dfn>.  The service models
+    provide different compromises among consistency, availability, and
+    partition tolerance.  They also differ in the number of servers required
+    and in terms of performance.  The standalone and active-backup database
+    service models share one on-disk format, and clustered databases use a
+    different format, but the OVSDB programs work with both formats.
+    <code>ovsdb</code>(5) documents these file formats.
   </p>
 
   <p>
@@ -212,11 +217,93 @@
   <p>
     Compared to a standalone server, the active-backup service model
     somewhat increases availability, at a risk of split-brain.  It adds
-    generally insignificant performance overhead.
+    generally insignificant performance overhead.  On the other hand, the
+    clustered service model, discussed below, requires at least 3 servers
+    and has greater performance overhead, but it avoids the need for
+    external management software and eliminates the possibility of
+    split-brain.
   </p>
 
   <p>
     Open vSwitch 2.6 introduced support for the active-backup service model.
+  </p>
+
+  <h3>Clustered Database Service Model</h3>
+
+  <p>
+    A <dfn>clustered</dfn> database runs across 3 or 5 database servers (the
+    <dfn>cluster</dfn>) on different hosts.  Servers in a cluster automatically
+    synchronize writes within the cluster.  A 3-server cluster can remain
+    available in the face of at most 1 server failure; a 5-server cluster
+    tolerates up to 2 failures.
+  </p>
+
+  <p>
+    Clusters larger than 5 servers will also work, with every 2 added
+    servers allowing the cluster to tolerate 1 more failure, but
+    performance decreases, especially write performance.  The number of
+    servers should be odd: a 4- or 6-server cluster cannot tolerate more
+    failures than a 3- or 5-server cluster, respectively.
+  </p>
+
+  <p>
+    To set up a clustered database, first initialize it on a single node by
+    running <code>ovsdb-tool create-cluster</code>, then start
+    <code>ovsdb-server</code>.  Depending on its arguments, the
+    <code>create-cluster</code> command can create an empty database or copy a
+    standalone database's contents into the new database.
+  </p>
+
+  <p>
+    To add a server to a cluster, run <code>ovsdb-tool join-cluster</code> on
+    the new server and start <code>ovsdb-server</code>.  To remove a running
+    server from a cluster, use <code>ovs-appctl</code> to invoke the
+    <code>cluster/leave</code> command.  When a server fails and cannot be
+    recovered, e.g. because its hard disk crashed, or to otherwise remove a
+    server that is down from a cluster, use <code>ovs-appctl</code> to invoke
+    <code>cluster/kick</code> to make the remaining servers kick it out of the
+    cluster.
+  </p>
+
+  <p>
+    The above methods for adding and removing servers only work for healthy
+    clusters, that is, for clusters with no more failures than their maximum
+    tolerance.  For example, in a 3-server cluster, the failure of 2 servers
+    prevents servers joining or leaving the cluster (as well as database
+    access).  To prevent data loss or inconsistency, the preferred solution to
+    this problem is to bring up enough of the failed servers to make the
+    cluster healthy again, then if necessary remove any remaining failed
+    servers and add new ones.  If this cannot be done, though, use
+    <code>ovs-appctl</code> to invoke <code>cluster/leave --force</code> on a
+    running server.  This command forces the server to which it is directed to
+    leave its cluster and form a new single-node cluster that contains only
+    itself.  The data in the new cluster may be inconsistent with the former
+    cluster: transactions not yet replicated to the server will be lost, and
+    transactions not yet applied to the cluster may be committed.  Afterward,
+    any servers in its former cluster will regard the server to have failed.
+  </p>
+
+  <p>
+    The servers in a cluster synchronize data over a cluster management
+    protocol that is specific to Open vSwitch; it is not the same as the OVSDB
+    protocol specified in RFC 7047.  For this purpose, a server in a cluster is
+    tied to a particular IP address and TCP port, which is specified in the
+    <code>ovsdb-tool</code> command that creates or joins the cluster.  The TCP
+    port used for clustering must be different from that used for OVSDB
+    clients.  To change the port or address of a server in a cluster, first
+    remove it from the cluster, then add it back with the new address.
+  </p>
+
+  <p>
+    To upgrade the <code>ovsdb-server</code> processes in a cluster from one
+    version of Open vSwitch to another, upgrading them one at a time will keep
+    the cluster healthy during the upgrade process.  (This is different from
+    upgrading a database schema, which is covered later under <ref
+    section="Upgrading or Downgrading a Database"/>.)
+  </p>
+
+  <p>
+    Open vSwitch 2.8 introduced support for the clustered service model.
   </p>
 
   <h2>Database Replication</h2>
@@ -297,6 +384,25 @@
         On Windows, connect to a local named pipe that is represented by a file
         created in the path <var>file</var> to mimic the behavior of a Unix
         domain socket.
+      </p>
+    </dd>
+
+    <dt><var>method1</var><code>, </code><var>method2</var><code>, </code>...<code>, </code><var>methodN</var></dt>
+    <dd>
+      <p>
+        For a clustered database service to be highly available, a client must
+        be able to connect to any of the servers in the cluster.  To do so,
+        specify connection methods for each of the servers separated by commas
+        (and optional spaces).
+      </p>
+
+      <p>
+        In theory, if machines go up and down and IP addresses change in the
+        right way, a client could talk to the wrong instance of a database.  To
+        avoid this possibility, add <code>cid:<var>uuid</var></code> in the
+        list of connection methods, where <var>uuid</var> is the cluster ID of
+        the desired database cluster, as printed by <code>ovsdb-tool
+        get-cid</code>.  This feature is optional.
       </p>
     </dd>
   </dl>
@@ -400,20 +506,23 @@
     For the standalone and active-backup service models, making a copy of the
     database file, e.g. using <code>cp</code>, effectively makes a snapshot,
     and because OVSDB database files are append-only, it works even if the
-    database is being modified when the snapshot takes place.
+    database is being modified when the snapshot takes place.  This approach
+    does not work for clustered databases.
   </p>
 
   <p>
-    Another way to make a backup is to use <code>ovsdb-client backup</code>,
-    which connects to a running database server and outputs an atomic snapshot
-    of its schema and content, in the same format used for on-disk databases.
+    Another way to make a backup, which works with all OVSDB service models, is
+    to use <code>ovsdb-client backup</code>, which connects to a running
+    database server and outputs an atomic snapshot of its schema and content,
+    in the same format used for standalone and active-backup databases.
   </p>
 
   <p>
     Multiple options are also available when the time comes to restore a
-    database from a backup.  One option is to stop the database server or
-    servers, overwrite the database file with the backup (e.g. with
-    <code>cp</code>), and then restart the servers.  Another way is to use
+    database from a backup.  For the standalone and active-backup service
+    models, one option is to stop the database server or servers, overwrite the
+    database file with the backup (e.g. with <code>cp</code>), and then restart
+    the servers.  Another way, which works with any service model, is to use
     <code>ovsdb-client restore</code>, which connects to a running database
     server and replaces the data in one of its databases by a provided
     snapshot.  Using <code>ovsdb-client restore</code> has the disadvantage
@@ -427,6 +536,21 @@
     designates as ephemeral.  This is by design: the designer of a schema only
     marks a column as ephemeral if it is acceptable for its data to be lost
     when a database server restarts.
+  </p>
+
+  <p>
+    Clustering and backup serve different purposes.  Clustering increases
+    availability, but it does not protect against data loss if, for example, a
+    malicious or malfunctioning OVSDB client deletes or tampers with data.
+  </p>
+
+  <h2>Changing Database Service Model</h2>
+
+  <p>
+    Use <code>ovsdb-tool create-cluster</code> to create a clustered database
+    from the contents of a standalone database.  Use <code>ovsdb-tool
+    backup</code> to create a standalone database from the contents of a
+    clustered database.
   </p>
 
   <h2>Upgrading or Downgrading a Database</h2>
@@ -520,8 +644,8 @@
     process).  To compact any database that is currently being served by
     <code>ovsdb-server</code>, use <code>ovs-appctl</code> to send the
     <code>ovsdb-server/compact</code> command.  Each server in an active-backup
-    database maintains its database file independently, so to compact all of
-    them, issue this command separately on each server.
+    or clustered database maintains its database file independently, so to
+    compact all of them, issue this command separately on each server.
   </p>
 
   <h3>Viewing History</h3>
@@ -540,9 +664,9 @@
 
   <p>
     The <code>show-log</code> command works with both OVSDB file formats, but
-    the details of the output format differ.  For active-backup databases, the
-    sequence of transactions in each server's log will differ, even at points
-    when they reflect the same data.
+    the details of the output format differ.  For active-backup and clustered
+    databases, the sequence of transactions in each server's log will differ,
+    even at points when they reflect the same data.
   </p>
 
   <h3>Truncating History</h3>
@@ -578,7 +702,8 @@
   <p>
     The first record in a standalone or active-backup database file specifies
     the schema.  <code>ovsdb-server</code> will refuse to work with such a
-    database.  Delete and recreate such a database, or restore it from a
+    database, or with a clustered database file with corruption in the first
+    few records.  Delete and recreate such a database, or restore it from a
     backup.
   </p>
 

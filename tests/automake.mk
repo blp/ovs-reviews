@@ -12,7 +12,12 @@ EXTRA_DIST += \
 	tests/atlocal.in \
 	$(srcdir)/package.m4 \
 	$(srcdir)/tests/testsuite \
-	$(srcdir)/tests/testsuite.patch
+	$(srcdir)/tests/testsuite.patch \
+	tests/test-raft.sh \
+	tests/test-raft2.sh \
+	tests/test-raft3.sh \
+	tests/test-raft4.sh \
+	tests/torture-raft4.sh
 
 COMMON_MACROS_AT = \
 	tests/ovsdb-macros.at \
@@ -86,6 +91,7 @@ TESTSUITE_AT = \
 	tests/ovsdb-idl.at \
 	tests/ovsdb-lock.at \
 	tests/ovsdb-rbac.at \
+	tests/ovsdb-cluster.at \
 	tests/ovs-vsctl.at \
 	tests/ovs-xapi-sync.at \
 	tests/stp.at \
@@ -293,6 +299,10 @@ tests_test_ovsdb_SOURCES = tests/test-ovsdb.c
 nodist_tests_test_ovsdb_SOURCES = tests/idltest.c tests/idltest.h
 EXTRA_DIST += tests/uuidfilt.pl tests/ovsdb-monitor-sort.pl
 tests_test_ovsdb_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
+
+noinst_PROGRAMS += tests/test-raft
+tests_test_raft_SOURCES = tests/test-raft.c
+tests_test_raft_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 
 noinst_PROGRAMS += tests/test-lib
 tests_test_lib_SOURCES = \

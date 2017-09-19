@@ -211,7 +211,7 @@ ovs-appctl: ovsdb-server: server returned an error
 ])
 else
   AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/add-db db2], 2, [],
-  [db2: already open
+  [ovsdb error: db2: already open
 ovs-appctl: ovsdb-server: server returned an error
 ])
 fi
@@ -285,7 +285,7 @@ AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db1 schema], [0], [ignore], [ignore])
 on_exit 'kill `cat *.pid`'
-AT_CHECK([ovsdb-server -v -vvlog:off --monitor --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db1])
+AT_CHECK([ovsdb-server -vfile -vvlog:off --monitor --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db1])
 
 # Add the second database.
 constraint_schema > schema2
@@ -318,7 +318,7 @@ AT_CHECK([ovsdb-tool create db1 schema], [0], [ignore], [ignore])
 constraint_schema > schema2
 AT_CHECK([ovsdb-tool create db2 schema2], [0], [ignore], [ignore])
 on_exit 'kill `cat *.pid`'
-AT_CHECK([ovsdb-server -v -vvlog:off --monitor --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db1 db2])
+AT_CHECK([ovsdb-server -vfile -vvlog:off --monitor --detach --no-chdir --pidfile --log-file --remote=punix:db.sock db1 db2])
 
 # Remove the second database.
 AT_CHECK([ovs-appctl -t ovsdb-server ovsdb-server/remove-db constraints])
@@ -462,7 +462,7 @@ AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db schema], [0], [ignore], [ignore])
 on_exit 'kill `cat *.pid`'
-AT_CHECK([ovsdb-server -v -vvlog:off --monitor --detach --no-chdir --pidfile --log-file db])
+AT_CHECK([ovsdb-server -vfile -vvlog:off --monitor --detach --no-chdir --pidfile --log-file db])
 
 # Add a remote.
 AT_CHECK([test ! -e socket1])
@@ -493,7 +493,7 @@ AT_SKIP_IF([test "$IS_WIN32" = "yes"])
 ordinal_schema > schema
 AT_CHECK([ovsdb-tool create db schema], [0], [ignore], [ignore])
 on_exit 'kill `cat *.pid`'
-AT_CHECK([ovsdb-server -v -vvlog:off --monitor --detach --no-chdir --pidfile --log-file db])
+AT_CHECK([ovsdb-server -vfile -vvlog:off --monitor --detach --no-chdir --pidfile --log-file db])
 
 # Add a remote.
 AT_CHECK([test ! -e socket1])
@@ -899,9 +899,8 @@ AT_CHECK([ovsdb-client convert new-schema])
 
 dnl Verify that the "ordinals" monitors behaved as they should have.
 dnl Both should have exited, for different reasons.
-dnl The db-aware _Server monitor should still be running, but not the unaware
-dnl one.
-for x in unaware aware; do
+for x in aware unaware; do
+    echo $x
     OVS_WAIT_WHILE([test -e monitor-ordinals-$x.pid])
     AT_CHECK([sort -k 3 monitor-ordinals-$x.stdout | ${PERL} $srcdir/uuidfilt.pl], [0],
 [<0> initial 0 zero
