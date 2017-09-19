@@ -36,6 +36,11 @@ Each OVSDB file may be specified on the command line as \fIdatabase\fR.
 If none is specified, the default is \fB@DBDIR@/conf.db\fR.  The database
 files must already have been created and initialized using, for
 example, \fBovsdb\-tool create\fR.
+.PP
+In addition to user-specified databases, \fBovsdb\-server\fR version
+2.9 and later also always hosts a built-in database named
+\fB_Server\fR.  Please see \fBovsdb\-server\fR(5) for documentation on
+this database's schema.
 .
 .SH "ACTIVE and BACKUP"
 \fBovsdb\-server\fR runs either as a backup server, or as an active server.
