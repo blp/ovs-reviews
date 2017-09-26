@@ -156,6 +156,11 @@ If \fIdatabase\fR was created before schema versioning was introduced,
 then it will not have a version number and this command will print a
 blank line.
 .
+.IP "\fBget\-schema\-cksum\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR]"
+Connects to \fIserver\fR, retrieves the schema for \fIdatabase\fR, and
+prints its checksum on stdout.  If \fIdatabase\fR does not include a
+checksum, prints a blank line.
+.
 .SS "Data Management Commands"
 .PP
 These commands read or modify the data in a database.
