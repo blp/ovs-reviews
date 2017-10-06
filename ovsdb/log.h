@@ -53,7 +53,8 @@ struct ovsdb_error *ovsdb_log_write(struct ovsdb_log *, const struct json *)
 struct ovsdb_error *ovsdb_log_commit(struct ovsdb_log *)
     OVS_WARN_UNUSED_RESULT;
 
-off_t ovsdb_log_get_offset(const struct ovsdb_log *);
+void ovsdb_log_mark_base(struct ovsdb_log *);
+bool ovsdb_log_has_grown(const struct ovsdb_log *);
 
 struct ovsdb_error *ovsdb_log_replace(struct ovsdb_log *,
                                       struct json **entries, size_t n)

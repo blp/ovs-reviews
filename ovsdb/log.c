@@ -52,6 +52,7 @@ struct ovsdb_log {
     struct ovsdb_error *read_error;
     bool write_error;
     enum ovsdb_log_mode mode;
+    off_t base;
 };
 
 static bool parse_header(char *header, const char **magicp,
@@ -196,6 +197,7 @@ ovsdb_log_open(const char *name, const char *magic,
     file->read_error = NULL;
     file->write_error = false;
     file->mode = OVSDB_LOG_READ;
+    file->base = 0;
     *filep = file;
     return NULL;
 
@@ -507,13 +509,16 @@ ovsdb_log_commit(struct ovsdb_log *file)
     return NULL;
 }
 
-/* Returns the current offset into the file backing 'log', in bytes.  This
- * reflects the number of bytes that have been read or written in the file.  If
- * the whole file has been read, this is the file size. */
-off_t
-ovsdb_log_get_offset(const struct ovsdb_log *log)
+void
+ovsdb_log_mark_base(struct ovsdb_log *log)
 {
-    return log->offset;
+    log->base = log->offset;
+}
+
+bool
+ovsdb_log_has_grown(const struct ovsdb_log *log)
+{
+    return log->offset > 10 * 1024 * 1024 && log->offset / 4 > log->base;
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -534,6 +539,7 @@ ovsdb_log_replace(struct ovsdb_log *log, struct json **entries, size_t n)
             return error;
         }
     }
+    ovsdb_log_mark_base(new);
 
     return ovsdb_log_replace_commit(log, new);
 }
@@ -597,6 +603,7 @@ ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new)
     /* read_error only matters for OVSDB_LOG_READ. */
     old->write_error = new->write_error;
     old->mode = OVSDB_LOG_WRITE;
+    old->base = new->base;
 
     /* Free 'new'. */
     ovsdb_log_close(new);
