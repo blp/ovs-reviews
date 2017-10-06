@@ -185,7 +185,9 @@ ovsdb_log_close(struct ovsdb_log *file)
 {
     if (file) {
         free(file->name);
-        fclose(file->stream);
+        if (file->stream) {
+            fclose(file->stream);
+        }
         lockfile_unlock(file->lockfile);
         ovsdb_error_destroy(file->read_error);
         free(file);
@@ -439,4 +441,105 @@ off_t
 ovsdb_log_get_offset(const struct ovsdb_log *log)
 {
     return log->offset;
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_log_replace(struct ovsdb_log *log, struct json **entries, size_t n)
+{
+    struct ovsdb_error *error;
+    struct ovsdb_log *new;
+
+    error = ovsdb_log_replace_start(log, &new);
+    if (error) {
+        return error;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        error = ovsdb_log_write(new, entries[i]);
+        if (error) {
+            ovsdb_log_replace_abort(new);
+            return error;
+        }
+    }
+
+    return ovsdb_log_replace_commit(log, new);
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_log_replace_start(struct ovsdb_log *old,
+                        struct ovsdb_log **newp)
+{
+    char *tmp_name = xasprintf("%s.tmp", old->name);
+    struct ovsdb_error *error;
+
+    ovs_assert(old->lockfile);
+
+    /* Remove temporary file.  (It might not exist.) */
+    if (unlink(tmp_name) < 0 && errno != ENOENT) {
+        error = ovsdb_io_error(errno, "failed to remove %s", tmp_name);
+        free(tmp_name);
+        *newp = NULL;
+        return error;
+    }
+
+    /* Create temporary file. */
+    error = ovsdb_log_open(tmp_name, old->magic, OVSDB_LOG_CREATE_EXCL,
+                           false, newp);
+    free(tmp_name);
+    return error;
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new)
+{
+    struct ovsdb_error *error = ovsdb_log_commit(new);
+    if (error) {
+        ovsdb_log_close(new);
+        return error;
+    }
+
+    /* Replace old file by new file on-disk. */
+    if (rename(new->name, old->name)) {
+        error = ovsdb_io_error(errno, "failed to rename \"%s\" to \"%s\"",
+                               new->name, old->name);
+        ovsdb_log_close(new);
+        return error;
+    }
+    fsync_parent_dir(old->name);
+
+    /* Replace 'old' by 'new' in memory.
+     *
+     * 'old' transitions to OVSDB_LOG_WRITE (it was probably in that mode
+     * anyway). */
+    /* prev_offset only matters for OVSDB_LOG_READ. */
+    old->offset = new->offset;
+    /* Keep old->name and old->rel_name. */
+    free(old->magic);
+    old->magic = new->magic;
+    new->magic = NULL;
+    /* Keep old->lockfile. */
+    fclose(old->stream);
+    old->stream = new->stream;
+    new->stream = NULL;
+    /* read_error only matters for OVSDB_LOG_READ. */
+    old->write_error = new->write_error;
+    old->mode = OVSDB_LOG_WRITE;
+
+    /* Free 'new'. */
+    ovsdb_log_close(new);
+
+    return NULL;
+}
+
+void
+ovsdb_log_replace_abort(struct ovsdb_log *new)
+{
+    if (new) {
+        /* Unlink the new file, but only after we close it (for Windows
+         * compatibility). */
+        char *name = xstrdup(new->name);
+        ovsdb_log_close(new);
+        unlink(name);
+        free(name);
+    }
 }
