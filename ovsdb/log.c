@@ -95,26 +95,24 @@ ovsdb_log_open(const char *name, const char *magic,
         lockfile = NULL;
     }
 
-    if (open_mode == OVSDB_LOG_READ_ONLY) {
+    switch (open_mode) {
+    case OVSDB_LOG_READ_ONLY:
         flags = O_RDONLY;
-    } else if (open_mode == OVSDB_LOG_READ_WRITE) {
+        break;
+
+    case OVSDB_LOG_READ_WRITE:
         flags = O_RDWR;
-    } else if (open_mode == OVSDB_LOG_CREATE) {
-#ifndef _WIN32
-        if (stat(name, &s) == -1 && errno == ENOENT
-            && lstat(name, &s) == 0 && S_ISLNK(s.st_mode)) {
-            /* 'name' is a dangling symlink.  We want to create the file that
-             * the symlink points to, but POSIX says that open() with O_EXCL
-             * must fail with EEXIST if the named file is a symlink.  So, we
-             * have to leave off O_EXCL and accept the race. */
-            flags = O_RDWR | O_CREAT;
-        } else {
-            flags = O_RDWR | O_CREAT | O_EXCL;
-        }
-#else
+        break;
+
+    case OVSDB_LOG_CREATE_EXCL:
         flags = O_RDWR | O_CREAT | O_EXCL;
-#endif
-    } else {
+        break;
+
+    case OVSDB_LOG_CREATE:
+        flags = O_RDWR | O_CREAT;
+        break;
+
+    default:
         OVS_NOT_REACHED();
     }
 #ifdef _WIN32
@@ -122,7 +120,9 @@ ovsdb_log_open(const char *name, const char *magic,
 #endif
     fd = open(name, flags, 0666);
     if (fd < 0) {
-        const char *op = open_mode == OVSDB_LOG_CREATE ? "create" : "open";
+        const char *op = (open_mode == OVSDB_LOG_CREATE_EXCL ? "create"
+            : open_mode == OVSDB_LOG_CREATE ? "create or open"
+            : "open");
         error = ovsdb_io_error(errno, "%s: %s failed", name, op);
         goto error_unlock;
     }
