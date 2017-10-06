@@ -36,6 +36,9 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 \fBovsdb\-client \fR[\fIoptions\fR]
 \fBbackup\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] > \fIsnapshot\fR
 .br
+\fBovsdb\-client \fR[\fIoptions\fR] [\fB\-\-force\fR]
+\fBrestore\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] < \fIsnapshot\fR
+.br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBmonitor\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fItable\fR
 [\fIcolumn\fR[\fB,\fIcolumn\fR]...]...
 .br
@@ -44,7 +47,6 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 \fBovsdb\-client \fR[\fIoptions\fR] \fBmonitor\-cond\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fIconditions
 \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]...
 .IP "Testing Commands:"
-.br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBlock\fI \fR[\fIserver\fR] \fIlock\fR
 .br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBsteal\fI \fR[\fIserver\fR] \fIlock\fR
@@ -194,6 +196,30 @@ database is in use.
 .IP
 The output does not include ephemeral columns, which by design do not
 survive across restarts of \fBovsdb\-server\fR.
+.
+.IP "[\fB\-\-force\fR] \fBrestore\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] < \fIsnapshot\fR"
+Reads \fIsnapshot\fR, which must be in the format used for OVSDB
+standalone and active-backup databases.  Then, connects to
+\fIserver\fR, verifies that \fIdatabase\fR and \fIsnapshot\fR have the
+same schema, then deletes all of the data in \fIdatabase\fR and
+replaces it by \fIsnapshot\fR.  The replacement happens atomically, in a
+single transaction.
+.IP
+UUIDs for rows in the restored database will differ from those in
+\fIsnapshot\fR, because the OVSDB protocol does not allow clients to
+specify row UUIDs.  Another way to restore a database,
+which does also restore row UUIDs, is to stop
+the server or servers, replace the database file by the snapshot, then
+restart the database.  Either way, ephemeral columns are not restored,
+since by design they do not survive across restarts of
+\fBovsdb\-server\fR.
+.IP
+Normally \fBrestore\fR exits with a failure if \fBsnapshot\fR and the
+server's database have different schemas.  In such a case, it is a
+good idea to convert the database to the new schema before restoring,
+e.g. with \fBovsdb\-client convert\fR.  Use \fB\-\-force\fR to proceed
+regardless of schema differences even though the restore might fail
+with an error or succeed with surprising results.
 .
 .IP "\fBmonitor\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]..."
 .IQ "\fBmonitor\-cond\fI \fR[\fIserver\fR] \fR[\fIdatabase\fR] \fIconditions\fR \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]..."
