@@ -352,7 +352,7 @@ do_log_io(struct ovs_cmdl_context *ctx)
             error = ovsdb_log_write(log, json);
             json_destroy(json);
         } else if (!strcmp(command, "commit")) {
-            error = ovsdb_log_commit(log);
+            error = ovsdb_log_commit_block(log);
         } else {
             ovs_fatal(0, "unknown log-io command \"%s\"", command);
         }

@@ -24,12 +24,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "lockfile.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/json.h"
 #include "openvswitch/vlog.h"
-#include "lockfile.h"
-#include "ovsdb.h"
+#include "ovs-atomic.h"
+#include "ovs-rcu.h"
+#include "ovs-thread.h"
 #include "ovsdb-error.h"
+#include "ovsdb.h"
+#include "poll-loop.h"
+#include "seq.h"
 #include "sha1.h"
 #include "socket-util.h"
 #include "transaction.h"
@@ -54,12 +59,16 @@ struct ovsdb_log {
     bool write_error;
     enum ovsdb_log_mode mode;
     off_t base;
+    struct afsync *afsync;
 };
 
 static bool parse_header(char *header, const char **magicp,
                          unsigned long int *length,
                          uint8_t sha1[SHA1_DIGEST_SIZE]);
 static bool is_magic_ok(const char *needle, const char *haystack);
+
+static struct afsync *afsync_create(int fd, uint64_t initial_ticket);
+static uint64_t afsync_destroy(struct afsync *);
 
 /* Attempts to open 'name' with the specified 'open_mode'.  On success, stores
  * the new log into '*filep' and returns NULL; otherwise returns NULL and
@@ -213,6 +222,7 @@ ovsdb_log_open(const char *name, const char *magic,
     file->write_error = false;
     file->mode = OVSDB_LOG_READ;
     file->base = 0;
+    file->afsync = NULL;
     *filep = file;
     return NULL;
 
@@ -251,6 +261,7 @@ void
 ovsdb_log_close(struct ovsdb_log *file)
 {
     if (file) {
+        afsync_destroy(file->afsync);
         free(file->name);
         free(file->rel_name);
         free(file->magic);
@@ -533,7 +544,7 @@ ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
 }
 
 struct ovsdb_error *
-ovsdb_log_commit(struct ovsdb_log *file)
+ovsdb_log_commit_block(struct ovsdb_log *file)
 {
     if (fsync(fileno(file->stream))) {
         return ovsdb_io_error(errno, "%s: fsync failed", file->rel_name);
@@ -603,7 +614,7 @@ ovsdb_log_replace_start(struct ovsdb_log *old,
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new)
 {
-    struct ovsdb_error *error = ovsdb_log_commit(new);
+    struct ovsdb_error *error = ovsdb_log_commit_block(new);
     if (error) {
         ovsdb_log_close(new);
         return error;
@@ -623,6 +634,10 @@ ovsdb_log_replace_commit(struct ovsdb_log *old, struct ovsdb_log *new)
      * 'old' transitions to OVSDB_LOG_WRITE (it was probably in that mode
      * anyway). */
     /* prev_offset only matters for OVSDB_LOG_READ. */
+    if (old->afsync) {
+        uint64_t ticket = afsync_destroy(old->afsync);
+        old->afsync = afsync_create(fileno(new->stream), ticket + 1);
+    }
     old->offset = new->offset;
     /* Keep old->name and old->rel_name. */
     free(old->magic);
@@ -653,5 +668,123 @@ ovsdb_log_replace_abort(struct ovsdb_log *new)
         ovsdb_log_close(new);
         unlink(name);
         free(name);
+    }
+}
+
+struct afsync {
+    pthread_t thread;
+    uint64_t cur, next;
+    struct seq *request, *complete;
+    int fd;
+};
+
+static void *
+afsync_thread(void *afsync_)
+{
+    struct afsync *afsync = afsync_;
+    uint64_t cur = 0;
+    for (;;) {
+        ovsrcu_quiesce_start();
+
+        uint64_t request_seq = seq_read(afsync->request);
+
+        uint64_t next;
+        atomic_read_explicit(&afsync->next, &next, memory_order_acquire);
+        if (next == UINT64_MAX) {
+            break;
+        }
+
+        if (cur != next) {
+            int error = fsync(afsync->fd) ? errno : 0;
+            if (!error) {
+                cur = next;
+                atomic_store_explicit(&afsync->cur, cur, memory_order_release);
+                seq_change(afsync->complete);
+            } else {
+                VLOG_WARN("fsync failed (%s)", ovs_strerror(error));
+            }
+        }
+
+        seq_wait(afsync->request, request_seq);
+        poll_block();
+    }
+    return NULL;
+}
+
+static struct afsync *
+afsync_create(int fd, uint64_t initial_ticket)
+{
+    struct afsync *afsync = xzalloc(sizeof *afsync);
+    atomic_init(&afsync->cur, initial_ticket);
+    atomic_init(&afsync->next, initial_ticket);
+    afsync->request = seq_create();
+    afsync->complete = seq_create();
+    afsync->thread = ovs_thread_create("log_fsync", afsync_thread, afsync);
+    afsync->fd = fd;
+    return afsync;
+}
+
+static uint64_t
+afsync_destroy(struct afsync *afsync)
+{
+    if (!afsync) {
+        return 0;
+    }
+
+    uint64_t next;
+    atomic_read(&afsync->next, &next);
+    atomic_store(&afsync->next, UINT64_MAX);
+    seq_change(afsync->request);
+    xpthread_join(afsync->thread, NULL);
+
+    seq_destroy(afsync->request);
+    seq_destroy(afsync->complete);
+
+    free(afsync);
+
+    return next;
+}
+
+static struct afsync *
+ovsdb_log_get_afsync(struct ovsdb_log *log)
+{
+    if (!log->afsync) {
+        log->afsync = afsync_create(fileno(log->stream), 0);
+    }
+    return log->afsync;
+}
+
+uint64_t
+ovsdb_log_commit_start(struct ovsdb_log *log)
+{
+    struct afsync *afsync = ovsdb_log_get_afsync(log);
+
+    uint64_t orig;
+    atomic_add_explicit(&afsync->next, 1, &orig, memory_order_acq_rel);
+
+    seq_change(afsync->request);
+
+    return orig + 1;
+}
+
+uint64_t
+ovsdb_log_commit_progress(struct ovsdb_log *log)
+{
+    struct afsync *afsync = ovsdb_log_get_afsync(log);
+    uint64_t cur;
+    atomic_read_explicit(&afsync->cur, &cur, memory_order_acquire);
+    return cur;
+}
+
+void
+ovsdb_log_commit_wait(struct ovsdb_log *log, uint64_t goal)
+{
+    struct afsync *afsync = ovsdb_log_get_afsync(log);
+    uint64_t complete = seq_read(afsync->complete);
+    uint64_t cur = ovsdb_log_commit_progress(log);
+    if (cur < goal) {
+        seq_wait(afsync->complete, complete);
+    } else {
+        poll_immediate_wake();
     }
 }
