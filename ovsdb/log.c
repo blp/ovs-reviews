@@ -45,6 +45,7 @@ enum ovsdb_log_mode {
 struct ovsdb_log {
     off_t prev_offset;
     off_t offset;
+    char *rel_name;
     char *name;
     char *magic;
     struct lockfile *lockfile;
@@ -80,6 +81,7 @@ ovsdb_log_open(const char *name, const char *magic,
 {
     struct lockfile *lockfile;
     struct ovsdb_error *error;
+    char *abs_name;
     FILE *stream;
     int flags;
     int fd;
@@ -89,14 +91,26 @@ ovsdb_log_open(const char *name, const char *magic,
     if (open_mode == OVSDB_LOG_CREATE_EXCL || open_mode == OVSDB_LOG_CREATE) {
         ovs_assert(!strchr(magic, '|'));
     }
+
     *filep = NULL;
+
+    /* Use the absolute name of the file because ovsdb-server opens its
+     * database before daemonize() chdirs to "/". */
+    char *deref_name = follow_symlinks(name);
+    abs_name = abs_file_name(NULL, deref_name);
+    free(deref_name);
+    if (!name) {
+        error = ovsdb_io_error(0, "could not determine current "
+                              "working directory");
+        goto error;
+    }
 
     ovs_assert(locking == -1 || locking == false || locking == true);
     if (locking < 0) {
         locking = open_mode != OVSDB_LOG_READ_ONLY;
     }
     if (locking) {
-        int retval = lockfile_lock(name, &lockfile);
+        int retval = lockfile_lock(abs_name, &lockfile);
         if (retval) {
             error = ovsdb_io_error(retval, "%s: failed to lock lockfile",
                                    name);
@@ -131,10 +145,10 @@ ovsdb_log_open(const char *name, const char *magic,
 #endif
     /* Special case for /dev/stdin to make it work even if the operating system
      * doesn't support it under that name. */
-    if (!strcmp(name, "/dev/stdin") && open_mode == OVSDB_LOG_READ_ONLY) {
+    if (!strcmp(abs_name, "/dev/stdin") && open_mode == OVSDB_LOG_READ_ONLY) {
         fd = dup(STDIN_FILENO);
     } else {
-        fd = open(name, flags, 0666);
+        fd = open(abs_name, flags, 0666);
     }
     if (fd < 0) {
         const char *op = (open_mode == OVSDB_LOG_CREATE_EXCL ? "create"
@@ -188,7 +202,8 @@ ovsdb_log_open(const char *name, const char *magic,
     }
 
     struct ovsdb_log *file = xmalloc(sizeof *file);
-    file->name = xstrdup(name);
+    file->name = abs_name;
+    file->rel_name = xstrdup(name);
     file->magic = xstrdup(actual_magic);
     file->lockfile = lockfile;
     file->stream = stream;
@@ -206,6 +221,7 @@ error_fclose:
 error_unlock:
     lockfile_unlock(lockfile);
 error:
+    free(abs_name);
     return error;
 }
 
@@ -236,6 +252,7 @@ ovsdb_log_close(struct ovsdb_log *file)
 {
     if (file) {
         free(file->name);
+        free(file->rel_name);
         free(file->magic);
         if (file->stream) {
             fclose(file->stream);
@@ -312,7 +329,7 @@ parse_body(struct ovsdb_log *file, off_t offset, unsigned long int length,
             json_parser_abort(parser);
             return ovsdb_io_error(ferror(file->stream) ? errno : EOF,
                                   "%s: error reading %lu bytes "
-                                  "starting at offset %lld", file->name,
+                                  "starting at offset %lld", file->rel_name,
                                   length, (long long int) offset);
         }
         sha1_update(&ctx, input, chunk);
@@ -340,14 +357,14 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
     if (file->read_error) {
         return ovsdb_error_clone(file->read_error);
     } else if (file->mode == OVSDB_LOG_WRITE) {
-        return OVSDB_BUG("reading file in write mode");
+        return NULL;
     }
 
     if (!fgets(header, sizeof header, file->stream)) {
         if (feof(file->stream)) {
             error = NULL;
         } else {
-            error = ovsdb_io_error(errno, "%s: read failed", file->name);
+            error = ovsdb_io_error(errno, "%s: read failed", file->rel_name);
         }
         goto error;
     }
@@ -358,7 +375,8 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         || strcmp(magic, file->magic)) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: parse error at offset "
                                    "%lld in header line \"%.*s\"",
-                                   file->name, (long long int) file->offset,
+                                   file->rel_name,
+                                   (long long int) file->offset,
                                    (int) strcspn(header, "\n"), header);
         goto error;
     }
@@ -372,7 +390,7 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
         error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
                                    "offset %lld have SHA-1 hash "SHA1_FMT" "
                                    "but should have hash "SHA1_FMT,
-                                   file->name, data_length,
+                                   file->rel_name, data_length,
                                    (long long int) data_offset,
                                    SHA1_ARGS(actual_sha1),
                                    SHA1_ARGS(expected_sha1));
@@ -382,7 +400,7 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
     if (json->type == JSON_STRING) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
                                    "offset %lld are not valid JSON (%s)",
-                                   file->name, data_length,
+                                   file->rel_name, data_length,
                                    (long long int) data_offset,
                                    json->u.string);
         goto error;
@@ -390,7 +408,7 @@ ovsdb_log_read(struct ovsdb_log *file, struct json **jsonp)
     if (json->type != JSON_OBJECT) {
         error = ovsdb_syntax_error(NULL, NULL, "%s: %lu bytes starting at "
                                    "offset %lld are not a JSON object",
-                                   file->name, data_length,
+                                   file->rel_name, data_length,
                                    (long long int) data_offset);
         goto error;
     }
@@ -422,6 +440,23 @@ ovsdb_log_unread(struct ovsdb_log *file)
     file->offset = file->prev_offset;
 }
 
+static struct ovsdb_error *
+ovsdb_log_truncate(struct ovsdb_log *file)
+{
+    file->mode = OVSDB_LOG_WRITE;
+
+    struct ovsdb_error *error = NULL;
+    if (fseeko(file->stream, file->offset, SEEK_SET)) {
+        error = ovsdb_io_error(errno, "%s: cannot seek to offset %lld",
+                               file->rel_name, (long long int) file->offset);
+    } else if (ftruncate(fileno(file->stream), file->offset)) {
+        error = ovsdb_io_error(errno, "%s: cannot truncate to length %lld",
+                               file->rel_name, (long long int) file->offset);
+    }
+    file->write_error = error != NULL;
+    return error;
+}
+
 void
 ovsdb_log_compose_record(const struct json *json,
                          const char *magic, struct ds *header, struct ds *data)
@@ -445,26 +480,16 @@ ovsdb_log_compose_record(const struct json *json,
 struct ovsdb_error *
 ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
 {
-    struct ovsdb_error *error;
-
     if (file->mode == OVSDB_LOG_READ || file->write_error) {
-        file->mode = OVSDB_LOG_WRITE;
-        file->write_error = false;
-        if (fseeko(file->stream, file->offset, SEEK_SET)) {
-            error = ovsdb_io_error(errno, "%s: cannot seek to offset %lld",
-                                   file->name, (long long int) file->offset);
-            goto error;
-        }
-        if (ftruncate(fileno(file->stream), file->offset)) {
-            error = ovsdb_io_error(errno, "%s: cannot truncate to length %lld",
-                                   file->name, (long long int) file->offset);
-            goto error;
+        struct ovsdb_error *error = ovsdb_log_truncate(file);
+        if (error) {
+            file->write_error = true;
+            return error;
         }
     }
 
     if (json->type != JSON_OBJECT && json->type != JSON_ARRAY) {
-        error = OVSDB_BUG("bad JSON type");
-        goto error;
+        return OVSDB_BUG("bad JSON type");
     }
 
     struct ds header = DS_EMPTY_INITIALIZER;
@@ -479,32 +504,29 @@ ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
     ds_destroy(&header);
     ds_destroy(&data);
     if (!ok) {
-        error = ovsdb_io_error(errno, "%s: write failed", file->name);
+        int error = errno;
 
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
         VLOG_WARN_RL(&rl, "%s: write failed (%s)",
-                     file->name, ovs_strerror(errno));
+                     file->name, ovs_strerror(error));
 
         /* Remove any partially written data, ignoring errors since there is
          * nothing further we can do. */
         ignore(ftruncate(fileno(file->stream), file->offset));
 
-        goto error;
+        file->write_error = true;
+        return ovsdb_io_error(error, "%s: write failed", file->rel_name);
     }
 
     file->offset += total_length;
     return NULL;
-
-error:
-    file->write_error = true;
-    return error;
 }
 
 struct ovsdb_error *
 ovsdb_log_commit(struct ovsdb_log *file)
 {
     if (fsync(fileno(file->stream))) {
-        return ovsdb_io_error(errno, "%s: fsync failed", file->name);
+        return ovsdb_io_error(errno, "%s: fsync failed", file->rel_name);
     }
     return NULL;
 }
@@ -548,7 +570,7 @@ struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_log_replace_start(struct ovsdb_log *old,
                         struct ovsdb_log **newp)
 {
-    char *tmp_name = xasprintf("%s.tmp", old->name);
+    char *tmp_name = xasprintf("%s.tmp", old->rel_name);
     struct ovsdb_error *error;
 
     ovs_assert(old->lockfile);
