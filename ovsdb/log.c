@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "openvswitch/json.h"
+#include "openvswitch/vlog.h"
 #include "lockfile.h"
 #include "ovsdb.h"
 #include "ovsdb-error.h"
@@ -32,6 +33,8 @@
 #include "socket-util.h"
 #include "transaction.h"
 #include "util.h"
+
+VLOG_DEFINE_THIS_MODULE(ovsdb_log);
 
 enum ovsdb_log_mode {
     OVSDB_LOG_READ,
@@ -398,6 +401,10 @@ ovsdb_log_write(struct ovsdb_log *file, const struct json *json)
         || fflush(file->stream))
     {
         error = ovsdb_io_error(errno, "%s: write failed", file->name);
+
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+        VLOG_WARN_RL(&rl, "%s: write failed (%s)",
+                     file->name, ovs_strerror(errno));
 
         /* Remove any partially written data, ignoring errors since there is
          * nothing further we can do. */
