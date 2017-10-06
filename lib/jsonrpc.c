@@ -875,6 +875,15 @@ jsonrpc_session_close(struct jsonrpc_session *s)
     }
 }
 
+struct jsonrpc *
+jsonrpc_session_steal(struct jsonrpc_session *s)
+{
+    struct jsonrpc *rpc = s->rpc;
+    s->rpc = NULL;
+    jsonrpc_session_close(s);
+    return rpc;
+}
+
 static void
 jsonrpc_session_disconnect(struct jsonrpc_session *s)
 {

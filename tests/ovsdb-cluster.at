@@ -1,0 +1,125 @@
+OVS_DEFINE_SHELL_HELPERS([
+# ovsdb_check_cluster N_SERVERS SCHEMA_FUNC OUTPUT TRANSACTION...
+ovsdb_check_cluster () {
+    local n=$1 schema_func=$2 output=$3
+    shift; shift; shift
+
+    $schema_func > schema
+    schema=`ovsdb-tool schema-name schema`
+    AT_CHECK([ovsdb-tool '-vPATTERN:console:%c|%p|%m' create-cluster s1.db schema unix:s1.raft], [0], [], [stderr])
+    AT_CHECK([grep -v 'from ephemeral to persistent' stderr], [1])
+    cid=`ovsdb-tool db-cid s1.db`
+    for i in `seq 2 $n`; do
+        AT_CHECK([ovsdb-tool join-cluster s$i.db $schema unix:s$i.raft unix:s1.raft])
+    done
+
+    on_exit 'kill `cat *.pid`'
+    for i in `seq $n`; do
+	AT_CHECK([ovsdb-server -vjsonrpc -vconsole:off --detach --no-chdir --log-file=s$i.log --pidfile=s$i.pid --unixctl=s$i --remote=punix:s$i.ovsdb s$i.db])
+    done
+    for i in `seq $n`; do
+	AT_CHECK([ovsdb-client wait unix:s$i.ovsdb $schema connected])
+    done
+
+    for txn
+    do
+      AT_CHECK([ovsdb-client -vjsonrpc -vconsole:off -vvlog:off --log-file transact unix:s1.ovsdb,unix:s2.ovsdb,unix:s3.ovsdb "$txn"], [0], [stdout])
+      cat stdout >> output
+    done
+    AT_CHECK_UNQUOTED([${PERL} $srcdir/uuidfilt.pl output], [0], [$output])
+    for i in `seq $n`; do
+	OVS_APP_EXIT_AND_WAIT_BY_TARGET([`pwd`/s$i], [s$i.pid])
+    done
+}
+])
+
+# Test a 1-server cluster.
+AT_BANNER([OVSDB - clustered transactions (1 server)])
+m4_define([OVSDB_CHECK_EXECUTION],
+  [AT_SETUP([$1 - cluster of 1])
+   AT_KEYWORDS([ovsdb server positive unix cluster cluster1 $5])
+   ovsdb_check_cluster 1 "$2" '$4' m4_foreach([txn], [$3], ['txn' ])
+   AT_CLEANUP])
+EXECUTION_EXAMPLES
+
+# Test a 3-server cluster.
+AT_BANNER([OVSDB - clustered transactions (3 servers)])
+m4_define([OVSDB_CHECK_EXECUTION],
+  [AT_SETUP([$1 - cluster of 3])
+   AT_KEYWORDS([ovsdb server positive unix cluster cluster3 $5])
+   ovsdb_check_cluster 3 "$2" '$4' m4_foreach([txn], [$3], ['txn' ])
+   AT_CLEANUP])
+EXECUTION_EXAMPLES
+
+# Test a 5-server cluster.
+AT_BANNER([OVSDB - clustered transactions (5 servers)])
+m4_define([OVSDB_CHECK_EXECUTION],
+  [AT_SETUP([$1 - cluster of 5])
+   AT_KEYWORDS([ovsdb server positive unix cluster cluster5 $5])
+   ovsdb_check_cluster 5 "$2" '$4' m4_foreach([txn], [$3], ['txn' ])
+   AT_CLEANUP])
+EXECUTION_EXAMPLES
+
+AT_BANNER([OVSDB - cluster tests])
+
+# Torture test.
+OVS_DEFINE_SHELL_HELPERS([
+ovsdb_torture_test () {
+    local n=$1			# Number of cluster members
+    local victim=$2		# Cluster member to kill
+    cp $top_srcdir/ovn/ovn-sb.ovsschema schema
+    schema=`ovsdb-tool schema-name schema`
+    AT_CHECK([ovsdb-tool '-vPATTERN:console:%c|%p|%m' create-cluster s1.db schema unix:s1.raft], [0], [], [dnl
+ovsdb|WARN|schema: changed 2 columns in 'OVN_Southbound' database from ephemeral to persistent, including 'status' column in 'Connection' table, because clusters do not support ephemeral columns
+])
+    cid=`ovsdb-tool db-cid s1.db`
+    for i in `seq 2 $n`; do
+	AT_CHECK([ovsdb-tool join-cluster s$i.db $schema unix:s$i.raft unix:s1.raft])
+    done
+
+    on_exit 'kill `cat *.pid`'
+    for i in `seq $n`; do
+	AT_CHECK([ovsdb-server -vjsonrpc -vconsole:off --detach --no-chdir --log-file=s$i.log --pidfile=s$i.pid --unixctl=s$i --remote=punix:s$i.ovsdb s$i.db])
+    done
+    for i in `seq $n`; do
+	AT_CHECK([ovsdb-client wait unix:s$i.ovsdb $schema connected])
+    done
+
+    export OVN_SB_DB=unix:s1.ovsdb,unix:s2.ovsdb,unix:s3.ovsdb
+
+    for i in `seq 0 9`; do
+	(for j in `seq 5`; do
+	     run_as "ovn-sbctl($i-$j)" ovn-sbctl --log-file=$i-$j.log -vfile add SB_Global . external_ids $i-$j=$i-$j
+	 done)&
+    done
+    sleep 2
+    OVS_APP_EXIT_AND_WAIT_BY_TARGET([`pwd`/s$victim], [s$victim.pid])
+    wait
+
+    for i in `seq 0 9`; do
+	for j in `seq 5`; do
+	    echo "$i-$j=$i-$j"
+	done
+    done > expout
+    AT_CHECK([ovn-sbctl --bare get SB_Global . external-ids | sed 's/, /\n/g; s/[[{}""]]//g;'], [0], [expout])
+
+    for i in `seq $n`; do
+	if test $i != $victim; then
+	    OVS_APP_EXIT_AND_WAIT_BY_TARGET([`pwd`/s$i], [s$i.pid])
+	fi
+    done
+}
+])
+AT_SETUP([OVSDB cluster torture test - kill leader])
+AT_KEYWORDS([ovsdb server positive unix cluster cluster3])
+ovsdb_torture_test 3 1
+AT_CLEANUP
+AT_SETUP([OVSDB cluster torture test - kill follower 1])
+AT_KEYWORDS([ovsdb server positive unix cluster cluster3])
+ovsdb_torture_test 3 2
+AT_CLEANUP
+AT_SETUP([OVSDB cluster torture test - kill follower 2])
+AT_KEYWORDS([ovsdb server positive unix cluster cluster3])
+ovsdb_torture_test 3 3
+AT_CLEANUP
+
