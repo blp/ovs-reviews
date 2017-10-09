@@ -34,6 +34,7 @@
 #include "row.h"
 #include "server.h"
 #include "simap.h"
+#include "storage.h"
 #include "stream.h"
 #include "table.h"
 #include "timeval.h"
@@ -770,6 +771,15 @@ ovsdb_jsonrpc_lookup_db(const struct ovsdb_jsonrpc_session *s,
         goto error;
     }
 
+    if (!db->schema) {
+        error = ovsdb_error("database not available",
+                            "%s request specifies database %s which is not "
+                            "yet available because it has not completed "
+                            "joining its cluster",
+                            request->method, db_name);
+        goto error;
+    }
+
     *replyp = NULL;
     return db;
 
@@ -1126,14 +1136,15 @@ ovsdb_jsonrpc_trigger_complete(struct ovsdb_jsonrpc_trigger *t)
     s = CONTAINER_OF(t->trigger.session, struct ovsdb_jsonrpc_session, up);
 
     if (jsonrpc_session_is_connected(s->js)) {
-        struct jsonrpc_msg *reply;
-
-        reply = ovsdb_trigger_steal_reply(&t->trigger);
-        if (!reply) {
-            reply = jsonrpc_create_error(json_string_create("canceled"),
+        struct jsonrpc_msg *reply = ovsdb_trigger_steal_reply(&t->trigger);
+        if (!reply && s->db_change_aware) {
+            reply = jsonrpc_create_error(ovsdb_error_to_json_free(
+                                             ovsdb_error("canceled", NULL)),
                                          t->id);
         }
-        ovsdb_jsonrpc_session_send(s, reply);
+        if (reply) {
+            ovsdb_jsonrpc_session_send(s, reply);
+        }
     }
 
     json_destroy(t->id);

@@ -10,6 +10,16 @@ m4_rename([AT_SETUP], [OVS_AT_SETUP])
 m4_define([AT_SETUP], [OVS_AT_SETUP($@)
 ovs_init
 ])
+
+m4_define([OVS_DEFINE_SHELL_HELPERS],
+  [m4_ifdef([AT_ingroup], [m4_fatal([$0: AT_SETUP and OVS_DEFINE_SHELL_HELPERS may not nest])])
+   m4_define([AT_ingroup])
+   m4_divert_push([PREPARE_TESTS])
+   $1
+   m4_divert_pop([PREPARE_TESTS])
+   m4_undefine([AT_ingroup])])
+
+
 m4_divert_push([PREPARE_TESTS])
 [
 # Set ovs_base to the base directory in which the test is running and
@@ -160,6 +170,25 @@ kill_ovs_vswitchd () {
 wc () {
    command wc "$@" | tr -s ' ' ' ' | sed 's/^ *//'
 }
+
+# run_as PROGRAM_NAME COMMAND [ARG...]
+#
+# Runs a command with argv[0] set to PROGRAM_NAME, if possible, in a
+# subshell.  Most utilities print argc[0] as part of their messages,
+# so this makes it easier to figure out which particular utility
+# prints a message if a bunch of identical processes are running.
+#
+# Not all shells support "exec -a NAME", so test for it.
+if (exec -a myname true); then
+    run_as () {
+	(exec -a "$@")
+    }
+else
+    run_as () {
+        shift
+	(exec "$@")
+    }
+fi
 ]
 m4_divert_pop([PREPARE_TESTS])
 
