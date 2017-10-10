@@ -93,6 +93,8 @@ struct ovsdb_error *raft_servers_validate_json(const struct json *);
 struct json *raft_servers_to_json(const struct hmap *servers);
 void raft_servers_format(const struct hmap *servers, struct ds *ds);
 
+/* A raft_entry is an in-memory data structure that represents a Raft log
+ * entry.  */
 struct raft_entry {
     uint64_t term;
     struct json *data;
@@ -104,6 +106,47 @@ void raft_entry_clone(struct raft_entry *, const struct raft_entry *);
 void raft_entry_destroy(struct raft_entry *);
 struct json *raft_entry_to_json(const struct raft_entry *);
 struct ovsdb_error *raft_entry_from_json(struct json *, struct raft_entry *)
+    OVS_WARN_UNUSED_RESULT;
+
+/* A raft_record is an on-disk record that serializes Raft log entries and
+ * other state. */
+
+enum raft_record_type {
+    /* Record types that match those in the Raft specification. */
+    RAFT_REC_ENTRY,             /* A log entry. */
+    RAFT_REC_TERM,              /* A new term. */
+    RAFT_REC_VOTE,              /* A vote. */
+
+    /* Extensions. */
+    RAFT_REC_COMMIT_INDEX,      /* An update to the local commit_index. */
+    RAFT_REC_LEADER,            /* This server is the leader. */
+    RAFT_REC_LEFT,              /* This server has left the cluster. */
+};
+
+struct raft_record {
+    enum raft_record_type type;
+
+    /* Valid in RAFT_REC_ENTRY, RAFT_REC_TERM, RAFT_REC_LEADER, and
+     * RAFT_REC_VOTE, and otherwise 0. */
+    uint64_t term;
+
+    union {
+        uint64_t commit_index;  /* RAFT_REC_COMMIT_INDEX. */
+
+        struct uuid vote;       /* RAFT_REC_VOTE. */
+
+        struct {                /* RAFT_REC_ENTRY. */
+            uint64_t index;
+            struct json *data;
+            struct json *servers;
+            struct uuid eid;
+        } entry;
+    };
+};
+
+void raft_record_uninit(struct raft_record *);
+struct ovsdb_error *raft_record_parse(struct raft_record *,
+                                      const struct json *)
     OVS_WARN_UNUSED_RESULT;
 
 void raft_put_uint64(struct json *object, const char *name, uint64_t integer);

@@ -678,129 +678,102 @@ raft_write_state(struct ovsdb_log *log,
     return error;
 }
 
-static void
-raft_parse_log_record__(struct raft *raft, struct ovsdb_parser *p)
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_apply_record(struct raft *raft, const struct raft_record *r)
 {
-    if (raft_parse_optional_boolean(p, "left") == 1) {
-        ovsdb_parser_raise_error(
-            p, "server has left the cluster and cannot be added back; use "
-            "\"ovsdb-tool join-cluster\" to add a new server");
-        return;
-    }
-
-    /* A commit_index record prevents the view of the database from moving
-     * backward from clients' perspective. */
-    uint64_t commit_index = raft_parse_optional_uint64(p, "commit_index");
-    if (commit_index) {
-        if (commit_index < raft->commit_index) {
-            ovsdb_parser_raise_error(p, "commit index %"PRIu64 " is "
-                                     "regression from previous %"PRIu64,
-                                     commit_index, raft->commit_index);
-        } else if (commit_index >= raft->log_end) {
-            ovsdb_parser_raise_error(p, "commit index %"PRIu64 " is "
-                                     "beyond last log index %"PRIu64,
-                                     commit_index, raft->log_end - 1);
-        } else {
-            raft->commit_index = commit_index;
-        }
-        return;
-    }
-
-    /* All log records include "term", plus at most one of:
-     *
-     *     - "index" plus zero or more of "data" and "servers".
-     *
-     *     - "vote".
-     */
-
-    /* Parse "term".
+    /* Apply "term", which is present in most kinds of records (and otherwise
+     * 0).
      *
      * A Raft leader can replicate entries from previous terms to the other
      * servers in the cluster, retaining the original terms on those entries
      * (see section 3.6.2 "Committing entries from previous terms" for more
      * information), so it's OK for the term in a log record to precede the
      * current term. */
-    uint64_t term = raft_parse_required_uint64(p, "term");
-    if (term > raft->term) {
-        raft->term = term;
+    if (r->term > raft->term) {
+        raft->term = r->term;
         raft->vote = raft->synced_vote = UUID_ZERO;
     }
 
-    /* Parse "vote". */
-    struct uuid vote;
-    if (raft_parse_optional_uuid(p, "vote", &vote)) {
-        if (term < raft->term) {
-            ovsdb_parser_raise_error(p, "log entry votes for term %"PRIu64" "
-                                     "but current term is %"PRIu64,
-                                     term, raft->term);
-        } else if (uuid_is_zero(&raft->vote)) {
-            raft->vote = raft->synced_vote = vote;
-        } else if (!uuid_equals(&raft->vote, &vote)) {
-            ovsdb_parser_raise_error(p, "log entry term %"PRIu64 " votes for "
-                                     "both "SID_FMT" and "SID_FMT, term,
-                                     SID_ARGS(&raft->vote),
-                                     SID_ARGS(&vote));
+    switch (r->type) {
+    case RAFT_REC_ENTRY:
+        if (r->entry.index < raft->commit_index) {
+            return ovsdb_error(NULL, "record attempts to truncate log from "
+                               "%"PRIu64" to %"PRIu64" entries, but commit "
+                               "index is already %"PRIu64,
+                               raft->log_end, r->entry.index,
+                               raft->commit_index);
+        } else if (r->entry.index < raft->log_end) {
+            /* This can happen, but it is unusual. */
+            VLOG_DBG("log entry truncates log from %"PRIu64" to %"PRIu64
+                     " entries", raft->log_end, r->entry.index);
+            raft_truncate(raft, r->entry.index);
+        } else if (r->entry.index > raft->log_end) {
+            return ovsdb_error(NULL, "log entry index %"PRIu64" skips past "
+                               "expected %"PRIu64,
+                               r->entry.index, raft->log_end);
         }
-        return;
-    }
 
-    /* Parse "index". */
-    const struct json *index_json = ovsdb_parser_member(
-        p, "index", OP_INTEGER | OP_OPTIONAL);
-    if (!index_json) {
-        return;
-    }
-    uint64_t index = json_integer(index_json);
-    if (index < raft->log_end) {
-        /* This can happen in some cases in Raft, but it is unusual. */
-        VLOG_DBG("log entry truncates log from %"PRIu64" to %"PRIu64" entries",
-                 raft->log_end, index);
-        raft_truncate(raft, index);
-    } else if (index > raft->log_end) {
-        ovsdb_parser_raise_error(p, "log entry index %"PRIu64" skips past "
-                                 "expected %"PRIu64, index, raft->log_end);
-    }
+        uint64_t prev_term = (raft->log_end > raft->log_start
+                              ? raft->entries[raft->log_end
+                                              - raft->log_start - 1].term
+                              : raft->snap.term);
+        if (r->term < prev_term) {
+            return ovsdb_error(NULL, "log entry index %"PRIu64" term "
+                               "%"PRIu64" precedes previous entry's term "
+                               "%"PRIu64, r->entry.index, r->term, prev_term);
+        }
 
-    /* This log record includes a Raft log entry, as opposed to just advancing
-     * the term or marking a vote.  Therefore, the term must not precede the
-     * term of the previous log entry. */
-    uint64_t prev_term = (raft->log_end > raft->log_start
-                          ? raft->entries[raft->log_end
-                                          - raft->log_start - 1].term
-                          : raft->snap.term);
-    if (term < prev_term) {
-        ovsdb_parser_raise_error(p, "log entry index %"PRIu64" term "
-                                 "%"PRIu64" precedes previous entry's term "
-                                 "%"PRIu64, index, term, prev_term);
+        raft_add_entry(raft, r->term,
+                       json_nullable_clone(r->entry.data), &r->entry.eid,
+                       json_nullable_clone(r->entry.servers));
+        return NULL;
+
+    case RAFT_REC_TERM:
+        return NULL;
+
+    case RAFT_REC_VOTE:
+        if (r->term < raft->term) {
+            return ovsdb_error(NULL, "record votes for term %"PRIu64" "
+                               "but current term is %"PRIu64,
+                               r->term, raft->term);
+        } else if (!uuid_is_zero(&raft->vote)
+                   && !uuid_equals(&raft->vote, &r->vote)) {
+            return ovsdb_error(NULL, "log entry term %"PRIu64 " votes for "
+                               "both "SID_FMT" and "SID_FMT, r->term,
+                               SID_ARGS(&raft->vote), SID_ARGS(&r->vote));
+        } else {
+            raft->vote = raft->synced_vote = r->vote;
+            return NULL;
+        }
+        break;
+
+    case RAFT_REC_COMMIT_INDEX:
+        if (r->commit_index < raft->commit_index) {
+            return ovsdb_error(NULL, "commit index %"PRIu64 " is "
+                               "regression from previous %"PRIu64,
+                               r->commit_index, raft->commit_index);
+        } else if (r->commit_index >= raft->log_end) {
+            return ovsdb_error(NULL, "commit index %"PRIu64 " is "
+                               "beyond last log index %"PRIu64,
+                               r->commit_index, raft->log_end - 1);
+        } else {
+            raft->commit_index = r->commit_index;
+            return NULL;
+        }
+        break;
+
+    case RAFT_REC_LEADER:
+        /* XXX we could use this to take back leadership for quick restart */
+        return NULL;
+
+    case RAFT_REC_LEFT:
+        return ovsdb_error(NULL, "server has left the cluster and cannot be "
+                           "added back; use \"ovsdb-tool join-cluster\" to "
+                           "add a new server");
+
+    default:
+        OVS_NOT_REACHED();
     }
-
-    /* Parse "servers", if present.*/
-    const struct json *servers = ovsdb_parser_member(
-        p, "servers", OP_OBJECT | OP_OPTIONAL);
-    if (servers) {
-        ovsdb_parser_put_error(p, raft_servers_validate_json(servers));
-    }
-
-    /* Parse "data", if present. */
-    const struct json *data = ovsdb_parser_member(
-        p, "data", OP_OBJECT | OP_ARRAY | OP_OPTIONAL);
-    struct uuid eid = data ? raft_parse_required_uuid(p, "eid") : UUID_ZERO;
-
-    /* Add log entry. */
-    if (!ovsdb_parser_has_error(p)) {
-        raft_add_entry(raft, term,
-                       data ? json_clone(data) : NULL, &eid,
-                       servers ? json_clone(servers) : NULL);
-    }
-}
-
-static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_parse_log_record(struct raft *raft, const struct json *entry)
-{
-    struct ovsdb_parser p;
-    ovsdb_parser_init(&p, entry, "raft log entry");
-    raft_parse_log_record__(raft, &p);
-    return ovsdb_parser_finish(&p);
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -880,10 +853,10 @@ raft_read_header(struct raft *raft)
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_read_log(struct raft *raft)
 {
-    for (;;) {
-        struct json *entry;
-        struct ovsdb_error *error = ovsdb_log_read(raft->log, &entry);
-        if (!entry) {
+    for (unsigned long long int i = 1; ; i++) {
+        struct json *json;
+        struct ovsdb_error *error = ovsdb_log_read(raft->log, &json);
+        if (!json) {
             if (error) {
                 /* We assume that the error is due to a partial write while
                  * appending to the file before a crash, so log it and
@@ -896,9 +869,15 @@ raft_read_log(struct raft *raft)
             break;
         }
 
-        error = raft_parse_log_record(raft, entry);
+        struct raft_record r;
+        error = raft_record_parse(&r, json);
+        if (!error) {
+            error = raft_apply_record(raft, &r);
+            raft_record_uninit(&r);
+        }
         if (error) {
-            return error;
+            return ovsdb_wrap_error(error, "error reading record %llu from "
+                                    "%s log", i, raft->name);
         }
     }
 
@@ -2274,6 +2253,16 @@ raft_become_leader(struct raft *raft)
 
     raft_update_our_match_index(raft, raft->log_end - 1);
     raft_send_heartbeats(raft);
+
+    /* Write the fact that we are leader to the log.  This is not used by the
+     * algorithm (although it could be, for quick restart), but it is used for
+     * offline analysis to check for conformance with the properties that Raft
+     * guarantees. */
+    struct json *json = json_object_create();
+    raft_put_uint64(json, "term", raft->term);
+    json_object_put(json, "leader", json_boolean_create(true));
+    raft_handle_write_error(raft, ovsdb_log_write(raft->log, json));
+    json_destroy(json);
 
     /* Initiate a no-op commit.  Otherwise we might never find out what's in
      * the log.  See section 6.4 item 1:

@@ -54,7 +54,7 @@ OVSDB Clustering To-do List
 
   * Overall diagram explaining the cluster and ovsdb protocol pieces
 
-  * commit_index in disk format
+  * commit_index and leader in disk format
 
 * Future work:
 

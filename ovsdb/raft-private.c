@@ -271,6 +271,114 @@ raft_entry_from_json(struct json *json, struct raft_entry *e)
     return error;
 }
 
+void
+raft_record_uninit(struct raft_record *r)
+{
+    if (!r) {
+        return;
+    }
+
+    switch (r->type) {
+    case RAFT_REC_ENTRY:
+        json_destroy(r->entry.data);
+        json_destroy(r->entry.servers);
+        break;
+
+    case RAFT_REC_TERM:
+    case RAFT_REC_VOTE:
+    case RAFT_REC_COMMIT_INDEX:
+    case RAFT_REC_LEADER:
+    case RAFT_REC_LEFT:
+        break;
+    }
+}
+
+static void
+raft_record_parse__(struct raft_record *r, struct ovsdb_parser *p)
+{
+    /* Parse "left". */
+    if (raft_parse_optional_boolean(p, "left") == 1) {
+        r->type = RAFT_REC_LEFT;
+        r->term = 0;
+        return;
+    }
+
+    /* Parse "commit_index". */
+    r->commit_index = raft_parse_optional_uint64(p, "commit_index");
+    if (r->commit_index) {
+        r->type = RAFT_REC_COMMIT_INDEX;
+        r->term = 0;
+        return;
+    }
+
+    /* All remaining types of log records include "term", plus at most one of:
+     *
+     *     - "index" plus zero or more of "data" and "servers".  If "data" is
+     *       present then "eid" may also be present.
+     *
+     *     - "vote".
+     *
+     *     - "leader".
+     */
+
+    /* Parse "term".
+     *
+     * A Raft leader can replicate entries from previous terms to the other
+     * servers in the cluster, retaining the original terms on those entries
+     * (see section 3.6.2 "Committing entries from previous terms" for more
+     * information), so it's OK for the term in a log record to precede the
+     * current term. */
+    r->term = raft_parse_required_uint64(p, "term");
+
+    /* Parse "leader". */
+    if (raft_parse_optional_boolean(p, "leader")) {
+        r->type = RAFT_REC_LEADER;
+    }
+
+    /* Parse "vote". */
+    if (raft_parse_optional_uuid(p, "vote", &r->vote)) {
+        r->type = RAFT_REC_VOTE;
+        if (uuid_is_zero(&r->vote)) {
+            ovsdb_parser_raise_error(p, "log entry votes for all-zeros SID");
+        }
+        return;
+    }
+
+    /* If "index" is present parse the rest of the entry, otherwise it's just a
+     * term update.. */
+    r->entry.index = raft_parse_optional_uint64(p, "index");
+    if (!r->entry.index) {
+        r->type = RAFT_REC_TERM;
+    } else {
+        r->type = RAFT_REC_ENTRY;
+        r->entry.servers = json_nullable_clone(
+            ovsdb_parser_member(p, "servers", OP_OBJECT | OP_OPTIONAL));
+        if (r->entry.servers) {
+            ovsdb_parser_put_error(
+                p, raft_servers_validate_json(r->entry.servers));
+        }
+        r->entry.data = json_nullable_clone(
+            ovsdb_parser_member(p, "data",
+                                OP_OBJECT | OP_ARRAY | OP_OPTIONAL));
+        r->entry.eid = (r->entry.data
+                        ? raft_parse_required_uuid(p, "eid")
+                        : UUID_ZERO);
+    }
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_record_parse(struct raft_record *r, const struct json *json)
+{
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "raft log record");
+    raft_record_parse__(r, &p);
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        raft_record_uninit(r);
+    }
+    return error;
+}
+
 /* Puts 'integer' into JSON 'object' with the given 'name'.
  *
  * The OVS JSON implementation only supports integers in the range

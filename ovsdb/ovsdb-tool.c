@@ -779,46 +779,36 @@ do_show_log_standalone(struct ovsdb_log *log)
 }
 
 static void
-print_member(const struct shash *object, const char *name)
+print_member(struct ovsdb_parser *p, const char *name)
 {
-    const struct json *value = shash_find_data(object, name);
-    if (!value) {
-        return;
+    const struct json *value = ovsdb_parser_member(p, name,
+                                                   OP_ANY | OP_OPTIONAL);
+    if (value) {
+        char *s = json_to_string(value, JSSF_SORT);
+        printf("\t%s: %s\n", name, s);
+        free(s);
     }
-
-    char *s = json_to_string(value, JSSF_SORT);
-    printf("\t%s: %s\n", name, s);
-    free(s);
 }
 
 static void
-print_uuid(const struct shash *object, const char *name)
+print_uuid(struct ovsdb_parser *p, const char *name)
 {
-    const struct json *value = shash_find_data(object, name);
+    const struct json *value = ovsdb_parser_member(p, name,
+                                                   OP_STRING | OP_OPTIONAL);;
+    if (value) {
+        printf("\t%s: %.4s\n", name, json_string(value));
+    }
+}
+
+static void
+print_servers(struct ovsdb_parser *p, const char *name)
+{
+    const struct json *value = ovsdb_parser_member(p, name, OP_OBJECT | OP_OPTIONAL);
     if (!value) {
         return;
     }
 
     printf("\t%s: ", name);
-    if (value->type == JSON_STRING) {
-        printf("%.4s\n", value->u.string);
-    } else {
-        printf("***invalid*\n");
-    }
-}
-
-static void
-print_servers(const struct shash *object, const char *name)
-{
-    const struct json *value = shash_find_data(object, name);
-    if (!value) {
-        return;
-    }
-
-    printf("\t%s: ", name);
-    if (value->type != JSON_OBJECT) {
-        printf("***invalid %s***\n", name);
-    }
 
     const struct shash_node *node;
     int i = 0;
@@ -841,14 +831,15 @@ print_servers(const struct shash *object, const char *name)
 }
 
 static void
-print_data(const struct shash *object, const char *name)
+print_data(struct ovsdb_parser *p, const char *name)
 {
-    const struct json *data = shash_find_data(object, name);
+    const struct json *data = ovsdb_parser_member(p, name,
+                                                  OP_ARRAY | OP_OPTIONAL);
     if (!data) {
         return;
     }
 
-    if (data->type != JSON_ARRAY || json_array(data)->n != 2) {
+    if (json_array(data)->n != 2) {
         printf("\t***invalid data***\n");
         return;
     }
@@ -884,29 +875,39 @@ do_show_log_cluster(struct ovsdb_log *log)
             break;
         }
 
-        struct shash *object = json_object(json);
+        struct ovsdb_parser p;
+        ovsdb_parser_init(&p, json, "clustered log record");
 
         printf("record %u:\n", i);
         if (i == 0) {
-            print_member(object, "name");
-            print_member(object, "address");
-            print_uuid(object, "server_id");
-            print_uuid(object, "cluster_id");
+            print_member(&p, "name");
+            print_member(&p, "local_address");
+            print_uuid(&p, "server_id");
+            print_uuid(&p, "cluster_id");
 
-            print_servers(object, "prev_servers");
-            print_member(object, "prev_term");
-            print_member(object, "prev_index");
-            print_data(object, "prev_data");
+            print_servers(&p, "prev_servers");
+            print_member(&p, "prev_term");
+            print_member(&p, "prev_index");
+            print_uuid(&p, "prev_eid");
+            print_data(&p, "prev_data");
 
-            print_member(object, "remotes");
+            print_member(&p, "remotes");
         } else {
-            print_member(object, "term");
-            print_member(object, "index");
-            print_data(object, "data");
-            print_servers(object, "servers");
-            print_uuid(object, "vote");
+            print_member(&p, "term");
+            print_member(&p, "index");
+            print_member(&p, "leader");
+            print_member(&p, "eid");
+            print_member(&p, "commit_index");
+            print_data(&p, "data");
+            print_servers(&p, "servers");
+            print_uuid(&p, "vote");
         }
-        json_destroy(json);
+        struct ovsdb_error *error = ovsdb_parser_finish(&p);
+        if (error) {
+            char *s = ovsdb_error_to_string_free(error);
+            puts(s);
+            free(s);
+        }
         putchar('\n');
     }
 
