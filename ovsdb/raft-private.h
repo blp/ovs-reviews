@@ -20,13 +20,13 @@
 /* Data structures for use internally within the Raft implementation. */
 
 #include "raft.h"
+#include <stdint.h>
 #include "openvswitch/hmap.h"
 #include "openvswitch/uuid.h"
-#include <stdint.h>
+#include "sset.h"
 
 struct ds;
 struct ovsdb_parser;
-struct sset;
 
 /* Formatting server IDs and cluster IDs for use in human-readable logs.  Do
  * not use these in cases where the whole server or cluster ID is needed; use
@@ -103,13 +103,34 @@ struct raft_entry {
 };
 
 void raft_entry_clone(struct raft_entry *, const struct raft_entry *);
-void raft_entry_destroy(struct raft_entry *);
+void raft_entry_uninit(struct raft_entry *);
 struct json *raft_entry_to_json(const struct raft_entry *);
 struct ovsdb_error *raft_entry_from_json(struct json *, struct raft_entry *)
     OVS_WARN_UNUSED_RESULT;
 
-/* A raft_record is an on-disk record that serializes Raft log entries and
- * other state. */
+/* On disk data serialization and deserialization. */
+
+/* First record in a Raft log. */
+struct raft_header {
+    /* All servers. */
+    struct uuid sid;            /* Server ID. */
+    struct uuid cid;            /* Cluster ID.  May be zero if 'joining'. */
+    char *name;                 /* Database name. */
+    char *local_address;        /* Address for Raft server to listen. */
+    bool joining;               /* True iff cluster not joined yet. */
+
+    /* Only for servers that haven't joined the cluster yet. */
+    struct sset remote_addresses; /* Address of other Raft servers. */
+
+    /* Only for servers that have joined the cluster. */
+    struct raft_entry snap;     /* Snapshot. */
+    uint64_t snap_index;        /* Snapshot's index. */
+};
+
+void raft_header_uninit(struct raft_header *);
+struct ovsdb_error *raft_header_from_json(struct raft_header *,
+                                          const struct json *)
+    OVS_WARN_UNUSED_RESULT;
 
 enum raft_record_type {
     /* Record types that match those in the Raft specification. */
@@ -123,6 +144,7 @@ enum raft_record_type {
     RAFT_REC_LEFT,              /* This server has left the cluster. */
 };
 
+/* Type used for the second and subsequent records in a Raft log. */
 struct raft_record {
     enum raft_record_type type;
 
@@ -145,8 +167,8 @@ struct raft_record {
 };
 
 void raft_record_uninit(struct raft_record *);
-struct ovsdb_error *raft_record_parse(struct raft_record *,
-                                      const struct json *)
+struct ovsdb_error *raft_record_from_json(struct raft_record *,
+                                          const struct json *)
     OVS_WARN_UNUSED_RESULT;
 
 void raft_put_uint64(struct json *object, const char *name, uint64_t integer);

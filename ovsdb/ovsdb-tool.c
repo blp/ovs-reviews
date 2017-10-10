@@ -37,6 +37,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "raft.h"
+#include "raft-private.h"
 #include "socket-util.h"
 #include "storage.h"
 #include "table.h"
@@ -614,6 +615,7 @@ print_db_changes(struct shash *tables, struct shash *names,
 {
     struct shash_node *n1;
 
+    int i = 0;
     SHASH_FOR_EACH (n1, tables) {
         const char *table = n1->name;
         struct ovsdb_table_schema *table_schema;
@@ -624,7 +626,11 @@ print_db_changes(struct shash *tables, struct shash *names,
             continue;
         }
 
-        table_schema = shash_find_data(&schema->tables, table);
+        if (i++ == 0) {
+            putchar('\n');
+        }
+
+        table_schema = schema ? shash_find_data(&schema->tables, table) : NULL;
         SHASH_FOR_EACH (n2, json_object(rows)) {
             const char *row_uuid = n2->name;
             struct json *columns = n2->data;
@@ -721,15 +727,47 @@ print_db_changes(struct shash *tables, struct shash *names,
 }
 
 static void
+print_change_record(const struct json *json, const struct ovsdb_schema *schema,
+                    struct shash *names)
+{
+    if (!json || json->type != JSON_OBJECT) {
+        return;
+    }
+
+    struct json *date, *comment;
+
+    date = shash_find_data(json_object(json), "_date");
+    if (date && date->type == JSON_INTEGER) {
+        long long int t = json_integer(date);
+        char *s;
+
+        if (t < INT32_MAX) {
+            /* Older versions of ovsdb wrote timestamps in seconds. */
+            t *= 1000;
+        }
+
+        s = xastrftime_msec(" %Y-%m-%d %H:%M:%S.###", t, true);
+        fputs(s, stdout);
+        free(s);
+    }
+
+    comment = shash_find_data(json_object(json), "_comment");
+    if (comment && comment->type == JSON_STRING) {
+        printf(" \"%s\"", json_string(comment));
+    }
+
+    if (show_log_verbosity > 0) {
+        print_db_changes(json_object(json), names, schema);
+    }
+}
+
+static void
 do_show_log_standalone(struct ovsdb_log *log)
 {
-    struct shash names;
-    struct ovsdb_schema *schema;
-    unsigned int i;
+    struct shash names = SHASH_INITIALIZER(&names);
+    struct ovsdb_schema *schema = NULL;
 
-    shash_init(&names);
-    schema = NULL;
-    for (i = 0; ; i++) {
+    for (unsigned int i = 0; ; i++) {
         struct json *json;
 
         check_ovsdb_error(ovsdb_log_read(log, &json));
@@ -742,33 +780,8 @@ do_show_log_standalone(struct ovsdb_log *log)
             check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
             printf(" \"%s\" schema, version=\"%s\", cksum=\"%s\"\n",
                    schema->name, schema->version, schema->cksum);
-        } else if (json->type == JSON_OBJECT) {
-            struct json *date, *comment;
-
-            date = shash_find_data(json_object(json), "_date");
-            if (date && date->type == JSON_INTEGER) {
-                long long int t = json_integer(date);
-                char *s;
-
-                if (t < INT32_MAX) {
-                    /* Older versions of ovsdb wrote timestamps in seconds. */
-                    t *= 1000;
-                }
-
-                s = xastrftime_msec(" %Y-%m-%d %H:%M:%S.###", t, true);
-                fputs(s, stdout);
-                free(s);
-            }
-
-            comment = shash_find_data(json_object(json), "_comment");
-            if (comment && comment->type == JSON_STRING) {
-                printf(" \"%s\"", json_string(comment));
-            }
-
-            if (i > 0 && show_log_verbosity > 0) {
-                putchar('\n');
-                print_db_changes(json_object(json), &names, schema);
-            }
+        } else {
+            print_change_record(json, schema, &names);
         }
         json_destroy(json);
         putchar('\n');
@@ -779,68 +792,45 @@ do_show_log_standalone(struct ovsdb_log *log)
 }
 
 static void
-print_member(struct ovsdb_parser *p, const char *name)
+print_servers(const char *name, const struct json *servers)
 {
-    const struct json *value = ovsdb_parser_member(p, name,
-                                                   OP_ANY | OP_OPTIONAL);
-    if (value) {
-        char *s = json_to_string(value, JSSF_SORT);
-        printf("\t%s: %s\n", name, s);
-        free(s);
-    }
-}
-
-static void
-print_uuid(struct ovsdb_parser *p, const char *name)
-{
-    const struct json *value = ovsdb_parser_member(p, name,
-                                                   OP_STRING | OP_OPTIONAL);;
-    if (value) {
-        printf("\t%s: %.4s\n", name, json_string(value));
-    }
-}
-
-static void
-print_servers(struct ovsdb_parser *p, const char *name)
-{
-    const struct json *value = ovsdb_parser_member(p, name, OP_OBJECT | OP_OPTIONAL);
-    if (!value) {
+    if (!servers) {
         return;
     }
 
-    printf("\t%s: ", name);
+    printf(" %s: ", name);
 
-    const struct shash_node *node;
-    int i = 0;
-    SHASH_FOR_EACH (node, json_object(value)) {
-        if (i++ > 0) {
+    const struct shash_node **nodes = shash_sort(json_object(servers));
+    size_t n = shash_count(json_object(servers));
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0) {
             printf(", ");
         }
+
+        const struct shash_node *node = nodes[i];
         printf("%.4s(", node->name);
 
         const struct json *address = node->data;
-        if (address->type != JSON_STRING) {
-            printf("***invalid***");
-        } else {
-            fputs(address->u.string, stdout);
-        }
+        char *s = json_to_string(address, JSSF_SORT);
+        fputs(s, stdout);
+        free(s);
 
-        printf(")");
+        putchar(')');
     }
-    printf("\n");
+    free(nodes);
+    putchar('\n');
 }
 
 static void
-print_data(struct ovsdb_parser *p, const char *name)
+print_data(const char *prefix, const struct json *data,
+           struct ovsdb_schema **schemap, struct shash *names)
 {
-    const struct json *data = ovsdb_parser_member(p, name,
-                                                  OP_ARRAY | OP_OPTIONAL);
     if (!data) {
         return;
     }
 
     if (json_array(data)->n != 2) {
-        printf("\t***invalid data***\n");
+        printf(" ***invalid data***\n");
         return;
     }
 
@@ -849,21 +839,93 @@ print_data(struct ovsdb_parser *p, const char *name)
         struct ovsdb_schema *schema;
 
         check_ovsdb_error(ovsdb_schema_from_json(schema_json, &schema));
-        printf("\tschema: \"%s\", version=\"%s\", cksum=\"%s\"\n",
-               schema->name, schema->version, schema->cksum);
-        ovsdb_schema_destroy(schema);
+        printf(" %sschema: \"%s\", version=\"%s\", cksum=\"%s\"\n",
+               prefix, schema->name, schema->version, schema->cksum);
+
+        ovsdb_schema_destroy(*schemap);
+        *schemap = schema;
     }
 
-    char *s = json_to_string(json_array(data)->elems[1], JSSF_SORT);
-    printf("\t%s: %s\n", name, s);
-    free(s);
+    print_change_record(json_array(data)->elems[1], *schemap, names);
+}
+
+static void
+print_raft_header(const struct raft_header *h,
+                  struct ovsdb_schema **schemap, struct shash *names)
+{
+    printf(" name: \"%s\'\n", h->name);
+    printf(" local address: \"%s\"\n", h->local_address);
+    printf(" server_id: "SID_FMT"\n", SID_ARGS(&h->sid));
+    if (!uuid_is_zero(&h->cid)) {
+        printf(" cluster_id: "CID_FMT"\n", CID_ARGS(&h->cid));
+    }
+    if (!sset_is_empty(&h->remote_addresses)) {
+        printf(" remote_addresses:");
+
+        const char *s;
+        SSET_FOR_EACH (s, &h->remote_addresses) {
+            printf(" %s", s);
+        }
+        putchar('\n');
+    }
+    if (h->snap_index) {
+        printf(" prev_index: %"PRIu64"\n", h->snap_index);
+        printf(" prev_term: %"PRIu64"\n", h->snap.term);
+        print_servers("prev_servers", h->snap.servers);
+        if (!uuid_is_zero(&h->snap.eid)) {
+            printf(" prev_eid: %04x\n", uuid_prefix(&h->snap.eid, 4));
+        }
+        print_data("prev_", h->snap.data, schemap, names);
+    }
+}
+
+static void
+print_raft_record(const struct raft_record *r,
+                  struct ovsdb_schema **schemap, struct shash *names)
+{
+    if (r->term) {
+        printf(" term: %"PRIu64"\n", r->term);
+    }
+
+    switch (r->type) {
+    case RAFT_REC_ENTRY:
+        printf(" index: %"PRIu64"\n", r->entry.index);
+        print_servers("servers", r->entry.servers);
+        if (!uuid_is_zero(&r->entry.eid)) {
+            printf(" eid: %04x\n", uuid_prefix(&r->entry.eid, 4));
+        }
+        print_data("", r->entry.data, schemap, names);
+        break;
+
+    case RAFT_REC_TERM:
+        break;
+
+    case RAFT_REC_VOTE:
+        printf(" vote: "SID_FMT"\n", SID_ARGS(&r->vote));
+        break;
+
+    case RAFT_REC_COMMIT_INDEX:
+        printf(" commit_index: %"PRIu64"\n", r->commit_index);
+        break;
+
+    case RAFT_REC_LEADER:
+        printf(" leader: true\n");
+        break;
+
+    case RAFT_REC_LEFT:
+        printf(" left: true\n");
+        break;
+
+    default:
+        OVS_NOT_REACHED();
+    }
 }
 
 static void
 do_show_log_cluster(struct ovsdb_log *log)
 {
-    struct shash names;
-    struct ovsdb_schema *schema;
+    struct shash names = SHASH_INITIALIZER(&names);
+    struct ovsdb_schema *schema = NULL;
     unsigned int i;
 
     shash_init(&names);
@@ -875,39 +937,29 @@ do_show_log_cluster(struct ovsdb_log *log)
             break;
         }
 
-        struct ovsdb_parser p;
-        ovsdb_parser_init(&p, json, "clustered log record");
-
         printf("record %u:\n", i);
+        struct ovsdb_error *error;
         if (i == 0) {
-            print_member(&p, "name");
-            print_member(&p, "local_address");
-            print_uuid(&p, "server_id");
-            print_uuid(&p, "cluster_id");
-
-            print_servers(&p, "prev_servers");
-            print_member(&p, "prev_term");
-            print_member(&p, "prev_index");
-            print_uuid(&p, "prev_eid");
-            print_data(&p, "prev_data");
-
-            print_member(&p, "remotes");
+            struct raft_header h;
+            error = raft_header_from_json(&h, json);
+            if (!error) {
+                print_raft_header(&h, &schema, &names);
+                raft_header_uninit(&h);
+            }
         } else {
-            print_member(&p, "term");
-            print_member(&p, "index");
-            print_member(&p, "leader");
-            print_member(&p, "eid");
-            print_member(&p, "commit_index");
-            print_data(&p, "data");
-            print_servers(&p, "servers");
-            print_uuid(&p, "vote");
+            struct raft_record r;
+            error = raft_record_from_json(&r, json);
+            if (!error) {
+                print_raft_record(&r, &schema, &names);
+                raft_record_uninit(&r);
+            }
         }
-        struct ovsdb_error *error = ovsdb_parser_finish(&p);
         if (error) {
             char *s = ovsdb_error_to_string_free(error);
             puts(s);
             free(s);
         }
+
         putchar('\n');
     }
 

@@ -780,74 +780,38 @@ static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_read_header(struct raft *raft)
 {
     /* Read header record. */
-    struct json *header;
-    struct ovsdb_error *error = ovsdb_log_read(raft->log, &header);
-    if (error || !header) {
+    struct json *json;
+    struct ovsdb_error *error = ovsdb_log_read(raft->log, &json);
+    if (error || !json) {
         /* Report error or end-of-file. */
         return error;
     }
     ovsdb_log_mark_base(raft->log);
 
-    struct ovsdb_parser p;
-    ovsdb_parser_init(&p, header, "raft header");
-
-    /* Parse always-required fields. */
-    raft->sid = raft_parse_required_uuid(&p, "server_id");
-    raft->name = nullable_xstrdup(raft_parse_required_string(&p, "name"));
-    raft->local_address = nullable_xstrdup(
-        raft_parse_required_string(&p, "local_address"));
-
-    /* Parse "remotes", if present.
-     *
-     * If this is present, then this database file is for the special case of a
-     * server that was created with "ovsdb-tool join-cluster" and has not yet
-     * joined its cluster, */
-    const struct json *remote_addresses
-        = ovsdb_parser_member(&p, "remote_addresses", OP_ARRAY | OP_OPTIONAL);
-    if (remote_addresses) {
-        raft->joining = true;
-        error = raft_addresses_from_json(remote_addresses,
-                                         &raft->remote_addresses);
-        if (!error
-            && sset_find_and_delete(&raft->remote_addresses,
-                                    raft->local_address)
-            && sset_is_empty(&raft->remote_addresses)) {
-            error = ovsdb_error(
-                NULL, "at least one remote address (other than the "
-                "local address) is required");
-        }
-    } else {
-        /* Parse required set of servers. */
-        const struct json *servers = ovsdb_parser_member(
-            &p, "prev_servers", OP_OBJECT);
-        error = raft_servers_validate_json(servers);
-        ovsdb_parser_put_error(&p, error);
-        if (!error) {
-            raft->snap.servers = json_clone(servers);
-        }
-
-        /* Parse term, index, and snapshot.  If any of these is present, all of
-         * them must be. */
-        const struct json *snapshot = ovsdb_parser_member(&p, "prev_data",
-                                                          OP_ANY | OP_OPTIONAL);
-        if (snapshot) {
-            raft->snap.eid = raft_parse_required_uuid(&p, "prev_eid");
-            raft->snap.term = raft_parse_required_uint64(&p, "prev_term");
-            raft->log_start = raft->log_end
-                = raft_parse_required_uint64(&p, "prev_index") + 1;
-            raft->commit_index = raft->log_start - 1;
-            raft->last_applied = raft->log_start - 2;
-            raft->snap.data = json_clone(snapshot);
-        }
+    struct raft_header h;
+    error = raft_header_from_json(&h, json);
+    if (error) {
+        return error;
     }
 
-    /* Parse cluster ID.  If we're joining a cluster, this is optional,
-     * otherwise it is mandatory. */
-    raft_parse_uuid__(&p, "cluster_id", raft->joining, &raft->cid);
+    raft->sid = h.sid;
+    raft->cid = h.cid;
+    raft->name = xstrdup(h.name);
+    raft->local_address = xstrdup(h.local_address);
+    raft->joining = h.joining;
 
-    error = ovsdb_parser_finish(&p);
-    json_destroy(header);
-    return error;
+    if (h.joining) {
+        sset_clone(&raft->remote_addresses, &h.remote_addresses);
+    } else {
+        raft_entry_clone(&raft->snap, &h.snap);
+        raft->log_start = raft->log_end = h.snap_index + 1;
+        raft->commit_index = raft->log_start - 1;
+        raft->last_applied = raft->log_start - 2;
+    }
+
+    raft_header_uninit(&h);
+
+    return NULL;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -870,7 +834,7 @@ raft_read_log(struct raft *raft)
         }
 
         struct raft_record r;
-        error = raft_record_parse(&r, json);
+        error = raft_record_from_json(&r, json);
         if (!error) {
             error = raft_apply_record(raft, &r);
             raft_record_uninit(&r);
@@ -1180,11 +1144,11 @@ raft_close(struct raft *raft)
 
     for (uint64_t index = raft->log_start; index < raft->log_end; index++) {
         struct raft_entry *e = &raft->entries[index - raft->log_start];
-        raft_entry_destroy(e);
+        raft_entry_uninit(e);
     }
     free(raft->entries);
 
-    raft_entry_destroy(&raft->snap);
+    raft_entry_uninit(&raft->snap);
 
     raft_servers_destroy(&raft->add_servers);
 
@@ -2355,7 +2319,7 @@ raft_truncate(struct raft *raft, uint64_t new_end)
         if (entry->servers) {
             servers_changed = true;
         }
-        raft_entry_destroy(entry);
+        raft_entry_uninit(entry);
     }
     return servers_changed;
 }
@@ -3542,7 +3506,7 @@ raft_handle_install_snapshot_request__(
     }
 
     for (size_t i = 0; i < raft->log_end - raft->log_start; i++) {
-        raft_entry_destroy(&raft->entries[i]);
+        raft_entry_uninit(&raft->entries[i]);
     }
     raft->log_start = raft->log_end = new_log_start;
     raft->log_synced = raft->log_end - 1;
@@ -3551,7 +3515,7 @@ raft_handle_install_snapshot_request__(
         raft->last_applied = raft->log_start - 2;
     }
 
-    raft_entry_destroy(&raft->snap);
+    raft_entry_uninit(&raft->snap);
     raft_entry_clone(&raft->snap, &new_snapshot);
 
     raft_get_servers_from_log(raft, VLL_INFO);
@@ -3663,10 +3627,10 @@ raft_store_snapshot(struct raft *raft, const struct json *new_snapshot_data)
     }
 
     raft->log_synced = raft->log_end - 1;
-    raft_entry_destroy(&raft->snap);
+    raft_entry_uninit(&raft->snap);
     raft_entry_clone(&raft->snap, &new_snapshot);
     for (size_t i = 0; i < new_log_start - raft->log_start; i++) {
-        raft_entry_destroy(&raft->entries[i]);
+        raft_entry_uninit(&raft->entries[i]);
     }
     memmove(&raft->entries[0], &raft->entries[new_log_start - raft->log_start],
             (raft->log_end - new_log_start) * sizeof *raft->entries);

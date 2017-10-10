@@ -69,6 +69,8 @@ raft_addresses_from_json(const struct json *json, struct sset *addresses)
         const struct json *address = array->elems[i];
         struct ovsdb_error *error = raft_address_validate_json(address);
         if (error) {
+            sset_destroy(addresses);
+            sset_init(addresses);
             return error;
         }
         sset_add(addresses, json_string(address));
@@ -224,7 +226,7 @@ raft_entry_clone(struct raft_entry *dst, const struct raft_entry *src)
 }
 
 void
-raft_entry_destroy(struct raft_entry *e)
+raft_entry_uninit(struct raft_entry *e)
 {
     if (e) {
         json_destroy(e->data);
@@ -266,7 +268,87 @@ raft_entry_from_json(struct json *json, struct raft_entry *e)
 
     struct ovsdb_error *error = ovsdb_parser_finish(&p);
     if (error) {
-        raft_entry_destroy(e);
+        raft_entry_uninit(e);
+    }
+    return error;
+}
+
+void
+raft_header_uninit(struct raft_header *h)
+{
+    if (!h) {
+        return;
+    }
+
+    free(h->name);
+    free(h->local_address);
+    sset_destroy(&h->remote_addresses);
+    raft_entry_uninit(&h->snap);
+}
+
+static void
+raft_header_from_json__(struct raft_header *h, struct ovsdb_parser *p)
+{
+    /* Parse always-required fields. */
+    h->sid = raft_parse_required_uuid(p, "server_id");
+    h->name = nullable_xstrdup(raft_parse_required_string(p, "name"));
+    h->local_address = nullable_xstrdup(
+        raft_parse_required_string(p, "local_address"));
+
+    /* Parse "remotes", if present.
+     *
+     * If this is present, then this database file is for the special case of a
+     * server that was created with "ovsdb-tool join-cluster" and has not yet
+     * joined its cluster, */
+    const struct json *remote_addresses
+        = ovsdb_parser_member(p, "remote_addresses", OP_ARRAY | OP_OPTIONAL);
+    h->joining = remote_addresses != NULL;
+    if (h->joining) {
+        struct ovsdb_error *error = raft_addresses_from_json(
+            remote_addresses, &h->remote_addresses);
+        if (error) {
+            ovsdb_parser_put_error(p, error);
+        } else if (sset_find_and_delete(&h->remote_addresses, h->local_address)
+                   && sset_is_empty(&h->remote_addresses)) {
+            ovsdb_parser_raise_error(p, "at least one remote address (other "
+                                     "than the local address) is required");
+        }
+    } else {
+        /* The set of servers is mandatory. */
+        h->snap.servers = json_nullable_clone(
+            ovsdb_parser_member(p, "prev_servers", OP_OBJECT));
+        if (h->snap.servers) {
+            ovsdb_parser_put_error(p, raft_servers_validate_json(
+                                       h->snap.servers));
+        }
+
+        /* Term, index, and snapshot are optional, but if any of them is
+         * present, all of them must be. */
+        h->snap_index = raft_parse_optional_uint64(p, "prev_index");
+        if (h->snap_index) {
+            h->snap.data = json_nullable_clone(
+                ovsdb_parser_member(p, "prev_data", OP_ANY));
+            h->snap.eid = raft_parse_required_uuid(p, "prev_eid");
+            h->snap.term = raft_parse_required_uint64(p, "prev_term");
+        }
+    }
+
+    /* Parse cluster ID.  If we're joining a cluster, this is optional,
+     * otherwise it is mandatory. */
+    raft_parse_uuid__(p, "cluster_id", h->joining, &h->cid);
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+raft_header_from_json(struct raft_header *h, const struct json *json)
+{
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "raft header");
+    memset(h, 0, sizeof *h);
+    sset_init(&h->remote_addresses);
+    raft_header_from_json__(h, &p);
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        raft_header_uninit(h);
     }
     return error;
 }
@@ -294,7 +376,7 @@ raft_record_uninit(struct raft_record *r)
 }
 
 static void
-raft_record_parse__(struct raft_record *r, struct ovsdb_parser *p)
+raft_record_from_json__(struct raft_record *r, struct ovsdb_parser *p)
 {
     /* Parse "left". */
     if (raft_parse_optional_boolean(p, "left") == 1) {
@@ -367,11 +449,11 @@ raft_record_parse__(struct raft_record *r, struct ovsdb_parser *p)
 }
 
 struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_record_parse(struct raft_record *r, const struct json *json)
+raft_record_from_json(struct raft_record *r, const struct json *json)
 {
     struct ovsdb_parser p;
     ovsdb_parser_init(&p, json, "raft log record");
-    raft_record_parse__(r, &p);
+    raft_record_from_json__(r, &p);
     struct ovsdb_error *error = ovsdb_parser_finish(&p);
     if (error) {
         raft_record_uninit(r);
