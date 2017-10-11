@@ -3409,7 +3409,20 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *log,
      * The term is redundant if we wrote a log record for that term above.  The
      * vote, if any, is never redundant.
      */
-    return raft_write_state(log, raft->term, &raft->vote);
+    error = raft_write_state(log, raft->term, &raft->vote);
+    if (error) {
+        return error;
+    }
+
+    /* Write commit_index if it's beyond the new start of the log. */
+    if (raft->commit_index >= new_log_start) {
+        struct raft_record r = {
+            .type = RAFT_REC_COMMIT_INDEX,
+            .commit_index = raft->commit_index,
+        };
+        return ovsdb_log_write_and_free(log, raft_record_to_json(&r));
+    }
+    return NULL;
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
