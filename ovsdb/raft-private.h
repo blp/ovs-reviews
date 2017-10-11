@@ -171,6 +171,7 @@ void raft_record_uninit(struct raft_record *);
 struct ovsdb_error *raft_record_from_json(struct raft_record *,
                                           const struct json *)
     OVS_WARN_UNUSED_RESULT;
+struct json *raft_record_to_json(const struct raft_record *);
 
 void raft_put_uint64(struct json *object, const char *name, uint64_t integer);
 uint64_t raft_parse_optional_uint64(struct ovsdb_parser *, const char *name);

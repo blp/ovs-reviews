@@ -417,11 +417,8 @@ raft_create_cluster(const char *file_name, const char *name,
     shash_add_nocopy(json_object(h.snap.servers),
                      xasprintf(UUID_FMT, UUID_ARGS(&h.sid)),
                      json_string_create(local_address));
-    struct json *json = raft_header_to_json(&h);
+    error = ovsdb_log_write_and_free(log, raft_header_to_json(&h));
     raft_header_uninit(&h);
-
-    error = ovsdb_log_write(log, json);
-    json_destroy(json);
     if (!error) {
         error = ovsdb_log_commit_block(log);
     }
@@ -505,11 +502,8 @@ raft_join_cluster(const char *file_name,
         .joining = true,
     };
     sset_clone(&h.remote_addresses, remote_addresses);
-    struct json *json = raft_header_to_json(&h);
+    error = ovsdb_log_write_and_free(log, raft_header_to_json(&h));
     raft_header_uninit(&h);
-
-    error = ovsdb_log_write(log, json);
-    json_destroy(json);
     if (!error) {
         error = ovsdb_log_commit_block(log);
     }
@@ -546,16 +540,6 @@ raft_metadata_destroy(struct raft_metadata *md)
         free(md->name);
         free(md->local);
     }
-}
-
-static struct json *
-raft_entry_to_json_with_index(const struct raft *raft, uint64_t index)
-{
-    ovs_assert(index >= raft->log_start && index < raft->log_end);
-    struct json *json = raft_entry_to_json(&raft->entries[index
-                                                          - raft->log_start]);
-    raft_put_uint64(json, "index", index);
-    return json;
 }
 
 static const struct raft_entry *
@@ -644,16 +628,23 @@ static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_entry(struct raft *raft, uint64_t term, struct json *data,
                  const struct uuid *eid, struct json *servers)
 {
-    uint64_t index = raft_add_entry(raft, term, data, eid, servers);
-    struct json *json = raft_entry_to_json_with_index(raft, index);
-    struct ovsdb_error *error = ovsdb_log_write(raft->log, json);
-    json_destroy(json);
-
+    struct raft_record r = {
+        .type = RAFT_REC_ENTRY,
+        .term = term,
+        .entry = {
+            .index = raft_add_entry(raft, term, data, eid, servers),
+            .data = data,
+            .servers = servers,
+            .eid = eid ? *eid : UUID_ZERO,
+        },
+    };
+    struct ovsdb_error *error = ovsdb_log_write_and_free(
+        raft->log, raft_record_to_json(&r));
     if (error) {
         return error;
     }
 
-    raft_waiter_create(raft, RAFT_W_ENTRY)->entry.index = index;
+    raft_waiter_create(raft, RAFT_W_ENTRY)->entry.index = r.entry.index;
 
     return NULL;
 }
@@ -662,15 +653,15 @@ static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_state(struct ovsdb_log *log,
                  uint64_t term, const struct uuid *vote)
 {
-    struct json *json = json_object_create();
-    raft_put_uint64(json, "term", term);
+    struct raft_record r;
+    r.term = term;
     if (vote && !uuid_is_zero(vote)) {
-        json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(vote));
+        r.type = RAFT_REC_VOTE;
+        r.vote = *vote;
+    } else {
+        r.type = RAFT_REC_TERM;
     }
-    struct ovsdb_error *error = ovsdb_log_write(log, json);
-    json_destroy(json);
-
-    return error;
+    return ovsdb_log_write_and_free(log, raft_record_to_json(&r));
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
@@ -2217,11 +2208,11 @@ raft_become_leader(struct raft *raft)
      * algorithm (although it could be, for quick restart), but it is used for
      * offline analysis to check for conformance with the properties that Raft
      * guarantees. */
-    struct json *json = json_object_create();
-    raft_put_uint64(json, "term", raft->term);
-    json_object_put(json, "leader", json_boolean_create(true));
-    raft_handle_write_error(raft, ovsdb_log_write(raft->log, json));
-    json_destroy(json);
+    struct raft_record r = {
+        .type = RAFT_REC_LEADER,
+        .term = raft->term,
+    };
+    ignore(ovsdb_log_write_and_free(raft->log, raft_record_to_json(&r)));
 
     /* Initiate a no-op commit.  Otherwise we might never find out what's in
      * the log.  See section 6.4 item 1:
@@ -2387,10 +2378,11 @@ raft_update_commit_index(struct raft *raft, uint64_t new_commit_index)
     /* Write the commit index to the log.  The next time we restart, this
      * allows us to start exporting a reasonably fresh log, instead of a log
      * that only contains the snapshot. */
-    struct json *json = json_object_create();
-    raft_put_uint64(json, "commit_index", raft->commit_index);
-    raft_handle_write_error(raft, ovsdb_log_write(raft->log, json));
-    json_destroy(json);
+    struct raft_record r = {
+        .type = RAFT_REC_COMMIT_INDEX,
+        .commit_index = raft->commit_index,
+    };
+    ignore(ovsdb_log_write_and_free(raft->log, raft_record_to_json(&r)));
 }
 
 /* This doesn't use rq->entries (but it does use rq->n_entries). */
@@ -3345,15 +3337,14 @@ raft_handle_remove_server_reply(struct raft *raft,
         /* Write a sentinel to prevent the cluster from restarting.  The
          * cluster should be resilient against such an occurrence in any case,
          * but this allows for better error messages. */
-        struct json *json = json_object_create();
-        json_object_put(json, "left", json_boolean_create(true));
-        struct ovsdb_error *error = ovsdb_log_write(raft->log, json);
+        struct raft_record r = { .type = RAFT_REC_LEFT };
+        struct ovsdb_error *error = ovsdb_log_write_and_free(
+            raft->log, raft_record_to_json(&r));
         if (error) {
             char *error_s = ovsdb_error_to_string_free(error);
             VLOG_WARN("error writing sentinel record (%s)", error_s);
             free(error_s);
         }
-        json_destroy(json);
 
         raft->leaving = false;
         raft->left = true;
@@ -3387,9 +3378,8 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *log,
         .snap_index = new_log_start - 1,
         .snap = *new_snapshot,
     };
-    struct json *json = raft_header_to_json(&h);
-    struct ovsdb_error *error = ovsdb_log_write(log, json);
-    json_destroy(json);
+    struct ovsdb_error *error = ovsdb_log_write_and_free(
+        log, raft_header_to_json(&h));
     if (error) {
         return error;
     }
@@ -3397,9 +3387,18 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *log,
 
     /* Write log records. */
     for (uint64_t index = new_log_start; index < raft->log_end; index++) {
-        struct json *json = raft_entry_to_json_with_index(raft, index);
-        error = ovsdb_log_write(log, json);
-        json_destroy(json);
+        const struct raft_entry *e = &raft->entries[index - raft->log_start];
+        struct raft_record r = {
+            .type = RAFT_REC_ENTRY,
+            .term = e->term,
+            .entry = {
+                .index = index,
+                .data = e->data,
+                .servers = e->servers,
+                .eid = e->eid,
+            },
+        };
+        error = ovsdb_log_write_and_free(log, raft_record_to_json(&r));
         if (error) {
             return error;
         }

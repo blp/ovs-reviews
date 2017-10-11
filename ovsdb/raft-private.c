@@ -494,6 +494,55 @@ raft_record_from_json(struct raft_record *r, const struct json *json)
     }
     return error;
 }
+
+struct json *
+raft_record_to_json(const struct raft_record *r)
+{
+    struct json *json = json_object_create();
+
+    switch (r->type) {
+    case RAFT_REC_ENTRY:
+        raft_put_uint64(json, "term", r->term);
+        raft_put_uint64(json, "index", r->entry.index);
+        if (r->entry.data) {
+            json_object_put(json, "data", json_clone(r->entry.data));
+        }
+        if (r->entry.servers) {
+            json_object_put(json, "servers", json_clone(r->entry.servers));
+        }
+        if (!uuid_is_zero(&r->entry.eid)) {
+            json_object_put_format(json, "eid",
+                                   UUID_FMT, UUID_ARGS(&r->entry.eid));
+        }
+        break;
+
+    case RAFT_REC_TERM:
+        raft_put_uint64(json, "term", r->term);
+        break;
+
+    case RAFT_REC_VOTE:
+        raft_put_uint64(json, "term", r->term);
+        json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(&r->vote));
+        break;
+
+    case RAFT_REC_COMMIT_INDEX:
+        raft_put_uint64(json, "commit_index", r->commit_index);
+        break;
+
+    case RAFT_REC_LEADER:
+        raft_put_uint64(json, "term", r->term);
+        json_object_put(json, "leader", json_boolean_create(true));
+        break;
+
+    case RAFT_REC_LEFT:
+        json_object_put(json, "left", json_boolean_create(true));
+        break;
+
+    default:
+        OVS_NOT_REACHED();
+    }
+    return json;
+}
 
 /* Puts 'integer' into JSON 'object' with the given 'name'.
  *

@@ -44,6 +44,8 @@ OVSDB Clustering To-do List
 
   * Handling bad transactions in read_db().  (Kill the database?)
 
+  * snapshots should include commit_index record if it's beyond snapshot
+
 * Documentation:
 
   * ACID (and CAP?) explanation.
