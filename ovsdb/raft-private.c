@@ -352,6 +352,40 @@ raft_header_from_json(struct raft_header *h, const struct json *json)
     }
     return error;
 }
+
+struct json *
+raft_header_to_json(const struct raft_header *h)
+{
+    struct json *json = json_object_create();
+
+    json_object_put_format(json, "server_id", UUID_FMT, UUID_ARGS(&h->sid));
+    if (!uuid_is_zero(&h->cid)) {
+        json_object_put_format(json, "cluster_id",
+                               UUID_FMT, UUID_ARGS(&h->cid));
+    }
+    json_object_put_string(json, "local_address", h->local_address);
+    json_object_put_string(json, "name", h->name);
+
+    if (!sset_is_empty(&h->remote_addresses)) {
+        json_object_put(json, "remote_addresses",
+                        raft_addresses_to_json(&h->remote_addresses));
+    }
+
+    if (h->snap.servers) {
+        json_object_put(json, "prev_servers", json_clone(h->snap.servers));
+    }
+    if (h->snap_index) {
+        raft_put_uint64(json, "prev_index", h->snap_index);
+        raft_put_uint64(json, "prev_term", h->snap.term);
+        if (h->snap.data) {
+            json_object_put(json, "prev_data", json_clone(h->snap.data));
+        }
+        json_object_put_format(json, "prev_eid",
+                               UUID_FMT, UUID_ARGS(&h->snap.eid));
+    }
+
+    return json;
+}
 
 void
 raft_record_uninit(struct raft_record *r)

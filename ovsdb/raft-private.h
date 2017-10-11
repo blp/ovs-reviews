@@ -123,14 +123,15 @@ struct raft_header {
     struct sset remote_addresses; /* Address of other Raft servers. */
 
     /* Only for servers that have joined the cluster. */
-    struct raft_entry snap;     /* Snapshot. */
     uint64_t snap_index;        /* Snapshot's index. */
+    struct raft_entry snap;     /* Snapshot. */
 };
 
 void raft_header_uninit(struct raft_header *);
 struct ovsdb_error *raft_header_from_json(struct raft_header *,
                                           const struct json *)
     OVS_WARN_UNUSED_RESULT;
+struct json *raft_header_to_json(const struct raft_header *);
 
 enum raft_record_type {
     /* Record types that match those in the Raft specification. */

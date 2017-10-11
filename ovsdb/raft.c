@@ -399,31 +399,29 @@ raft_create_cluster(const char *file_name, const char *name,
     }
 
     /* Write log file. */
-    struct uuid sid, cid, eid;
-    uuid_generate(&sid);
-    uuid_generate(&cid);
-    uuid_generate(&eid);
+    struct raft_header h = {
+        .sid = uuid_random(),
+        .cid = uuid_random(),
+        .name = xstrdup(name),
+        .local_address = xstrdup(local_address),
+        .joining = false,
+        .remote_addresses = SSET_INITIALIZER(&h.remote_addresses),
+        .snap_index = 1,
+        .snap = {
+            .term = 1,
+            .data = json_nullable_clone(data),
+            .eid = uuid_random(),
+            .servers = json_object_create(),
+        },
+    };
+    shash_add_nocopy(json_object(h.snap.servers),
+                     xasprintf(UUID_FMT, UUID_ARGS(&h.sid)),
+                     json_string_create(local_address));
+    struct json *json = raft_header_to_json(&h);
+    raft_header_uninit(&h);
 
-    char sid_s[UUID_LEN + 1];
-    sprintf(sid_s, UUID_FMT, UUID_ARGS(&sid));
-
-    struct json *snapshot = json_object_create();
-    json_object_put_string(snapshot, "server_id", sid_s);
-    json_object_put_string(snapshot, "local_address", local_address);
-    json_object_put_string(snapshot, "name", name);
-
-    struct json *prev_servers = json_object_create();
-    json_object_put_string(prev_servers, sid_s, local_address);
-    json_object_put(snapshot, "prev_servers", prev_servers);
-
-    json_object_put_format(snapshot, "cluster_id", UUID_FMT, UUID_ARGS(&cid));
-    json_object_put(snapshot, "prev_term", json_integer_create(1));
-    json_object_put(snapshot, "prev_index", json_integer_create(1));
-    json_object_put(snapshot, "prev_data", json_clone(data));
-    json_object_put_format(snapshot, "prev_eid", UUID_FMT, UUID_ARGS(&eid));
-
-    error = ovsdb_log_write(log, snapshot);
-    json_destroy(snapshot);
+    error = ovsdb_log_write(log, json);
+    json_destroy(json);
     if (!error) {
         error = ovsdb_log_commit_block(log);
     }
@@ -499,22 +497,19 @@ raft_join_cluster(const char *file_name,
     }
 
     /* Write log file. */
-    struct uuid sid;
-    uuid_generate(&sid);
+    struct raft_header h = {
+        .sid = uuid_random(),
+        .cid = cid ? *cid : UUID_ZERO,
+        .name = xstrdup(name),
+        .local_address = xstrdup(local_address),
+        .joining = true,
+    };
+    sset_clone(&h.remote_addresses, remote_addresses);
+    struct json *json = raft_header_to_json(&h);
+    raft_header_uninit(&h);
 
-    struct json *snapshot = json_object_create();
-    json_object_put_format(snapshot, "server_id", UUID_FMT, UUID_ARGS(&sid));
-    json_object_put_string(snapshot, "local_address", local_address);
-    json_object_put_string(snapshot, "name", name);
-    json_object_put(snapshot, "remote_addresses",
-                    raft_addresses_to_json(remote_addresses));
-    if (cid) {
-        json_object_put_format(snapshot, "cluster_id",
-                               UUID_FMT, UUID_ARGS(cid));
-    }
-
-    error = ovsdb_log_write(log, snapshot);
-    json_destroy(snapshot);
+    error = ovsdb_log_write(log, json);
+    json_destroy(json);
     if (!error) {
         error = ovsdb_log_commit_block(log);
     }
@@ -3384,28 +3379,17 @@ raft_write_snapshot(struct raft *raft, struct ovsdb_log *log,
                     uint64_t new_log_start,
                     const struct raft_entry *new_snapshot)
 {
-    /* Write snapshot record. */
-    struct json *header = json_object_create();
-    json_object_put_format(header, "server_id", UUID_FMT,
-                           UUID_ARGS(&raft->sid));
-    json_object_put_string(header, "name", raft->name);
-    json_object_put_string(header, "local_address", raft->local_address);
-    json_object_put(header, "prev_servers", json_clone(new_snapshot->servers));
-    if (!uuid_is_zero(&raft->cid)) {
-        json_object_put_format(header, "cluster_id", UUID_FMT,
-                               UUID_ARGS(&raft->cid));
-    }
-
-    json_object_put(header, "prev_term",
-                    json_integer_create(new_snapshot->term));
-    json_object_put(header, "prev_index",
-                    json_integer_create(new_log_start - 1));
-    json_object_put(header, "prev_data", json_clone(new_snapshot->data));
-    json_object_put_format(header, "prev_eid",
-                           UUID_FMT, UUID_ARGS(&new_snapshot->eid));
-
-    struct ovsdb_error *error = ovsdb_log_write(log, header);
-    json_destroy(header);
+    struct raft_header h = {
+        .sid = raft->sid,
+        .cid = raft->cid,
+        .name = raft->name,
+        .local_address = raft->local_address,
+        .snap_index = new_log_start - 1,
+        .snap = *new_snapshot,
+    };
+    struct json *json = raft_header_to_json(&h);
+    struct ovsdb_error *error = ovsdb_log_write(log, json);
+    json_destroy(json);
     if (error) {
         return error;
     }
