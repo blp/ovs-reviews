@@ -983,6 +983,210 @@ do_show_log(struct ovs_cmdl_context *ctx)
     ovsdb_log_close(log);
 }
 
+struct server {
+    const char *filename;
+
+    struct raft_header header;
+
+    struct raft_record *records;
+    size_t n_records;
+
+    struct raft_entry *snap;
+    struct raft_entry *entries;
+    uint64_t log_start, log_end;
+};
+
+static void
+do_check_cluster(struct ovs_cmdl_context *ctx)
+{
+    struct server *servers = xzalloc((ctx->argc - 1) * sizeof *servers);
+    size_t n_servers = 0;
+
+    uint64_t max_term = 0;
+
+    for (int i = 1; i < ctx->argc; i++) {
+        struct server *s = &servers[n_servers];
+        s->filename = ctx->argv[i];
+
+        struct ovsdb_log *log;
+        check_ovsdb_error(ovsdb_log_open(s->filename, RAFT_MAGIC,
+                                         OVSDB_LOG_READ_ONLY, -1, &log));
+
+        struct json *json;
+        check_ovsdb_error(ovsdb_log_read(log, &json));
+        check_ovsdb_error(raft_header_from_json(&s->header, json));
+        json_destroy(json);
+
+        if (s->header.joining) {
+            printf("%s has not joined the cluster, omitting\n", s->filename);
+            continue;
+        }
+        if (n_servers > 0) {
+            struct server *s0 = &servers[0];
+            if (!uuid_equals(&s0->header.cid, &s->header.cid)) {
+                ovs_fatal(0, "%s has cluster ID "CID_FMT" but %s "
+                          "has cluster ID "CID_FMT,
+                          s0->filename, CID_ARGS(&s0->header.cid),
+                          s->filename, CID_ARGS(&s->header.cid));
+            }
+            if (strcmp(s0->header.name, s->header.name)) {
+                ovs_fatal(0, "%s is named \"%s\" but %s is named \"%s\"",
+                          s0->filename, s0->header.name,
+                          s->filename, s->header.name);
+            }
+        }
+        s->snap = &s->header.snap;
+        s->log_start = s->log_end = s->header.snap_index + 1;
+
+        size_t allocated_records = 0;
+        size_t allocated_entries = 0;
+        uint64_t term = 0;
+        struct uuid vote = UUID_ZERO;
+        uint64_t commit_index = s->header.snap_index;
+        for (unsigned long long int rec_idx = 1; ; rec_idx++) {
+            if (s->n_records >= allocated_records) {
+                s->records = x2nrealloc(s->records, &allocated_records,
+                                        sizeof *s->records);
+            }
+            check_ovsdb_error(ovsdb_log_read(log, &json));
+            if (!json) {
+                break;
+            }
+            struct raft_record *r = &s->records[s->n_records++];
+            check_ovsdb_error(raft_record_from_json(r, json));
+            json_destroy(json);
+
+            if (r->term > term) {
+                term = r->term;
+                vote = UUID_ZERO;
+            }
+
+            switch (r->type) {
+            case RAFT_REC_ENTRY:
+                if (r->entry.index < commit_index) {
+                    ovs_fatal(0, "%s: record %llu  attempts to truncate log "
+                              "from %"PRIu64" to %"PRIu64" entries, but "
+                              "commit index is already %"PRIu64,
+                              s->filename, rec_idx,
+                              s->log_end, r->entry.index,
+                              commit_index);
+                } else if (r->entry.index > s->log_end) {
+                    ovs_fatal(0, "%s: record %llu with index %"PRIu64" skips "
+                              "past expected index %"PRIu64, s->filename,
+                              rec_idx, r->entry.index, s->log_end);
+                }
+
+                if (r->entry.index < s->log_end) {
+                    /* This can happen, but it is unusual. */
+                    printf("%s: record %llu truncates log from %"PRIu64" to "
+                           "%"PRIu64" entries", s->filename, rec_idx,
+                           s->log_end, r->entry.index);
+                    s->log_end = r->entry.index;
+                }
+
+                uint64_t prev_term = (s->log_end > s->log_start
+                                      ? s->entries[s->log_end
+                                                   - s->log_start - 1].term
+                                      : s->snap->term);
+                if (r->term < prev_term) {
+                    ovs_fatal(0, "%s: record %llu with index %"PRIu64" term "
+                              "%"PRIu64" precedes previous entry's term "
+                              "%"PRIu64, s->filename, rec_idx,
+                              r->entry.index, r->term, prev_term);
+                }
+
+                uint64_t log_idx = s->log_end++ - s->log_start;
+                if (log_idx >= allocated_entries) {
+                    s->entries = x2nrealloc(s->entries, &allocated_entries,
+                                            sizeof *s->entries);
+                }
+                struct raft_entry *e = &s->entries[log_idx];
+                e->term = r->term;
+                e->data = r->entry.data;
+                e->eid = r->entry.eid;
+                e->servers = r->entry.servers;
+                break;
+
+            case RAFT_REC_TERM:
+                break;
+
+            case RAFT_REC_VOTE:
+                if (r->term < term) {
+                    ovs_fatal(0, "%s: record %llu votes for term %"PRIu64" "
+                              "but current term is %"PRIu64, s->filename,
+                              rec_idx, r->term, term);
+                } else if (!uuid_is_zero(&vote)
+                           && !uuid_equals(&vote, &r->vote)) {
+                    ovs_fatal(0, "%s: record %llu votes for "SID_FMT" in term "
+                              "%"PRIu64" but a previous record for the "
+                              "same term voted for "SID_FMT, s->filename,
+                              rec_idx, SID_ARGS(&vote), r->term,
+                              SID_ARGS(&r->vote));
+                } else {
+                    vote = r->vote;
+                }
+                break;
+
+
+            case RAFT_REC_COMMIT_INDEX:
+                if (r->commit_index < commit_index) {
+                    ovs_fatal(0, "%s: record %llu regresses commit index "
+                              "from %"PRIu64 " to %"PRIu64, s->filename,
+                              rec_idx, commit_index, r->commit_index);
+                } else if (r->commit_index >= s->log_end) {
+                    ovs_fatal(0, "%s: record %llu advances commit index to "
+                              "%"PRIu64 " but last log index is %"PRIu64,
+                              s->filename, rec_idx, r->commit_index,
+                              s->log_end - 1);
+                } else {
+                    commit_index = r->commit_index;
+                }
+                break;
+
+            case RAFT_REC_LEADER:
+                break;
+
+            case RAFT_REC_LEFT:
+                printf("%s: record %llu shows that the server left the "
+                       "cluster\n", s->filename, rec_idx);
+                break;
+            }
+        }
+
+        if (term > max_term) {
+            max_term = term;
+        }
+
+        n_servers++;
+    }
+
+    /* Check election safety property.
+     *
+     * This could use O(n_servers) memory but it currently uses O(max_term). */
+    struct server **leaders = xzalloc((max_term + 1) * sizeof *leaders);
+    for (size_t server_idx = 0; server_idx < n_servers; server_idx++) {
+        struct server *s = &servers[server_idx];
+
+        for (size_t i = 0; i < s->n_records; i++) {
+            const struct raft_record *r = &s->records[i];
+            ovs_assert(r->term <= max_term);
+
+            if (r->type == RAFT_REC_LEADER) {
+                struct server **leader = &leaders[r->term];
+                if (!*leader) {
+                    *leader = s;
+                } else if (*leader != s) {
+                    ovs_fatal(0, "term %"PRIu64" has two different leaders: "
+                              SID_FMT" and "SID_FMT,
+                              r->term, SID_ARGS(&(*leader)->header.sid),
+                              SID_ARGS(&s->header.sid));
+                }
+            }
+        }
+    }
+    free(leaders);
+}
+
 static void
 do_help(struct ovs_cmdl_context *ctx OVS_UNUSED)
 {
@@ -1015,6 +1219,7 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "query", "[db] trns", 1, 2, do_query, OVS_RO },
     { "transact", "[db] trns", 1, 2, do_transact, OVS_RO },
     { "show-log", "[db]", 0, 1, do_show_log, OVS_RO },
+    { "check-cluster", "db...", 1, INT_MAX, do_check_cluster, OVS_RO },
     { "help", NULL, 0, INT_MAX, do_help, OVS_RO },
     { "list-commands", NULL, 0, INT_MAX, do_list_commands, OVS_RO },
     { NULL, NULL, 0, 0, NULL, OVS_RO },

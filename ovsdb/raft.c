@@ -665,7 +665,8 @@ raft_write_state(struct ovsdb_log *log,
 }
 
 static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
-raft_apply_record(struct raft *raft, const struct raft_record *r)
+raft_apply_record(struct raft *raft, unsigned long long int rec_idx,
+                  const struct raft_record *r)
 {
     /* Apply "term", which is present in most kinds of records (and otherwise
      * 0).
@@ -683,20 +684,22 @@ raft_apply_record(struct raft *raft, const struct raft_record *r)
     switch (r->type) {
     case RAFT_REC_ENTRY:
         if (r->entry.index < raft->commit_index) {
-            return ovsdb_error(NULL, "record attempts to truncate log from "
-                               "%"PRIu64" to %"PRIu64" entries, but commit "
-                               "index is already %"PRIu64,
-                               raft->log_end, r->entry.index,
+            return ovsdb_error(NULL, "record %llu attempts to truncate log "
+                               "from %"PRIu64" to %"PRIu64" entries, but "
+                               "commit index is already %"PRIu64,
+                               rec_idx, raft->log_end, r->entry.index,
                                raft->commit_index);
-        } else if (r->entry.index < raft->log_end) {
-            /* This can happen, but it is unusual. */
-            VLOG_DBG("log entry truncates log from %"PRIu64" to %"PRIu64
-                     " entries", raft->log_end, r->entry.index);
-            raft_truncate(raft, r->entry.index);
         } else if (r->entry.index > raft->log_end) {
-            return ovsdb_error(NULL, "log entry index %"PRIu64" skips past "
-                               "expected %"PRIu64,
-                               r->entry.index, raft->log_end);
+            return ovsdb_error(NULL, "record %llu with index %"PRIu64" skips "
+                               "past expected index %"PRIu64,
+                               rec_idx, r->entry.index, raft->log_end);
+        }
+
+        if (r->entry.index < raft->log_end) {
+            /* This can happen, but it is notable. */
+            VLOG_DBG("record %llu truncates log from %"PRIu64" to %"PRIu64
+                     " entries", rec_idx, raft->log_end, r->entry.index);
+            raft_truncate(raft, r->entry.index);
         }
 
         uint64_t prev_term = (raft->log_end > raft->log_start
@@ -704,9 +707,10 @@ raft_apply_record(struct raft *raft, const struct raft_record *r)
                                               - raft->log_start - 1].term
                               : raft->snap.term);
         if (r->term < prev_term) {
-            return ovsdb_error(NULL, "log entry index %"PRIu64" term "
+            return ovsdb_error(NULL, "record %llu with index %"PRIu64" term "
                                "%"PRIu64" precedes previous entry's term "
-                               "%"PRIu64, r->entry.index, r->term, prev_term);
+                               "%"PRIu64,
+                               rec_idx, r->entry.index, r->term, prev_term);
         }
 
         raft_add_entry(raft, r->term,
@@ -719,14 +723,16 @@ raft_apply_record(struct raft *raft, const struct raft_record *r)
 
     case RAFT_REC_VOTE:
         if (r->term < raft->term) {
-            return ovsdb_error(NULL, "record votes for term %"PRIu64" "
+            return ovsdb_error(NULL, "record %llu votes for term %"PRIu64" "
                                "but current term is %"PRIu64,
-                               r->term, raft->term);
+                               rec_idx, r->term, raft->term);
         } else if (!uuid_is_zero(&raft->vote)
                    && !uuid_equals(&raft->vote, &r->vote)) {
-            return ovsdb_error(NULL, "log entry term %"PRIu64 " votes for "
-                               "both "SID_FMT" and "SID_FMT, r->term,
-                               SID_ARGS(&raft->vote), SID_ARGS(&r->vote));
+            return ovsdb_error(NULL, "record %llu votes for "SID_FMT" in term "
+                               "%"PRIu64" but a previous record for the "
+                               "same term voted for "SID_FMT, rec_idx,
+                               SID_ARGS(&raft->vote), r->term,
+                               SID_ARGS(&r->vote));
         } else {
             raft->vote = raft->synced_vote = r->vote;
             return NULL;
@@ -735,13 +741,13 @@ raft_apply_record(struct raft *raft, const struct raft_record *r)
 
     case RAFT_REC_COMMIT_INDEX:
         if (r->commit_index < raft->commit_index) {
-            return ovsdb_error(NULL, "commit index %"PRIu64 " is "
-                               "regression from previous %"PRIu64,
-                               r->commit_index, raft->commit_index);
+            return ovsdb_error(NULL, "record %llu regresses commit index "
+                               "from %"PRIu64 " to %"PRIu64,
+                               rec_idx, raft->commit_index, r->commit_index);
         } else if (r->commit_index >= raft->log_end) {
-            return ovsdb_error(NULL, "commit index %"PRIu64 " is "
-                               "beyond last log index %"PRIu64,
-                               r->commit_index, raft->log_end - 1);
+            return ovsdb_error(NULL, "record %llu advances commit index to "
+                               "%"PRIu64 " but last log index is %"PRIu64,
+                               rec_idx, r->commit_index, raft->log_end - 1);
         } else {
             raft->commit_index = r->commit_index;
             return NULL;
@@ -753,9 +759,10 @@ raft_apply_record(struct raft *raft, const struct raft_record *r)
         return NULL;
 
     case RAFT_REC_LEFT:
-        return ovsdb_error(NULL, "server has left the cluster and cannot be "
-                           "added back; use \"ovsdb-tool join-cluster\" to "
-                           "add a new server");
+        return ovsdb_error(NULL, "record %llu indicates server has left the "
+                           "cluster; it cannot be added back (use "
+                           "\"ovsdb-tool join-cluster\" to add a new server)",
+                           rec_idx);
 
     default:
         OVS_NOT_REACHED();
@@ -791,8 +798,8 @@ raft_read_header(struct raft *raft)
     } else {
         raft_entry_clone(&raft->snap, &h.snap);
         raft->log_start = raft->log_end = h.snap_index + 1;
-        raft->commit_index = raft->log_start - 1;
-        raft->last_applied = raft->log_start - 2;
+        raft->commit_index = h.snap_index;
+        raft->last_applied = h.snap_index - 1;
     }
 
     raft_header_uninit(&h);
@@ -822,7 +829,7 @@ raft_read_log(struct raft *raft)
         struct raft_record r;
         error = raft_record_from_json(&r, json);
         if (!error) {
-            error = raft_apply_record(raft, &r);
+            error = raft_apply_record(raft, i, &r);
             raft_record_uninit(&r);
         }
         if (error) {
