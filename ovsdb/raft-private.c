@@ -394,17 +394,22 @@ raft_record_uninit(struct raft_record *r)
         return;
     }
 
+    free(r->comment);
+
     switch (r->type) {
     case RAFT_REC_ENTRY:
         json_destroy(r->entry.data);
         json_destroy(r->entry.servers);
         break;
 
+    case RAFT_REC_NOTE:
+        free(r->note);
+        break;
+
     case RAFT_REC_TERM:
     case RAFT_REC_VOTE:
     case RAFT_REC_COMMIT_INDEX:
     case RAFT_REC_LEADER:
-    case RAFT_REC_LEFT:
         break;
     }
 }
@@ -412,10 +417,14 @@ raft_record_uninit(struct raft_record *r)
 static void
 raft_record_from_json__(struct raft_record *r, struct ovsdb_parser *p)
 {
-    /* Parse "left". */
-    if (raft_parse_optional_boolean(p, "left") == 1) {
-        r->type = RAFT_REC_LEFT;
+    r->comment = nullable_xstrdup(raft_parse_optional_string(p, "comment"));
+
+    /* Parse "note". */
+    const char *note = raft_parse_optional_string(p, "note");
+    if (note) {
+        r->type = RAFT_REC_NOTE;
         r->term = 0;
+        r->note = xstrdup(note);
         return;
     }
 
@@ -447,15 +456,19 @@ raft_record_from_json__(struct raft_record *r, struct ovsdb_parser *p)
     r->term = raft_parse_required_uint64(p, "term");
 
     /* Parse "leader". */
-    if (raft_parse_optional_boolean(p, "leader")) {
+    if (raft_parse_optional_uuid(p, "leader", &r->sid)) {
         r->type = RAFT_REC_LEADER;
+        if (uuid_is_zero(&r->sid)) {
+            ovsdb_parser_raise_error(p, "record says leader is all-zeros SID");
+        }
+        return;
     }
 
     /* Parse "vote". */
-    if (raft_parse_optional_uuid(p, "vote", &r->vote)) {
+    if (raft_parse_optional_uuid(p, "vote", &r->sid)) {
         r->type = RAFT_REC_VOTE;
-        if (uuid_is_zero(&r->vote)) {
-            ovsdb_parser_raise_error(p, "log entry votes for all-zeros SID");
+        if (uuid_is_zero(&r->sid)) {
+            ovsdb_parser_raise_error(p, "record votes for all-zeros SID");
         }
         return;
     }
@@ -500,6 +513,10 @@ raft_record_to_json(const struct raft_record *r)
 {
     struct json *json = json_object_create();
 
+    if (r->comment && *r->comment) {
+        json_object_put_string(json, "comment", r->comment);
+    }
+
     switch (r->type) {
     case RAFT_REC_ENTRY:
         raft_put_uint64(json, "term", r->term);
@@ -522,7 +539,11 @@ raft_record_to_json(const struct raft_record *r)
 
     case RAFT_REC_VOTE:
         raft_put_uint64(json, "term", r->term);
-        json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(&r->vote));
+        json_object_put_format(json, "vote", UUID_FMT, UUID_ARGS(&r->sid));
+        break;
+
+    case RAFT_REC_NOTE:
+        json_object_put(json, "note", json_string_create(r->note));
         break;
 
     case RAFT_REC_COMMIT_INDEX:
@@ -531,11 +552,7 @@ raft_record_to_json(const struct raft_record *r)
 
     case RAFT_REC_LEADER:
         raft_put_uint64(json, "term", r->term);
-        json_object_put(json, "leader", json_boolean_create(true));
-        break;
-
-    case RAFT_REC_LEFT:
-        json_object_put(json, "left", json_boolean_create(true));
+        json_object_put_format(json, "leader", UUID_FMT, UUID_ARGS(&r->sid));
         break;
 
     default:

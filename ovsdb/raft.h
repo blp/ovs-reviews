@@ -139,6 +139,6 @@ struct ovsdb_error *raft_store_snapshot(struct raft *,
 
 /* Cluster management. */
 void raft_take_leadership(struct raft *);
-void raft_transfer_leadership(struct raft *);
+void raft_transfer_leadership(struct raft *, const char *reason);
 
 #endif /* lib/raft.h */

@@ -140,23 +140,26 @@ enum raft_record_type {
     RAFT_REC_VOTE,              /* A vote. */
 
     /* Extensions. */
+    RAFT_REC_NOTE,              /* A note about some significant event. */
     RAFT_REC_COMMIT_INDEX,      /* An update to the local commit_index. */
-    RAFT_REC_LEADER,            /* This server is the leader. */
-    RAFT_REC_LEFT,              /* This server has left the cluster. */
+    RAFT_REC_LEADER,            /* A server has become leader for this term. */
 };
 
 /* Type used for the second and subsequent records in a Raft log. */
 struct raft_record {
     enum raft_record_type type;
+    char *comment;
 
     /* Valid in RAFT_REC_ENTRY, RAFT_REC_TERM, RAFT_REC_LEADER, and
      * RAFT_REC_VOTE, and otherwise 0. */
     uint64_t term;
 
     union {
+        char *note;             /* RAFT_REC_NOTE. */
+
         uint64_t commit_index;  /* RAFT_REC_COMMIT_INDEX. */
 
-        struct uuid vote;       /* RAFT_REC_VOTE. */
+        struct uuid sid;        /* RAFT_REC_VOTE, RAFT_REC_LEADER. */
 
         struct {                /* RAFT_REC_ENTRY. */
             uint64_t index;

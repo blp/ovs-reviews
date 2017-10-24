@@ -653,11 +653,10 @@ static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 raft_write_state(struct ovsdb_log *log,
                  uint64_t term, const struct uuid *vote)
 {
-    struct raft_record r;
-    r.term = term;
+    struct raft_record r = { .term = term };
     if (vote && !uuid_is_zero(vote)) {
         r.type = RAFT_REC_VOTE;
-        r.vote = *vote;
+        r.sid = *vote;
     } else {
         r.type = RAFT_REC_TERM;
     }
@@ -727,17 +726,26 @@ raft_apply_record(struct raft *raft, unsigned long long int rec_idx,
                                "but current term is %"PRIu64,
                                rec_idx, r->term, raft->term);
         } else if (!uuid_is_zero(&raft->vote)
-                   && !uuid_equals(&raft->vote, &r->vote)) {
+                   && !uuid_equals(&raft->vote, &r->sid)) {
             return ovsdb_error(NULL, "record %llu votes for "SID_FMT" in term "
                                "%"PRIu64" but a previous record for the "
                                "same term voted for "SID_FMT, rec_idx,
                                SID_ARGS(&raft->vote), r->term,
-                               SID_ARGS(&r->vote));
+                               SID_ARGS(&r->sid));
         } else {
-            raft->vote = raft->synced_vote = r->vote;
+            raft->vote = raft->synced_vote = r->sid;
             return NULL;
         }
         break;
+
+    case RAFT_REC_NOTE:
+        if (!strcmp(r->note, "left")) {
+            return ovsdb_error(NULL, "record %llu indicates server has left "
+                               "the cluster; it cannot be added back (use "
+                               "\"ovsdb-tool join-cluster\" to add a new "
+                               "server)", rec_idx);
+        }
+        return NULL;
 
     case RAFT_REC_COMMIT_INDEX:
         if (r->commit_index < raft->commit_index) {
@@ -757,12 +765,6 @@ raft_apply_record(struct raft *raft, unsigned long long int rec_idx,
     case RAFT_REC_LEADER:
         /* XXX we could use this to take back leadership for quick restart */
         return NULL;
-
-    case RAFT_REC_LEFT:
-        return ovsdb_error(NULL, "record %llu indicates server has left the "
-                           "cluster; it cannot be added back (use "
-                           "\"ovsdb-tool join-cluster\" to add a new server)",
-                           rec_idx);
 
     default:
         OVS_NOT_REACHED();
@@ -865,7 +867,6 @@ raft_add_conn(struct raft *raft, struct jsonrpc_session *js,
     }
     conn->incoming = incoming;
     conn->js_seqno = jsonrpc_session_get_seqno(conn->js);
-    VLOG_INFO("%s: initial seqno=%u", jsonrpc_session_get_name(conn->js), conn->js_seqno);
 }
 
 /* Starts the local server in an existing Raft cluster, using the local copy of
@@ -981,9 +982,30 @@ raft_find_conn_by_address(struct raft *raft, const char *address)
     return NULL;
 }
 
-/* If we're leader, try to transfer leadership to another server. */
+static void OVS_PRINTF_FORMAT(3, 4)
+raft_record_note(struct raft *raft, const char *note,
+                 const char *comment_format, ...)
+{
+    va_list args;
+    va_start(args, comment_format);
+    char *comment = xvasprintf(comment_format, args);
+    va_end(args);
+
+    struct raft_record r = {
+        .type = RAFT_REC_NOTE,
+        .comment = comment,
+        .note = CONST_CAST(char *, note),
+    };
+    ignore(ovsdb_log_write_and_free(raft->log, raft_record_to_json(&r)));
+
+    free(comment);
+}
+
+/* If we're leader, try to transfer leadership to another server, logging
+ * 'reason' as the human-readable reason (it should be a phrase suitable for
+ * following "because") . */
 void
-raft_transfer_leadership(struct raft *raft)
+raft_transfer_leadership(struct raft *raft, const char *reason)
 {
     if (raft->role != RAFT_LEADER) {
         return;
@@ -1001,6 +1023,7 @@ raft_transfer_leadership(struct raft *raft)
             union raft_rpc rpc = {
                 .become_leader = {
                     .common = {
+                        .comment = CONST_CAST(char *, reason),
                         .type = RAFT_RPC_BECOME_LEADER,
                         .sid = s->sid,
                     },
@@ -1008,6 +1031,10 @@ raft_transfer_leadership(struct raft *raft)
                 }
             };
             raft_send__(raft, &rpc, conn->js);
+
+            raft_record_note(raft, "transfer leadership",
+                             "transferring leadership to "SID_FMT" because %s",
+                             SID_ARGS(&s->sid), reason);
             break;
         }
     }
@@ -1062,7 +1089,7 @@ raft_leave(struct raft *raft)
     VLOG_INFO(SID_FMT": starting to leave cluster "CID_FMT,
               SID_ARGS(&raft->sid), CID_ARGS(&raft->cid));
     raft->leaving = true;
-    raft_transfer_leadership(raft);
+    raft_transfer_leadership(raft, "this server is leaving the cluster");
     raft_become_follower(raft);
     raft_send_remove_server_requests(raft);
     raft->leave_timeout = time_msec() + ELECTION_BASE_MSEC;
@@ -1127,7 +1154,7 @@ raft_close(struct raft *raft)
         return;
     }
 
-    raft_transfer_leadership(raft);
+    raft_transfer_leadership(raft, "this server is shutting down");
 
     raft_close__(raft);
 
@@ -2218,6 +2245,7 @@ raft_become_leader(struct raft *raft)
     struct raft_record r = {
         .type = RAFT_REC_LEADER,
         .term = raft->term,
+        .sid = raft->sid,
     };
     ignore(ovsdb_log_write_and_free(raft->log, raft_record_to_json(&r)));
 
@@ -2549,6 +2577,17 @@ raft_update_leader(struct raft *raft, const struct uuid *sid)
                       SID_ARGS(sid), raft->term);
         }
         raft->leader_sid = *sid;
+
+        /* Record the leader to the log.  This is not used by the algorithm
+         * (although it could be, for quick restart), but it is used for
+         * offline analysis to check for conformance with the properties
+         * that Raft guarantees. */
+        struct raft_record r = {
+            .type = RAFT_REC_LEADER,
+            .term = raft->term,
+            .sid = *sid,
+        };
+        ignore(ovsdb_log_write_and_free(raft->log, raft_record_to_json(&r)));
     }
     return true;
 }
@@ -3341,17 +3380,7 @@ raft_handle_remove_server_reply(struct raft *raft,
         VLOG_INFO("%04x: finished leaving cluster %04x",
                   uuid_prefix(&raft->sid, 4), uuid_prefix(&raft->cid, 4));
 
-        /* Write a sentinel to prevent the cluster from restarting.  The
-         * cluster should be resilient against such an occurrence in any case,
-         * but this allows for better error messages. */
-        struct raft_record r = { .type = RAFT_REC_LEFT };
-        struct ovsdb_error *error = ovsdb_log_write_and_free(
-            raft->log, raft_record_to_json(&r));
-        if (error) {
-            char *error_s = ovsdb_error_to_string_free(error);
-            VLOG_WARN("error writing sentinel record (%s)", error_s);
-            free(error_s);
-        }
+        raft_record_note(raft, "left", "this server left the cluster");
 
         raft->leaving = false;
         raft->left = true;

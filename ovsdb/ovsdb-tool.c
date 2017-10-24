@@ -883,6 +883,9 @@ static void
 print_raft_record(const struct raft_record *r,
                   struct ovsdb_schema **schemap, struct shash *names)
 {
+    if (r->comment) {
+        printf(" comment: \"%s\"\n", r->comment);
+    }
     if (r->term) {
         printf(" term: %"PRIu64"\n", r->term);
     }
@@ -901,7 +904,11 @@ print_raft_record(const struct raft_record *r,
         break;
 
     case RAFT_REC_VOTE:
-        printf(" vote: "SID_FMT"\n", SID_ARGS(&r->vote));
+        printf(" vote: "SID_FMT"\n", SID_ARGS(&r->sid));
+        break;
+
+    case RAFT_REC_NOTE:
+        printf(" note: \"%s\"\n", r->note);
         break;
 
     case RAFT_REC_COMMIT_INDEX:
@@ -909,11 +916,7 @@ print_raft_record(const struct raft_record *r,
         break;
 
     case RAFT_REC_LEADER:
-        printf(" leader: true\n");
-        break;
-
-    case RAFT_REC_LEFT:
-        printf(" left: true\n");
+        printf(" leader: "SID_FMT"\n", SID_ARGS(&r->sid));
         break;
 
     default:
@@ -1116,17 +1119,23 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
                               "but current term is %"PRIu64, s->filename,
                               rec_idx, r->term, term);
                 } else if (!uuid_is_zero(&vote)
-                           && !uuid_equals(&vote, &r->vote)) {
+                           && !uuid_equals(&vote, &r->sid)) {
                     ovs_fatal(0, "%s: record %llu votes for "SID_FMT" in term "
                               "%"PRIu64" but a previous record for the "
                               "same term voted for "SID_FMT, s->filename,
                               rec_idx, SID_ARGS(&vote), r->term,
-                              SID_ARGS(&r->vote));
+                              SID_ARGS(&r->sid));
                 } else {
-                    vote = r->vote;
+                    vote = r->sid;
                 }
                 break;
 
+            case RAFT_REC_NOTE:
+                if (!strcmp(r->note, "left")) {
+                    printf("%s: record %llu shows that the server left the "
+                           "cluster\n", s->filename, rec_idx);
+                }
+                break;
 
             case RAFT_REC_COMMIT_INDEX:
                 if (r->commit_index < commit_index) {
@@ -1145,11 +1154,6 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
 
             case RAFT_REC_LEADER:
                 break;
-
-            case RAFT_REC_LEFT:
-                printf("%s: record %llu shows that the server left the "
-                       "cluster\n", s->filename, rec_idx);
-                break;
             }
         }
 
@@ -1162,25 +1166,37 @@ do_check_cluster(struct ovs_cmdl_context *ctx)
 
     /* Check election safety property.
      *
-     * This could use O(n_servers) memory but it currently uses O(max_term). */
-    struct server **leaders = xzalloc((max_term + 1) * sizeof *leaders);
+     * This could use O(n_servers) memory but it currently uses O(max_term).
+     *
+     * This struct indicates that server 's' recorded that the server with ID
+     * 'sid' became leader. */
+    struct leader {
+        struct server *s;
+        struct uuid sid;
+    } *leaders = xzalloc((max_term + 1) * sizeof *leaders);
     for (size_t server_idx = 0; server_idx < n_servers; server_idx++) {
         struct server *s = &servers[server_idx];
 
         for (size_t i = 0; i < s->n_records; i++) {
             const struct raft_record *r = &s->records[i];
             ovs_assert(r->term <= max_term);
+            if (r->type != RAFT_REC_LEADER) {
+                continue;
+            }
 
-            if (r->type == RAFT_REC_LEADER) {
-                struct server **leader = &leaders[r->term];
-                if (!*leader) {
-                    *leader = s;
-                } else if (*leader != s) {
-                    ovs_fatal(0, "term %"PRIu64" has two different leaders: "
-                              SID_FMT" and "SID_FMT,
-                              r->term, SID_ARGS(&(*leader)->header.sid),
-                              SID_ARGS(&s->header.sid));
-                }
+            struct leader *leader = &leaders[r->term];
+            if (!leader->s) {
+                leader->s = s;
+                leader->sid = r->sid;
+            } else if (!uuid_equals(&leader->sid, &r->sid)) {
+                ovs_fatal(0, "term %"PRIu64" has two different leaders: "
+                          SID_FMT" says that the leader is "SID_FMT" and "
+                          SID_FMT" says that the leader is "SID_FMT,
+                          r->term,
+                          SID_ARGS(&leader->s->header.sid),
+                          SID_ARGS(&leader->sid),
+                          SID_ARGS(&s->header.sid),
+                          SID_ARGS(&r->sid));
             }
         }
     }
