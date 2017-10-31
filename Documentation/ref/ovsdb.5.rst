@@ -149,9 +149,9 @@ The clustered format has the following additional notation:
 <cluster-txn>
     A JSON array with two elements:
 
-    1. The first element is either a <database-schema> or ``null``.  It
-       is always present in the first of a clustered database to indicate the
-       database's initial schema.  If it is present in a later record, it
+    1. The first element is either a <database-schema> or ``null``.  It is
+       always present in the first record of a clustered database to indicate
+       the database's initial schema.  If it is present in a later record, it
        indicates a change of schema for the database.
 
     2. The second element is either a transaction record in the format
