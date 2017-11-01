@@ -593,11 +593,9 @@ for example, ``ovs-vsctl`` adds its command line to the transactions that it
 makes.
 
 The ``show-log`` command works with both OVSDB file formats, but the details of
-the output format differ.  For active-backup databases, the sequence of
-transactions in each server's log will differ, even at points when they reflect
-the same data.  For active-backup and clustered databases, the sequence of
-transactions in each server's log will differ, even at points when they reflect
-the same data.
+the output format differ.  For active-backup and clustered databases, the
+sequence of transactions in each server's log will differ, even at points when
+they reflect the same data.
 
 Truncating History
 ------------------
