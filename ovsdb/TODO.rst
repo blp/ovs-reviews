@@ -61,3 +61,50 @@ OVSDB Clustering To-do List
   * File format with diff support. 
 
   * Future work: DNS or directory support
+
+From Numan Siddique::
+
+  1) As I had mentioned in the IRC meeting yesterday, when I pass the options
+  "--remote=db:OVN_Northbound,NB_Global,connections" to ovsdb-server, it is
+  failing with the error
+  "ovsdb-server: "db:OVN_Northbound,NB_Global,connections": no table named
+  NB_Global".
+
+  I see this issue when I freshly create the database file (ovsdb-tool
+  create-cluster ovnnb.db OVN_Northbound local_addr remote_addr" and start
+  ovsdb-server) and start the ovsdb-server.
+
+  This issue is not seen if the ovsdb-server has already connected to the
+  remote and the above option is passed in subsequent runs.
+
+
+  b) I am seeing an issue when I run  "ovn-nbctl ls-add sw2". It hangs.
+
+  I created a 2 node cluster - node 1 and node 2
+   When I run "ovn-nbctl ls-add sw2" it hangs. Here are the steps
+     1. On node 1 created a clustered db and started ovsdb-server
+       (/usr/share/openvswitch/scripts/ovn-ctl start_ovsdb
+  --db-nb-cluster-local-addr=tcp:192.168.121.91:6643
+  --db-sb-cluster-local-addr=tcp:192.168.121.91:6644)
+     2. Created a logical switch "ovn-nbctl ls-add sw0"
+
+     3. On node 2, started ovsdb-servers as
+       /usr/share/openvswitch/scripts/ovn-ctl start_ovsdb
+  --db-nb-cluster-local-addr=tcp:192.168.121.87:6643
+  --db-sb-cluster-local-addr=tcp:192.168.121.87:6644
+  --db-nb-cluster-remote-addr=tcp:192.168.121.91:6643
+  --db-sb-cluster-remote-addr=tcp:192.168.121.91:6644
+
+    4. "ovn-nbctl show" works fine. Ran "ovn-nbctl ls-add sw1" and it worked
+  fine.
+
+    5. Stop ovsdb-server - /usr/share/openvswitch/scripts/ovn-ctl stop_ovsdb
+
+    6. Start again and when I run "ovn-nbctl ls-add sw2" it hangs.
+     You can find the logs of ovsdb-server for node 2 here -
+  https://paste.fedoraproject.org/paste/xp~8lxdoq52TO28NbGoQbg
+
+     and node 1 here -
+  https://paste.fedoraproject.org/paste/~J4rG9H36GWWWav98N5KaQ
+
+
