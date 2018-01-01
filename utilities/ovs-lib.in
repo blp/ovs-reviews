@@ -441,6 +441,53 @@ upgrade_db () {
     fi
 }
 
+create_cluster () {
+    DB_FILE="$1"
+    DB_SCHEMA="$2"
+    LOCAL_ADDR="$3"
+
+    if test ! -e "$DB_FILE"; then
+        action "Creating cluster database $DB_FILE" ovsdb_tool create-cluster "$DB_FILE" "$DB_SCHEMA" "$LOCAL_ADDR"
+    else
+        # DB file exists. Check if it is a clustered db or not. If it is a
+        # clustered db, nothing to be done. Else create a clustered db from that.
+        ovsdb_tool db-local-address $DB_FILE
+        if [ "$?" = "1" ]; then
+            version=`ovsdb_tool db-version "$DB_FILE"`
+            cksum=`ovsdb_tool db-cksum "$DB_FILE" | awk '{print $1}'`
+            backup=$DB_FILE.backup$version-$cksum
+            action "Backing up database to $backup" cp "$DB_FILE" "$backup" || return 1
+
+            action "Creating cluster database $DB_FILE from existing one" \
+            ovsdb_tool create-cluster "$DB_FILE" "$backup" "$LOCAL_ADDR"
+        fi
+    fi
+}
+
+join_cluster() {
+    DB_FILE="$1"
+    SCHEMA_NAME="$2"
+    LOCAL_ADDR="$3"
+    REMOTE_ADDR="$4"
+
+    if test ! -e "$DB_FILE"; then
+        ovsdb_tool join-cluster "$DB_FILE" "$SCHEMA_NAME" "$LOCAL_ADDR" "$REMOTE_ADDR"
+    else
+        # DB file exists. Check if it is a clustered db or not. If it is a
+        # clustered db, nothing to be done. Else backup the db and join the cluster.
+        ovsdb_tool db-local-address $DB_FILE
+        if [ "$?" = "1" ]; then
+            version=`ovsdb_tool db-version "$DB_FILE"`
+            cksum=`ovsdb_tool db-cksum "$DB_FILE" | awk '{print $1}'`
+            backup=$DB_FILE.backup$version-$cksum
+            action "Backing up database to $backup" cp "$DB_FILE" "$backup" || return 1
+
+            action "Creating cluster database $DB_FILE from existing one" \
+            ovsdb_tool join-cluster "$DB_FILE" "$SCHEMA_NAME" "$LOCAL_ADDR"
+        fi
+    fi
+}
+
 ovs_vsctl () {
     ovs-vsctl --no-wait "$@"
 }
