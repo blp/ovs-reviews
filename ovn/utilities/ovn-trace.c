@@ -757,7 +757,7 @@ ovntrace_make_names_friendly(const char *in)
         const char *start;
         const char *next;
 
-        next = lex_token_parse(&token, in, &start);
+        next = lex_token_parse(&token, in, &start, NULL);
         if (token.type == LEX_T_STRING) {
             const struct ovntrace_port *port = shash_find_data(&ports,
                                                                token.s);

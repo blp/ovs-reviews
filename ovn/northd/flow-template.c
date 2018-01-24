@@ -26,8 +26,6 @@
 #include "openvswitch/shash.h"
 #include "openvswitch/vlog.h"
 #include "ovn/lex.h"
-#include "ovn/northd/northd-nb-idl.h"
-#include "ovn/northd/ovn-northd.h"
 #include "ovsdb-idl-provider.h"
 #include "ovsdb-idl.h"
 #include "sset.h"

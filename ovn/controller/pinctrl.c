@@ -1884,7 +1884,7 @@ extract_addresses_with_port(const char *addresses,
     }
 
     struct lexer lexer;
-    lexer_init(&lexer, addresses + ofs);
+    lexer_init(&lexer, addresses + ofs, NULL);
     lexer_get(&lexer);
 
     if (lexer.error || lexer.token.type != LEX_T_ID
