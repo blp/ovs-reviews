@@ -26,10 +26,10 @@ include "lswitch-stateful.ftl";
  * 100). */
 for (lsp in Logical_Switch_Port) {
     /* Logical VLANs not supported. */
-    flow(lsp.ls, LS_IN_PORT_SEC_L2, 100, vlan.present) { drop; };
+    flow(lsp.ls, LS_IN_PORT_SEC_L2, 100, vlan.present) { drop; }
 
     /* Broadcast/multicast source address is invalid. */
-    flow(lsp.ls, LS_IN_PORT_SEC_L2, 100, eth.src[40]) { drop; };
+    flow(lsp.ls, LS_IN_PORT_SEC_L2, 100, eth.src[40]) { drop; }
 
     /* Port security flows have priority 50 (see below) and will continue
      * to the next table if packet source is acceptable. */
@@ -40,34 +40,34 @@ for (lsp in Logical_Switch_Port) {
  *  Ingress table 1: Ingress port security - IP (priority 90 and 80)
  *  Ingress table 2: Ingress port security - ND (priority 90 and 80)
  */
-for (lsp in Logical_Switch_Port if lsp.enabled) {
+for (lsp in Logical_Switch_Port) if (lsp.enabled) dp (lsp.ls) {
     with (P = lsp.name,
           L2 = lsp.port_security_l2,
           IP = lsp.port_security_ip_ingress,
           ND = lsp.port_security_nd)
-    {
+    match (inport = <P>) {
         if (lsp.port_security != []) {
-            flow(lsp.ls, LS_IN_PORT_SEC_L2, 50, inport == "<P>" && eth.src == <L2>) { next; };
-            flow(lsp.ls, LS_IN_PORT_SEC_IP, 90, inport == "<P>" && (<IP>)) {
-                next;
-            };
-            flow(lsp.ls, LS_IN_PORT_SEC_IP, 80, inport == "<P>" && ip && eth.src == <L2>) {
-                drop;
-            };
-
-            flow(lsp.ls, LS_IN_PORT_SEC_ND, 90, inport == "<P>" && (<ND>)) { next; };
-            flow(lsp.ls, LS_IN_PORT_SEC_ND, 80, inport == "<P>" && (arp || nd)) { drop; };
+            stage (LS_IN_PORT_SEC_L2) pri (50) match (eth.src == <L2>)
+                { next; }
+            stage (LS_IN_PORT_SEC_IP) {
+                pri (90) match (<IP>) { next; };
+                pri (80) match (ip && eth.src == <L2>) { drop; }
+            }
+            stage (LS_IN_PORT_SEC_ND) {
+                pri (90) match (<ND>) { next; }
+                pri (80) match (arp || nd) { drop; }
+            }
         } else {
-            flow(lsp.ls, LS_IN_PORT_SEC_L2, 50, inport == "<P>") { next; };
+            stage (LS_IN_PORT_SEC_L2) pri (50) { next; };
         }
     }
 }
 
 /* Ingress table 1 and 2: Port security - IP and ND, by default goto next.
  * (priority 0). */
-for (lsp in Logical_Switch_Port) {
-    flow(lsp.ls, LS_IN_PORT_SEC_ND, 0, 1) { next; };
-    flow(lsp.ls, LS_IN_PORT_SEC_IP, 0, 1) { next; };
+for (lsp in Logical_Switch_Port) dp (lsp.ls) pri (0) {
+    stage (LS_IN_PORT_SEC_ND) { next; };
+    stage (LS_IN_PORT_SEC_IP) { next; };
 }
 
 /* Ingress table 9: Respond to ARP/ND requests, for ports that are up and for
