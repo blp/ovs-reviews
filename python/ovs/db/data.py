@@ -76,12 +76,12 @@ class Atom(object):
     def __eq__(self, other):
         if not isinstance(other, Atom) or self.type != other.type:
             return NotImplemented
-        return True if self.value == other.value else False
+        return self.value == other.value
 
     def __lt__(self, other):
         if not isinstance(other, Atom) or self.type != other.type:
             return NotImplemented
-        return True if self.value < other.value else False
+        return self.value < other.value
 
     def __cmp__(self, other):
         if not isinstance(other, Atom) or self.type != other.type:

@@ -447,6 +447,7 @@ class Idl(object):
             raise error.Error("<table-updates> is not an object",
                               table_updates)
 
+        changed = False
         for table_name, table_update in six.iteritems(table_updates):
             table = self.tables.get(table_name)
             if not table:
@@ -472,8 +473,8 @@ class Idl(object):
                                       % (table_name, uuid_string))
 
                 if version == OVSDB_UPDATE2:
-                    if self.__process_update2(table, uuid, row_update):
-                        self.change_seqno += 1
+                    changed = self.__process_update2(table, uuid, row_update,
+                                                     changed)
                     continue
 
                 parser = ovs.db.parser.Parser(row_update, "row-update")
@@ -485,12 +486,12 @@ class Idl(object):
                     raise error.Error('<row-update> missing "old" and '
                                       '"new" members', row_update)
 
-                if self.__process_update(table, uuid, old, new):
-                    self.change_seqno += 1
+                changed = self.__process_update(table, uuid, old, new, changed)
+        if changed:
+            self.change_seqno += 1
 
-    def __process_update2(self, table, uuid, row_update):
+    def __process_update2(self, table, uuid, row_update, changed):
         row = table.rows.get(uuid)
-        changed = False
         if "delete" in row_update:
             if row:
                 del table.rows[uuid]
@@ -511,9 +512,8 @@ class Idl(object):
             else:
                 row_update = row_update['initial']
             self.__add_default(table, row_update)
-            if self.__row_update(table, row, row_update):
-                changed = True
-                self.notify(ROW_CREATE, row)
+            changed = self.__row_update(table, row, row_update, changed)
+            self.notify(ROW_CREATE, row)
         elif "modify" in row_update:
             if not row:
                 raise error.Error('Modify non-existing row')
@@ -528,10 +528,9 @@ class Idl(object):
                               row_update)
         return changed
 
-    def __process_update(self, table, uuid, old, new):
+    def __process_update(self, table, uuid, old, new, changed):
         """Returns True if a column changed, False otherwise."""
         row = table.rows.get(uuid)
-        changed = False
         if not new:
             # Delete row.
             if row:
@@ -547,13 +546,13 @@ class Idl(object):
             if not row:
                 row = self.__create_row(table, uuid)
                 changed = True
+                self.__row_update(table, row, new, True)
+                self.notify(ROW_CREATE, row)
             else:
                 # XXX rate-limit
                 vlog.warn("cannot add existing row %s to table %s"
                           % (uuid, table.name))
-            if self.__row_update(table, row, new):
-                changed = True
-                self.notify(ROW_CREATE, row)
+                changed = self.__row_update(table, row, new, changed)
         else:
             op = ROW_UPDATE
             if not row:
@@ -563,9 +562,8 @@ class Idl(object):
                 # XXX rate-limit
                 vlog.warn("cannot modify missing row %s in table %s"
                           % (uuid, table.name))
-            if self.__row_update(table, row, new):
-                changed = True
-                self.notify(op, row, Row.from_json(self, table, uuid, old))
+            changed = self.__row_update(table, row, new, changed)
+            self.notify(op, row, Row.from_json(self, table, uuid, old))
         return changed
 
     def __column_name(self, column):
@@ -608,8 +606,7 @@ class Idl(object):
 
         return old_row_diff_json
 
-    def __row_update(self, table, row, row_json):
-        changed = False
+    def __row_update(self, table, row, row_json, changed):
         for column_name, datum_json in six.iteritems(row_json):
             column = table.columns.get(column_name)
             if not column:
@@ -626,14 +623,13 @@ class Idl(object):
                           % (column_name, table.name, e))
                 continue
 
-            if datum != row._data[column_name]:
+            # If the column changed, update it and record that we saw a change.
+            # We also update it if we've already recorded some other change,
+            # because that's cheaper than doing an unnecessary comparison.
+            if changed or datum != row._data[column_name]:
                 row._data[column_name] = datum
                 if column.alert:
                     changed = True
-            else:
-                # Didn't really change but the OVSDB monitor protocol always
-                # includes every value in a row.
-                pass
         return changed
 
     def __create_row(self, table, uuid):
