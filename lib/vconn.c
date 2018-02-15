@@ -1054,13 +1054,13 @@ exit:
 
 static enum ofperr
 vconn_bundle_reply_validate(struct ofpbuf *reply,
-                            struct ofputil_bundle_ctrl_msg *request,
+                            struct ofpbundle_ctrl_msg *request,
                             struct ovs_list *errors)
 {
     const struct ofp_header *oh;
     enum ofptype type;
     enum ofperr error;
-    struct ofputil_bundle_ctrl_msg rbc;
+    struct ofpbundle_ctrl_msg rbc;
 
     oh = reply->data;
     error = ofptype_decode(&type, oh);
@@ -1076,8 +1076,8 @@ vconn_bundle_reply_validate(struct ofpbuf *reply,
     if (type != OFPTYPE_BUNDLE_CONTROL) {
         return OFPERR_OFPBRC_BAD_TYPE;
     }
-
-    error = ofputil_decode_bundle_ctrl(oh, &rbc);
+    
+    error = ofpbundle_decode_ctrl(oh, &rbc);
     if (error) {
         return error;
     }
@@ -1103,7 +1103,7 @@ vconn_bundle_reply_validate(struct ofpbuf *reply,
  * Returns errno value, or 0 when successful. */
 static int
 vconn_bundle_control_transact(struct vconn *vconn,
-                              struct ofputil_bundle_ctrl_msg *bc,
+                              struct ofpbundle_ctrl_msg *bc,
                               uint16_t type, struct ovs_list *errors)
 {
     struct ofpbuf *request, *reply;
@@ -1111,7 +1111,7 @@ vconn_bundle_control_transact(struct vconn *vconn,
     enum ofperr ofperr;
 
     bc->type = type;
-    request = ofputil_encode_bundle_ctrl_request(vconn->version, bc);
+    request = ofpbundle_encode_ctrl_request(vconn->version, bc);
     ofpmsg_update_length(request);
     error = vconn_transact__(vconn, request, &reply, errors);
     if (error) {
@@ -1176,11 +1176,11 @@ vconn_bundle_barrier_transact(struct vconn *vconn, struct ovs_list *errors)
 }
 
 static int
-vconn_bundle_add_msg(struct vconn *vconn, struct ofputil_bundle_ctrl_msg *bc,
+vconn_bundle_add_msg(struct vconn *vconn, struct ofpbundle_ctrl_msg *bc,
                      struct ofpbuf *msg,
                      struct ovs_list *errors)
 {
-    struct ofputil_bundle_add_msg bam;
+    struct ofpbundle_add_msg bam;
     struct ofpbuf *request;
     int error;
 
@@ -1190,7 +1190,7 @@ vconn_bundle_add_msg(struct vconn *vconn, struct ofputil_bundle_ctrl_msg *bc,
     bam.flags = bc->flags;
     bam.msg = msg->data;
 
-    request = ofputil_encode_bundle_add(vconn->version, &bam);
+    request = ofpbundle_encode_add(vconn->version, &bam);
 
     error = vconn_send_block(vconn, request);
     if (!error) {
@@ -1207,7 +1207,7 @@ int
 vconn_bundle_transact(struct vconn *vconn, struct ovs_list *requests,
                       uint16_t flags, struct ovs_list *errors)
 {
-    struct ofputil_bundle_ctrl_msg bc;
+    struct ofpbundle_ctrl_msg bc;
     struct ofpbuf *request;
     int error;
 

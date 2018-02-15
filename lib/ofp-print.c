@@ -1859,9 +1859,9 @@ static enum ofperr
 ofp_print_bundle_ctrl(struct ds *s, const struct ofp_header *oh)
 {
     int error;
-    struct ofputil_bundle_ctrl_msg bctrl;
+    struct ofpbundle_ctrl_msg bctrl;
 
-    error = ofputil_decode_bundle_ctrl(oh, &bctrl);
+    error = ofpbundle_decode_ctrl(oh, &bctrl);
     if (error) {
         return error;
     }
@@ -1909,9 +1909,9 @@ ofp_print_bundle_add(struct ds *s, const struct ofp_header *oh,
                      int verbosity)
 {
     int error;
-    struct ofputil_bundle_add_msg badd;
+    struct ofpbundle_add_msg badd;
 
-    error = ofputil_decode_bundle_add(oh, &badd, NULL);
+    error = ofpbundle_decode_add(oh, &badd, NULL);
     if (error) {
         return error;
     }

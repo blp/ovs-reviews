@@ -7832,8 +7832,8 @@ do_bundle_commit(struct ofconn *ofconn, uint32_t id, uint16_t flags)
 static enum ofperr
 handle_bundle_control(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofputil_bundle_ctrl_msg bctrl;
-    struct ofputil_bundle_ctrl_msg reply;
+    struct ofpbundle_ctrl_msg bctrl;
+    struct ofpbundle_ctrl_msg reply;
     struct ofpbuf *buf;
     enum ofperr error;
 
@@ -7842,7 +7842,7 @@ handle_bundle_control(struct ofconn *ofconn, const struct ofp_header *oh)
         return error;
     }
 
-    error = ofputil_decode_bundle_ctrl(oh, &bctrl);
+    error = ofpbundle_decode_ctrl(oh, &bctrl);
     if (error) {
         return error;
     }
@@ -7876,7 +7876,7 @@ handle_bundle_control(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     if (!error) {
-        buf = ofputil_encode_bundle_ctrl_reply(oh, &reply);
+        buf = ofpbundle_encode_ctrl_reply(oh, &reply);
         ofconn_send_reply(ofconn, buf);
     }
     return error;
@@ -7888,7 +7888,7 @@ handle_bundle_add(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
     enum ofperr error;
-    struct ofputil_bundle_add_msg badd;
+    struct ofpbundle_add_msg badd;
     struct ofp_bundle_entry *bmsg;
     enum ofptype type;
 
@@ -7897,7 +7897,7 @@ handle_bundle_add(struct ofconn *ofconn, const struct ofp_header *oh)
         return error;
     }
 
-    error = ofputil_decode_bundle_add(oh, &badd, &type);
+    error = ofpbundle_decode_add(oh, &badd, &type);
     if (error) {
         return error;
     }

@@ -3147,15 +3147,15 @@ static void
 ofctl_bundle(struct ovs_cmdl_context *ctx)
 {
     enum ofputil_protocol protocol, usable_protocols;
-    struct ofputil_bundle_msg *bms;
+    struct ofpbundle_msg *bms;
     struct ovs_list requests;
     struct vconn *vconn;
     size_t n_bms;
     char *error;
 
-    error = parse_ofp_bundle_file(ctx->argv[2], ports_to_accept(ctx->argv[1]),
-                                  tables_to_accept(ctx->argv[1]),
-                                  &bms, &n_bms, &usable_protocols);
+    error = ofpbundle_parse_msg(ctx->argv[2], ports_to_accept(ctx->argv[1]),
+                                tables_to_accept(ctx->argv[1]),
+                                &bms, &n_bms, &usable_protocols);
     if (error) {
         ovs_fatal(0, "%s", error);
     }
@@ -3179,8 +3179,8 @@ ofctl_bundle(struct ovs_cmdl_context *ctx)
     protocol = open_vconn_for_flow_mod(ctx->argv[1], &vconn, usable_protocols);
 
     ovs_list_init(&requests);
-    ofputil_encode_bundle_msgs(bms, n_bms, &requests, protocol);
-    ofputil_free_bundle_msgs(bms, n_bms);
+    ofpbundle_encode_msgs(bms, n_bms, &requests, protocol);
+    ofpbundle_free_msgs(bms, n_bms);
     bundle_transact(vconn, &requests, OFPBF_ORDERED | OFPBF_ATOMIC);
     ofpbuf_list_delete(&requests);
 

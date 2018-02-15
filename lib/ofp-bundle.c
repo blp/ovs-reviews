@@ -27,7 +27,7 @@ VLOG_DEFINE_THIS_MODULE(ofp_bundle);
 
 /* Destroys 'bms'. */
 void
-ofputil_free_bundle_msgs(struct ofputil_bundle_msg *bms, size_t n_bms)
+ofpbundle_free_msgs(struct ofpbundle_msg *bms, size_t n_bms)
 {
     for (size_t i = 0; i < n_bms; i++) {
         switch ((int)bms[i].type) {
@@ -49,9 +49,9 @@ ofputil_free_bundle_msgs(struct ofputil_bundle_msg *bms, size_t n_bms)
 }
 
 void
-ofputil_encode_bundle_msgs(const struct ofputil_bundle_msg *bms,
-                           size_t n_bms, struct ovs_list *requests,
-                           enum ofputil_protocol protocol)
+ofpbundle_encode_msgs(const struct ofpbundle_msg *bms,
+                      size_t n_bms, struct ovs_list *requests,
+                      enum ofputil_protocol protocol)
 {
     enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
 
@@ -78,8 +78,8 @@ ofputil_encode_bundle_msgs(const struct ofputil_bundle_msg *bms,
 }
 
 enum ofperr
-ofputil_decode_bundle_ctrl(const struct ofp_header *oh,
-                           struct ofputil_bundle_ctrl_msg *msg)
+ofpbundle_decode_ctrl(const struct ofp_header *oh,
+                      struct ofpbundle_ctrl_msg *msg)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
@@ -95,8 +95,8 @@ ofputil_decode_bundle_ctrl(const struct ofp_header *oh,
 }
 
 struct ofpbuf *
-ofputil_encode_bundle_ctrl_request(enum ofp_version ofp_version,
-                                   struct ofputil_bundle_ctrl_msg *bc)
+ofpbundle_encode_ctrl_request(enum ofp_version ofp_version,
+                              struct ofpbundle_ctrl_msg *bc)
 {
     struct ofpbuf *request;
     struct ofp14_bundle_ctrl_msg *m;
@@ -106,7 +106,7 @@ ofputil_encode_bundle_ctrl_request(enum ofp_version ofp_version,
     case OFP11_VERSION:
     case OFP12_VERSION:
         ovs_fatal(0, "bundles need OpenFlow 1.3 or later "
-                     "(\'-O OpenFlow14\')");
+                  "(\'-O OpenFlow14\')");
     case OFP13_VERSION:
     case OFP14_VERSION:
     case OFP15_VERSION:
@@ -128,8 +128,8 @@ ofputil_encode_bundle_ctrl_request(enum ofp_version ofp_version,
 }
 
 struct ofpbuf *
-ofputil_encode_bundle_ctrl_reply(const struct ofp_header *oh,
-                                 struct ofputil_bundle_ctrl_msg *msg)
+ofpbundle_encode_ctrl_reply(const struct ofp_header *oh,
+                            struct ofpbundle_ctrl_msg *msg)
 {
     struct ofpbuf *buf;
     struct ofp14_bundle_ctrl_msg *m;
@@ -247,9 +247,9 @@ ofputil_is_bundlable(enum ofptype type)
 }
 
 enum ofperr
-ofputil_decode_bundle_add(const struct ofp_header *oh,
-                          struct ofputil_bundle_add_msg *msg,
-                          enum ofptype *typep)
+ofpbundle_decode_add(const struct ofp_header *oh,
+                     struct ofpbundle_add_msg *msg,
+                     enum ofptype *typep)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
 
@@ -303,8 +303,8 @@ ofputil_decode_bundle_add(const struct ofp_header *oh,
 }
 
 struct ofpbuf *
-ofputil_encode_bundle_add(enum ofp_version ofp_version,
-                          struct ofputil_bundle_add_msg *msg)
+ofpbundle_encode_add(enum ofp_version ofp_version,
+                     struct ofpbundle_add_msg *msg)
 {
     struct ofpbuf *request;
     struct ofp14_bundle_ctrl_msg *m;
@@ -332,11 +332,11 @@ ofputil_encode_bundle_add(enum ofp_version ofp_version,
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 char * OVS_WARN_UNUSED_RESULT
-parse_ofp_bundle_file(const char *file_name,
-                      const struct ofputil_port_map *port_map,
-                      const struct ofputil_table_map *table_map,
-                      struct ofputil_bundle_msg **bms, size_t *n_bms,
-                      enum ofputil_protocol *usable_protocols)
+ofpbundle_parse_msg(const char *file_name,
+                    const struct ofputil_port_map *port_map,
+                    const struct ofputil_table_map *table_map,
+                    struct ofpbundle_msg **bms, size_t *n_bms,
+                    enum ofputil_protocol *usable_protocols)
 {
     size_t allocated_bms;
     char *error = NULL;
@@ -364,7 +364,7 @@ parse_ofp_bundle_file(const char *file_name,
         size_t len;
 
         if (*n_bms >= allocated_bms) {
-            struct ofputil_bundle_msg *new_bms;
+            struct ofpbundle_msg *new_bms;
 
             new_bms = x2nrealloc(*bms, &allocated_bms, sizeof **bms);
             for (size_t i = 0; i < *n_bms; i++) {
@@ -422,7 +422,7 @@ parse_ofp_bundle_file(const char *file_name,
         char *err_msg = xasprintf("%s:%d: %s", file_name, line_number, error);
         free(error);
 
-        ofputil_free_bundle_msgs(*bms, *n_bms);
+        ofpbundle_free_msgs(*bms, *n_bms);
         *bms = NULL;
         *n_bms = 0;
         return err_msg;
