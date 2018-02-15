@@ -27,14 +27,14 @@
 
 VLOG_DEFINE_THIS_MODULE(ofp_connection);
 
-/* ofputil_role_request */
+/* ofpconn_role_request */
 
 /* Decodes the OpenFlow "role request" or "role reply" message in '*oh' into
  * an abstract form in '*rr'.  Returns 0 if successful, otherwise an
  * OFPERR_* value. */
 enum ofperr
-ofputil_decode_role_message(const struct ofp_header *oh,
-                            struct ofputil_role_request *rr)
+ofpconn_decode_role_message(const struct ofp_header *oh,
+                            struct ofpconn_role_request *rr)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
@@ -86,8 +86,8 @@ ofputil_decode_role_message(const struct ofp_header *oh,
 /* Returns an encoded form of a role reply suitable for the "request" in a
  * buffer owned by the caller. */
 struct ofpbuf *
-ofputil_encode_role_reply(const struct ofp_header *request,
-                          const struct ofputil_role_request *rr)
+ofpconn_encode_role_reply(const struct ofp_header *request,
+                          const struct ofpconn_role_request *rr)
 {
     struct ofpbuf *buf;
     enum ofpraw raw;
@@ -124,7 +124,7 @@ ofputil_encode_role_reply(const struct ofp_header *request,
  * 'protocol'.  Returns the role status message, if 'protocol' supports them,
  * otherwise a null pointer. */
 struct ofpbuf *
-ofputil_encode_role_status(const struct ofputil_role_status *status,
+ofpconn_encode_role_status(const struct ofpconn_role_status *status,
                            enum ofputil_protocol protocol)
 {
     enum ofp_version version = ofputil_protocol_to_ofp_version(protocol);
@@ -145,8 +145,8 @@ ofputil_encode_role_status(const struct ofputil_role_status *status,
 }
 
 enum ofperr
-ofputil_decode_role_status(const struct ofp_header *oh,
-                           struct ofputil_role_status *rs)
+ofpconn_decode_role_status(const struct ofp_header *oh,
+                           struct ofpconn_role_status *rs)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
@@ -169,7 +169,7 @@ ofputil_decode_role_status(const struct ofp_header *oh,
 }
 
 const char *
-ofputil_async_msg_type_to_string(enum ofputil_async_msg_type type)
+ofpconn_async_msg_type_to_string(enum ofpconn_async_msg_type type)
 {
     switch (type) {
     case OAM_PACKET_IN:      return "PACKET_IN";
@@ -187,7 +187,7 @@ ofputil_async_msg_type_to_string(enum ofputil_async_msg_type type)
 
 struct ofp14_async_prop {
     uint64_t prop_type;
-    enum ofputil_async_msg_type oam;
+    enum ofpconn_async_msg_type oam;
     bool master;
     uint32_t allowed10, allowed14;
 };
@@ -221,7 +221,7 @@ get_ofp14_async_config_prop_by_prop_type(uint64_t prop_type)
 }
 
 static const struct ofp14_async_prop *
-get_ofp14_async_config_prop_by_oam(enum ofputil_async_msg_type oam,
+get_ofp14_async_config_prop_by_oam(enum ofpconn_async_msg_type oam,
                                    bool master)
 {
     FOR_EACH_ASYNC_PROP (ap) {
@@ -240,7 +240,7 @@ ofp14_async_prop_allowed(const struct ofp14_async_prop *prop,
 }
 
 static ovs_be32
-encode_async_mask(const struct ofputil_async_cfg *src,
+encode_async_mask(const struct ofpconn_async_cfg *src,
                   const struct ofp14_async_prop *ap,
                   enum ofp_version version)
 {
@@ -251,7 +251,7 @@ encode_async_mask(const struct ofputil_async_cfg *src,
 static enum ofperr
 decode_async_mask(ovs_be32 src,
                   const struct ofp14_async_prop *ap, enum ofp_version version,
-                  bool loose, struct ofputil_async_cfg *dst)
+                  bool loose, struct ofpconn_async_cfg *dst)
 {
     uint32_t mask = ntohl(src);
     uint32_t allowed = ofp14_async_prop_allowed(ap, version);
@@ -259,7 +259,7 @@ decode_async_mask(ovs_be32 src,
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         OFPPROP_LOG(&rl, loose,
                     "bad value %#x for %s (allowed mask %#x)",
-                    mask, ofputil_async_msg_type_to_string(ap->oam),
+                    mask, ofpconn_async_msg_type_to_string(ap->oam),
                     allowed);
         mask &= allowed;
         if (!loose) {
@@ -284,7 +284,7 @@ decode_async_mask(ovs_be32 src,
 static enum ofperr
 parse_async_tlv(const struct ofpbuf *property,
                 const struct ofp14_async_prop *ap,
-                struct ofputil_async_cfg *ac,
+                struct ofpconn_async_cfg *ac,
                 enum ofp_version version, bool loose)
 {
     enum ofperr error;
@@ -319,9 +319,9 @@ parse_async_tlv(const struct ofpbuf *property,
 
 static void
 decode_legacy_async_masks(const ovs_be32 masks[2],
-                          enum ofputil_async_msg_type oam,
+                          enum ofpconn_async_msg_type oam,
                           enum ofp_version version,
-                          struct ofputil_async_cfg *dst)
+                          struct ofpconn_async_cfg *dst)
 {
     for (int i = 0; i < 2; i++) {
         bool master = i == 0;
@@ -353,9 +353,9 @@ decode_legacy_async_masks(const ovs_be32 masks[2],
  * Returns error code OFPERR_OFPACFC_UNSUPPORTED if the configuration is not
  * supported.*/
 enum ofperr
-ofputil_decode_set_async_config(const struct ofp_header *oh, bool loose,
-                                const struct ofputil_async_cfg *basis,
-                                struct ofputil_async_cfg *ac)
+ofpconn_decode_set_async_config(const struct ofp_header *oh, bool loose,
+                                const struct ofpconn_async_cfg *basis,
+                                struct ofpconn_async_cfg *ac)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
@@ -365,7 +365,7 @@ ofputil_decode_set_async_config(const struct ofp_header *oh, bool loose,
         raw == OFPRAW_OFPT13_GET_ASYNC_REPLY) {
         const struct nx_async_config *msg = ofpmsg_body(oh);
 
-        *ac = OFPUTIL_ASYNC_CFG_INIT;
+        *ac = OFPCONN_ASYNC_CFG_INIT;
         decode_legacy_async_masks(msg->packet_in_mask, OAM_PACKET_IN,
                                   oh->version, ac);
         decode_legacy_async_masks(msg->port_status_mask, OAM_PORT_STATUS,
@@ -407,8 +407,8 @@ ofputil_decode_set_async_config(const struct ofp_header *oh, bool loose,
 }
 
 static void
-encode_legacy_async_masks(const struct ofputil_async_cfg *ac,
-                          enum ofputil_async_msg_type oam,
+encode_legacy_async_masks(const struct ofpconn_async_cfg *ac,
+                          enum ofpconn_async_msg_type oam,
                           enum ofp_version version,
                           ovs_be32 masks[2])
 {
@@ -421,7 +421,7 @@ encode_legacy_async_masks(const struct ofputil_async_cfg *ac,
 }
 
 static void
-ofputil_put_async_config__(const struct ofputil_async_cfg *ac,
+ofpconn_put_async_config__(const struct ofpconn_async_cfg *ac,
                            struct ofpbuf *buf, bool tlv,
                            enum ofp_version version, uint32_t oams)
 {
@@ -455,14 +455,14 @@ ofputil_put_async_config__(const struct ofputil_async_cfg *ac,
 /* Encodes and returns a reply to the OFPT_GET_ASYNC_REQUEST in 'oh' that
  * states that the asynchronous message configuration is 'ac'. */
 struct ofpbuf *
-ofputil_encode_get_async_reply(const struct ofp_header *oh,
-                               const struct ofputil_async_cfg *ac)
+ofpconn_encode_get_async_reply(const struct ofp_header *oh,
+                               const struct ofpconn_async_cfg *ac)
 {
     enum ofpraw raw = (oh->version < OFP14_VERSION
                        ? OFPRAW_OFPT13_GET_ASYNC_REPLY
                        : OFPRAW_OFPT14_GET_ASYNC_REPLY);
     struct ofpbuf *reply = ofpraw_alloc_reply(raw, oh, 0);
-    ofputil_put_async_config__(ac, reply,
+    ofpconn_put_async_config__(ac, reply,
                                raw == OFPRAW_OFPT14_GET_ASYNC_REPLY,
                                oh->version, UINT32_MAX);
     return reply;
@@ -478,7 +478,7 @@ ofputil_encode_get_async_reply(const struct ofp_header *oh,
  * any extensions then this function encodes an Open vSwitch extension message
  * that does support configuring OVS extension OAM_*. */
 struct ofpbuf *
-ofputil_encode_set_async_config(const struct ofputil_async_cfg *ac,
+ofpconn_encode_set_async_config(const struct ofpconn_async_cfg *ac,
                                 uint32_t oams, enum ofp_version ofp_version)
 {
     enum ofpraw raw = (ofp_version >= OFP14_VERSION ? OFPRAW_OFPT14_SET_ASYNC
@@ -486,15 +486,15 @@ ofputil_encode_set_async_config(const struct ofputil_async_cfg *ac,
                        : ofp_version >= OFP13_VERSION ? OFPRAW_OFPT13_SET_ASYNC
                        : OFPRAW_NXT_SET_ASYNC_CONFIG);
     struct ofpbuf *request = ofpraw_alloc(raw, ofp_version, 0);
-    ofputil_put_async_config__(ac, request,
+    ofpconn_put_async_config__(ac, request,
                                (raw == OFPRAW_OFPT14_SET_ASYNC ||
                                 raw == OFPRAW_NXT_SET_ASYNC_CONFIG2),
                                ofp_version, oams);
     return request;
 }
 
-struct ofputil_async_cfg
-ofputil_async_cfg_default(enum ofp_version version)
+struct ofpconn_async_cfg
+ofpconn_async_cfg_default(enum ofp_version version)
 {
     /* We enable all of the OF1.4 reasons regardless of 'version' because the
      * reasons added in OF1.4 just are just refinements of the OFPR_ACTION
@@ -507,7 +507,7 @@ ofputil_async_cfg_default(enum ofp_version version)
         pin |= 1u << OFPR_IMPLICIT_MISS;
     }
 
-    struct ofputil_async_cfg oac = {
+    struct ofpconn_async_cfg oac = {
         .master[OAM_PACKET_IN] = pin,
         .master[OAM_PORT_STATUS] = OFPPR_BITS,
         .slave[OAM_PORT_STATUS] = OFPPR_BITS

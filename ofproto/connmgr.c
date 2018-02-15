@@ -92,7 +92,7 @@ struct ofconn {
      *
      * A 1-bit enables sending an asynchronous message for one possible reason
      * that the message might be generated, a 0-bit disables it. */
-    struct ofputil_async_cfg *async_cfg;
+    struct ofpconn_async_cfg *async_cfg;
 
     /* Flow table operation logging. */
     int n_add, n_delete, n_modify; /* Number of unreported ops of each kind. */
@@ -954,14 +954,14 @@ ofconn_get_role(const struct ofconn *ofconn)
 void
 ofconn_send_role_status(struct ofconn *ofconn, uint32_t role, uint8_t reason)
 {
-    struct ofputil_role_status status;
+    struct ofpconn_role_status status;
     struct ofpbuf *buf;
 
     status.reason = reason;
     status.role = role;
     ofconn_get_master_election_id(ofconn, &status.generation_id);
 
-    buf = ofputil_encode_role_status(&status, ofconn_get_protocol(ofconn));
+    buf = ofpconn_encode_role_status(&status, ofconn_get_protocol(ofconn));
     if (buf) {
         ofconn_send(ofconn, buf, NULL);
     }
@@ -988,7 +988,7 @@ ofconn_set_role(struct ofconn *ofconn, enum ofp12_controller_role role)
 void
 ofconn_set_invalid_ttl_to_controller(struct ofconn *ofconn, bool enable)
 {
-    struct ofputil_async_cfg ac = ofconn_get_async_config(ofconn);
+    struct ofpconn_async_cfg ac = ofconn_get_async_config(ofconn);
     uint32_t bit = 1u << OFPR_INVALID_TTL;
     if (enable) {
         ac.master[OAM_PACKET_IN] |= bit;
@@ -1001,7 +1001,7 @@ ofconn_set_invalid_ttl_to_controller(struct ofconn *ofconn, bool enable)
 bool
 ofconn_get_invalid_ttl_to_controller(struct ofconn *ofconn)
 {
-    struct ofputil_async_cfg ac = ofconn_get_async_config(ofconn);
+    struct ofpconn_async_cfg ac = ofconn_get_async_config(ofconn);
     uint32_t bit = 1u << OFPR_INVALID_TTL;
     return (ac.master[OAM_PACKET_IN] & bit) != 0;
 }
@@ -1086,7 +1086,7 @@ ofconn_set_miss_send_len(struct ofconn *ofconn, int miss_send_len)
 
 void
 ofconn_set_async_config(struct ofconn *ofconn,
-                        const struct ofputil_async_cfg *ac)
+                        const struct ofpconn_async_cfg *ac)
 {
     if (!ofconn->async_cfg) {
         ofconn->async_cfg = xmalloc(sizeof *ofconn->async_cfg);
@@ -1104,7 +1104,7 @@ ofconn_set_async_config(struct ofconn *ofconn,
     }
 }
 
-struct ofputil_async_cfg
+struct ofpconn_async_cfg
 ofconn_get_async_config(const struct ofconn *ofconn)
 {
     if (ofconn->async_cfg) {
@@ -1113,8 +1113,8 @@ ofconn_get_async_config(const struct ofconn *ofconn)
 
     int version = rconn_get_version(ofconn->rconn);
     return (version < 0 || !ofconn->enable_async_msgs
-            ? OFPUTIL_ASYNC_CFG_INIT
-            : ofputil_async_cfg_default(version));
+            ? OFPCONN_ASYNC_CFG_INIT
+            : ofpconn_async_cfg_default(version));
 }
 
 /* Sends 'msg' on 'ofconn', accounting it as a reply.  (If there is a
@@ -1518,7 +1518,7 @@ ofconn_log_flow_mods(struct ofconn *ofconn)
  * 'ofconn'. */
 static bool
 ofconn_receives_async_msg(const struct ofconn *ofconn,
-                          enum ofputil_async_msg_type type,
+                          enum ofpconn_async_msg_type type,
                           unsigned int reason)
 {
     ovs_assert(reason < 32);
@@ -1533,7 +1533,7 @@ ofconn_receives_async_msg(const struct ofconn *ofconn,
         return false;
     }
 
-    struct ofputil_async_cfg ac = ofconn_get_async_config(ofconn);
+    struct ofpconn_async_cfg ac = ofconn_get_async_config(ofconn);
     uint32_t *masks = (ofconn->role == OFPCR12_ROLE_SLAVE
                        ? ac.slave
                        : ac.master);

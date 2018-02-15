@@ -25,30 +25,30 @@ extern "C" {
 #endif
 
 /* Abstract ofp_role_request and reply. */
-struct ofputil_role_request {
+struct ofpconn_role_request {
     enum ofp12_controller_role role;
     bool have_generation_id;
     uint64_t generation_id;
 };
 
-struct ofputil_role_status {
+struct ofpconn_role_status {
     enum ofp12_controller_role role;
     enum ofp14_controller_role_reason reason;
     uint64_t generation_id;
 };
 
-enum ofperr ofputil_decode_role_message(const struct ofp_header *,
-                                        struct ofputil_role_request *);
-struct ofpbuf *ofputil_encode_role_reply(const struct ofp_header *,
-                                         const struct ofputil_role_request *);
+enum ofperr ofpconn_decode_role_message(const struct ofp_header *,
+                                        struct ofpconn_role_request *);
+struct ofpbuf *ofpconn_encode_role_reply(const struct ofp_header *,
+                                         const struct ofpconn_role_request *);
 
-struct ofpbuf *ofputil_encode_role_status(const struct ofputil_role_status *,
+struct ofpbuf *ofpconn_encode_role_status(const struct ofpconn_role_status *,
                                           enum ofputil_protocol);
 
-enum ofperr ofputil_decode_role_status(const struct ofp_header *,
-                                       struct ofputil_role_status *);
+enum ofperr ofpconn_decode_role_status(const struct ofp_header *,
+                                       struct ofpconn_role_status *);
 
-enum ofputil_async_msg_type {
+enum ofpconn_async_msg_type {
     /* Standard asynchronous messages. */
     OAM_PACKET_IN,              /* OFPT_PACKET_IN or NXT_PACKET_IN. */
     OAM_PORT_STATUS,            /* OFPT_PORT_STATUS. */
@@ -62,25 +62,25 @@ enum ofputil_async_msg_type {
 
     OAM_N_TYPES
 };
-const char *ofputil_async_msg_type_to_string(enum ofputil_async_msg_type);
+const char *ofpconn_async_msg_type_to_string(enum ofpconn_async_msg_type);
 
-struct ofputil_async_cfg {
+struct ofpconn_async_cfg {
     uint32_t master[OAM_N_TYPES];
     uint32_t slave[OAM_N_TYPES];
 };
-#define OFPUTIL_ASYNC_CFG_INIT (struct ofputil_async_cfg) { .master[0] = 0 }
+#define OFPCONN_ASYNC_CFG_INIT (struct ofpconn_async_cfg) { .master[0] = 0 }
 
-enum ofperr ofputil_decode_set_async_config(const struct ofp_header *,
+enum ofperr ofpconn_decode_set_async_config(const struct ofp_header *,
                                             bool loose,
-                                            const struct ofputil_async_cfg *,
-                                            struct ofputil_async_cfg *);
+                                            const struct ofpconn_async_cfg *,
+                                            struct ofpconn_async_cfg *);
 
-struct ofpbuf *ofputil_encode_get_async_reply(
-    const struct ofp_header *, const struct ofputil_async_cfg *);
-struct ofpbuf *ofputil_encode_set_async_config(
-    const struct ofputil_async_cfg *, uint32_t oams, enum ofp_version);
+struct ofpbuf *ofpconn_encode_get_async_reply(
+    const struct ofp_header *, const struct ofpconn_async_cfg *);
+struct ofpbuf *ofpconn_encode_set_async_config(
+    const struct ofpconn_async_cfg *, uint32_t oams, enum ofp_version);
 
-struct ofputil_async_cfg ofputil_async_cfg_default(enum ofp_version);
+struct ofpconn_async_cfg ofpconn_async_cfg_default(enum ofp_version);
 
 #ifdef __cplusplus
 }

@@ -62,7 +62,7 @@ struct ofproto_async_msg {
     struct ovs_list list_node;  /* For queuing. */
     uint16_t controller_id;     /* Controller ID to send to. */
 
-    enum ofputil_async_msg_type oam;
+    enum ofpconn_async_msg_type oam;
     /* OAM_PACKET_IN. */
     struct {
         struct ofputil_packet_in_private up;
@@ -125,8 +125,8 @@ int ofconn_get_miss_send_len(const struct ofconn *);
 void ofconn_set_miss_send_len(struct ofconn *, int miss_send_len);
 
 void ofconn_set_async_config(struct ofconn *,
-                             const struct ofputil_async_cfg *);
-struct ofputil_async_cfg ofconn_get_async_config(const struct ofconn *);
+                             const struct ofpconn_async_cfg *);
+struct ofpconn_async_cfg ofconn_get_async_config(const struct ofconn *);
 
 void ofconn_send_reply(const struct ofconn *, struct ofpbuf *);
 void ofconn_send_replies(const struct ofconn *, struct ovs_list *);

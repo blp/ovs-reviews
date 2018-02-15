@@ -5832,12 +5832,12 @@ handle_flow_mod__(struct ofproto *ofproto, const struct ofputil_flow_mod *fm,
 static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofputil_role_request request;
-    struct ofputil_role_request reply;
+    struct ofpconn_role_request request;
+    struct ofpconn_role_request reply;
     struct ofpbuf *buf;
     enum ofperr error;
 
-    error = ofputil_decode_role_message(oh, &request);
+    error = ofpconn_decode_role_message(oh, &request);
     if (error) {
         return error;
     }
@@ -5855,7 +5855,7 @@ handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
     reply.role = ofconn_get_role(ofconn);
     reply.have_generation_id = ofconn_get_master_election_id(
         ofconn, &reply.generation_id);
-    buf = ofputil_encode_role_reply(oh, &reply);
+    buf = ofpconn_encode_role_reply(oh, &reply);
     ofconn_send_reply(ofconn, buf);
 
     return 0;
@@ -5901,11 +5901,11 @@ handle_nxt_set_packet_in_format(struct ofconn *ofconn,
 static enum ofperr
 handle_nxt_set_async_config(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofputil_async_cfg basis = ofconn_get_async_config(ofconn);
-    struct ofputil_async_cfg ac;
+    struct ofpconn_async_cfg basis = ofconn_get_async_config(ofconn);
+    struct ofpconn_async_cfg ac;
     enum ofperr error;
 
-    error = ofputil_decode_set_async_config(oh, false, &basis, &ac);
+    error = ofpconn_decode_set_async_config(oh, false, &basis, &ac);
     if (error) {
         return error;
     }
@@ -5922,8 +5922,8 @@ handle_nxt_set_async_config(struct ofconn *ofconn, const struct ofp_header *oh)
 static enum ofperr
 handle_nxt_get_async_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
-    struct ofputil_async_cfg ac = ofconn_get_async_config(ofconn);
-    ofconn_send_reply(ofconn, ofputil_encode_get_async_reply(oh, &ac));
+    struct ofpconn_async_cfg ac = ofconn_get_async_config(ofconn);
+    ofconn_send_reply(ofconn, ofpconn_encode_get_async_reply(oh, &ac));
 
     return 0;
 }

@@ -1181,10 +1181,10 @@ ofp_print_role_generic(struct ds *string, enum ofp12_controller_role role,
 static enum ofperr
 ofp_print_role_message(struct ds *string, const struct ofp_header *oh)
 {
-    struct ofputil_role_request rr;
+    struct ofpconn_role_request rr;
     enum ofperr error;
 
-    error = ofputil_decode_role_message(oh, &rr);
+    error = ofpconn_decode_role_message(oh, &rr);
     if (error) {
         return error;
     }
@@ -1197,10 +1197,10 @@ ofp_print_role_message(struct ds *string, const struct ofp_header *oh)
 static enum ofperr
 ofp_print_role_status_message(struct ds *string, const struct ofp_header *oh)
 {
-    struct ofputil_role_status rs;
+    struct ofpconn_role_status rs;
     enum ofperr error;
 
-    error = ofputil_decode_role_status(oh, &rs);
+    error = ofpconn_decode_role_status(oh, &rs);
     if (error) {
         return error;
     }
@@ -1352,7 +1352,7 @@ ofp_requestforward_reason_to_string(enum ofp14_requestforward_reason reason,
 
 static const char *
 ofp_async_config_reason_to_string(uint32_t reason,
-                                  enum ofputil_async_msg_type type,
+                                  enum ofpconn_async_msg_type type,
                                   char *reasonbuf, size_t bufsize)
 {
     switch (type) {
@@ -1386,11 +1386,11 @@ static enum ofperr
 ofp_print_set_async_config(struct ds *string, const struct ofp_header *oh,
                            enum ofptype ofptype)
 {
-    struct ofputil_async_cfg basis = OFPUTIL_ASYNC_CFG_INIT;
-    struct ofputil_async_cfg ac;
+    struct ofpconn_async_cfg basis = OFPCONN_ASYNC_CFG_INIT;
+    struct ofpconn_async_cfg ac;
 
     bool is_reply = ofptype == OFPTYPE_GET_ASYNC_REPLY;
-    enum ofperr error = ofputil_decode_set_async_config(oh, is_reply,
+    enum ofperr error = ofpconn_decode_set_async_config(oh, is_reply,
                                                         &basis, &ac);
     if (error) {
         return error;
@@ -1400,7 +1400,7 @@ ofp_print_set_async_config(struct ds *string, const struct ofp_header *oh,
         ds_put_format(string, "\n %s:\n", i == 0 ? "master" : "slave");
         for (uint32_t type = 0; type < OAM_N_TYPES; type++) {
             ds_put_format(string, "%16s:",
-                          ofputil_async_msg_type_to_string(type));
+                          ofpconn_async_msg_type_to_string(type));
 
             uint32_t role = i == 0 ? ac.master[type] : ac.slave[type];
             for (int j = 0; j < 32; j++) {
