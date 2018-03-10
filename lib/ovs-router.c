@@ -53,6 +53,7 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
 static struct ovs_mutex mutex = OVS_MUTEX_INITIALIZER;
 static struct classifier cls;
+static ATOMIC(ovs_version_t) cls_version = ATOMIC_VAR_INIT(OVS_VERSION_MIN);
 
 /* By default, use the system routing table.  For system-independent testing,
  * the unit tests disable using the system routing table. */
@@ -82,6 +83,28 @@ void
 ovs_router_disable_system_routing_table(void)
 {
     use_system_routing_table = false;
+}
+
+static ovs_version_t
+ovs_router_get_version(void)
+{
+    /* Use memory_order_acquire to signify that any following memory accesses
+     * can not be reordered to happen before this atomic read.  This makes sure
+     * all following reads relate to this or a newer version, but never to an
+     * older version. */
+    ovs_version_t version;
+    atomic_read_explicit(&cls_version, &version, memory_order_acquire);
+    return version;
+}
+
+static void
+ovs_router_set_version(ovs_version_t version)
+{
+    /* Use memory_order_release to signify that any prior memory accesses can
+     * not be reordered to happen after this atomic store.  This makes sure the
+     * new version is properly set up when the readers can read this 'version'
+     * value. */
+    atomic_store_explicit(&cls_version, version, memory_order_release);
 }
 
 static bool
@@ -126,7 +149,7 @@ ovs_router_lookup(uint32_t mark, const struct in6_addr *ip6_dst,
         }
     }
 
-    cr = classifier_lookup(&cls, OVS_VERSION_MAX, &flow, NULL);
+    cr = classifier_lookup(&cls, ovs_router_get_version(), &flow, NULL);
     if (cr) {
         struct ovs_router_entry *p = ovs_router_entry_cast(cr);
 
@@ -143,6 +166,10 @@ ovs_router_lookup(uint32_t mark, const struct in6_addr *ip6_dst,
 static void
 rt_entry_free(struct ovs_router_entry *p)
 {
+    ovs_mutex_lock(&mutex);
+    classifier_remove(&cls, &p->cr);
+    ovs_mutex_unlock(&mutex);
+
     cls_rule_destroy(&p->cr);
     free(p);
 }
@@ -263,8 +290,14 @@ ovs_router_insert__(const struct ovs_route *route, int priority)
     }
 
     ovs_mutex_lock(&mutex);
-    const struct cls_rule *cr = classifier_replace(&cls, &entry->cr,
-                                                   OVS_VERSION_MIN, NULL, 0);
+    ovs_version_t version = ovs_router_get_version();
+    const struct cls_rule *cr = classifier_find_rule_exactly(&cls, &entry->cr,
+                                                             version);
+    if (cr) {
+        cls_rule_make_invisible_in_version(cr, version + 1);
+    }
+    classifier_insert(&cls, &entry->cr, version + 1, NULL, 0);
+    ovs_router_set_version(version + 1);
     ovs_mutex_unlock(&mutex);
 
     if (cr) {
@@ -285,16 +318,6 @@ ovs_router_insert(const struct ovs_route *route)
     }
 }
 
-static void
-rt_entry_delete__(const struct cls_rule *cr)
-{
-    struct ovs_router_entry *p = ovs_router_entry_cast(cr);
-
-    tnl_port_map_delete_ipdev(p->output_bridge);
-    classifier_remove_assert(&cls, cr);
-    ovsrcu_postpone(rt_entry_free, ovs_router_entry_cast(cr));
-}
-
 static bool
 rt_entry_delete(uint32_t mark, uint8_t priority,
                 const struct in6_addr *ip6_dst, uint8_t plen)
@@ -302,24 +325,26 @@ rt_entry_delete(uint32_t mark, uint8_t priority,
     const struct cls_rule *cr;
     struct cls_rule rule;
     struct match match;
-    bool res = false;
 
     rt_init_match(&match, mark, ip6_dst, plen);
 
     cls_rule_init(&rule, &match, priority);
 
     /* Find the exact rule. */
-    cr = classifier_find_rule_exactly(&cls, &rule, OVS_VERSION_MAX);
+    ovs_mutex_lock(&mutex);
+    ovs_version_t version = ovs_router_get_version();
+    cr = classifier_find_rule_exactly(&cls, &rule, version);
     if (cr) {
-        ovs_mutex_lock(&mutex);
-        rt_entry_delete__(cr);
-        ovs_mutex_unlock(&mutex);
+        cls_rule_make_invisible_in_version(cr, version + 1);
+        ovs_router_set_version(version + 1);
+    }
+    ovs_mutex_unlock(&mutex);
 
-        res = true;
+    if (cr) {
+        ovsrcu_postpone(rt_entry_free, ovs_router_entry_cast(cr));
     }
 
-    cls_rule_destroy(&rule);
-    return res;
+    return cr != NULL;
 }
 
 static bool
@@ -444,7 +469,7 @@ ovs_router_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
     struct ds ds = DS_EMPTY_INITIALIZER;
 
     ds_put_format(&ds, "Route Table:\n");
-    CLS_FOR_EACH(rt, cr, &cls) {
+    CLS_FOR_EACH_TARGET (rt, cr, &cls, NULL, ovs_router_get_version()) {
         uint8_t plen;
         if (rt->priority == rt->plen || rt->local) {
             ds_put_format(&ds, "Cached: ");
@@ -516,20 +541,50 @@ ovs_router_lookup_cmd(struct unixctl_conn *conn, int argc,
 }
 
 void
-ovs_router_flush(void)
+ovs_router_replace(const struct ovs_route routes[], size_t n)
 {
-    struct ovs_router_entry *rt;
-
     ovs_mutex_lock(&mutex);
+    ovs_version_t version = ovs_router_get_version();
     classifier_defer(&cls);
-    CLS_FOR_EACH(rt, cr, &cls) {
+
+    /* Delete existing (non-user) routes. */
+    struct ovs_router_entry *rt;
+    CLS_FOR_EACH_TARGET (rt, cr, &cls, NULL, version) {
         if (rt->priority == rt->plen) {
-            rt_entry_delete__(&rt->cr);
+            tnl_port_map_delete_ipdev(rt->output_bridge);
+            cls_rule_make_invisible_in_version(&rt->cr, version + 1);
+            ovsrcu_postpone(rt_entry_free, rt);
         }
     }
+
+    /* Add new routes. */
+    for (const struct ovs_route *route = routes; route < &routes[n]; route++) {
+        int error = ovs_router_entry_create(route, route->plen, &rt);
+        if (error) {
+            continue;
+        }
+
+        /* Drop duplicates in 'routes'. */
+        const struct cls_rule *cr = classifier_find_rule_exactly(&cls, &rt->cr,
+                                                                 version + 1);
+        if (cr) {
+            free(rt);
+            continue;
+        }
+
+        /* Insert. */
+        classifier_insert(&cls, &rt->cr, version + 1, NULL, 0);
+    }
+    ovs_router_set_version(version + 1);
     classifier_publish(&cls);
     ovs_mutex_unlock(&mutex);
     seq_change(tnl_conf_seq);
+}
+
+void
+ovs_router_flush(void)
+{
+    ovs_router_replace(NULL, 0);
 }
 
 static void

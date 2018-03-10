@@ -43,6 +43,8 @@ struct ovs_route {
     struct in6_addr gw;
 };
 void ovs_router_insert(const struct ovs_route *);
+void ovs_router_replace(const struct ovs_route[], size_t n);
+
 void ovs_router_flush(void);
 
 void ovs_router_disable_system_routing_table(void);

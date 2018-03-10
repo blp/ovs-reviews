@@ -68,10 +68,8 @@ static struct nln_notifier *name_notifier = NULL;
 static bool route_table_valid = false;
 
 static int route_table_reset(void);
-static void route_table_handle_msg(const struct route_table_msg *);
 static int route_table_parse(struct ofpbuf *, struct route_table_msg *);
 static void route_table_change(const struct route_table_msg *, void *);
-static void route_map_clear(void);
 
 static void name_table_init(void);
 static void name_table_change(const struct rtnetlink_change *, void *);
@@ -141,40 +139,66 @@ route_table_wait(void)
 }
 
 static int
-route_table_reset(void)
+route_table_dump(struct ovs_route **routesp, size_t *n_routesp)
 {
     struct nl_dump dump;
-    struct rtgenmsg *rtgenmsg;
-    uint64_t reply_stub[NL_DUMP_BUFSIZE / 8];
-    struct ofpbuf request, reply, buf;
 
-    route_map_clear();
-    netdev_get_addrs_list_flush();
-    route_table_valid = true;
-    rt_change_seq++;
-
+    /* Compose and send route table dump request. */
+    struct ofpbuf request;
     ofpbuf_init(&request, 0);
-
+    struct rtgenmsg *rtgenmsg;
     nl_msg_put_nlmsghdr(&request, sizeof *rtgenmsg, RTM_GETROUTE,
                         NLM_F_REQUEST);
-
     rtgenmsg = ofpbuf_put_zeros(&request, sizeof *rtgenmsg);
     rtgenmsg->rtgen_family = AF_UNSPEC;
-
     nl_dump_start(&dump, NETLINK_ROUTE, &request);
     ofpbuf_uninit(&request);
 
-    ofpbuf_use_stub(&buf, reply_stub, sizeof reply_stub);
+    /* Retrieve all of the dump results. */
+    struct ovs_route *routes = NULL;
+    size_t allocated_routes = 0;
+    size_t n_routes = 0;
+    uint64_t stub[NL_DUMP_BUFSIZE / 8];
+    struct ofpbuf buf = OFPBUF_STUB_INITIALIZER(stub);
+    struct ofpbuf reply;
     while (nl_dump_next(&dump, &reply, &buf)) {
         struct route_table_msg msg;
-
-        if (route_table_parse(&reply, &msg)) {
-            route_table_handle_msg(&msg);
+        if (route_table_parse(&reply, &msg)
+            && msg.relevant && msg.nlmsg_type == RTM_NEWROUTE) {
+            if (n_routes >= allocated_routes) {
+                routes = x2nrealloc(routes, &allocated_routes, sizeof *routes);
+            }
+            routes[n_routes++] = msg.rd;
         }
     }
     ofpbuf_uninit(&buf);
 
-    return nl_dump_done(&dump);
+    int error = nl_dump_done(&dump);
+    if (error) {
+        free(routes);
+        routes = NULL;
+        n_routes = 0;
+    }
+    *routesp = routes;
+    *n_routesp = n_routes;
+    return error;
+}
+
+static int
+route_table_reset(void)
+{
+    struct ovs_route *routes;
+    size_t n_routes;
+    int error = route_table_dump(&routes, &n_routes);
+    if (!error) {
+        netdev_get_addrs_list_flush();
+        ovs_router_replace(routes, n_routes);
+        route_table_valid = true;
+        rt_change_seq++;
+
+        free(routes);
+    }
+    return error;
 }
 
 /* Return RTNLGRP_IPV4_ROUTE or RTNLGRP_IPV6_ROUTE on success, 0 on parse
@@ -288,20 +312,6 @@ route_table_change(const struct route_table_msg *change OVS_UNUSED,
                    void *aux OVS_UNUSED)
 {
     route_table_valid = false;
-}
-
-static void
-route_table_handle_msg(const struct route_table_msg *change)
-{
-    if (change->relevant && change->nlmsg_type == RTM_NEWROUTE) {
-        ovs_router_insert(&change->rd);
-    }
-}
-
-static void
-route_map_clear(void)
-{
-    ovs_router_flush();
 }
 
 bool
