@@ -1484,6 +1484,10 @@ parse_bucket_str(struct ofputil_bucket *bucket, char *str_,
     if (!actions.length) {
         return xstrdup("bucket must specify actions");
     }
+    if (group_type == OFPGT11_FF && !ofputil_bucket_has_liveness(bucket)) {
+        return xstrdup("fast failover bucket requires watch_port or "
+                       "watch_group");
+    }
     ds_chomp(&actions, ',');
 
     ofpbuf_init(&ofpacts, 0);
