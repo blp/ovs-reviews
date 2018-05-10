@@ -4252,6 +4252,9 @@ xlate_dp_hash_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
         uint64_t param = group->up.props.selection_method_param;
 
         ctx_trigger_recirculate_with_hash(ctx, param >> 32, (uint32_t)param);
+        if (ctx->xin->xcache) {
+            ofproto_group_unref(&group->up);
+        }
     } else {
         uint32_t n_buckets = group->up.n_buckets;
         if (n_buckets) {
@@ -4266,6 +4269,8 @@ xlate_dp_hash_select_group(struct xlate_ctx *ctx, struct group_dpif *group,
             if (bucket) {
                 xlate_group_bucket(ctx, bucket, is_last_action);
                 xlate_group_stats(ctx, group, bucket);
+            } else if (ctx->xin->xcache) {
+                ofproto_group_unref(&group->up);
             }
         }
     }
