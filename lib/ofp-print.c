@@ -2594,7 +2594,7 @@ static void
 ofp_print_bucket_id(struct ds *s, const char *label, uint32_t bucket_id,
                     enum ofp_version ofp_version)
 {
-    if (ofp_version < OFP15_VERSION) {
+    if (ofp_version > OFP10_VERSION && ofp_version < OFP15_VERSION) {
         return;
     }
 

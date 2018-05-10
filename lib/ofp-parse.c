@@ -1468,7 +1468,7 @@ parse_bucket_str(struct ofputil_bucket *bucket, char *str_,
                 error = xasprintf("invalid bucket_id id %"PRIu32,
                                   bucket->bucket_id);
             }
-            *usable_protocols &= OFPUTIL_P_OF15_UP;
+            *usable_protocols &= OFPUTIL_P_OF10_ANY | OFPUTIL_P_OF15_UP;
         } else if (!strcasecmp(key, "action") || !strcasecmp(key, "actions")) {
             ds_put_format(&actions, "%s,", value);
         } else {
@@ -1580,7 +1580,7 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, int command,
     struct ofputil_bucket *bucket;
     char *error = NULL;
 
-    *usable_protocols = OFPUTIL_P_OF11_UP;
+    *usable_protocols = OFPUTIL_P_ANY;
 
     if (command == -2) {
         size_t len;
@@ -1626,12 +1626,12 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, int command,
 
     case OFPGC15_INSERT_BUCKET:
         fields = F_BUCKETS | F_COMMAND_BUCKET_ID;
-        *usable_protocols &= OFPUTIL_P_OF15_UP;
+        *usable_protocols &= OFPUTIL_P_OF10_ANY | OFPUTIL_P_OF15_UP;
         break;
 
     case OFPGC15_REMOVE_BUCKET:
         fields = F_COMMAND_BUCKET_ID | F_COMMAND_BUCKET_ID_ALL;
-        *usable_protocols &= OFPUTIL_P_OF15_UP;
+        *usable_protocols &= OFPUTIL_P_OF10_ANY | OFPUTIL_P_OF15_UP;
         break;
 
     default:
@@ -1647,8 +1647,6 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, int command,
         gm->group_id = OFPG_ALL;
         return NULL;
     }
-
-    *usable_protocols = OFPUTIL_P_OF11_UP;
 
     /* Strip the buckets off the end of 'string', if there are any, saving a
      * pointer for later.  We want to parse the buckets last because the bucket
@@ -1744,7 +1742,7 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, int command,
             memset(gm->props.selection_method, '\0',
                    NTR_MAX_SELECTION_METHOD_LEN);
             strcpy(gm->props.selection_method, value);
-            *usable_protocols &= OFPUTIL_P_OF15_UP;
+            *usable_protocols &= OFPUTIL_P_OF10_ANY | OFPUTIL_P_OF15_UP;
         } else if (!strcmp(name, "selection_method_param")) {
             if (!(fields & F_GROUP_TYPE)) {
                 error = xstrdup("selection method param is not needed");
@@ -1754,7 +1752,7 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, int command,
             if (error) {
                 goto out;
             }
-            *usable_protocols &= OFPUTIL_P_OF15_UP;
+            *usable_protocols &= OFPUTIL_P_OF10_ANY | OFPUTIL_P_OF15_UP;
         } else if (!strcmp(name, "fields")) {
             if (!(fields & F_GROUP_TYPE)) {
                 error = xstrdup("fields are not needed");
@@ -1766,7 +1764,7 @@ parse_ofp_group_mod_str__(struct ofputil_group_mod *gm, int command,
             if (error) {
                 goto out;
             }
-            *usable_protocols &= OFPUTIL_P_OF15_UP;
+            *usable_protocols &= OFPUTIL_P_OF10_ANY | OFPUTIL_P_OF15_UP;
         } else {
             error = xasprintf("unknown keyword %s", name);
             goto out;
@@ -1891,7 +1889,7 @@ parse_ofp_group_mod_file(const char *file_name,
     allocated_gms = *n_gms;
     ds_init(&s);
     line_number = 0;
-    *usable_protocols = OFPUTIL_P_OF11_UP;
+    *usable_protocols = OFPUTIL_P_ANY;
     while (!ds_get_preprocessed_line(&s, stream, &line_number)) {
         enum ofputil_protocol usable;
         char *error;
