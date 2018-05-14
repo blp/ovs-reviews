@@ -4256,7 +4256,7 @@ ofctl_parse_actions__(const char *version_s, bool instructions)
             /* Verify actions, enforce consistency. */
             struct match match = MATCH_CATCHALL_INITIALIZER;
             struct ofpact_check_params cp = {
-                .match = &match,
+                .match = match,
                 .max_ports = OFPP_MAX,
                 .table_id = table_id ? atoi(table_id) : 0,
                 .n_tables = OFPTT_MAX + 1,

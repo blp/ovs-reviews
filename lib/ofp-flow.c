@@ -344,7 +344,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
     }
 
     struct ofpact_check_params cp = {
-        .match = &match,
+        .match = match,
         .max_ports = max_port,
         .table_id = fm->table_id,
         .n_tables = max_table
@@ -1729,7 +1729,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
             enum ofperr err;
 
             struct ofpact_check_params cp = {
-                .match = &match,
+                .match = match,
                 .max_ports = OFPP_MAX,
                 .table_id = fm->table_id,
                 .n_tables = 255,

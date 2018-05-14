@@ -540,7 +540,7 @@ ofproto_unixctl_trace_actions(struct unixctl_conn *conn, int argc,
     }
 
     struct ofpact_check_params cp = {
-        .match = &match,
+        .match = match,
         .max_ports = u16_to_ofp(ofproto->up.max_ports),
         .table_id = 0,
         .n_tables = ofproto->up.n_tables,

@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include "openflow/openflow.h"
 #include "openflow/nicira-ext.h"
+#include "openvswitch/match.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-protocol.h"
@@ -1113,7 +1114,7 @@ ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
 
 struct ofpact_check_params {
     /* Input. */
-    struct match *match;
+    struct match match;
     ofp_port_t max_ports;
     uint8_t table_id;
     uint8_t n_tables;

@@ -3525,7 +3525,7 @@ ofproto_packet_out_init(struct ofproto *ofproto,
      * list of a packet-out. */
     match_wc_init(&match, opo->flow);
     struct ofpact_check_params cp = {
-        .match = &match,
+        .match = match,
         .max_ports = u16_to_ofp(ofproto->max_ports),
         .table_id = 0,
         .n_tables = ofproto->n_tables

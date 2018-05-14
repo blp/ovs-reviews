@@ -1306,7 +1306,7 @@ static enum ofperr
 check_OUTPUT_REG(const struct ofpact_output_reg *a,
                  const struct ofpact_check_params *cp)
 {
-    return mf_check_src(&a->src, cp->match);
+    return mf_check_src(&a->src, &cp->match);
 }
 
 /* Action structure for NXAST_BUNDLE and NXAST_BUNDLE_LOAD.
@@ -1532,7 +1532,7 @@ static enum ofperr
 check_BUNDLE(const struct ofpact_bundle *a,
              const struct ofpact_check_params *cp)
 {
-    return bundle_check(a, cp->max_ports, cp->match);
+    return bundle_check(a, cp->max_ports, &cp->match);
 }
 
 /* Set VLAN actions. */
@@ -1631,7 +1631,7 @@ check_SET_VLAN_VID(struct ofpact_vlan_vid *a, struct ofpact_check_params *cp)
 {
     /* Remember if we saw a vlan tag in the flow to aid translating to OpenFlow
      * 1.1+ if need be. */
-    ovs_be16 *tci = &cp->match->flow.vlans[0].tci;
+    ovs_be16 *tci = &cp->match.flow.vlans[0].tci;
     a->flow_has_vlan = (*tci & htons(VLAN_CFI)) != 0;
     if (!a->flow_has_vlan && !a->push_vlan_if_needed) {
         inconsistent_match(&cp->usable_protocols);
@@ -1739,7 +1739,7 @@ check_SET_VLAN_PCP(struct ofpact_vlan_pcp *a, struct ofpact_check_params *cp)
 {
     /* Remember if we saw a vlan tag in the flow to aid translating to OpenFlow
      * 1.1+ if need be. */
-    ovs_be16 *tci = &cp->match->flow.vlans[0].tci;
+    ovs_be16 *tci = &cp->match.flow.vlans[0].tci;
     a->flow_has_vlan = (*tci & htons(VLAN_CFI)) != 0;
     if (!a->flow_has_vlan && !a->push_vlan_if_needed) {
         inconsistent_match(&cp->usable_protocols);
@@ -1806,10 +1806,10 @@ static enum ofperr
 check_STRIP_VLAN(const struct ofpact_null *a OVS_UNUSED,
                  struct ofpact_check_params *cp)
 {
-    if (!(cp->match->flow.vlans[0].tci & htons(VLAN_CFI))) {
+    if (!(cp->match.flow.vlans[0].tci & htons(VLAN_CFI))) {
         inconsistent_match(&cp->usable_protocols);
     }
-    flow_pop_vlan(&cp->match->flow, NULL);
+    flow_pop_vlan(&cp->match.flow, NULL);
     return 0;
 }
 
@@ -1874,7 +1874,7 @@ static enum ofperr
 check_PUSH_VLAN(const struct ofpact_push_vlan *a OVS_UNUSED,
                 struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
     if (flow->vlans[FLOW_MAX_VLAN_HEADERS - 1].tci & htons(VLAN_CFI)) {
         /* Support maximum (FLOW_MAX_VLAN_HEADERS) VLAN headers. */
         return OFPERR_OFPBAC_BAD_TAG;
@@ -2069,7 +2069,7 @@ format_SET_IPV4_DST(const struct ofpact_ipv4 *a,
 static enum ofperr
 check_set_ipv4(struct ofpact_check_params *cp)
 {
-    ovs_be16 dl_type = get_dl_type(&cp->match->flow);
+    ovs_be16 dl_type = get_dl_type(&cp->match.flow);
     if (dl_type != htons(ETH_TYPE_IP)) {
         inconsistent_match(&cp->usable_protocols);
     }
@@ -2146,7 +2146,7 @@ format_SET_IP_DSCP(const struct ofpact_dscp *a,
 static enum ofperr
 check_set_ip(struct ofpact_check_params *cp)
 {
-    if (!is_ip_any(&cp->match->flow)) {
+    if (!is_ip_any(&cp->match.flow)) {
         inconsistent_match(&cp->usable_protocols);
     }
     return 0;
@@ -2372,7 +2372,7 @@ format_SET_L4_DST_PORT(const struct ofpact_l4_port *a,
 static enum ofperr
 check_set_l4_port(struct ofpact_l4_port *a, struct ofpact_check_params *cp)
 {
-    const struct flow *flow = &cp->match->flow;
+    const struct flow *flow = &cp->match.flow;
     if (!is_ip_any(flow)
         || flow->nw_frag & FLOW_NW_FRAG_LATER
         || (flow->nw_proto != IPPROTO_TCP &&
@@ -2702,7 +2702,7 @@ static enum ofperr
 check_REG_MOVE(const struct ofpact_reg_move *a,
                const struct ofpact_check_params *cp)
 {
-    return nxm_reg_move_check(a, cp->match);
+    return nxm_reg_move_check(a, &cp->match);
 }
 
 /* Action structure for OFPAT12_SET_FIELD. */
@@ -3324,11 +3324,10 @@ format_SET_FIELD(const struct ofpact_set_field *a,
 }
 
 static enum ofperr
-check_SET_FIELD(struct ofpact_set_field *a,
-                const struct ofpact_check_params *cp)
+check_SET_FIELD(struct ofpact_set_field *a, struct ofpact_check_params *cp)
 {
     const struct mf_field *mf = a->field;
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
     ovs_be16 *tci = &flow->vlans[0].tci;
 
     /* Require OXM_OF_VLAN_VID to have an existing VLAN header. */
@@ -3540,14 +3539,14 @@ static enum ofperr
 check_STACK_PUSH(const struct ofpact_stack *a,
                  const struct ofpact_check_params *cp)
 {
-    return nxm_stack_push_check(a, cp->match);
+    return nxm_stack_push_check(a, &cp->match);
 }
 
 static enum ofperr
 check_STACK_POP(const struct ofpact_stack *a,
                 const struct ofpact_check_params *cp)
 {
-    return nxm_stack_pop_check(a, cp->match);
+    return nxm_stack_pop_check(a, &cp->match);
 }
 
 /* Action structure for NXAST_DEC_TTL_CNT_IDS.
@@ -3769,7 +3768,7 @@ format_SET_MPLS_LABEL(const struct ofpact_mpls_label *a,
 static enum ofperr
 check_set_mpls(struct ofpact_check_params *cp)
 {
-    ovs_be16 dl_type = get_dl_type(&cp->match->flow);
+    ovs_be16 dl_type = get_dl_type(&cp->match.flow);
     if (!eth_type_mpls(dl_type)) {
         inconsistent_match(&cp->usable_protocols);
     }
@@ -3973,7 +3972,7 @@ static enum ofperr
 check_PUSH_MPLS(const struct ofpact_push_mpls *a,
                 struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
 
     if (flow->packet_type != htonl(PT_ETH)) {
         inconsistent_match(&cp->usable_protocols);
@@ -4030,7 +4029,7 @@ format_POP_MPLS(const struct ofpact_pop_mpls *a,
 static enum ofperr
 check_POP_MPLS(const struct ofpact_pop_mpls *a, struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
     ovs_be16 dl_type = get_dl_type(flow);
 
     if (flow->packet_type != htonl(PT_ETH) || !eth_type_mpls(dl_type)) {
@@ -4297,7 +4296,7 @@ static enum ofperr
 check_FIN_TIMEOUT(const struct ofpact_fin_timeout *a OVS_UNUSED,
                   struct ofpact_check_params *cp)
 {
-    if (cp->match->flow.nw_proto != IPPROTO_TCP) {
+    if (cp->match.flow.nw_proto != IPPROTO_TCP) {
         inconsistent_match(&cp->usable_protocols);
     }
     return 0;
@@ -4498,7 +4497,7 @@ format_ENCAP(const struct ofpact_encap *a,
 static enum ofperr
 check_ENCAP(const struct ofpact_encap *a, struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
     flow->packet_type = a->new_pkt_type;
     if (pt_ns(flow->packet_type) == OFPHTN_ETHERTYPE) {
         flow->dl_type = htons(pt_ns_type(flow->packet_type));
@@ -4615,7 +4614,7 @@ static enum ofperr
 check_DECAP(const struct ofpact_decap *a OVS_UNUSED,
             struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
     if (flow->packet_type == htonl(PT_ETH)) {
         /* Adjust the packet_type to allow subsequent actions. */
         flow->packet_type = PACKET_TYPE_BE(OFPHTN_ETHERTYPE,
@@ -4663,7 +4662,7 @@ static enum ofperr
 check_DEC_NSH_TTL(const struct ofpact_null *a OVS_UNUSED,
                   struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
     if (flow->packet_type != htonl(PT_NSH) &&
         flow->dl_type != htons(ETH_TYPE_NSH)) {
         inconsistent_match(&cp->usable_protocols);
@@ -4885,7 +4884,7 @@ static enum ofperr
 check_RESUBMIT(const struct ofpact_resubmit *a,
                const struct ofpact_check_params *cp)
 {
-    if (a->with_ct_orig && !is_ct_valid(&cp->match->flow, &cp->match->wc,
+    if (a->with_ct_orig && !is_ct_valid(&cp->match.flow, &cp->match.wc,
                                         NULL)) {
         return OFPERR_OFPBAC_MATCH_INCONSISTENT;
     }
@@ -5477,10 +5476,9 @@ format_LEARN(const struct ofpact_learn *a,
 }
 
 static enum ofperr
-check_LEARN(const struct ofpact_learn *a,
-            const struct ofpact_check_params *cp)
+check_LEARN(const struct ofpact_learn *a, const struct ofpact_check_params *cp)
 {
-    return learn_check(a, cp->match);
+    return learn_check(a, &cp->match);
 }
 
 /* Action structure for NXAST_CONJUNCTION. */
@@ -5707,7 +5705,7 @@ static enum ofperr
 check_MULTIPATH(const struct ofpact_multipath *a,
                 const struct ofpact_check_params *cp)
 {
-    return multipath_check(a, cp->match);
+    return multipath_check(a, &cp->match);
 }
 
 /* Action structure for NXAST_NOTE.
@@ -6689,7 +6687,7 @@ format_CT(const struct ofpact_conntrack *a,
 static enum ofperr
 check_CT(struct ofpact_conntrack *a, struct ofpact_check_params *cp)
 {
-    struct flow *flow = &cp->match->flow;
+    struct flow *flow = &cp->match.flow;
 
     if (!dl_type_is_ip_any(get_dl_type(flow))
         || (flow->ct_state & CS_INVALID && a->flags & NX_CT_F_COMMIT)
@@ -6702,7 +6700,7 @@ check_CT(struct ofpact_conntrack *a, struct ofpact_check_params *cp)
     }
 
     if (a->zone_src.field) {
-        return mf_check_src(&a->zone_src, cp->match);
+        return mf_check_src(&a->zone_src, &cp->match);
     }
 
     return check_subactions(a->actions, ofpact_ct_get_action_len(a), cp);
@@ -7101,7 +7099,7 @@ parse_NAT(char *arg, const struct ofpact_parse_params *pp)
 static enum ofperr
 check_NAT(const struct ofpact_nat *a, const struct ofpact_check_params *cp)
 {
-    ovs_be16 dl_type = get_dl_type(&cp->match->flow);
+    ovs_be16 dl_type = get_dl_type(&cp->match.flow);
     if (!dl_type_is_ip_any(dl_type) ||
         (a->range_af == AF_INET && dl_type != htons(ETH_TYPE_IP)) ||
         (a->range_af == AF_INET6 && dl_type != htons(ETH_TYPE_IPV6))) {
@@ -8274,40 +8272,20 @@ ofpact_check__(struct ofpact *a, struct ofpact_check_params *cp)
  * example of an inconsistency between match and actions is a flow that does
  * not match on an MPLS Ethertype but has an action that pops an MPLS label.)
  *
- * May annotate ofpacts with information gathered from the 'match'.
- *
- * May temporarily modify 'match', but restores the changes before
- * returning. */
+ * May annotate ofpacts with information gathered from the 'match'. */
 enum ofperr
 ofpacts_check(struct ofpact ofpacts[], size_t ofpacts_len,
               struct ofpact_check_params *cp)
 {
-    /* Save fields that might temporarily be modified. */
-    struct flow *flow = &cp->match->flow;
-    ovs_be32 packet_type = flow->packet_type;
-    ovs_be16 dl_type = flow->dl_type;
-    uint8_t nw_proto = flow->nw_proto;
-    union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
-    memcpy(vlans, flow->vlans, sizeof vlans);
-
-    /* Check all the actions. */
     cp->usable_protocols = OFPUTIL_P_ANY;
-    enum ofperr error = 0;
     struct ofpact *a;
     OFPACT_FOR_EACH (a, ofpacts, ofpacts_len) {
-        error = ofpact_check__(a, cp);
+        enum ofperr error = ofpact_check__(a, cp);
         if (error) {
-            break;
+            return error;
         }
     }
-
-    /* Restore fields that may have been modified. */
-    flow->packet_type = packet_type;
-    flow->dl_type = dl_type;
-    memcpy(flow->vlans, vlans, sizeof vlans);
-    flow->nw_proto = nw_proto;
-
-    return error;
+    return 0;
 }
 
 /* Like ofpacts_check(), but reports inconsistencies as
