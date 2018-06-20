@@ -22,21 +22,17 @@
  * This module adds and removes patch ports between the integration bridge and
  * physical bridges, as directed by other-config:ovn-bridge-mappings. */
 
-struct hmap;
-struct ovsdb_idl_txn;
-struct ovsrec_bridge;
-struct ovsrec_bridge_table;
-struct ovsrec_open_vswitch_table;
-struct ovsrec_port_table;
-struct sbrec_port_binding_table;
-struct sbrec_chassis;
+#include "ovn/controller/patch-ovn-sb-idl.h"
+#include "ovn/controller/patch-vswitch-idl.h"
 
-void patch_run(struct ovsdb_idl_txn *ovs_idl_txn,
-               const struct ovsrec_bridge_table *,
-               const struct ovsrec_open_vswitch_table *,
-               const struct ovsrec_port_table *,
-               const struct sbrec_port_binding_table *,
-               const struct ovsrec_bridge *br_int,
-               const struct sbrec_chassis *);
+struct hmap;
+
+void patch_run(struct patch_ovsrec_txn *,
+               const struct patch_ovsrec_bridge_table *,
+               const struct patch_ovsrec_open_vswitch_table *,
+               const struct patch_ovsrec_port_table *,
+               const struct patch_sbrec_port_binding_table *,
+               const struct patch_ovsrec_bridge *br_int,
+               const struct patch_sbrec_chassis *);
 
 #endif /* ovn/patch.h */

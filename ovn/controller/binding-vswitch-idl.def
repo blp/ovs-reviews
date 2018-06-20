@@ -1,0 +1,22 @@
+# -*- python -*-
+
+{
+    "prefix": "binding_ovsrec_",
+    "tables": {
+        "Interface": {
+            "name": RO,
+            "external_ids": RO,
+            "ofport": RO,
+            "status": RO,
+            "options": RO},
+        "Port": {
+            "name": RO,
+            "interfaces": RO,
+            "external_ids": RO,
+            "qos": RW},
+        "Bridge": {
+            "name": RO,
+            "ports": RO},
+        "QoS": {
+            "type": RW}}
+}

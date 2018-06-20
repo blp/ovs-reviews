@@ -1,0 +1,21 @@
+# -*- python -*-
+
+{
+    "prefix": "patch_ovsrec_",
+    "tables": {
+        "Interface": {
+            "name": RW,
+            "type": RW,
+            "options": RW,
+            "external_ids": RO},
+        "Port": {
+            "name": RW,
+            "interfaces": RW,
+            "external_ids": RW},
+        "Bridge": {
+            "name": RO,
+            "ports": RW},
+        "Open_vSwitch": {
+            "external_ids": RO
+        }}
+}

@@ -17,33 +17,30 @@
 #ifndef PINCTRL_H
 #define PINCTRL_H 1
 
+#include "ovn/controller/pinctrl-vswitch-idl.h"
+#include "ovn/controller/pinctrl-ovn-sb-idl.h"
+
 #include <stdint.h>
 
 #include "lib/sset.h"
 #include "openvswitch/meta-flow.h"
 
 struct hmap;
-struct lport_index;
-struct ovsdb_idl_index;
-struct ovsdb_idl_txn;
-struct ovsrec_bridge;
-struct sbrec_chassis;
-struct sbrec_dns_table;
-struct sbrec_mac_binding_table;
 
 void pinctrl_init(void);
-void pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
-                 struct ovsdb_idl_index *sbrec_chassis_by_name,
-                 struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
-                 struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
-                 struct ovsdb_idl_index *sbrec_port_binding_by_key,
-                 struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                 const struct sbrec_dns_table *,
-                 const struct sbrec_mac_binding_table *,
-                 const struct ovsrec_bridge *, const struct sbrec_chassis *,
+void pinctrl_run(struct pinctrl_sbrec_txn *,
+                 struct pinctrl_sbrec_chassis_by_name *,
+                 struct pinctrl_sbrec_datapath_binding_by_tunnel_key *,
+                 struct pinctrl_sbrec_port_binding_by_datapath *,
+                 struct pinctrl_sbrec_port_binding_by_tunnel_key_datapath *,
+                 struct pinctrl_sbrec_port_binding_by_logical_port *,
+                 const struct pinctrl_sbrec_dns_table *,
+                 const struct pinctrl_sbrec_mac_binding_table *,
+                 const struct pinctrl_ovsrec_bridge *,
+                 const struct pinctrl_sbrec_chassis *,
                  const struct hmap *local_datapaths,
                  const struct sset *active_tunnels);
-void pinctrl_wait(struct ovsdb_idl_txn *ovnsb_idl_txn);
+void pinctrl_wait(struct pinctrl_sbrec_txn *);
 void pinctrl_destroy(void);
 
 #endif /* ovn/pinctrl.h */

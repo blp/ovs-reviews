@@ -1,0 +1,17 @@
+# -*- python -*-
+
+{
+    "prefix": "bfd_sbrec_",
+    "tables": {
+        "Datapath_Binding": {
+            "external_ids": RO,
+            "tunnel_key": RO,
+        },
+        "Port_Binding": {
+            "chassis": RO,
+            "type": RO}},
+    "indexes": {
+        "Port_Binding": [["datapath"]],
+        "Chassis": [["name"]],
+    }
+}

@@ -482,7 +482,8 @@ recv_S_UPDATE_FLOWS(const struct ofp_header *oh, enum ofptype type,
  * field for class OVN_GENEVE_CLASS, type OVN_GENEVE_TYPE.  If successful,
  * returns the MFF_* field ID for the option, otherwise returns 0. */
 enum mf_field_id
-ofctrl_run(const struct ovsrec_bridge *br_int, struct shash *pending_ct_zones)
+ofctrl_run(const struct ofctrl_ovsrec_bridge *br_int,
+           struct shash *pending_ct_zones)
 {
     char *target = xasprintf("unix:%s/%s.mgmt", ovs_rundir(), br_int->name);
     if (strcmp(target, rconn_get_target(swconn))) {

@@ -16,7 +16,6 @@
 #include <config.h>
 
 #include "gchassis.h"
-#include "lport.h"
 #include "lib/sset.h"
 #include "openvswitch/vlog.h"
 #include "ovn/lib/chassis-index.h"
@@ -39,7 +38,7 @@ compare_chassis_prio_(const void *a_, const void *b_)
 }
 
 struct ovs_list*
-gateway_chassis_get_ordered(struct ovsdb_idl_index *sbrec_chassis_by_name,
+gateway_chassis_get_ordered(struct sbrec_chassis_index *sbrec_chassis_by_name,
                             const struct sbrec_port_binding *binding)
 {
     const char *redir_chassis_str;

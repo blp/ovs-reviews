@@ -1,0 +1,16 @@
+# -*- python -*-
+
+{
+    "prefix": "encaps_ovsrec_",
+    "tables": {
+        "Interface": {
+            "name": RW,
+            "type": RW,
+            "options": RW},
+        "Port": {
+            "name": RW,
+            "interfaces": RW,
+            "external_ids": RW},
+        "Bridge": {
+            "ports": RW}}
+}

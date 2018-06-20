@@ -1,0 +1,16 @@
+# -*- python -*-
+
+{
+    "prefix": "pinctrl_ovsrec_",
+    "tables": {
+        "Interface": {
+            "ofport": RO,
+            "external_ids": RO},
+        "Port": {
+            "name": RO,
+            "interfaces": RO,
+            "external_ids": RO},
+        "Bridge": {
+            "name": RO,
+            "ports": RO}}
+}

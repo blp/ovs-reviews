@@ -2766,7 +2766,7 @@ do_idl_compound_index_with_ref(struct ovs_cmdl_context *ctx)
     ovsdb_idl_add_table(idl, &idltest_table_simple4);
     ovsdb_idl_add_column(idl, &idltest_simple4_col_name);
 
-    struct ovsdb_idl_index *index = ovsdb_idl_index_create1(
+    struct idltest_simple3_index *index = idltest_simple3_index_create1(
         idl, &idltest_simple3_col_uref);
 
     ovsdb_idl_get_initial_snapshot(idl);
@@ -2823,8 +2823,8 @@ do_idl_compound_index_with_ref(struct ovs_cmdl_context *ctx)
 
 static int
 test_idl_compound_index_single_column(struct ovsdb_idl *idl,
-                                      struct ovsdb_idl_index *s_index,
-                                      struct ovsdb_idl_index *i_index)
+                                      struct idltest_simple_index *s_index,
+                                      struct idltest_simple_index *i_index)
 {
     const struct idltest_simple *myRow;
     struct ovsdb_idl_txn *txn;
@@ -2915,10 +2915,10 @@ test_idl_compound_index_single_column(struct ovsdb_idl *idl,
 }
 
 static int
-test_idl_compound_index_double_column(struct ovsdb_idl_index *si_index,
-                                      struct ovsdb_idl_index *sid_index,
-                                      struct ovsdb_idl_index *is_index,
-                                      struct ovsdb_idl_index *ids_index)
+test_idl_compound_index_double_column(struct idltest_simple_index *si_index,
+                                      struct idltest_simple_index *sid_index,
+                                      struct idltest_simple_index *is_index,
+                                      struct idltest_simple_index *ids_index)
 {
     const struct idltest_simple *myRow;
     int step = 0;
@@ -3004,33 +3004,35 @@ do_idl_compound_index(struct ovs_cmdl_context *ctx)
     ovsdb_idl_add_column(idl, &idltest_simple_col_r);
     ovsdb_idl_add_column(idl, &idltest_simple_col_b);
 
-    struct ovsdb_idl_index *s_index
-        = ovsdb_idl_index_create1(idl, &idltest_simple_col_s);
+    struct idltest_simple_index *s_index
+        = idltest_simple_index_create1(idl, &idltest_simple_col_s);
 
-    struct ovsdb_idl_index *i_index
-        = ovsdb_idl_index_create1(idl, &idltest_simple_col_i);
+    struct idltest_simple_index *i_index
+        = idltest_simple_index_create1(idl, &idltest_simple_col_i);
 
-    struct ovsdb_idl_index *si_index
-        = ovsdb_idl_index_create2(idl, &idltest_simple_col_s,
-                                  &idltest_simple_col_i);
+    struct idltest_simple_index *si_index
+        = idltest_simple_index_create2(idl, &idltest_simple_col_s,
+                                       &idltest_simple_col_i);
 
     const struct ovsdb_idl_index_column sid_columns[] = {
         { .column = &idltest_simple_col_s },
         { .column = &idltest_simple_col_i, .order = OVSDB_INDEX_DESC },
     };
-    struct ovsdb_idl_index *sid_index
-        = ovsdb_idl_index_create(idl, sid_columns, ARRAY_SIZE(sid_columns));
+    struct idltest_simple_index *sid_index
+        = idltest_simple_index_create(idl, sid_columns,
+                                      ARRAY_SIZE(sid_columns));
 
-    struct ovsdb_idl_index *is_index
-        = ovsdb_idl_index_create2(idl, &idltest_simple_col_i,
-                                  &idltest_simple_col_s);
+    struct idltest_simple_index *is_index
+        = idltest_simple_index_create2(idl, &idltest_simple_col_i,
+                                       &idltest_simple_col_s);
 
     const struct ovsdb_idl_index_column ids_columns[] = {
         { .column = &idltest_simple_col_i, .order = OVSDB_INDEX_DESC },
         { .column = &idltest_simple_col_s },
     };
-    struct ovsdb_idl_index *ids_index
-        = ovsdb_idl_index_create(idl, ids_columns, ARRAY_SIZE(sid_columns));
+    struct idltest_simple_index *ids_index
+        = idltest_simple_index_create(idl, ids_columns,
+                                      ARRAY_SIZE(sid_columns));
 
     /* wait for replica to be updated */
     ovsdb_idl_get_initial_snapshot(idl);

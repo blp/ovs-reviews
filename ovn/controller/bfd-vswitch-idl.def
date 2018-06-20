@@ -1,0 +1,18 @@
+# -*- python -*-
+
+{
+    "prefix": "bfd_ovsrec_",
+    "tables": {
+        "Interface": {
+            "name": RO,
+            "bfd": RW,
+            "bfd_status": RO,
+            "options": RO},
+        "Port": {
+            "name": RO,
+            "interfaces": RO,
+            "external_ids": RO},
+        "Bridge": {
+            "name": RO,
+            "ports": RO}}
+}

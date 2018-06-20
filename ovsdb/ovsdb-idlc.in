@@ -14,7 +14,9 @@ from ovs.db.types import StringType, IntegerType, RealType
 argv0 = sys.argv[0]
 
 def parseSchema(filename):
-    return ovs.db.schema.IdlSchema.from_json(ovs.json.from_file(filename))
+    schema = ovs.db.schema.IdlSchema.from_json(ovs.json.from_file(filename))
+    replace_cplusplus_keyword(schema)
+    return schema
 
 def annotateSchema(schemaFile, annotationFile):
     schemaJson = ovs.json.from_file(schemaFile)
@@ -82,6 +84,8 @@ def cMembers(prefix, tableName, columnName, column, const, refTable=True):
         m = {'name': columnName,
              'type': constify(type.key.toCType(prefix, refTable) + pointer, const),
              'comment': type.cDeclComment()}
+        if refTable and type.key.ref_table_name:
+            m['cast'] = '(%s)' % m['type']
 
         if singleton:
             comment += " * '%s'" % columnName
@@ -182,7 +186,6 @@ def replace_cplusplus_keyword(schema):
 
 def printCIDLHeader(schemaFile):
     schema = parseSchema(schemaFile)
-    replace_cplusplus_keyword(schema)
     prefix = schema.idlPrefix
     print('''\
 /* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
@@ -283,19 +286,27 @@ static inline bool %(s)s_is_deleted(const struct %(s)s *row)
     return %(s)s_row_get_seqno(row, OVSDB_IDL_CHANGE_DELETE) > 0;
 }
 
+struct %(s)s_index *%(s)s_index_create(
+    struct ovsdb_idl *, const struct ovsdb_idl_index_column[], size_t n);
+struct %(s)s_index *%(s)s_index_create1(
+    struct ovsdb_idl *, const struct ovsdb_idl_column *);
+struct %(s)s_index *%(s)s_index_create2(
+    struct ovsdb_idl *, const struct ovsdb_idl_column *,
+    const struct ovsdb_idl_column *);
+
 void %(s)s_index_destroy_row(const struct %(s)s *);
 
-struct %(s)s *%(s)s_index_find(struct ovsdb_idl_index *, const struct %(s)s *);
+struct %(s)s *%(s)s_index_find(struct %(s)s_index *, const struct %(s)s *);
 
 int %(s)s_index_compare(
-    struct ovsdb_idl_index *, 
+    struct %(s)s_index *, 
     const struct %(s)s *, 
     const struct %(s)s *);
-struct ovsdb_idl_cursor %(s)s_cursor_first(struct ovsdb_idl_index *);
+struct ovsdb_idl_cursor %(s)s_cursor_first(struct %(s)s_index *);
 struct ovsdb_idl_cursor %(s)s_cursor_first_eq(
-    struct ovsdb_idl_index *, const struct %(s)s *);
+    struct %(s)s_index *, const struct %(s)s *);
 struct ovsdb_idl_cursor %(s)s_cursor_first_ge(
-    struct ovsdb_idl_index *, const struct %(s)s *);
+    struct %(s)s_index *, const struct %(s)s *);
 
 struct %(s)s *%(s)s_cursor_data(struct ovsdb_idl_cursor *);
 
@@ -386,7 +397,7 @@ bool %(s)s_is_updated(const struct %(s)s *, enum %(s)s_column_id);
         print("")
 
     # Table indexes.
-        print("struct %(s)s *%(s)s_index_init_row(struct ovsdb_idl_index *);" % {'s': structName})
+        print("struct %(s)s *%(s)s_index_init_row(struct %(s)s_index *);" % {'s': structName})
         print
         for columnName, column in sorted(table.columns.items()):
             print('void %(s)s_index_set_%(c)s(const struct %(s)s *,' % {'s': structName, 'c': columnName})
@@ -431,7 +442,6 @@ def printEnum(type, members):
 
 def printCIDLSource(schemaFile):
     schema = parseSchema(schemaFile)
-    replace_cplusplus_keyword(schema)
     prefix = schema.idlPrefix
     print('''\
 /* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
@@ -1177,6 +1187,51 @@ void
 
 # Index table related functions
         print("""
+static bool
+%(s)s_column_in_table(
+    struct ovsdb_idl *idl,
+    const struct ovsdb_idl_index_column *column)
+{
+    const struct ovsdb_idl_class *class = ovsdb_idl_get_class(idl);
+    const struct ovsdb_idl_table_class *tc
+        = ovsdb_idl_table_class_from_column(class, column->column);
+    return tc == &%(p)stable_%(tl)s;
+}
+
+struct %(s)s_index *
+%(s)s_index_create(
+    struct ovsdb_idl *idl,
+    const struct ovsdb_idl_index_column columns[], size_t n)
+{
+    /* It's only necessary to check the first column's table because
+     * ovsdb_idl_index_create() checks that all of the columns are
+     * in the same table. */
+    ovs_assert(n > 0);
+    ovs_assert(%(s)s_column_in_table(idl, &columns[0]));
+
+    return (struct %(s)s_index *) ovsdb_idl_index_create(idl, columns, n);
+}
+
+struct %(s)s_index *%(s)s_index_create1(
+    struct ovsdb_idl *idl, const struct ovsdb_idl_column *column1)
+{
+    const struct ovsdb_idl_index_column columns[] = {
+        { .column = column1 },
+    };
+    return %(s)s_index_create(idl, columns, ARRAY_SIZE(columns));
+}
+
+struct %(s)s_index *%(s)s_index_create2(
+    struct ovsdb_idl *idl, const struct ovsdb_idl_column *column1,
+    const struct ovsdb_idl_column *column2)
+{
+    const struct ovsdb_idl_index_column columns[] = {
+        { .column = column1 },
+        { .column = column2 },
+    };
+    return %(s)s_index_create(idl, columns, ARRAY_SIZE(columns));
+}
+
 /* Destroy 'row' of kind "%(t)s". The row must have been
  * created with ovsdb_idl_index_init_row.
  */
@@ -1184,55 +1239,63 @@ void
 %(s)s_index_destroy_row(const struct %(s)s *row)
 {
     ovsdb_idl_index_destroy_row(&row->header_);
-}
-        """ % { 's' : structName, 't': tableName })
+}"""
+              % { 's' : structName, 't': tableName, 'p': prefix,
+                  'tl': tableName.lower()})
         print("""
+static inline struct ovsdb_idl_index *
+%(s)s_index_cast(struct %(s)s_index *index_)
+{
+    struct ovsdb_idl_index *index = (struct ovsdb_idl_index *) index_;
+    ovs_assert(index->table->class_ == &%(p)stable_%(tl)s);
+    return index;
+}
+
 /* Creates a new row of kind "%(t)s". */
 struct %(s)s *
-%(s)s_index_init_row(struct ovsdb_idl_index *index)
+%(s)s_index_init_row(struct %(s)s_index *index)
 {
-    ovs_assert(index->table->class_ == &%(p)stable_%(tl)s);
-    return (struct %(s)s *) ovsdb_idl_index_init_row(index);
+    return (struct %(s)s *) ovsdb_idl_index_init_row(%(s)s_index_cast(index));
 }
 
 struct %(s)s *
-%(s)s_index_find(struct ovsdb_idl_index *index, const struct %(s)s *target)
+%(s)s_index_find(struct %(s)s_index *index, const struct %(s)s *target)
 {
-    ovs_assert(index->table->class_ == &%(p)stable_%(tl)s);
-    return %(s)s_cast(ovsdb_idl_index_find(index, &target->header_));
+    return %(s)s_cast(
+        ovsdb_idl_index_find(%(s)s_index_cast(index), &target->header_));
 }
 
 /* Compares 'a' to 'b' and returns a strcmp()-type result. */
 int
 %(s)s_index_compare(
-    struct ovsdb_idl_index *index, 
+    struct %(s)s_index *index, 
     const struct %(s)s *a, 
     const struct %(s)s *b)
 {
-    return ovsdb_idl_index_compare(index, &a->header_, &b->header_);
+    return ovsdb_idl_index_compare(%(s)s_index_cast(index),
+                                   &a->header_, &b->header_);
 }
 
 struct ovsdb_idl_cursor
-%(s)s_cursor_first(struct ovsdb_idl_index *index)
+%(s)s_cursor_first(struct %(s)s_index *index)
 {
-    ovs_assert(index->table->class_ == &%(p)stable_%(tl)s);
-    return ovsdb_idl_cursor_first(index);
+    return ovsdb_idl_cursor_first(%(s)s_index_cast(index));
 }
 
 struct ovsdb_idl_cursor
 %(s)s_cursor_first_eq(
-    struct ovsdb_idl_index *index, const struct %(s)s *target)
+    struct %(s)s_index *index, const struct %(s)s *target)
 {
-    ovs_assert(index->table->class_ == &%(p)stable_%(tl)s);
-    return ovsdb_idl_cursor_first_eq(index, &target->header_);
+    return ovsdb_idl_cursor_first_eq(%(s)s_index_cast(index),
+                                     &target->header_);
 }
 
 struct ovsdb_idl_cursor
 %(s)s_cursor_first_ge(
-    struct ovsdb_idl_index *index, const struct %(s)s *target)
+    struct %(s)s_index *index, const struct %(s)s *target)
 {
-    ovs_assert(index->table->class_ == &%(p)stable_%(tl)s);
-    return ovsdb_idl_cursor_first_ge(index, &target->header_);
+    return ovsdb_idl_cursor_first_ge(%(s)s_index_cast(index),
+                                     &target->header_);
 }
 
 struct %(s)s *
@@ -1493,6 +1556,451 @@ def ovsdb_escape(string):
             return '\\x%02x' % ord(c)
     return re.sub(r'["\\\000-\037]', escape, string)
 
+RO = 1
+WO = 2
+RW = RO|WO
+def printCIDLSubset(schemaFile, subsetFile):
+    schema = parseSchema(schemaFile)
+    prefix = schema.idlPrefix
+    subset = eval(open(subsetFile, "rb").read(), None,
+                  {'RO': RO,
+                   'RW': RW,
+                   'WO': WO})
+    subset_prefix = subset['prefix']
+    subset_tables = subset['tables']
+    subset_indexes = subset.get('indexes', {})
+
+    # XXX verify that columns in the subset_tables exist
+    # XXX verify that permitted columns only reference permitted tables
+
+    # Columns named in an index must be RW
+    for table_name, indexes in subset_indexes.items():
+        column_acls = subset_tables.setdefault(table_name, {})
+        for index in indexes:
+            for column_name in index:
+                column_acls[column_name] = RW
+
+    print('''\
+/* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
+
+#ifndef %(PREFIX)sIDL_HEADER
+#define %(PREFIX)sIDL_HEADER 1
+
+#include "util.h"
+#include %(header)s
+
+#ifdef  __cplusplus
+extern "C" {
+#endif
+
+/* Allows the IDL owner to obtain a restricted transaction view. */
+static inline struct %(prefix)stxn *
+%(prefix)stxn_get(struct ovsdb_idl_txn *txn)
+{
+    return (struct %(prefix)stxn *) txn;
+}
+
+static inline void OVS_PRINTF_FORMAT(2, 3)
+%(prefix)stxn_add_comment(struct %(prefix)stxn *txn_, const char *format, ...)
+{
+    struct ovsdb_idl_txn *txn = (struct ovsdb_idl_txn *) txn_;
+
+    va_list args;
+    va_start(args, format);
+    char *comment = xvasprintf(format, args);
+    va_end(args);
+
+    ovsdb_idl_txn_add_comment(txn, "%%s", comment);
+
+    free(comment);
+}
+
+static inline void
+%(prefix)sregister(struct ovsdb_idl *idl)
+{\
+'''
+          % {'prefix': subset_prefix,
+             'PREFIX': subset_prefix.upper(),
+             'header': schema.idlHeader})
+
+    for table_name, column_acls in sorted(subset_tables.items()):
+        table = schema.tables[table_name]
+        for column_name, column in sorted_columns(table):
+            column_permissions = column_acls.get(column_name, 0)
+            if not column_permissions:
+                continue
+            print('    ovsdb_idl_add_column(idl, &%(p)s%(t)s_col_%(c)s);'
+                  % {'p': prefix,
+                     't': table_name.lower(),
+                     'c': column_name})
+    print('}')
+
+    for table_name, column_acls in sorted(subset_tables.items()):
+        table = schema.tables[table_name]
+        struct_name = "%s%s" % (subset_prefix, table_name.lower())
+        prefix_struct_name = "%s%s" % (prefix, table_name.lower())
+
+        print("")
+        print("/* %s table. */" % table_name)
+        print("struct %s {" % struct_name)
+        print("\tstruct ovsdb_idl_row header_;")
+        table_permissions = 0
+        for column_name, column in sorted_columns(table):
+            print("\n\t/* %s column. */" % column_name)
+            if column.extensions.get("members"):
+                print("\t%s" % column.extensions["members"])
+                continue
+            comment, members = cMembers(subset_prefix, table_name,
+                                        column_name, column, False)
+            column_permissions = column_acls.get(column_name, 0)
+            table_permissions |= column_permissions
+            name_suffix = ('' if column_permissions & RO
+                           else '__writeonly' if column_permissions & WO
+                           else '__noaccess')
+            for member in members:
+                print("\t%s%s%s;%s"
+                      % (member['type'],
+                         member['name'],
+                         name_suffix,
+                         member['comment']))
+        print("};")
+
+        args = {'s': struct_name, 'S': struct_name.upper(),
+                'sp': prefix_struct_name, 'p': subset_prefix}
+        print('''
+/* Allows the IDL owner to obtain a restricted table view. */
+static inline const struct %(s)s_table *
+%(s)s_table_get(const struct ovsdb_idl *idl)
+{
+    return (const struct %(s)s_table *) idl;
+}
+
+/* Obtains a restricted row view from a general-purpose one. */
+static inline const struct %(s)s *
+%(s)s_get(const struct %(sp)s *row)
+{
+    return (const struct %(s)s *) row;
+}
+
+/* Iterators for the restricted table view. */
+#define %(S)s_TABLE_FOR_EACH(ROW, TABLE) \\
+        for ((ROW) = %(s)s_table_first(TABLE); \\
+             (ROW); \\
+             (ROW) = %(s)s_next(ROW))''' % args)
+        if table_permissions & WO:
+            print('''\
+#define %(S)s_TABLE_FOR_EACH_SAFE(ROW, NEXT, TABLE) \\
+        for ((ROW) = %(s)s_table_first(TABLE); \\
+             (ROW) ? ((NEXT) = %(s)s_next(ROW), 1) : 0; \\
+             (ROW) = (NEXT))''' % args)
+        print('''\
+static inline const struct %(s)s *
+%(s)s_get_for_uuid(
+    const struct %(s)s_table *table,
+    const struct uuid *uuid)
+{
+    struct ovsdb_idl *idl = (struct ovsdb_idl *) table;
+    return (const struct %(s)s *) %(sp)s_get_for_uuid(idl, uuid);
+}
+static inline const struct %(s)s *
+%(s)s_table_first(const struct %(s)s_table *table)
+{
+    struct ovsdb_idl *idl = (struct ovsdb_idl *) table;
+    return (const struct %(s)s *) %(sp)s_first(idl);
+}
+static inline const struct %(s)s *
+%(s)s_next(const struct %(s)s *row)
+{
+    return (const struct %(s)s *) %(sp)s_next(
+        (struct %(sp)s *) row);
+}''' % {'s': struct_name,
+        'sp': prefix_struct_name,
+        'c': column_name})
+        if table_permissions & WO:
+            print('''
+static inline void
+%(s)s_delete(const struct %(s)s *row_)
+{
+    struct %(sp)s *row = (struct %(sp)s *) row_;
+    %(sp)s_delete(row);
+}
+
+static inline struct %(s)s *
+%(s)s_insert(struct %(p)stxn *txn_)
+{
+    struct ovsdb_idl_txn *txn = (struct ovsdb_idl_txn *) txn_;
+    return (struct %(s)s *) %(sp)s_insert(txn);
+}
+
+
+unsigned int %(s)s_row_get_seqno(const struct %(s)s *, enum ovsdb_idl_change);
+const struct %(s)s *%(s)s_track_get_first(const struct %(s)s_table *);
+const struct %(s)s *%(s)s_track_get_next(const struct %(s)s *);
+#define %(S)s_FOR_EACH_TRACKED(ROW, IDL) \\
+        for ((ROW) = %(s)s_track_get_first(IDL); \\
+             (ROW); \\
+             (ROW) = %(s)s_track_get_next(ROW))
+
+/* Returns true if 'row' was inserted since the last change tracking reset. */
+static inline bool %(s)s_is_new(const struct %(s)s *row)
+{
+    return %(s)s_row_get_seqno(row, OVSDB_IDL_CHANGE_MODIFY) == 0;
+}
+
+/* Returns true if 'row' was deleted since the last change tracking reset. */
+static inline bool %(s)s_is_deleted(const struct %(s)s *row)
+{
+    return %(s)s_row_get_seqno(row, OVSDB_IDL_CHANGE_DELETE) > 0;
+}
+
+bool %(s)s_is_updated(const struct %(s)s *, enum %(sp)s_column_id);''' % args)
+
+        for column_name, column in sorted_columns(table):
+            if (column.extensions.get('synthetic')
+                or (column_acls.get(column_name, 0) & RO) == 0):
+                continue
+            print('''
+static inline void
+%(s)s_verify_%(c)s(const struct %(s)s *row)
+{
+    %(sp)s_verify_%(c)s((const struct %(sp)s *) row);
+}''' % {'s': struct_name,
+        'sp': prefix_struct_name,
+        'c': column_name})
+
+        print("")
+        for column_name, column in sorted_columns(table):
+            if (column.extensions.get('synthetic')
+                or (column_acls.get(column_name, 0) & RO) == 0):
+                continue
+            if column.type.value:
+                valueParam = ', enum ovsdb_atomic_type value_type'
+            else:
+                valueParam = ''
+            print('const struct ovsdb_datum *%(s)s_get_%(c)s(const struct %(s)s *, enum ovsdb_atomic_type key_type%(v)s);' % {
+                's': struct_name, 'c': column_name, 'v': valueParam})
+
+        print("")
+        for column_name, column in sorted_columns(table):
+            if (column.extensions.get('synthetic')
+                or (column_acls.get(column_name, 0) & WO) == 0):
+                continue
+            type = column.type
+
+            if type.is_smap():
+                print('''\
+static inline void
+%(s)s_set_%(c)s(const struct %(s)s *row, const struct smap *smap)
+{
+    %(sp)s_set_%(c)s((const struct %(sp)s *) row, smap);
+}
+'''
+                      % {'c': column_name,
+                         's': struct_name,
+                         'sp': prefix_struct_name})
+                continue
+
+            comment, members = cMembers(subset_prefix, table_name, column_name,
+                                        column, True)
+            comment2, members2 = cMembers(prefix, table_name, column_name,
+                                          column, True)
+
+            print('''\
+static inline void
+%(s)s_set_%(c)s(const struct %(s)s *row, %(args)s)
+{
+    %(sp)s_set_%(c)s((const struct %(sp)s *) row, %(arg_names)s);
+}
+'''
+                  % {'c': column_name,
+                     's': struct_name,
+                     'sp': prefix_struct_name,
+                     'args': ', '.join(['%(type)s%(name)s' % m for m in members]),
+                     'arg_names': ', '.join([m.get('cast', '') + m['name']
+                                             for m in members2])})
+
+        print("")
+        for column_name, column in sorted_columns(table):
+            if (column.extensions.get('synthetic')
+                or column_acls.get(column_name, '') != RW):
+                continue
+            if column.type.is_map():
+                print('void %(s)s_update_%(c)s_setkey(const struct %(s)s *, ' % {'s': struct_name, 'c': column_name}, end=' ')
+                print('%(coltype)s, %(valtype)s);' % {'coltype':column.type.key.to_const_c_type(subset_prefix), 'valtype':column.type.value.to_const_c_type(subset_prefix)})
+                print('void %(s)s_update_%(c)s_delkey(const struct %(s)s *, ' % {'s': struct_name, 'c': column_name}, end=' ')
+                print('%(coltype)s);' % {'coltype':column.type.key.to_const_c_type(subset_prefix)})
+            if column.type.is_set():
+                args = {
+                    'sp': prefix_struct_name,
+                    's': struct_name,
+                    'c': column_name,
+                    'valtype': column.type.key.to_const_c_type(subset_prefix)
+                }
+                args['cast'] = '(%s)' % column.type.key.to_const_c_type(prefix) if column.type.key.ref_table_name else ''
+                print('''\
+static inline void
+%(s)s_update_%(c)s_addvalue(
+    const struct %(s)s *row,
+    %(valtype)s new_value)
+{
+    %(sp)s_update_%(c)s_addvalue(
+        (const struct %(sp)s *) row,
+        %(cast)snew_value);
+}
+
+static inline void
+%(s)s_update_%(c)s_delvalue(
+    const struct %(s)s *row,
+    %(valtype)s old_value)
+{
+    %(sp)s_update_%(c)s_delvalue(
+        (const struct %(sp)s *) row,
+        %(cast)sold_value);
+}''' % args)
+
+    for table_name, indexes in subset_indexes.items():
+        table = schema.tables[table_name]
+        struct_name = "%s%s" % (subset_prefix, table_name.lower())
+        prefix_struct_name = "%s%s" % (prefix, table_name.lower())
+
+        for index in indexes:
+            print('/* Index of %s by %s. */'
+                  % (table_name, ' and '.join(index)))
+
+            columns = '_'.join(index)
+
+            set_params = []
+            set_names = []
+            set_calls = []
+            for column_name in index:
+                column = table.columns[column_name]
+                comment, members = cMembers(subset_prefix, table_name,
+                                            column_name, column, True)
+                set_params += ['%(type)s%(name)s' % m for m in members]
+                set_names += [m['name'] for m in members]
+                set_calls += ['%(s)s_set_%(c)s(row, %(names)s);'
+                              % {'s': struct_name,
+                                 'c': column_name,
+                                 'names': ', '.join([m['name'] for m in members])}]
+
+            index_name = '%s_by_%s' % (struct_name, columns)
+            args = {'c': columns,
+                    't': table_name.lower(),
+                    's': struct_name,
+                    'sp': prefix_struct_name,
+                    'i': index_name,
+                    'I': index_name.upper(),
+                    'set_params': ', '.join(set_params),
+                    'set_names': ', '.join(set_names),
+                    'set_calls': '\n'.join(set_calls)}
+            print('''\
+static inline struct %(i)s *
+%(i)s_get(struct %(sp)s_index *index)
+{
+    return (struct %(i)s *) index;
+}
+
+static inline struct %(s)s *
+%(i)s_new_row(struct %(i)s *index)
+{
+    return (struct %(s)s *) ovsdb_idl_index_init_row((struct ovsdb_idl_index *) index);
+}
+
+static inline void
+%(i)s_set(
+    struct %(s)s *row,
+    %(set_params)s)
+{
+    %(set_calls)s
+}
+
+static inline void
+%(i)s_destroy_row(
+    struct %(s)s *row)
+{
+    ovsdb_idl_index_destroy_row((struct ovsdb_idl_row *) row);
+}
+
+#define %(I)s_FOR_EACH_RANGE(ROW, FROM, TO, INDEX) \\
+        for (struct ovsdb_idl_cursor cursor__ = %(i)s_cursor_first_ge(INDEX, FROM); \\
+             (cursor__.position \\
+              && ((ROW) = %(i)s_cursor_data(&cursor__), \\
+                  !(TO) || %(i)s_index_compare(INDEX, ROW, TO) <= 0)); \\
+             ovsdb_idl_cursor_next(&cursor__))
+#define %(I)s_FOR_EACH_EQUAL(ROW, KEY, INDEX) \\
+        for (struct ovsdb_idl_cursor cursor__ = %(i)s_cursor_first_eq(INDEX, KEY); \\
+             (cursor__.position \\
+              ? ((ROW) = %(i)s_cursor_data(&cursor__), \\
+                 ovsdb_idl_cursor_next_eq(&cursor__), \\
+                 true) \\
+              : false); \\
+            )
+#define %(I)s_FOR_EACH_BYINDEX(ROW, INDEX) \\
+        for (struct ovsdb_idl_cursor cursor__ = %(i)s_cursor_first(INDEX); \\
+             (cursor__.position \\
+              ? ((ROW) = %(i)s_cursor_data(&cursor__), \\
+                 ovsdb_idl_cursor_next(&cursor__), \\
+                 true) \\
+              : false); \\
+            )
+
+static inline struct %(s)s *
+%(i)s_find(struct %(i)s *index, %(set_params)s)
+{
+    struct %(s)s *target = %(i)s_new_row(index);
+    %(i)s_set(target, %(set_names)s);
+    struct %(s)s *row = (struct %(s)s *) ovsdb_idl_index_find((struct ovsdb_idl_index *) index, &target->header_);
+    %(i)s_destroy_row(target);
+    return row;
+}
+
+/* Compares 'a' to 'b' and returns a strcmp()-type result. */
+static inline int
+%(i)s_compare(
+    struct %(i)s *index, 
+    const struct %(s)s *a, 
+    const struct %(s)s *b)
+{
+    return ovsdb_idl_index_compare((struct ovsdb_idl_index *) index,
+                                   &a->header_, &b->header_);
+}
+
+static inline struct ovsdb_idl_cursor
+%(i)s_cursor_first(struct %(i)s *index)
+{
+    return ovsdb_idl_cursor_first((struct ovsdb_idl_index *) index);
+}
+
+static inline struct ovsdb_idl_cursor
+%(i)s_cursor_first_eq(
+    struct %(i)s *index, const struct %(s)s *target)
+{
+    return ovsdb_idl_cursor_first_eq((struct ovsdb_idl_index *) index,
+                                     &target->header_);
+}
+
+static inline struct ovsdb_idl_cursor
+%(i)s_cursor_first_ge(
+    struct %(i)s *index, const struct %(s)s *target)
+{
+    return ovsdb_idl_cursor_first_ge((struct ovsdb_idl_index *) index,
+                                     &target->header_);
+}
+
+static inline struct %(s)s *
+%(i)s_cursor_data(struct ovsdb_idl_cursor *cursor)
+{
+    return (struct %(s)s *) ovsdb_idl_cursor_data(cursor);
+}
+'''
+                  % args)
+
+    print('''
+#ifdef  __cplusplus
+}
+#endif''')
+    print("\n#endif /* %sIDL_HEADER */" % subset_prefix.upper())
+
 def usage():
     print("""\
 %(argv0)s: ovsdb schema compiler
@@ -1539,7 +2047,8 @@ if __name__ == "__main__":
 
         commands = {"annotate": (annotateSchema, 2),
                     "c-idl-header": (printCIDLHeader, 1),
-                    "c-idl-source": (printCIDLSource, 1)}
+                    "c-idl-source": (printCIDLSource, 1),
+                    "c-idl-subset": (printCIDLSubset, 2)}
 
         if not args[0] in commands:
             sys.stderr.write("%s: unknown command \"%s\" "

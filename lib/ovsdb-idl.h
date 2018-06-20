@@ -386,7 +386,7 @@ struct ovsdb_idl_index_column {
 
 /* Creating an index. */
 struct ovsdb_idl_index *ovsdb_idl_index_create(
-    struct ovsdb_idl *, const struct ovsdb_idl_index_column *, size_t n);
+    struct ovsdb_idl *, const struct ovsdb_idl_index_column[], size_t n);
 struct ovsdb_idl_index *ovsdb_idl_index_create1(
     struct ovsdb_idl *, const struct ovsdb_idl_column *);
 struct ovsdb_idl_index *ovsdb_idl_index_create2(

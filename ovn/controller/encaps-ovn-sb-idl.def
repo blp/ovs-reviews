@@ -1,0 +1,14 @@
+# -*- python -*-
+
+{
+    "prefix": "encaps_sbrec_",
+    "tables": {
+        "Encap": {
+            "name": RW,
+            "type": RW,
+            "ip": RO,
+            "options": RW},
+        "Chassis": {
+            "name": RO,
+            "encaps": RO}}
+}

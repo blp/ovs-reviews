@@ -16,22 +16,21 @@
 #ifndef OVN_BFD_H
 #define OVN_BFD_H 1
 
+#include "ovn/controller/bfd-ovn-sb-idl.h"
+#include "ovn/controller/bfd-vswitch-idl.h"
+
 struct hmap;
 struct ovsdb_idl;
-struct ovsdb_idl_index;
-struct ovsrec_bridge;
-struct ovsrec_interface_table;
-struct sbrec_chassis;
 struct sset;
 
 void bfd_register_ovs_idl(struct ovsdb_idl *);
-void bfd_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
-             struct ovsdb_idl_index *sbrec_port_binding_by_datapath,
-             const struct ovsrec_interface_table *interface_table,
-             const struct ovsrec_bridge *br_int,
+void bfd_run(struct bfd_sbrec_chassis_by_name *,
+             struct bfd_sbrec_port_binding_by_datapath *,
+             const struct bfd_ovsrec_interface_table *,
+             const struct bfd_ovsrec_bridge *br_int,
              const struct sbrec_chassis *chassis_rec,
              const struct hmap *local_datapaths);
-void  bfd_calculate_active_tunnels(const struct ovsrec_bridge *br_int,
+void  bfd_calculate_active_tunnels(const struct bfd_ovsrec_bridge *br_int,
                                    struct sset *active_tunnels);
 
 #endif

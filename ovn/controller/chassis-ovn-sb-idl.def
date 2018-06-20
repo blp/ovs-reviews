@@ -1,0 +1,21 @@
+# -*- python -*-
+
+{
+    "prefix": "chassis_sbrec_",
+    "tables": {
+        "Chassis": {
+            "name": RW,
+            "hostname": RW,
+            "external_ids": RW,
+            "encaps": RW
+        },
+        "Encap": {
+            "type": RW,
+            "ip": RW,
+            "options": RW,
+            "chassis_name": WO
+        }},
+    "indexes": {
+        "Chassis": [["name"]],
+    }
+}

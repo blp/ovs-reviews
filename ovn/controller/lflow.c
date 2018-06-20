@@ -17,7 +17,6 @@
 #include "lflow.h"
 #include "coverage.h"
 #include "gchassis.h"
-#include "lport.h"
 #include "ofctrl.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/ofp-actions.h"
@@ -50,25 +49,25 @@ lflow_init(void)
 }
 
 struct lookup_port_aux {
-    struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath;
-    struct ovsdb_idl_index *sbrec_port_binding_by_name;
-    const struct sbrec_datapath_binding *dp;
+    struct lflow_sbrec_multicast_group_by_name_datapath *sbrec_multicast_group_by_name_datapath;
+    struct lflow_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name;
+    const struct lflow_sbrec_datapath_binding *dp;
 };
 
 struct condition_aux {
-    struct ovsdb_idl_index *sbrec_chassis_by_name;
-    struct ovsdb_idl_index *sbrec_port_binding_by_name;
-    const struct sbrec_chassis *chassis;
+    struct lflow_sbrec_chassis_by_name *sbrec_chassis_by_name;
+    struct lflow_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name;
+    const struct lflow_sbrec_chassis *chassis;
     const struct sset *active_tunnels;
 };
 
 static void consider_logical_flow(
-    struct ovsdb_idl_index *sbrec_chassis_by_name,
-    struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
-    struct ovsdb_idl_index *sbrec_port_binding_by_name,
-    const struct sbrec_logical_flow *,
+    struct lflow_sbrec_chassis_by_name *,
+    struct lflow_sbrec_multicast_group_by_name_datapath *,
+    struct lflow_sbrec_port_binding_by_logical_port *,
+    const struct lflow_sbrec_logical_flow *,
     const struct hmap *local_datapaths,
-    const struct sbrec_chassis *,
+    const struct lflow_sbrec_chassis *,
     struct hmap *dhcp_opts,
     struct hmap *dhcpv6_opts,
     struct hmap *nd_ra_opts,
@@ -86,15 +85,18 @@ lookup_port_cb(const void *aux_, const char *port_name, unsigned int *portp)
 {
     const struct lookup_port_aux *aux = aux_;
 
-    const struct sbrec_port_binding *pb
-        = lport_lookup_by_name(aux->sbrec_port_binding_by_name, port_name);
+    const struct lflow_sbrec_port_binding *pb
+        = lflow_sbrec_port_binding_by_logical_port_find(
+            aux->sbrec_port_binding_by_name, port_name);
     if (pb && pb->datapath == aux->dp) {
         *portp = pb->tunnel_key;
         return true;
     }
 
-    const struct sbrec_multicast_group *mg = mcgroup_lookup_by_dp_name(
-        aux->sbrec_multicast_group_by_name_datapath, aux->dp, port_name);
+    const struct lflow_sbrec_multicast_group *mg =
+        lflow_sbrec_multicast_group_by_name_datapath_find(
+            aux->sbrec_multicast_group_by_name_datapath,
+            port_name, aux->dp);
     if (mg) {
         *portp = mg->tunnel_key;
         return true;
@@ -108,8 +110,9 @@ is_chassis_resident_cb(const void *c_aux_, const char *port_name)
 {
     const struct condition_aux *c_aux = c_aux_;
 
-    const struct sbrec_port_binding *pb
-        = lport_lookup_by_name(c_aux->sbrec_port_binding_by_name, port_name);
+    const struct lflow_sbrec_port_binding *pb
+        = lflow_sbrec_port_binding_by_logical_port_find(
+            c_aux->sbrec_port_binding_by_name, port_name);
     if (!pb) {
         return false;
     }
@@ -117,13 +120,14 @@ is_chassis_resident_cb(const void *c_aux_, const char *port_name)
         /* for non-chassisredirect ports */
         return pb->chassis && pb->chassis == c_aux->chassis;
     } else {
-        struct ovs_list *gateway_chassis;
-        gateway_chassis = gateway_chassis_get_ordered(
-            c_aux->sbrec_chassis_by_name, pb);
+        struct ovs_list *gateway_chassis = gateway_chassis_get_ordered(
+            (struct sbrec_chassis_index *) c_aux->sbrec_chassis_by_name /* XXX */,
+            (struct sbrec_port_binding *) pb /* XXX */);
         if (gateway_chassis) {
-            bool active = gateway_chassis_is_active(gateway_chassis,
-                                                    c_aux->chassis,
-                                                    c_aux->active_tunnels);
+            bool active = gateway_chassis_is_active(
+                gateway_chassis,
+                (struct sbrec_chassis *) c_aux->chassis /* XXX */,
+                c_aux->active_tunnels);
             gateway_chassis_destroy(gateway_chassis);
             return active;
         }
@@ -132,23 +136,22 @@ is_chassis_resident_cb(const void *c_aux_, const char *port_name)
 }
 
 static bool
-is_switch(const struct sbrec_datapath_binding *ldp)
+is_switch(const struct lflow_sbrec_datapath_binding *ldp)
 {
     return smap_get(&ldp->external_ids, "logical-switch") != NULL;
-
 }
 
 /* Adds the logical flows from the Logical_Flow table to flow tables. */
 static void
 add_logical_flows(
-    struct ovsdb_idl_index *sbrec_chassis_by_name,
-    struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
-    struct ovsdb_idl_index *sbrec_port_binding_by_name,
-    const struct sbrec_dhcp_options_table *dhcp_options_table,
-    const struct sbrec_dhcpv6_options_table *dhcpv6_options_table,
-    const struct sbrec_logical_flow_table *logical_flow_table,
+    struct lflow_sbrec_chassis_by_name *sbrec_chassis_by_name,
+    struct lflow_sbrec_multicast_group_by_name_datapath *sbrec_multicast_group_by_name_datapath,
+    struct lflow_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name,
+    const struct lflow_sbrec_dhcp_options_table *dhcp_options_table,
+    const struct lflow_sbrec_dhcpv6_options_table *dhcpv6_options_table,
+    const struct lflow_sbrec_logical_flow_table *logical_flow_table,
     const struct hmap *local_datapaths,
-    const struct sbrec_chassis *chassis,
+    const struct lflow_sbrec_chassis *chassis,
     const struct shash *addr_sets,
     const struct shash *port_groups,
     const struct sset *active_tunnels,
@@ -158,19 +161,20 @@ add_logical_flows(
     struct ovn_extend_table *meter_table)
 {
     uint32_t conj_id_ofs = 1;
-    const struct sbrec_logical_flow *lflow;
+    const struct lflow_sbrec_logical_flow *lflow;
 
     struct hmap dhcp_opts = HMAP_INITIALIZER(&dhcp_opts);
     struct hmap dhcpv6_opts = HMAP_INITIALIZER(&dhcpv6_opts);
-    const struct sbrec_dhcp_options *dhcp_opt_row;
-    SBREC_DHCP_OPTIONS_TABLE_FOR_EACH (dhcp_opt_row, dhcp_options_table) {
+    const struct lflow_sbrec_dhcp_options *dhcp_opt_row;
+    LFLOW_SBREC_DHCP_OPTIONS_TABLE_FOR_EACH (dhcp_opt_row,
+                                             dhcp_options_table) {
         dhcp_opt_add(&dhcp_opts, dhcp_opt_row->name, dhcp_opt_row->code,
                      dhcp_opt_row->type);
     }
 
 
-    const struct sbrec_dhcpv6_options *dhcpv6_opt_row;
-    SBREC_DHCPV6_OPTIONS_TABLE_FOR_EACH (dhcpv6_opt_row,
+    const struct lflow_sbrec_dhcpv6_options *dhcpv6_opt_row;
+    LFLOW_SBREC_DHCPV6_OPTIONS_TABLE_FOR_EACH (dhcpv6_opt_row,
                                          dhcpv6_options_table) {
        dhcp_opt_add(&dhcpv6_opts, dhcpv6_opt_row->name, dhcpv6_opt_row->code,
                     dhcpv6_opt_row->type);
@@ -179,7 +183,7 @@ add_logical_flows(
     struct hmap nd_ra_opts = HMAP_INITIALIZER(&nd_ra_opts);
     nd_ra_opts_init(&nd_ra_opts);
 
-    SBREC_LOGICAL_FLOW_TABLE_FOR_EACH (lflow, logical_flow_table) {
+    LFLOW_SBREC_LOGICAL_FLOW_TABLE_FOR_EACH (lflow, logical_flow_table) {
         consider_logical_flow(sbrec_chassis_by_name,
                               sbrec_multicast_group_by_name_datapath,
                               sbrec_port_binding_by_name,
@@ -197,12 +201,12 @@ add_logical_flows(
 
 static void
 consider_logical_flow(
-    struct ovsdb_idl_index *sbrec_chassis_by_name,
-    struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
-    struct ovsdb_idl_index *sbrec_port_binding_by_name,
-    const struct sbrec_logical_flow *lflow,
+    struct lflow_sbrec_chassis_by_name *sbrec_chassis_by_name,
+    struct lflow_sbrec_multicast_group_by_name_datapath *sbrec_multicast_group_by_name_datapath,
+    struct lflow_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name,
+    const struct lflow_sbrec_logical_flow *lflow,
     const struct hmap *local_datapaths,
-    const struct sbrec_chassis *chassis,
+    const struct lflow_sbrec_chassis *chassis,
     struct hmap *dhcp_opts,
     struct hmap *dhcpv6_opts,
     struct hmap *nd_ra_opts,
@@ -218,7 +222,7 @@ consider_logical_flow(
     /* Determine translation of logical table IDs to physical table IDs. */
     bool ingress = !strcmp(lflow->pipeline, "ingress");
 
-    const struct sbrec_datapath_binding *ldp = lflow->logical_datapath;
+    const struct lflow_sbrec_datapath_binding *ldp = lflow->logical_datapath;
     if (!ldp) {
         return;
     }
@@ -396,12 +400,14 @@ put_load(const uint8_t *data, size_t len,
 }
 
 static void
-consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                       const struct sbrec_mac_binding *b,
-                       struct hmap *flow_table)
+consider_neighbor_flow(
+    struct lflow_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name,
+    const struct lflow_sbrec_mac_binding *b,
+    struct hmap *flow_table)
 {
-    const struct sbrec_port_binding *pb
-        = lport_lookup_by_name(sbrec_port_binding_by_name, b->logical_port);
+    const struct lflow_sbrec_port_binding *pb
+        = lflow_sbrec_port_binding_by_logical_port_find(
+            sbrec_port_binding_by_name, b->logical_port);
     if (!pb) {
         return;
     }
@@ -447,12 +453,12 @@ consider_neighbor_flow(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 /* Adds an OpenFlow flow to flow tables for each MAC binding in the OVN
  * southbound database. */
 static void
-add_neighbor_flows(struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                   const struct sbrec_mac_binding_table *mac_binding_table,
+add_neighbor_flows(struct lflow_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name,
+                   const struct lflow_sbrec_mac_binding_table *mac_binding_table,
                    struct hmap *flow_table)
 {
-    const struct sbrec_mac_binding *b;
-    SBREC_MAC_BINDING_TABLE_FOR_EACH (b, mac_binding_table) {
+    const struct lflow_sbrec_mac_binding *b;
+    LFLOW_SBREC_MAC_BINDING_TABLE_FOR_EACH (b, mac_binding_table) {
         consider_neighbor_flow(sbrec_port_binding_by_name, b, flow_table);
     }
 }
@@ -460,33 +466,34 @@ add_neighbor_flows(struct ovsdb_idl_index *sbrec_port_binding_by_name,
 /* Translates logical flows in the Logical_Flow table in the OVN_SB database
  * into OpenFlow flows.  See ovn-architecture(7) for more information. */
 void
-lflow_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
-          struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
-          struct ovsdb_idl_index *sbrec_port_binding_by_name,
-          const struct sbrec_dhcp_options_table *dhcp_options_table,
-          const struct sbrec_dhcpv6_options_table *dhcpv6_options_table,
-          const struct sbrec_logical_flow_table *logical_flow_table,
-          const struct sbrec_mac_binding_table *mac_binding_table,
-          const struct sbrec_chassis *chassis,
-          const struct hmap *local_datapaths,
-          const struct shash *addr_sets,
-          const struct shash *port_groups,
-          const struct sset *active_tunnels,
-          const struct sset *local_lport_ids,
-          struct hmap *flow_table,
-          struct ovn_extend_table *group_table,
-          struct ovn_extend_table *meter_table)
+lflow_run(
+    struct lflow_sbrec_chassis_by_name *lflow_sbrec_chassis_by_name,
+    struct lflow_sbrec_multicast_group_by_name_datapath *lflow_sbrec_multicast_group_by_name_datapath,
+    struct lflow_sbrec_port_binding_by_logical_port *lflow_sbrec_port_binding_by_name,
+    const struct lflow_sbrec_dhcp_options_table *dhcp_options_table,
+    const struct lflow_sbrec_dhcpv6_options_table *dhcpv6_options_table,
+    const struct lflow_sbrec_logical_flow_table *logical_flow_table,
+    const struct lflow_sbrec_mac_binding_table *mac_binding_table,
+    const struct lflow_sbrec_chassis *chassis,
+    const struct hmap *local_datapaths,
+    const struct shash *addr_sets,
+    const struct shash *port_groups,
+    const struct sset *active_tunnels,
+    const struct sset *local_lport_ids,
+    struct hmap *flow_table,
+    struct ovn_extend_table *group_table,
+    struct ovn_extend_table *meter_table)
 {
     COVERAGE_INC(lflow_run);
 
-    add_logical_flows(sbrec_chassis_by_name,
-                      sbrec_multicast_group_by_name_datapath,
-                      sbrec_port_binding_by_name, dhcp_options_table,
+    add_logical_flows(lflow_sbrec_chassis_by_name,
+                      lflow_sbrec_multicast_group_by_name_datapath,
+                      lflow_sbrec_port_binding_by_name, dhcp_options_table,
                       dhcpv6_options_table, logical_flow_table,
                       local_datapaths, chassis, addr_sets, port_groups,
                       active_tunnels, local_lport_ids, flow_table, group_table,
                       meter_table);
-    add_neighbor_flows(sbrec_port_binding_by_name, mac_binding_table,
+    add_neighbor_flows(lflow_sbrec_port_binding_by_name, mac_binding_table,
                        flow_table);
 }
 

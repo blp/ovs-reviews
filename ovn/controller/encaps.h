@@ -18,19 +18,18 @@
 
 #include <stdbool.h>
 
+#include "ovn/controller/encaps-vswitch-idl.h"
+#include "ovn/controller/encaps-ovn-sb-idl.h"
+
 struct ovsdb_idl;
-struct ovsdb_idl_txn;
-struct ovsrec_bridge;
-struct ovsrec_bridge_table;
-struct sbrec_chassis_table;
 
 void encaps_register_ovs_idl(struct ovsdb_idl *);
-void encaps_run(struct ovsdb_idl_txn *ovs_idl_txn,
-                const struct ovsrec_bridge_table *,
-                const struct ovsrec_bridge *br_int,
-                const struct sbrec_chassis_table *,
+void encaps_run(struct encaps_ovsrec_txn *,
+                const struct encaps_ovsrec_bridge_table *,
+                const struct encaps_ovsrec_bridge *br_int,
+                const struct encaps_sbrec_chassis_table *,
                 const char *chassis_id);
-bool encaps_cleanup(struct ovsdb_idl_txn *ovs_idl_txn,
-                    const struct ovsrec_bridge *br_int);
+bool encaps_cleanup(struct encaps_ovsrec_txn *,
+                    const struct encaps_ovsrec_bridge *br_int);
 
 #endif /* ovn/encaps.h */

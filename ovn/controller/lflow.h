@@ -16,6 +16,7 @@
 #ifndef OVN_LFLOW_H
 #define OVN_LFLOW_H 1
 
+#include "ovn/controller/lflow-ovn-sb-idl.h"
 #include "ovn/lib/logical-fields.h"
 
 /* Logical_Flow table translation to OpenFlow
@@ -36,13 +37,7 @@
 #include <stdint.h>
 
 struct ovn_extend_table;
-struct ovsdb_idl_index;
 struct hmap;
-struct sbrec_chassis;
-struct sbrec_dhcp_options_table;
-struct sbrec_dhcpv6_options_table;
-struct sbrec_logical_flow_table;
-struct sbrec_mac_binding_table;
 struct simap;
 struct sset;
 struct uuid;
@@ -65,14 +60,14 @@ struct uuid;
 #define LOG_PIPELINE_LEN 24
 
 void lflow_init(void);
-void lflow_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
-               struct ovsdb_idl_index *sbrec_multicast_group_by_name_datapath,
-               struct ovsdb_idl_index *sbrec_port_binding_by_name,
-               const struct sbrec_dhcp_options_table *,
-               const struct sbrec_dhcpv6_options_table *,
-               const struct sbrec_logical_flow_table *,
-               const struct sbrec_mac_binding_table *,
-               const struct sbrec_chassis *chassis,
+void lflow_run(struct lflow_sbrec_chassis_by_name *,
+               struct lflow_sbrec_multicast_group_by_name_datapath *,
+               struct lflow_sbrec_port_binding_by_logical_port *,
+               const struct lflow_sbrec_dhcp_options_table *,
+               const struct lflow_sbrec_dhcpv6_options_table *,
+               const struct lflow_sbrec_logical_flow_table *,
+               const struct lflow_sbrec_mac_binding_table *,
+               const struct lflow_sbrec_chassis *chassis,
                const struct hmap *local_datapaths,
                const struct shash *addr_sets,
                const struct shash *port_groups,

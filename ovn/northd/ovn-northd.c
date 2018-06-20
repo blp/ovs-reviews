@@ -1725,7 +1725,7 @@ gateway_chassis_equal(const struct nbrec_gateway_chassis *nb_gwc,
 
 static bool
 sbpb_gw_chassis_needs_update(
-    struct ovsdb_idl_index *sbrec_chassis_by_name,
+    struct sbrec_chassis_index *sbrec_chassis_by_name,
     const struct sbrec_port_binding *port_binding,
     const struct nbrec_logical_router_port *lrp)
 {
@@ -1809,7 +1809,7 @@ sbpb_gw_chassis_needs_update(
 static void
 copy_gw_chassis_from_nbrp_to_sbpb(
         struct northd_context *ctx,
-        struct ovsdb_idl_index *sbrec_chassis_by_name,
+        struct sbrec_chassis_index *sbrec_chassis_by_name,
         const struct nbrec_logical_router_port *lrp,
         const struct sbrec_port_binding *port_binding) {
 
@@ -1856,7 +1856,7 @@ copy_gw_chassis_from_nbrp_to_sbpb(
 
 static void
 ovn_port_update_sbrec(struct northd_context *ctx,
-                      struct ovsdb_idl_index *sbrec_chassis_by_name,
+                      struct sbrec_chassis_index *sbrec_chassis_by_name,
                       const struct ovn_port *op,
                       struct hmap *chassis_qdisc_queues)
 {
@@ -2103,7 +2103,7 @@ cleanup_mac_bindings(struct northd_context *ctx, struct hmap *ports)
  * datapaths. */
 static void
 build_ports(struct northd_context *ctx,
-            struct ovsdb_idl_index *sbrec_chassis_by_name,
+            struct sbrec_chassis_index *sbrec_chassis_by_name,
             struct hmap *datapaths, struct hmap *ports)
 {
     struct ovs_list sb_only, nb_only, both;
@@ -6625,7 +6625,7 @@ sync_dns_entries(struct northd_context *ctx, struct hmap *datapaths)
 
 static void
 ovnnb_db_run(struct northd_context *ctx,
-             struct ovsdb_idl_index *sbrec_chassis_by_name,
+             struct sbrec_chassis_index *sbrec_chassis_by_name,
              struct ovsdb_idl_loop *sb_loop)
 {
     if (!ctx->ovnsb_txn || !ctx->ovnnb_txn) {
@@ -7269,7 +7269,7 @@ main(int argc, char *argv[])
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_nb_cfg);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_name);
 
-    struct ovsdb_idl_index *sbrec_chassis_by_name
+    struct sbrec_chassis_index *sbrec_chassis_by_name
         = chassis_index_create(ovnsb_idl_loop.idl);
 
     /* Ensure that only a single ovn-northd is active in the deployment by

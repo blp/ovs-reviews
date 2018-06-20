@@ -1,0 +1,20 @@
+# -*- python -*-
+
+{
+    "prefix": "patch_sbrec_",
+    "tables": {
+        "Chassis": {
+            "name": RO
+        },
+        "Port_Binding": {
+            "chassis": RO,
+            "logical_port": RO,
+            "type": RO,
+            "options": RO,
+        }},
+    "indexes": {
+        "Chassis": [["name"]],
+        "Datapath_Binding": [["tunnel_key"]],
+        "Port_Binding": [["tunnel_key", "datapath"], ["datapath"], ["logical_port"]],
+    }
+}

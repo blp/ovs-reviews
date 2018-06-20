@@ -1,0 +1,27 @@
+# -*- python -*-
+
+{
+    "prefix": "binding_sbrec_",
+    "tables": {
+        "Chassis": {
+            "name": RO,
+            "hostname": RO
+        },
+        "Datapath_Binding": {
+            "external_ids": RO,
+            "tunnel_key": RO,
+        },
+        "Port_Binding": {
+            "chassis": RW,
+            "datapath": RO,
+            "tunnel_key": RO,
+            "mac": RO,
+            "type": RO,
+            "options": RO,
+            "parent_port": RO}},
+    "indexes": {
+        "Chassis": [["name"]],
+        "Datapath_Binding": [["tunnel_key"]],
+        "Port_Binding": [["datapath"], ["logical_port"]],
+    }
+}

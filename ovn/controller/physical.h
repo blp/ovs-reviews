@@ -25,14 +25,12 @@
  * two pipelines.
  */
 
+#include "ovn/controller/physical-vswitch-idl.h"
+#include "ovn/controller/physical-ovn-sb-idl.h"
 #include "openvswitch/meta-flow.h"
 
 struct hmap;
-struct ovsdb_idl_index;
-struct ovsrec_bridge;
 struct simap;
-struct sbrec_multicast_group_table;
-struct sbrec_port_binding_table;
 struct sset;
 
 /* OVN Geneve option information.
@@ -43,17 +41,18 @@ struct sset;
 #define OVN_GENEVE_LEN 4
 
 void physical_register_ovs_idl(struct ovsdb_idl *);
-void physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
-                  struct ovsdb_idl_index *sbrec_port_binding_by_name,
-                  const struct sbrec_multicast_group_table *,
-                  const struct sbrec_port_binding_table *,
-                  enum mf_field_id mff_ovn_geneve,
-                  const struct ovsrec_bridge *br_int,
-                  const struct sbrec_chassis *chassis,
-                  const struct simap *ct_zones,
-                  const struct hmap *local_datapaths,
-                  const struct sset *local_lports,
-                  const struct sset *active_tunnels,
-                  struct hmap *flow_table);
+void physical_run(
+    struct phys_sbrec_chassis_by_name *,
+    struct phys_sbrec_port_binding_by_logical_port *,
+    const struct phys_sbrec_multicast_group_table *,
+    const struct phys_sbrec_port_binding_table *,
+    enum mf_field_id mff_ovn_geneve,
+    const struct phys_ovsrec_bridge *br_int,
+    const struct phys_sbrec_chassis *chassis,
+    const struct simap *ct_zones,
+    const struct hmap *local_datapaths,
+    const struct sset *local_lports,
+    const struct sset *active_tunnels,
+    struct hmap *flow_table);
 
 #endif /* ovn/physical.h */

@@ -1,0 +1,8 @@
+# -*- python -*-
+
+{
+    "prefix": "ofctrl_ovsrec_",
+    "tables": {
+        "Bridge": {
+            "name": RO}}
+}

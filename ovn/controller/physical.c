@@ -19,7 +19,6 @@
 #include "flow.h"
 #include "gchassis.h"
 #include "lflow.h"
-#include "lport.h"
 #include "lib/bundle.h"
 #include "openvswitch/poll-loop.h"
 #include "lib/uuid.h"
@@ -31,7 +30,6 @@
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "ovn-controller.h"
-#include "ovn/lib/chassis-index.h"
 #include "ovn/lib/ovn-sb-idl.h"
 #include "ovn/lib/ovn-util.h"
 #include "physical.h"
@@ -47,18 +45,7 @@ VLOG_DEFINE_THIS_MODULE(physical);
 void
 physical_register_ovs_idl(struct ovsdb_idl *ovs_idl)
 {
-    ovsdb_idl_add_table(ovs_idl, &ovsrec_table_bridge);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_bridge_col_ports);
-
-    ovsdb_idl_add_table(ovs_idl, &ovsrec_table_port);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_port_col_name);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_port_col_interfaces);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_port_col_external_ids);
-
-    ovsdb_idl_add_table(ovs_idl, &ovsrec_table_interface);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_interface_col_name);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_interface_col_ofport);
-    ovsdb_idl_add_column(ovs_idl, &ovsrec_interface_col_external_ids);
+    phys_ovsrec_register(ovs_idl);
 }
 
 static struct simap localvif_to_ofport =
@@ -125,7 +112,7 @@ put_resubmit(uint8_t table_id, struct ofpbuf *ofpacts)
 static void
 put_encapsulation(enum mf_field_id mff_ovn_geneve,
                   const struct chassis_tunnel *tun,
-                  const struct sbrec_datapath_binding *datapath,
+                  const struct phys_sbrec_datapath_binding *datapath,
                   uint16_t outport, struct ofpbuf *ofpacts)
 {
     if (tun->type == GENEVE) {
@@ -151,12 +138,12 @@ put_stack(enum mf_field_id field, struct ofpact_stack *stack)
     stack->subfield.n_bits = stack->subfield.field->n_bits;
 }
 
-static const struct sbrec_port_binding *
+static const struct phys_sbrec_port_binding *
 get_localnet_port(const struct hmap *local_datapaths, int64_t tunnel_key)
 {
     const struct local_datapath *ld = get_local_datapath(local_datapaths,
                                                          tunnel_key);
-    return ld ? ld->localnet_port : NULL;
+    return ld ? phys_sbrec_port_binding_get(ld->localnet_port) : NULL;
 }
 
 /* Datapath zone IDs for connection tracking and NAT */
@@ -167,7 +154,7 @@ struct zone_ids {
 };
 
 static struct zone_ids
-get_zone_ids(const struct sbrec_port_binding *binding,
+get_zone_ids(const struct phys_sbrec_port_binding *binding,
              const struct simap *ct_zones)
 {
     struct zone_ids zone_ids;
@@ -267,7 +254,7 @@ put_local_common_flows(uint32_t dp_key, uint32_t port_key,
 }
 
 static void
-load_logical_ingress_metadata(const struct sbrec_port_binding *binding,
+load_logical_ingress_metadata(const struct phys_sbrec_port_binding *binding,
                               const struct zone_ids *zone_ids,
                               struct ofpbuf *ofpacts_p)
 {
@@ -291,14 +278,14 @@ load_logical_ingress_metadata(const struct sbrec_port_binding *binding,
 }
 
 static void
-consider_port_binding(struct ovsdb_idl_index *sbrec_chassis_by_name,
-                      struct ovsdb_idl_index *sbrec_port_binding_by_name,
+consider_port_binding(struct phys_sbrec_chassis_by_name *sbrec_chassis_by_name,
+                      struct phys_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name,
                       enum mf_field_id mff_ovn_geneve,
                       const struct simap *ct_zones,
                       const struct sset *active_tunnels,
                       const struct hmap *local_datapaths,
-                      const struct sbrec_port_binding *binding,
-                      const struct sbrec_chassis *chassis,
+                      const struct phys_sbrec_port_binding *binding,
+                      const struct phys_sbrec_chassis *chassis,
                       struct ofpbuf *ofpacts_p,
                       struct hmap *flow_table)
 {
@@ -317,8 +304,9 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_chassis_by_name,
             return;
         }
 
-        const struct sbrec_port_binding *peer = lport_lookup_by_name(
-            sbrec_port_binding_by_name, peer_name);
+        const struct phys_sbrec_port_binding *peer
+            = phys_sbrec_port_binding_by_logical_port_find(
+                sbrec_port_binding_by_name, peer_name);
         if (!peer || strcmp(peer->type, binding->type)) {
             return;
         }
@@ -360,13 +348,15 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_chassis_by_name,
         return;
     }
 
-    struct ovs_list *gateway_chassis
-        = gateway_chassis_get_ordered(sbrec_chassis_by_name, binding);
+    struct ovs_list *gateway_chassis = gateway_chassis_get_ordered(
+        (struct sbrec_chassis_index *) sbrec_chassis_by_name /* XXX */,
+        (struct sbrec_port_binding *) binding /* XXX */);
 
     if (!strcmp(binding->type, "chassisredirect")
         && (binding->chassis == chassis
-            || gateway_chassis_is_active(gateway_chassis, chassis,
-                                         active_tunnels))) {
+            || gateway_chassis_is_active(
+                gateway_chassis, (struct sbrec_chassis *) chassis /* XXX */,
+                active_tunnels))) {
 
         /* Table 33, priority 100.
          * =======================
@@ -384,9 +374,9 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_chassis_by_name,
 
         const char *distributed_port = smap_get_def(&binding->options,
                                                     "distributed-port", "");
-        const struct sbrec_port_binding *distributed_binding
-            = lport_lookup_by_name(sbrec_port_binding_by_name,
-                                   distributed_port);
+        const struct phys_sbrec_port_binding *distributed_binding
+            = phys_sbrec_port_binding_by_logical_port_find(
+                sbrec_port_binding_by_name, distributed_port);
 
         if (!distributed_binding) {
             /* Packet will be dropped. */
@@ -395,8 +385,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_chassis_by_name,
                          "port %s referred by chassisredirect port %s",
                          distributed_port,
                          binding->logical_port);
-        } else if (binding->datapath !=
-                   distributed_binding->datapath) {
+        } else if (binding->datapath != distributed_binding->datapath) {
             /* Packet will be dropped. */
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
             VLOG_WARN_RL(&rl,
@@ -487,7 +476,7 @@ consider_port_binding(struct ovsdb_idl_index *sbrec_chassis_by_name,
 
     bool is_ha_remote = false;
     const struct chassis_tunnel *tun = NULL;
-    const struct sbrec_port_binding *localnet_port =
+    const struct phys_sbrec_port_binding *localnet_port =
         get_localnet_port(local_datapaths, dp_key);
     if (!ofport) {
         /* It is remote port, may be reached by tunnel or localnet port */
@@ -732,8 +721,8 @@ static void
 consider_mc_group(enum mf_field_id mff_ovn_geneve,
                   const struct simap *ct_zones,
                   const struct hmap *local_datapaths,
-                  const struct sbrec_chassis *chassis,
-                  const struct sbrec_multicast_group *mc,
+                  const struct phys_sbrec_chassis *chassis,
+                  const struct phys_sbrec_multicast_group *mc,
                   struct ofpbuf *ofpacts_p,
                   struct ofpbuf *remote_ofpacts_p,
                   struct hmap *flow_table)
@@ -765,7 +754,7 @@ consider_mc_group(enum mf_field_id mff_ovn_geneve,
     ofpbuf_clear(ofpacts_p);
     ofpbuf_clear(remote_ofpacts_p);
     for (size_t i = 0; i < mc->n_ports; i++) {
-        struct sbrec_port_binding *port = mc->ports[i];
+        struct phys_sbrec_port_binding *port = mc->ports[i];
 
         if (port->datapath != mc->datapath) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
@@ -868,13 +857,13 @@ update_ofports(struct simap *old, struct simap *new)
 }
 
 void
-physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
-             struct ovsdb_idl_index *sbrec_port_binding_by_name,
-             const struct sbrec_multicast_group_table *multicast_group_table,
-             const struct sbrec_port_binding_table *port_binding_table,
+physical_run(struct phys_sbrec_chassis_by_name *sbrec_chassis_by_name,
+             struct phys_sbrec_port_binding_by_logical_port *sbrec_port_binding_by_name,
+             const struct phys_sbrec_multicast_group_table *multicast_group_table,
+             const struct phys_sbrec_port_binding_table *port_binding_table,
              enum mf_field_id mff_ovn_geneve,
-             const struct ovsrec_bridge *br_int,
-             const struct sbrec_chassis *chassis,
+             const struct phys_ovsrec_bridge *br_int,
+             const struct phys_sbrec_chassis *chassis,
              const struct simap *ct_zones,
              const struct hmap *local_datapaths,
              const struct sset *local_lports,
@@ -889,7 +878,7 @@ physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
     struct simap new_tunnel_to_ofport =
         SIMAP_INITIALIZER(&new_tunnel_to_ofport);
     for (int i = 0; i < br_int->n_ports; i++) {
-        const struct ovsrec_port *port_rec = br_int->ports[i];
+        const struct phys_ovsrec_port *port_rec = br_int->ports[i];
         if (!strcmp(port_rec->name, br_int->name)) {
             continue;
         }
@@ -906,7 +895,8 @@ physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
                                         "ovn-l2gateway-port");
 
         for (int j = 0; j < port_rec->n_interfaces; j++) {
-            const struct ovsrec_interface *iface_rec = port_rec->interfaces[j];
+            const struct phys_ovsrec_interface *iface_rec
+                = port_rec->interfaces[j];
 
             /* Get OpenFlow port number. */
             if (!iface_rec->n_ofport) {
@@ -997,8 +987,8 @@ physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
 
     /* Set up flows in table 0 for physical-to-logical translation and in table
      * 64 for logical-to-physical translation. */
-    const struct sbrec_port_binding *binding;
-    SBREC_PORT_BINDING_TABLE_FOR_EACH (binding, port_binding_table) {
+    const struct phys_sbrec_port_binding *binding;
+    PHYS_SBREC_PORT_BINDING_TABLE_FOR_EACH (binding, port_binding_table) {
         consider_port_binding(sbrec_chassis_by_name,
                               sbrec_port_binding_by_name,
                               mff_ovn_geneve, ct_zones,
@@ -1008,10 +998,10 @@ physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
     }
 
     /* Handle output to multicast groups, in tables 32 and 33. */
-    const struct sbrec_multicast_group *mc;
+    const struct phys_sbrec_multicast_group *mc;
     struct ofpbuf remote_ofpacts;
     ofpbuf_init(&remote_ofpacts, 0);
-    SBREC_MULTICAST_GROUP_TABLE_FOR_EACH (mc, multicast_group_table) {
+    PHYS_SBREC_MULTICAST_GROUP_TABLE_FOR_EACH (mc, multicast_group_table) {
         consider_mc_group(mff_ovn_geneve, ct_zones, local_datapaths, chassis,
                           mc, &ofpacts, &remote_ofpacts, flow_table);
     }
@@ -1067,7 +1057,7 @@ physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
             continue;
         }
 
-        SBREC_PORT_BINDING_TABLE_FOR_EACH (binding, port_binding_table) {
+        PHYS_SBREC_PORT_BINDING_TABLE_FOR_EACH (binding, port_binding_table) {
             struct match match = MATCH_CATCHALL_INITIALIZER;
 
             if (!binding->chassis ||
@@ -1139,8 +1129,9 @@ physical_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
         /* Iterate over all local logical ports and insert a drop
          * rule with higher priority for every localport in this
          * datapath. */
-        const struct sbrec_port_binding *pb = lport_lookup_by_name(
-            sbrec_port_binding_by_name, localport);
+        const struct phys_sbrec_port_binding *pb
+            = phys_sbrec_port_binding_by_logical_port_find(
+                sbrec_port_binding_by_name, localport);
         if (pb && !strcmp(pb->type, "localport")) {
             match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, pb->tunnel_key);
             match_set_metadata(&match, htonll(pb->datapath->tunnel_key));

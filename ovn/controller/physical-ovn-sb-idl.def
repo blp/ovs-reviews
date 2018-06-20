@@ -1,0 +1,30 @@
+# -*- python -*-
+
+{
+    "prefix": "phys_sbrec_",
+    "tables": {
+        "Chassis": {
+            "hostname": RO
+        },
+        "Datapath_Binding": {
+            "tunnel_key": RO},
+        "Port_Binding": {
+            "logical_port": RO,
+            "datapath": RO,
+            "tunnel_key": RO,
+            "chassis": RO,
+            "type": RO,
+            "options": RO,
+            "parent_port": RO,
+            "tag": RO
+        },
+        "Multicast_Group": {
+            "datapath": RO,
+            "tunnel_key": RO,
+            "ports": RO
+        }},
+    "indexes": {
+        "Port_Binding": [["logical_port"]],
+        "Chassis": [["name"]],
+    }
+}

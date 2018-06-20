@@ -1,0 +1,44 @@
+# -*- python -*-
+
+{
+    "prefix": "lflow_sbrec_",
+    "tables": {
+        "Datapath_Binding": {
+            "tunnel_key": RO,
+            "external_ids": RO,
+        },
+        "Port_Binding": {
+            "datapath": RO,
+            "tunnel_key": RO,
+            "chassis": RO,
+            "type": RO},
+        "DHCP_Options": {
+            "name": RO,
+            "code": RO,
+            "type": RO,
+        },
+        "DHCPv6_Options": {
+            "name": RO,
+            "code": RO,
+            "type": RO,
+        },
+        "Logical_Flow": {
+            "pipeline": RO,
+            "logical_datapath": RO,
+            "table_id": RO,
+            "actions": RO,
+            "match": RO,
+            "priority": RO},
+        "MAC_Binding": {
+            "logical_port": RO,
+            "mac": RO,
+            "ip": RO
+        },
+        "Multicast_Group": {
+            "tunnel_key": RO}},
+    "indexes": {
+        "Chassis": [["name"]],
+        "Multicast_Group": [["name", "datapath"]],
+        "Port_Binding": [["logical_port"]],
+    }
+}

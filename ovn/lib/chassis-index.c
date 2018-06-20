@@ -16,16 +16,16 @@
 #include "ovn/lib/chassis-index.h"
 #include "ovn/lib/ovn-sb-idl.h"
 
-struct ovsdb_idl_index *
+struct sbrec_chassis_index *
 chassis_index_create(struct ovsdb_idl *idl)
 {
-    return ovsdb_idl_index_create1(idl, &sbrec_chassis_col_name);
+    return sbrec_chassis_index_create1(idl, &sbrec_chassis_col_name);
 }
 
 /* Finds and returns the chassis with the given 'name', or NULL if no such
  * chassis exists. */
 const struct sbrec_chassis *
-chassis_lookup_by_name(struct ovsdb_idl_index *sbrec_chassis_by_name,
+chassis_lookup_by_name(struct sbrec_chassis_index *sbrec_chassis_by_name,
                        const char *name)
 {
     struct sbrec_chassis *target = sbrec_chassis_index_init_row(

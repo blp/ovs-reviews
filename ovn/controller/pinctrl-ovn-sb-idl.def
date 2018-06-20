@@ -1,0 +1,30 @@
+# -*- python -*-
+
+{
+    "prefix": "pinctrl_sbrec_",
+    "tables": {
+        "DNS": {
+            "datapaths": RO,
+            "records": RO
+        },
+        "MAC_Binding": {
+            "datapath": RW,
+            "logical_port": RW,
+            "ip": RW,
+            "mac": RW
+        },
+        "Port_Binding": {
+            "datapath": RO,
+            "chassis": RO,
+            "logical_port": RO,
+            "type": RO,
+            "options": RO,
+            "nat_addresses": RO,
+            "mac": RO
+        }},
+    "indexes": {
+        "Chassis": [["name"]],
+        "Datapath_Binding": [["tunnel_key"]],
+        "Port_Binding": [["tunnel_key", "datapath"], ["datapath"], ["logical_port"]],
+    }
+}

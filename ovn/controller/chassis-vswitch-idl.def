@@ -1,0 +1,12 @@
+# -*- python -*-
+
+{
+    "prefix": "chassis_ovsrec_",
+    "tables": {
+        "Open_vSwitch": {
+            "external_ids": RO,
+            "iface_types": RO},
+        "Bridge": {
+            "datapath_type": RO,
+        }}
+}
