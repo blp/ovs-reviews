@@ -1529,7 +1529,7 @@ send_ipv6_ras(
         struct pinctrl_sbrec_port_binding *target
             = pinctrl_sbrec_port_binding_by_datapath_new_row(
                 sbrec_port_binding_by_datapath);
-        pinctrl_sbrec_port_binding_set_datapath(
+        pinctrl_sbrec_port_binding_by_datapath_set(
             target, pinctrl_sbrec_datapath_binding_get(ld->datapath));
 
         struct pinctrl_sbrec_port_binding *pb;

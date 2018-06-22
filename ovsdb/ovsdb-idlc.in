@@ -1573,12 +1573,12 @@ def printCIDLSubset(schemaFile, subsetFile):
     # XXX verify that columns in the subset_tables exist
     # XXX verify that permitted columns only reference permitted tables
 
-    # Columns named in an index must be RW
+    # Columns named in an index must be readable
     for table_name, indexes in subset_indexes.items():
         column_acls = subset_tables.setdefault(table_name, {})
         for index in indexes:
             for column_name in index:
-                column_acls[column_name] = RW
+                column_acls[column_name] = column_acls.get(column_name, 0) | RO
 
     print('''\
 /* Generated automatically -- do not modify!    -*- buffer-read-only: t -*- */
@@ -1876,12 +1876,15 @@ static inline void
                 column = table.columns[column_name]
                 comment, members = cMembers(subset_prefix, table_name,
                                             column_name, column, True)
+                comment2, members2 = cMembers(prefix, table_name,
+                                              column_name, column, True)
                 set_params += ['%(type)s%(name)s' % m for m in members]
                 set_names += [m['name'] for m in members]
-                set_calls += ['%(s)s_set_%(c)s(row, %(names)s);'
+                set_calls += ['%(sp)s_set_%(c)s((struct %(sp)s *) row, %(names)s);'
                               % {'s': struct_name,
+                                 'sp': prefix_struct_name,
                                  'c': column_name,
-                                 'names': ', '.join([m['name'] for m in members])}]
+                                 'names': ', '.join([m.get('cast', '') + m['name'] for m in members2])}]
 
             index_name = '%s_by_%s' % (struct_name, columns)
             args = {'c': columns,

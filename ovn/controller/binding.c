@@ -120,7 +120,7 @@ add_local_datapath__(struct binding_sbrec_datapath_binding_by_tunnel_key *sbrec_
     struct binding_sbrec_port_binding *target =
         binding_sbrec_port_binding_by_datapath_new_row(
             sbrec_port_binding_by_datapath);
-    binding_sbrec_port_binding_set_datapath(target, datapath);
+    binding_sbrec_port_binding_by_datapath_set(target, datapath);
 
     const struct binding_sbrec_port_binding *pb;
     BINDING_SBREC_PORT_BINDING_BY_DATAPATH_FOR_EACH_EQUAL (
