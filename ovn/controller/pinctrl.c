@@ -1149,6 +1149,16 @@ process_packet_in(const struct ofp_header *msg,
     struct flow headers;
     flow_extract(&packet, &headers);
 
+    static struct vlog_rate_limit rl2 = VLOG_RATE_LIMIT_INIT(100, 500);
+    if (!VLOG_DROP_DBG(&rl2)) {
+        char *packet_s = ofp_packet_to_string(dp_packet_data(&packet),
+                                              dp_packet_size(&packet), 0);
+        VLOG_DBG("logical flow 0x%08"PRIx32" invoked %s action on: %s",
+                 ntohl(ah->sb_row_uuid),
+                 action_opcode_to_string(ntohl(ah->opcode)), packet_s);
+        free(packet_s);
+    }
+
     switch (ntohl(ah->opcode)) {
     case ACTION_OPCODE_ARP:
         pinctrl_handle_arp(&headers, &pin.flow_metadata, &userdata);
@@ -1687,6 +1697,11 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
         ovs_be128 ip6 = hton128(flow_get_xxreg(md, 0));
         inet_ntop(AF_INET6, &ip6, ip_s, sizeof(ip_s));
     }
+
+    VLOG_DBG("put_%s(dp %"PRIu32", port %"PRIu32", %s, "ETH_ADDR_FMT")",
+             is_arp ? "arp" : "nd", dp_key, port_key, ip_s,
+             ETH_ADDR_ARGS(headers->dl_src));
+
     uint32_t hash = hash_string(ip_s, hash_2words(dp_key, port_key));
     struct put_mac_binding *pmb
         = pinctrl_find_put_mac_binding(dp_key, port_key, ip_s, hash);
@@ -1704,6 +1719,7 @@ pinctrl_handle_put_mac_binding(const struct flow *md,
     }
     pmb->timestamp = time_msec();
     pmb->mac = headers->dl_src;
+
 }
 
 static void

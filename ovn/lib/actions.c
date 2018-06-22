@@ -51,6 +51,32 @@ VLOG_DEFINE_THIS_MODULE(actions);
     static void STRUCT##_free(struct STRUCT *a);
 OVNACTS
 #undef OVNACT
+
+const char *
+action_opcode_to_string(enum action_opcode opcode)
+{
+    switch (opcode) {
+#define OPCODE(ENUM, STRING) case ENUM: return STRING;
+        ACTION_OPCODES
+#undef OPCODE
+
+    default:
+        return "<unknown>";
+    }
+}
+
+bool
+action_opcode_is_valid(uint32_t opcode)
+{
+    switch (opcode) {
+#define OPCODE(ENUM, STRING) case ENUM: return true;
+        ACTION_OPCODES
+#undef OPCODE
+
+    default:
+        return false;
+    }
+}
 
 /* Helpers. */
 
@@ -77,7 +103,8 @@ ovnact_init(struct ovnact *ovnact, enum ovnact_type type, size_t len)
 }
 
 static size_t
-encode_start_controller_op(enum action_opcode opcode, bool pause,
+encode_start_controller_op(const struct ovnact_encode_params *ep,
+                           enum action_opcode opcode, bool pause,
                            struct ofpbuf *ofpacts)
 {
     size_t ofs = ofpacts->size;
@@ -87,7 +114,9 @@ encode_start_controller_op(enum action_opcode opcode, bool pause,
     oc->reason = OFPR_ACTION;
     oc->pause = pause;
 
-    struct action_header ah = { .opcode = htonl(opcode) };
+    struct action_header ah;
+    ah.opcode = htonl(opcode);
+    ah.sb_row_uuid = ep->sb_row_uuid ? htonl(ep->sb_row_uuid->parts[0]) : 0;
     ofpbuf_put(ofpacts, &ah, sizeof ah);
 
     return ofs;
@@ -103,9 +132,10 @@ encode_finish_controller_op(size_t ofs, struct ofpbuf *ofpacts)
 }
 
 static void
-encode_controller_op(enum action_opcode opcode, struct ofpbuf *ofpacts)
+encode_controller_op(const struct ovnact_encode_params *ep,
+                     enum action_opcode opcode, struct ofpbuf *ofpacts)
 {
-    size_t ofs = encode_start_controller_op(opcode, false, ofpacts);
+    size_t ofs = encode_start_controller_op(ep, opcode, false, ofpacts);
     encode_finish_controller_op(ofs, ofpacts);
 }
 
@@ -1245,7 +1275,7 @@ encode_nested_actions(const struct ovnact_nest *on,
      * converted to OpenFlow, as its userdata.  ovn-controller will convert the
      * packet to ARP or NA and then send the packet and actions back to the
      * switch inside an OFPT_PACKET_OUT message. */
-    size_t oc_offset = encode_start_controller_op(opcode, false, ofpacts);
+    size_t oc_offset = encode_start_controller_op(ep, opcode, false, ofpacts);
     ofpacts_put_openflow_actions(inner_ofpacts.data, inner_ofpacts.size,
                                  ofpacts, OFP13_VERSION);
     encode_finish_controller_op(oc_offset, ofpacts);
@@ -1444,6 +1474,7 @@ format_PUT_ND(const struct ovnact_put_mac_bind *put_mac, struct ds *s)
 
 static void
 encode_put_mac(const struct ovnact_put_mac_bind *put_mac,
+               const struct ovnact_encode_params *ep,
                enum mf_field_id ip_field, enum action_opcode opcode,
                struct ofpbuf *ofpacts)
 {
@@ -1453,24 +1484,24 @@ encode_put_mac(const struct ovnact_put_mac_bind *put_mac,
         { expr_resolve_field(&put_mac->mac), MFF_ETH_SRC }
     };
     encode_setup_args(args, ARRAY_SIZE(args), ofpacts);
-    encode_controller_op(opcode, ofpacts);
+    encode_controller_op(ep, opcode, ofpacts);
     encode_restore_args(args, ARRAY_SIZE(args), ofpacts);
 }
 
 static void
 encode_PUT_ARP(const struct ovnact_put_mac_bind *put_mac,
-               const struct ovnact_encode_params *ep OVS_UNUSED,
+               const struct ovnact_encode_params *ep,
                struct ofpbuf *ofpacts)
 {
-    encode_put_mac(put_mac, MFF_REG0, ACTION_OPCODE_PUT_ARP, ofpacts);
+    encode_put_mac(put_mac, ep, MFF_REG0, ACTION_OPCODE_PUT_ARP, ofpacts);
 }
 
 static void
 encode_PUT_ND(const struct ovnact_put_mac_bind *put_mac,
-              const struct ovnact_encode_params *ep OVS_UNUSED,
+              const struct ovnact_encode_params *ep,
               struct ofpbuf *ofpacts)
 {
-    encode_put_mac(put_mac, MFF_XXREG0, ACTION_OPCODE_PUT_ND, ofpacts);
+    encode_put_mac(put_mac, ep, MFF_XXREG0, ACTION_OPCODE_PUT_ND, ofpacts);
 }
 
 static void
@@ -1732,12 +1763,13 @@ encode_put_dhcpv6_option(const struct ovnact_gen_option *o,
 
 static void
 encode_PUT_DHCPV4_OPTS(const struct ovnact_put_opts *pdo,
-                       const struct ovnact_encode_params *ep OVS_UNUSED,
+                       const struct ovnact_encode_params *ep,
                        struct ofpbuf *ofpacts)
 {
     struct mf_subfield dst = expr_resolve_field(&pdo->dst);
 
-    size_t oc_offset = encode_start_controller_op(ACTION_OPCODE_PUT_DHCP_OPTS,
+    size_t oc_offset = encode_start_controller_op(ep,
+                                                  ACTION_OPCODE_PUT_DHCP_OPTS,
                                                   true, ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
@@ -1763,13 +1795,13 @@ encode_PUT_DHCPV4_OPTS(const struct ovnact_put_opts *pdo,
 
 static void
 encode_PUT_DHCPV6_OPTS(const struct ovnact_put_opts *pdo,
-                       const struct ovnact_encode_params *ep OVS_UNUSED,
+                       const struct ovnact_encode_params *ep,
                        struct ofpbuf *ofpacts)
 {
     struct mf_subfield dst = expr_resolve_field(&pdo->dst);
 
     size_t oc_offset = encode_start_controller_op(
-        ACTION_OPCODE_PUT_DHCPV6_OPTS, true, ofpacts);
+        ep, ACTION_OPCODE_PUT_DHCPV6_OPTS, true, ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
     ofpbuf_put(ofpacts, &ofs, sizeof ofs);
@@ -1858,12 +1890,12 @@ format_DNS_LOOKUP(const struct ovnact_dns_lookup *dl, struct ds *s)
 
 static void
 encode_DNS_LOOKUP(const struct ovnact_dns_lookup *dl,
-                  const struct ovnact_encode_params *ep OVS_UNUSED,
+                  const struct ovnact_encode_params *ep,
                   struct ofpbuf *ofpacts)
 {
     struct mf_subfield dst = expr_resolve_field(&dl->dst);
 
-    size_t oc_offset = encode_start_controller_op(ACTION_OPCODE_DNS_LOOKUP,
+    size_t oc_offset = encode_start_controller_op(ep, ACTION_OPCODE_DNS_LOOKUP,
                                                   true, ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
@@ -2021,13 +2053,13 @@ encode_put_nd_ra_option(const struct ovnact_gen_option *o,
 
 static void
 encode_PUT_ND_RA_OPTS(const struct ovnact_put_opts *po,
-                      const struct ovnact_encode_params *ep OVS_UNUSED,
+                      const struct ovnact_encode_params *ep,
                       struct ofpbuf *ofpacts)
 {
     struct mf_subfield dst = expr_resolve_field(&po->dst);
 
     size_t oc_offset = encode_start_controller_op(
-        ACTION_OPCODE_PUT_ND_RA_OPTS, true, ofpacts);
+        ep, ACTION_OPCODE_PUT_ND_RA_OPTS, true, ofpacts);
     nx_put_header(ofpacts, dst.field->id, OFP13_VERSION, false);
     ovs_be32 ofs = htonl(dst.ofs);
     ofpbuf_put(ofpacts, &ofs, sizeof ofs);
@@ -2141,10 +2173,10 @@ format_LOG(const struct ovnact_log *log, struct ds *s)
 
 static void
 encode_LOG(const struct ovnact_log *log,
-           const struct ovnact_encode_params *ep OVS_UNUSED,
+           const struct ovnact_encode_params *ep,
            struct ofpbuf *ofpacts)
 {
-    size_t oc_offset = encode_start_controller_op(ACTION_OPCODE_LOG, false,
+    size_t oc_offset = encode_start_controller_op(ep, ACTION_OPCODE_LOG, false,
                                                   ofpacts);
 
     struct log_pin_header *lph = ofpbuf_put_uninit(ofpacts, sizeof *lph);

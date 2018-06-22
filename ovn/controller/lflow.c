@@ -332,6 +332,7 @@ consider_logical_flow(
         .egress_ptable = OFTABLE_LOG_EGRESS_PIPELINE,
         .output_ptable = output_ptable,
         .mac_bind_ptable = OFTABLE_MAC_BINDING,
+        .sb_row_uuid = &lflow->header_.uuid,
     };
     ovnacts_encode(ovnacts.data, ovnacts.size, &ep, &ofpacts);
     ovnacts_free(ovnacts.data, ovnacts.size);

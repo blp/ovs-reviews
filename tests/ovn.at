@@ -2767,6 +2767,10 @@ done
 ovn-sbctl -f csv -d bare --no-heading \
     -- --columns=logical_port,ip,mac list mac_binding > mac_bindings
 
+# Check the MAC bindings against those expected.
+AT_CHECK_UNQUOTED([sort < mac_bindings], [0], [`sort < mac_bindings.expected`
+])
+
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
     for j in 1 2 3; do
@@ -2776,10 +2780,6 @@ for i in 1 2 3; do
         done
     done
 done
-
-# Check the MAC bindings against those expected.
-AT_CHECK_UNQUOTED([sort < mac_bindings], [0], [`sort < mac_bindings.expected`
-])
 
 # Gracefully terminate daemons
 OVN_CLEANUP([hv1], [hv2], [hv3])

@@ -351,112 +351,120 @@ void *ovnact_put(struct ofpbuf *, enum ovnact_type, size_t len);
 OVNACTS
 #undef OVNACT
 
+#define ACTION_OPCODES                                                  \
+    /* "arp { ...actions... }".                                         \
+     *                                                                  \
+     * The actions, in OpenFlow 1.3 format, follow the action_header.   \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_ARP, "arp {...}")                              \
+                                                                        \
+    /* "put_arp(port, ip, mac)"                                         \
+     *                                                                  \
+     * Arguments are passed through the packet metadata and data, as follows: \
+     *                                                                  \
+     *     MFF_REG0 = ip                                                \
+     *     MFF_LOG_INPORT = port                                        \
+     *     MFF_ETH_SRC = mac                                            \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_PUT_ARP, "put_arp()")                          \
+                                                                        \
+    /* "result = put_dhcp_opts(offer_ip, option, ...)".                 \
+     *                                                                  \
+     * Arguments follow the action_header, in this format:              \
+     *   - A 32-bit or 64-bit OXM header designating the result field.  \
+     *   - A 32-bit integer specifying a bit offset within the result field. \
+     *   - The 32-bit DHCP offer IP.                                    \
+     *   - Any number of DHCP options.                                  \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_PUT_DHCP_OPTS, "put_dhcp_opts()")              \
+                                                                        \
+    /* "nd_na { ...actions... }".                                       \
+     *                                                                  \
+     * The actions, in OpenFlow 1.3 format, follow the action_header.   \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_ND_NA, "nd_na {...}")                          \
+                                                                        \
+    /* "put_nd(port, ip6, mac)"                                         \
+     *                                                                  \
+     * Arguments are passed through the packet metadata and data, as follows: \
+     *                                                                  \
+     *     MFF_XXREG0 = ip6                                             \
+     *     MFF_LOG_INPORT = port                                        \
+     *     MFF_ETH_SRC = mac                                            \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_PUT_ND, "put_nd()")                            \
+                                                                        \
+    /* "result = put_dhcpv6_opts(option, ...)".                         \
+     *                                                                  \
+     * Arguments follow the action_header, in this format:              \
+     *   - A 32-bit or 64-bit OXM header designating the result field.  \
+     *   - A 32-bit integer specifying a bit offset within the result field. \
+     *   - Any number of DHCPv6 options.                                \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_PUT_DHCPV6_OPTS, "put_dhcpv6_opts()")          \
+                                                                        \
+    /* "result = dns_lookup()".                                         \
+     * Arguments follow the action_header, in this format:              \
+     *   - A 32-bit or 64-bit OXM header designating the result field.  \
+     *   - A 32-bit integer specifying a bit offset within the result field. \
+     *                                                                  \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_DNS_LOOKUP, "dns_lookup()")                    \
+                                                                        \
+    /* "log(arguments)".                                                \
+     *                                                                  \
+     * Arguments are as follows:                                        \
+     *   - An 8-bit verdict.                                            \
+     *   - An 8-bit severity.                                           \
+     *   - A variable length string containing the name.                \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_LOG, "log()")                                  \
+                                                                        \
+    /* "result = put_nd_ra_opts(option, ...)".                          \
+     * Arguments follow the action_header, in this format:              \
+     *   - A 32-bit or 64-bit OXM header designating the result field.  \
+     *   - A 32-bit integer specifying a bit offset within the result field. \
+     *   - Any number of ICMPv6 options.                                \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_PUT_ND_RA_OPTS, "put_nd_ra_opts()")            \
+                                                                        \
+    /* "nd_ns { ...actions... }".                                       \
+     *                                                                  \
+     * The actions, in OpenFlow 1.3 format, follow the action_header.   \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_ND_NS, "nd_ns {...}")                          \
+                                                                        \
+    /* "icmp4 { ...actions... } and icmp6 { ...actions... }".           \
+     *                                                                  \
+     * The actions, in OpenFlow 1.3 format, follow the action_header.   \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_ICMP, "icmp[46] {...}")                        \
+                                                                        \
+    /* "tcp_reset { ...actions... }".                                   \
+     *                                                                  \
+     * The actions, in OpenFlow 1.3 format, follow the action_header.   \
+     */                                                                 \
+    OPCODE(ACTION_OPCODE_TCP_RESET, "tcp_reset {...}")                  \
+                                                                        \
+    /* "nd_na_router { ...actions... }" with rso flag 'ND_RSO_ROUTER' set. \
+        *                                                               \
+        * The actions, in OpenFlow 1.3 format, follow the action_header. \
+        */                                                              \
+    OPCODE(ACTION_OPCODE_ND_NA_ROUTER, "nd_na_router {...}")
+
 enum action_opcode {
-    /* "arp { ...actions... }".
-     *
-     * The actions, in OpenFlow 1.3 format, follow the action_header.
-     */
-    ACTION_OPCODE_ARP,
-
-    /* "put_arp(port, ip, mac)"
-     *
-     * Arguments are passed through the packet metadata and data, as follows:
-     *
-     *     MFF_REG0 = ip
-     *     MFF_LOG_INPORT = port
-     *     MFF_ETH_SRC = mac
-     */
-    ACTION_OPCODE_PUT_ARP,
-
-    /* "result = put_dhcp_opts(offer_ip, option, ...)".
-     *
-     * Arguments follow the action_header, in this format:
-     *   - A 32-bit or 64-bit OXM header designating the result field.
-     *   - A 32-bit integer specifying a bit offset within the result field.
-     *   - The 32-bit DHCP offer IP.
-     *   - Any number of DHCP options.
-     */
-    ACTION_OPCODE_PUT_DHCP_OPTS,
-
-    /* "nd_na { ...actions... }".
-     *
-     * The actions, in OpenFlow 1.3 format, follow the action_header.
-     */
-    ACTION_OPCODE_ND_NA,
-
-    /* "put_nd(port, ip6, mac)"
-     *
-     * Arguments are passed through the packet metadata and data, as follows:
-     *
-     *     MFF_XXREG0 = ip6
-     *     MFF_LOG_INPORT = port
-     *     MFF_ETH_SRC = mac
-     */
-    ACTION_OPCODE_PUT_ND,
-
-    /* "result = put_dhcpv6_opts(option, ...)".
-     *
-     * Arguments follow the action_header, in this format:
-     *   - A 32-bit or 64-bit OXM header designating the result field.
-     *   - A 32-bit integer specifying a bit offset within the result field.
-     *   - Any number of DHCPv6 options.
-     */
-    ACTION_OPCODE_PUT_DHCPV6_OPTS,
-
-    /* "result = dns_lookup()".
-     * Arguments follow the action_header, in this format:
-     *   - A 32-bit or 64-bit OXM header designating the result field.
-     *   - A 32-bit integer specifying a bit offset within the result field.
-     *
-     */
-    ACTION_OPCODE_DNS_LOOKUP,
-
-    /* "log(arguments)".
-     *
-     * Arguments are as follows:
-     *   - An 8-bit verdict.
-     *   - An 8-bit severity.
-     *   - A variable length string containing the name.
-     */
-    ACTION_OPCODE_LOG,
-
-    /* "result = put_nd_ra_opts(option, ...)".
-     * Arguments follow the action_header, in this format:
-     *   - A 32-bit or 64-bit OXM header designating the result field.
-     *   - A 32-bit integer specifying a bit offset within the result field.
-     *   - Any number of ICMPv6 options.
-     */
-    ACTION_OPCODE_PUT_ND_RA_OPTS,
-
-    /* "nd_ns { ...actions... }".
-     *
-     * The actions, in OpenFlow 1.3 format, follow the action_header.
-     */
-    ACTION_OPCODE_ND_NS,
-
-    /* "icmp4 { ...actions... } and icmp6 { ...actions... }".
-     *
-     * The actions, in OpenFlow 1.3 format, follow the action_header.
-     */
-    ACTION_OPCODE_ICMP,
-
-    /* "tcp_reset { ...actions... }".
-     *
-     * The actions, in OpenFlow 1.3 format, follow the action_header.
-     */
-    ACTION_OPCODE_TCP_RESET,
-
-    /* "nd_na_router { ...actions... }" with rso flag 'ND_RSO_ROUTER' set.
-        *
-        * The actions, in OpenFlow 1.3 format, follow the action_header.
-        */
-    ACTION_OPCODE_ND_NA_ROUTER,
+#define OPCODE(ENUM, STRING) ENUM,
+    ACTION_OPCODES
+#undef OPCODE
 };
+
+bool action_opcode_is_valid(uint32_t);
+const char *action_opcode_to_string(enum action_opcode);
 
 /* Header. */
 struct action_header {
     ovs_be32 opcode;            /* One of ACTION_OPCODE_* */
-    uint8_t pad[4];
+    ovs_be32 sb_row_uuid;       /* First 4 bytes of Logical_Flow row UUID. */
 };
 BUILD_ASSERT_DECL(sizeof(struct action_header) == 8);
 
@@ -544,6 +552,11 @@ struct ovnact_encode_params {
     uint8_t output_ptable;      /* OpenFlow table for 'output' to resubmit. */
     uint8_t mac_bind_ptable;    /* OpenFlow table for 'get_arp'/'get_nd' to
                                    resubmit. */
+
+    /* Optional UUID of southbound row.  If provided, this is passed to
+     * ovn-controller in any "controller" OpenFlow actions, to make it possible
+     * to identify the source of the packets. */
+    const struct uuid *sb_row_uuid;
 };
 
 void ovnacts_encode(const struct ovnact[], size_t ovnacts_len,
