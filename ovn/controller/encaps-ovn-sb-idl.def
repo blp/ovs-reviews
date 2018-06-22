@@ -4,8 +4,7 @@
     "prefix": "encaps_sbrec_",
     "tables": {
         "Encap": {
-            "name": RW,
-            "type": RW,
+            "type": RO,
             "ip": RO,
             "options": RW},
         "Chassis": {
