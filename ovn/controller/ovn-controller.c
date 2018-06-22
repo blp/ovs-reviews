@@ -643,7 +643,7 @@ main(int argc, char *argv[])
 
         struct ovsdb_idl_txn *ovs_idl_txn = ovsdb_idl_loop_run(&ovs_idl_loop);
         struct ovsdb_idl_txn *ovnsb_idl_txn
-            = ovsdb_idl_loop_run(&ovnsb_idl_loop);
+            = ovsdb_idl_loop_run_force(&ovnsb_idl_loop);
 
         update_probe_interval(ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
                               ovnsb_remote, ovnsb_idl_loop.idl);
@@ -788,7 +788,7 @@ main(int argc, char *argv[])
 
                     hmap_destroy(&flow_table);
                 }
-                if (ovnsb_idl_txn) {
+                if (ovnsb_idl_txn && !ovnsb_idl_loop.discard_txn) {
                     int64_t cur_cfg = ofctrl_get_cur_cfg();
                     if (cur_cfg && cur_cfg != chassis->nb_cfg) {
                         sbrec_chassis_set_nb_cfg(chassis, cur_cfg);

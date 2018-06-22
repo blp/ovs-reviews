@@ -313,6 +313,7 @@ struct ovsdb_idl_loop {
 
     struct ovsdb_idl_txn *committing_txn;
     unsigned int precommit_seqno;
+    bool discard_txn;
 
     struct ovsdb_idl_txn *open_txn;
 
@@ -329,6 +330,7 @@ struct ovsdb_idl_loop {
 
 void ovsdb_idl_loop_destroy(struct ovsdb_idl_loop *);
 struct ovsdb_idl_txn *ovsdb_idl_loop_run(struct ovsdb_idl_loop *);
+struct ovsdb_idl_txn *ovsdb_idl_loop_run_force(struct ovsdb_idl_loop *);
 int ovsdb_idl_loop_commit_and_wait(struct ovsdb_idl_loop *);
 
 /* Conditional Replication

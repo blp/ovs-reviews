@@ -3762,8 +3762,8 @@ ovsdb_idl_txn_extract_mutations(struct ovsdb_idl_row *row,
  * IDL's copy of the database.  If the transaction commits successfully, then
  * the database server will send an update and, thus, the IDL will be updated
  * with the committed changes. */
-enum ovsdb_idl_txn_status
-ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
+static enum ovsdb_idl_txn_status
+ovsdb_idl_txn_commit__(struct ovsdb_idl_txn *txn, bool really_abort)
 {
     struct ovsdb_idl_row *row;
     struct json *operations;
@@ -4005,6 +4005,9 @@ ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
     if (!any_updates) {
         txn->status = TXN_UNCHANGED;
         json_destroy(operations);
+    } else if (really_abort) {
+        txn->status = TXN_ABORTED;
+        json_destroy(operations);
     } else if (!jsonrpc_session_send(
                    txn->db->idl->session,
                    jsonrpc_create_request(
@@ -4031,6 +4034,12 @@ coverage_out:
     }
 
     return txn->status;
+}
+
+enum ovsdb_idl_txn_status
+ovsdb_idl_txn_commit(struct ovsdb_idl_txn *txn)
+{
+    return ovsdb_idl_txn_commit__(txn, false);
 }
 
 /* Attempts to commit 'txn', blocking until the commit either succeeds or
@@ -5041,15 +5050,40 @@ ovsdb_idl_loop_destroy(struct ovsdb_idl_loop *loop)
     }
 }
 
+static bool
+discard_txn(const struct ovsdb_idl_loop *loop)
+{
+    return (loop->committing_txn
+            || ovsdb_idl_get_seqno(loop->idl) == loop->skip_seqno);
+}
+
+static struct ovsdb_idl_txn *
+ovsdb_idl_loop_run__(struct ovsdb_idl_loop *loop, bool force)
+{
+    ovsdb_idl_run(loop->idl);
+    if (force) {
+        loop->discard_txn = discard_txn(loop);
+        loop->open_txn = ovsdb_idl_txn_create(loop->idl);
+    } else {
+        loop->open_txn = (loop->committing_txn
+                          || ovsdb_idl_get_seqno(loop->idl) == loop->skip_seqno
+                          ? NULL
+                          : ovsdb_idl_txn_create(loop->idl));
+        loop->discard_txn = false;
+    }
+    return loop->open_txn;
+}
+
 struct ovsdb_idl_txn *
 ovsdb_idl_loop_run(struct ovsdb_idl_loop *loop)
 {
-    ovsdb_idl_run(loop->idl);
-    loop->open_txn = (loop->committing_txn
-                      || ovsdb_idl_get_seqno(loop->idl) == loop->skip_seqno
-                      ? NULL
-                      : ovsdb_idl_txn_create(loop->idl));
-    return loop->open_txn;
+    return ovsdb_idl_loop_run__(loop, false);
+}
+
+struct ovsdb_idl_txn *
+ovsdb_idl_loop_run_force(struct ovsdb_idl_loop *loop)
+{
+    return ovsdb_idl_loop_run__(loop, true);
 }
 
 /* Attempts to commit the current transaction, if one is open, and sets up the
@@ -5076,10 +5110,14 @@ int
 ovsdb_idl_loop_commit_and_wait(struct ovsdb_idl_loop *loop)
 {
     if (loop->open_txn) {
-        loop->committing_txn = loop->open_txn;
+        if (loop->discard_txn) {
+            ovsdb_idl_txn_commit__(loop->open_txn, true);
+            ovsdb_idl_txn_destroy(loop->open_txn);
+        } else {
+            loop->committing_txn = loop->open_txn;
+            loop->precommit_seqno = ovsdb_idl_get_seqno(loop->idl);
+        }
         loop->open_txn = NULL;
-
-        loop->precommit_seqno = ovsdb_idl_get_seqno(loop->idl);
     }
 
     struct ovsdb_idl_txn *txn = loop->committing_txn;
