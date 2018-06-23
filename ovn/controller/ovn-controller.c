@@ -719,7 +719,7 @@ main(int argc, char *argv[])
                 ofctrl_ovsrec_bridge_get(br_int), &pending_ct_zones);
 
             pinctrl_run(
-                pinctrl_sbrec_txn_get(ovnsb_idl_txn),
+                ovnsb_idl_loop.discard_txn ? NULL : pinctrl_sbrec_txn_get(ovnsb_idl_txn),
                 pinctrl_sbrec_chassis_by_name_get(sbrec_chassis_by_name),
                 pinctrl_sbrec_datapath_binding_by_tunnel_key_get(
                     sbrec_datapath_binding_by_key),
@@ -848,7 +848,7 @@ main(int argc, char *argv[])
 
         if (br_int) {
             ofctrl_wait();
-            pinctrl_wait(pinctrl_sbrec_txn_get(ovnsb_idl_txn));
+            pinctrl_wait(ovnsb_idl_loop.discard_txn ? NULL : pinctrl_sbrec_txn_get(ovnsb_idl_txn));
         }
 
         ovsdb_idl_loop_commit_and_wait(&ovnsb_idl_loop);
