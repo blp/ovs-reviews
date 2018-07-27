@@ -503,10 +503,8 @@
           OpenFlow specification mandates the timeout to be at least one
           second. The default is 10 seconds.
         </p>
-    </column>
-
+      </column>
     </group>
-
     <group title="Status">
       <column name="next_cfg">
         Sequence number for client to increment.  When a client modifies
@@ -767,6 +765,85 @@
           <option>--remote=db:Open_vSwitch,Open_vSwitch,manager_options</option>
           The startup scripts that accompany Open vSwitch do this by default.
         </p>
+      </column>
+    </group>
+
+    <group title="IPsec">
+      <p>
+        The global configuration of IPsec tunnels is set in the
+        <code>other_config</code> column of the <code>Open_vSwitch</code>
+        table. The individual IPsec tunnel configuration is set in the
+        <code>options</code> column of the <code>Interface</code> table.
+      </p>
+      <p>
+        <code>ipsec_skb_mark</code> is set to choose forwarding mode which
+        prevents unencrypted packets being sent out since there is delay
+        between the user setting up IPsec tunnel and the IPsec tunnel actually
+        taking affect to encrypt packets.
+      </p>
+      <p>
+        There are three authentication modes:
+      </p>
+      <ol>
+        <li>
+          Pre-shared key mode: <code>private_key</code>,
+          <code>certificate</code>, and <code>ca_cert</code> must not be set.
+          <code>psk</code> in the <code>options</code> column of the
+          <code>Interface</code> table should be set as the preshared key.
+        </li>
+        <li>
+          Self-signed certificate mode: <code>private_key</code> and
+          <code>certificate</code> must be set. <code>remote_cert</code> in the
+          <code>options</code> column of the <code>Interface</code> table must
+          be set. The remote certificate can be self-signed.
+        </li>
+        <li>
+          CA-signed certificate mode: <code>private_key</code>,
+          <code>certificate</code>, and <code>ca_cert</code> must be set.
+          <code>remote_name</code> in the <code>options</code> column of the
+          <code>Interface</code> table must be set as the common name (CN) of
+          the remote certificate. The remote certificate must be signed by the
+          CA.
+        </li>
+      </ol>
+      <column name="other_config" key="ipsec_skb_mark"
+              type='{"type": "string"}'>
+          <p>
+            Setting ipsec_skb_mark as 1/1 blocks unecrypted packets with skb
+            mark setting as 1. Besides, the OpenFlow rule with set SKB mark
+            action specified in OVSDB needs to be installed in Open_vSwitch
+            table before the first packet was able to leave the OVS tunnel.
+          </p>
+          <p>
+            Setting ipsec_skb_mark as 0/1 blocks unecrypted packets without skb
+            mark. As a result, IPsec assumes that all packets coming from
+            tunnels should be encrypted unless OpenFlow actions explicitly
+            set skb mark to a non-zero value.
+          </p>
+      </column>
+      <column name="other_config" key="private_key"
+              type='{"type": "string"}'>
+          <p>
+            Name of a PEM file containing the private key used as the switch's
+            identity for IPsec tunnels.
+          </p>
+      </column>
+      <column name="other_config" key="certificate"
+              type='{"type": "string"}'>
+          <p>
+            Name of a PEM file containing a certificate that certifies the
+            switch's private key, and identifies a trustworthy switch for IPsec
+            tunnels. The certificate must be x.509 version 3 and with the
+            string in common name (CN) also set in the subject alternative name
+            (SAN).
+          </p>
+      </column>
+      <column name="other_config" key="ca_cert"
+              type='{"type": "string"}'>
+          <p>
+            Name of a PEM file containing the CA certificate used to verify
+            that a remote switch of the IPsec tunnel is trustworthy.
+          </p>
       </column>
     </group>
 
@@ -1409,7 +1486,7 @@
       <column name="external_ids"/>
     </group>
   </table>
-  
+
   <table name="Port" table="Port or bond configuration.">
     <p>A port within a <ref table="Bridge"/>.</p>
     <p>Most commonly, a port has exactly one ``interface,'' pointed to by its
@@ -2398,9 +2475,9 @@
 
       <column name="options" key="local_ip">
         <p>
-          Optional.  The tunnel destination IP that received packets must
-          match.  Default is to match all addresses.  If specified, may be one
-          of:
+          Optional (except for IPsec tunnels).  The tunnel destination IP that
+          received packets must match.  Default is to match all addresses.  If
+          specified, may be one of:
         </p>
 
         <ul>
@@ -2655,7 +2732,7 @@
 
         <column name="options" key="csum" type='{"type": "boolean"}'>
           <p>
-            Optional.  Compute encapsulation header (either GRE or UDP) 
+            Optional.  Compute encapsulation header (either GRE or UDP)
             checksums on outgoing packets.  Default is disabled, set to
             <code>true</code> to enable.  Checksums present on incoming
             packets will be validated regardless of this setting.
@@ -2673,8 +2750,35 @@
 
         </column>
       </group>
-    </group>
 
+      <group title="Tunnel Options: IPsec">
+        <p>
+          <code>gre</code>, <code>geneve</code>, <code>vxlan</code>, and
+          <code>stt</code> interfaces support these options.
+        </p>
+        <column name="options" key="psk" type='{"type": "string"}'>
+          <p>
+            The preshared secret to negotiate tunnel in PSK mode. This value
+            must match on both tunnel ends and must be unset when
+            <code>remote_cert</code> or <code>remote_name</code>is set.
+          </p>
+        </column>
+        <column name="options" key="remote_cert" type='{"type": "string"}'>
+          <p>
+            Name of a PEM file containing a certificate of the remote switch.
+            The certificate must be x.509 version 3 and with the string in
+            common name (CN) also set in the subject alternative name (SAN). It
+            must be unset when <code>psk</code> is set.
+          </p>
+        </column>
+        <column name="options" key="remote_name" type='{"type": "string"}'>
+          <p>
+            Common name (CN) of the remote certificate. It must be unset when
+            <code>psk</code> is set.
+          </p>
+        </column>
+      </group>
+    </group>
     <group title="Tunnel Options: erspan only">
       <p>
         Only <code>erspan</code> interfaces support these options.
