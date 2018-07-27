@@ -222,6 +222,13 @@ start_forwarding () {
     return 0
 }
 
+start_ovs_ipsec () {
+    ${datadir}/scripts/ovs-monitor-ipsec \
+        --pidfile=${rundir}/ovs-monitor-ipsec.pid \
+        --log-file --detach --monitor unix:${rundir}/db.sock
+    return 0
+}
+
 ## ---- ##
 ## stop ##
 ## ---- ##
@@ -236,6 +243,11 @@ stop_forwarding () {
     if test X"$OVS_VSWITCHD" = Xyes; then
         stop_daemon ovs-vswitchd
     fi
+}
+
+stop_ovs_ipsec () {
+    ${bindir}/ovs-appctl -t ovs-monitor-ipsec exit
+    return 0
 }
 
 ## --------------- ##
@@ -521,6 +533,12 @@ case $command in
         ;;
     delete-transient-ports)
         del_transient_ports
+        ;;
+    start-ovs-ipsec)
+        start_ovs_ipsec
+        ;;
+    stop-ovs-ipsec)
+        stop_ovs_ipsec
         ;;
     help)
         usage
