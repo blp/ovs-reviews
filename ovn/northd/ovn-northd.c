@@ -6746,8 +6746,8 @@ ovnnb_db_run(struct northd_context *ctx,
     }
     hmap_destroy(&ports);
 
-    /* Copy nb_cfg from northbound to southbound database.
-     *
+    /* Sync ipsec configuration.
+     * Copy nb_cfg from northbound to southbound database.
      * Also set up to update sb_cfg once our southbound transaction commits. */
     const struct nbrec_nb_global *nb = nbrec_nb_global_first(ctx->ovnnb_idl);
     if (!nb) {
@@ -6756,6 +6756,9 @@ ovnnb_db_run(struct northd_context *ctx,
     const struct sbrec_sb_global *sb = sbrec_sb_global_first(ctx->ovnsb_idl);
     if (!sb) {
         sb = sbrec_sb_global_insert(ctx->ovnsb_txn);
+    }
+    if (nb->ipsec != sb->ipsec) {
+        sbrec_sb_global_set_ipsec(sb, nb->ipsec);
     }
     sbrec_sb_global_set_nb_cfg(sb, nb->nb_cfg);
     sb_loop->next_cfg = nb->nb_cfg;
@@ -7260,6 +7263,7 @@ main(int argc, char *argv[])
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_sb_global);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_sb_global_col_nb_cfg);
+    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_sb_global_col_ipsec);
 
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_logical_flow);
     add_column_noalert(ovnsb_idl_loop.idl,

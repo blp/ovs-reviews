@@ -679,7 +679,9 @@ main(int argc, char *argv[])
                                   chassis_id, br_int);
             encaps_run(ovs_idl_txn,
                        ovsrec_bridge_table_get(ovs_idl_loop.idl), br_int,
-                       sbrec_chassis_table_get(ovnsb_idl_loop.idl), chassis_id);
+                       sbrec_chassis_table_get(ovnsb_idl_loop.idl), chassis_id,
+                       sbrec_sb_global_first(ovnsb_idl_loop.idl),
+                       ovsrec_open_vswitch_table_get(ovs_idl_loop.idl));
             bfd_calculate_active_tunnels(br_int, &active_tunnels);
             binding_run(ovnsb_idl_txn, ovs_idl_txn, sbrec_chassis_by_name,
                         sbrec_datapath_binding_by_key,
