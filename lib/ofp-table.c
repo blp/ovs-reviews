@@ -342,10 +342,7 @@ ofputil_decode_table_features(struct ofpbuf *msg,
 {
     memset(tf, 0, sizeof *tf);
 
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }
@@ -630,10 +627,7 @@ ofputil_decode_table_desc(struct ofpbuf *msg,
 {
     memset(td, 0, sizeof *td);
 
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }
@@ -1945,13 +1939,7 @@ ofputil_decode_table_stats_reply(struct ofpbuf *msg,
                                  struct ofputil_table_stats *stats,
                                  struct ofputil_table_features *features)
 {
-    const struct ofp_header *oh;
-
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-    oh = msg->header;
-
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }
@@ -1961,6 +1949,7 @@ ofputil_decode_table_stats_reply(struct ofpbuf *msg,
     features->supports_eviction = -1;
     features->supports_vacancy_events = -1;
 
+    const struct ofp_header *oh = msg->header;
     switch ((enum ofp_version) oh->version) {
     case OFP10_VERSION:
         return ofputil_decode_ofp10_table_stats(msg, stats, features);

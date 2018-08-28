@@ -350,10 +350,7 @@ ofputil_decode_flow_monitor_request(struct ofputil_flow_monitor_request *rq,
     struct nx_flow_monitor_request *nfmr;
     uint16_t flags;
 
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }
@@ -561,10 +558,7 @@ ofputil_decode_flow_update(struct ofputil_flow_update *update,
     unsigned int length;
     struct ofp_header *oh;
 
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    ofpraw_pull_assert(msg);
     ofpbuf_clear(ofpacts);
     if (!msg->size) {
         return EOF;

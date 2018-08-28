@@ -509,8 +509,7 @@ ofputil_decode_group_stats_reply(struct ofpbuf *msg,
     size_t i;
 
     gs->bucket_stats = NULL;
-    error = (msg->header ? ofpraw_decode(&raw, msg->header)
-             : ofpraw_pull(&raw, msg));
+    error = ofpraw_pull(&raw, msg);
     if (error) {
         return error;
     }
@@ -1663,10 +1662,7 @@ ofputil_decode_ofp11_group_desc_reply(struct ofputil_group_desc *gd,
     struct ofp11_group_desc_stats *ogds;
     size_t length;
 
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }
@@ -1700,10 +1696,7 @@ ofputil_decode_ofp15_group_desc_reply(struct ofputil_group_desc *gd,
     uint16_t length, bucket_list_len;
     int error;
 
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }

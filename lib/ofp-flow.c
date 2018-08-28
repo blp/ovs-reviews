@@ -901,8 +901,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
     enum ofperr error;
     enum ofpraw raw;
 
-    error = (msg->header ? ofpraw_decode(&raw, msg->header)
-             : ofpraw_pull(&raw, msg));
+    error = ofpraw_pull(&raw, msg);
     if (error) {
         return error;
     }

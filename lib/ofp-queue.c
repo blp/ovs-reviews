@@ -734,8 +734,7 @@ ofputil_decode_queue_stats(struct ofputil_queue_stats *qs, struct ofpbuf *msg)
     enum ofperr error;
     enum ofpraw raw;
 
-    error = (msg->header ? ofpraw_decode(&raw, msg->header)
-             : ofpraw_pull(&raw, msg));
+    error = ofpraw_pull(&raw, msg);
     if (error) {
         return error;
     }

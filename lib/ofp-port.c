@@ -1736,8 +1736,7 @@ ofputil_decode_port_stats(struct ofputil_port_stats *ps, struct ofpbuf *msg)
     memset(&(ps->stats), 0xFF, sizeof (ps->stats));
     memset(&(ps->custom_stats), 0, sizeof (ps->custom_stats));
 
-    error = (msg->header ? ofpraw_decode(&raw, msg->header)
-             : ofpraw_pull(&raw, msg));
+    error = ofpraw_pull(&raw, msg);
     if (error) {
         return error;
     }

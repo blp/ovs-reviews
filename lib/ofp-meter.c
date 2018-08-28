@@ -290,11 +290,8 @@ ofputil_decode_meter_config(struct ofpbuf *msg,
     const struct ofp13_meter_config *omc;
     enum ofperr err;
 
-    /* Pull OpenFlow headers for the first call. */
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    /* Pull OpenFlow headers. */
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }
@@ -405,11 +402,8 @@ ofputil_decode_meter_stats(struct ofpbuf *msg,
     const struct ofp13_meter_stats *oms;
     enum ofperr err;
 
-    /* Pull OpenFlow headers for the first call. */
-    if (!msg->header) {
-        ofpraw_pull_assert(msg);
-    }
-
+    /* Pull OpenFlow headers. */
+    ofpraw_pull_assert(msg);
     if (!msg->size) {
         return EOF;
     }

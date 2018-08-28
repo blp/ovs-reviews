@@ -440,7 +440,11 @@ ofpraw_decode_assert(const struct ofp_header *oh)
  * (including the stats headers, vendor header, and any subtype header) with
  * ofpbuf_pull().  It also sets 'msg->header' to the start of the OpenFlow
  * header and 'msg->msg' just beyond the headers (that is, to the final value
- * of msg->data). */
+ * of msg->data).
+ *
+ * If 'msg->header' is already nonnull when this function is called, it decodes
+ * the message type without pulling anything more off, and without re-checking
+ * the message length. */
 enum ofperr
 ofpraw_pull(enum ofpraw *rawp, struct ofpbuf *msg)
 {
@@ -449,6 +453,17 @@ ofpraw_pull(enum ofpraw *rawp, struct ofpbuf *msg)
     const struct raw_instance *instance;
     const struct raw_info *info;
     struct ofphdrs hdrs;
+    if (msg->header) {
+        enum ofperr error = ofphdrs_decode(&hdrs, msg->header,
+                                           msg->size + ofpbuf_headersize(msg));
+        if (!error) {
+            error = ofpraw_from_ofphdrs(rawp, &hdrs);
+        }
+        if (error) {
+            *rawp = 0;
+        }
+        return error;
+    }
 
     unsigned int min_len;
     unsigned int len;

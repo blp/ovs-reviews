@@ -78,8 +78,7 @@ ofputil_pull_ipfix_stats(struct ofputil_ipfix_stats *is, struct ofpbuf *msg)
 
     memset(is, 0xFF, sizeof (*is));
 
-    error = (msg->header ? ofpraw_decode(&raw, msg->header)
-             : ofpraw_pull(&raw, msg));
+    error = ofpraw_pull(&raw, msg);
     if (error) {
         return error;
     }
