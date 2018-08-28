@@ -167,7 +167,7 @@ struct ofpbuf *ofputil_encode_dump_ports_request(enum ofp_version ofp_version,
                                                  ofp_port_t port);
 void ofputil_append_port_stat(struct ovs_list *replies,
                               const struct ofputil_port_stats *ops);
-size_t ofputil_count_port_stats(const struct ofp_header *);
+size_t ofputil_count_port_stats(struct ofpbuf *msg);
 int ofputil_decode_port_stats(struct ofputil_port_stats *, struct ofpbuf *msg);
 void ofputil_format_port_stats(struct ds *, const struct ofputil_port_stats *,
                                const struct ofputil_port_map *);

@@ -1702,16 +1702,17 @@ ofputil_pull_ofp14_port_stats(struct ofputil_port_stats *ops,
 }
 
 /* Returns the number of port stats elements in OFPTYPE_PORT_STATS_REPLY
- * message 'oh'. */
+ * message 'msg'. */
 size_t
-ofputil_count_port_stats(const struct ofp_header *oh)
+ofputil_count_port_stats(struct ofpbuf *msg)
 {
-    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
-    ofpraw_pull_assert(&b);
-
+    void *data = msg->data;
+    size_t size = msg->size;
     for (size_t n = 0; ; n++) {
         struct ofputil_port_stats ps;
-        if (ofputil_decode_port_stats(&ps, &b)) {
+        if (ofputil_decode_port_stats(&ps, msg)) {
+            msg->data = data;
+            msg->size = size;
             return n;
         }
     }

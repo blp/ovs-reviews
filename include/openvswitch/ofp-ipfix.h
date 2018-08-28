@@ -43,7 +43,7 @@ struct ofputil_ipfix_stats {
 
 void ofputil_append_ipfix_stat(struct ovs_list *replies,
                               const struct ofputil_ipfix_stats *);
-size_t ofputil_count_ipfix_stats(const struct ofp_header *);
+size_t ofputil_count_ipfix_stats(size_t body_len);
 int ofputil_pull_ipfix_stats(struct ofputil_ipfix_stats *, struct ofpbuf *msg);
 void ofputil_format_ipfix_stats_bridge(struct ds *,
                                        const struct ofputil_ipfix_stats *);

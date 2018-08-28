@@ -98,15 +98,12 @@ ofputil_pull_ipfix_stats(struct ofputil_ipfix_stats *is, struct ofpbuf *msg)
 
 
 /* Returns the number of ipfix stats elements in
- * OFPTYPE_IPFIX_BRIDGE_STATS_REPLY or OFPTYPE_IPFIX_FLOW_STATS_REPLY
- * message 'oh'. */
+ * OFPTYPE_IPFIX_BRIDGE_STATS_REPLY or OFPTYPE_IPFIX_FLOW_STATS_REPLY message
+ * with the given 'body_len'. */
 size_t
-ofputil_count_ipfix_stats(const struct ofp_header *oh)
+ofputil_count_ipfix_stats(size_t body_len)
 {
-    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
-    ofpraw_pull_assert(&b);
-
-    return b.size / sizeof(struct ofputil_ipfix_stats);
+    return body_len / sizeof(struct ofputil_ipfix_stats);
 }
 
 static void

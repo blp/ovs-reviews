@@ -70,8 +70,8 @@ enum ofperr
 ofputil_pull_switch_features(struct ofpbuf *b,
                              struct ofputil_switch_features *features)
 {
-    const struct ofp_header *oh = b->data;
     enum ofpraw raw = ofpraw_pull_assert(b);
+    const struct ofp_header *oh = b->header;
     const struct ofp_switch_features *osf = ofpbuf_pull(b, sizeof *osf);
     features->datapath_id = ntohll(osf->datapath_id);
     features->n_buffers = ntohl(osf->n_buffers);

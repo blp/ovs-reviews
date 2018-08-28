@@ -23,8 +23,10 @@
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/ofp-msgs.h"
 #include "openvswitch/ofpbuf.h"
+#include "openvswitch/poll-loop.h"
 #include "openvswitch/vlog.h"
 #include "ovs-thread.h"
+#include "timeval.h"
 #include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(ofp_msgs);
@@ -406,7 +408,11 @@ ofphdrs_len(const struct ofphdrs *hdrs)
  * '*raw'.  On failure, returns an OFPERR_* error code and zeros '*raw'.
  *
  * This function checks that 'oh' is a valid length for its particular type of
- * message, and returns an error if not. */
+ * message, and returns an error if not.
+ *
+ * This function is not suitable for reassembled multipart requests that might
+ * be over 64 kB (since oh->length maxes out at UINT64_MAX).  Use ofpraw_pull()
+ * directly.  */
 enum ofperr
 ofpraw_decode(enum ofpraw *raw, const struct ofp_header *oh)
 {
@@ -444,7 +450,11 @@ ofpraw_decode_assert(const struct ofp_header *oh)
  *
  * If 'msg->header' is already nonnull when this function is called, it decodes
  * the message type without pulling anything more off, and without re-checking
- * the message length. */
+ * the message length.
+ *
+ * This function works OK for reassembled multipart requests that are 64 kB or
+ * larger, because it looks at msg->size instead of the ofp_header's length
+ * field. */
 enum ofperr
 ofpraw_pull(enum ofpraw *rawp, struct ofpbuf *msg)
 {
@@ -895,7 +905,7 @@ void
 ofpmsg_update_length(struct ofpbuf *buf)
 {
     struct ofp_header *oh = ofpbuf_at_assert(buf, 0, sizeof *oh);
-    oh->length = htons(buf->size);
+    oh->length = htons(MIN(UINT16_MAX, buf->size));
 }
 
 /* Returns just past the OpenFlow header (including the stats headers, vendor
@@ -1072,6 +1082,179 @@ bool
 ofpmp_more(const struct ofp_header *oh)
 {
     return (ofpmp_flags(oh) & OFPSF_REPLY_MORE) != 0;
+}
+
+/* Multipart request assembler. */
+
+struct ofpmp_partial {
+    struct hmap_node hmap_node; /* In struct ofpmp_assembler's 'msgs'. */
+    ovs_be32 xid;
+    enum ofpraw raw;
+    long long int timeout;
+    struct ovs_list msgs;
+    size_t size;
+};
+
+static uint32_t
+hash_xid(ovs_be32 xid)
+{
+    return hash_int((OVS_FORCE uint32_t) xid, 0);
+}
+
+static struct ofpmp_partial *
+ofpmp_assembler_find(struct hmap *assembler, ovs_be32 xid)
+{
+    if (hmap_is_empty(assembler)) {
+        /* Common case. */
+        return NULL;
+    }
+
+    struct ofpmp_partial *p;
+    HMAP_FOR_EACH_IN_BUCKET (p, hmap_node, hash_xid(xid), assembler) {
+        if (p->xid == xid) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static void
+ofpmp_partial_destroy(struct hmap *assembler, struct ofpmp_partial *p)
+{
+    if (p) {
+        hmap_remove(assembler, &p->hmap_node);
+        ofpbuf_list_delete(&p->msgs);
+        free(p);
+    }
+}
+
+static struct ofpbuf *
+ofpmp_partial_error(struct hmap *assembler, struct ofpmp_partial *p,
+                    enum ofperr error)
+{
+    const struct ofpbuf *head = ofpbuf_from_list(ovs_list_back(&p->msgs));
+    const struct ofp_header *oh = head->data;
+    struct ofpbuf *reply = ofperr_encode_reply(error, oh);
+
+    ofpmp_partial_destroy(assembler, p);
+
+    return reply;
+}
+
+/* Clears out and frees any messages currently being reassembled.  Afterward,
+ * the caller may destroy the hmap, with hmap_destroy(), without risk of
+ * leaks. */
+void
+ofpmp_assembler_clear(struct hmap *assembler)
+{
+    struct ofpmp_partial *p, *next;
+    HMAP_FOR_EACH_SAFE (p, next, hmap_node, assembler) {
+        ofpmp_partial_destroy(assembler, p);
+    }
+}
+
+/* Does periodic maintenance on 'assembler'.  If any partially assembled
+ * requests have timed out, returns an appropriate error message for the caller
+ * to send to the controller. */
+struct ofpbuf *
+ofpmp_assembler_run(struct hmap *assembler)
+{
+    struct ofpmp_partial *p;
+    HMAP_FOR_EACH (p, hmap_node, assembler) {
+        if (time_msec() >= p->timeout) {
+            return ofpmp_partial_error(
+                assembler, p, OFPERR_OFPBRC_MULTIPART_REQUEST_TIMEOUT);
+        }
+    }
+    return NULL;
+}
+
+/* Arranges for the polling loop to wake up when a partially assembled request
+ * times out. */
+void
+ofpmp_assembler_wait(struct hmap *assembler)
+{
+    struct ofpmp_partial *p;
+    HMAP_FOR_EACH (p, hmap_node, assembler) {
+        poll_timer_wait_until(p->timeout);
+    }
+}
+
+struct ofpbuf *
+ofpmp_assembler_execute(struct hmap *assembler, struct ofpbuf *msg)
+{
+    struct ofp_header *oh = msg->data;
+    if (oh->version < OFP13_VERSION || !ofpmsg_is_stat_request(oh)) {
+        return msg;
+    }
+
+    struct ofpmp_partial *p = ofpmp_assembler_find(assembler, oh->xid);
+    bool more = ofpmp_more(oh);
+    if (!p && !more) {
+        return msg;
+    }
+
+    enum ofpraw raw;
+    enum ofperr error = ofpraw_decode(&raw, oh);
+    if (error) {
+        struct ofpbuf *reply = ofperr_encode_reply(error, oh);
+        ofpbuf_delete(msg);
+        return reply;
+    }
+
+    if (!p) {
+        p = xmalloc(sizeof *p);
+        hmap_insert(assembler, &p->hmap_node, hash_xid(oh->xid));
+        p->xid = oh->xid;
+        ovs_list_init(&p->msgs);
+        p->raw = raw;
+        p->size = 0;
+    } else {
+        /* Pull off the OpenFlow and statistics headers--we only want the
+         * body. */
+        ofpraw_pull_assert(msg);
+    }
+
+    ovs_list_push_back(&p->msgs, &msg->list_node);
+    if (p->raw != raw) {
+        return ofpmp_partial_error(assembler, p, OFPERR_OFPBRC_BAD_STAT);
+    }
+
+    p->size += msg->size;
+    if (p->size > 1024 * 1024) {
+        return ofpmp_partial_error(assembler, p,
+                                   OFPERR_OFPBRC_MULTIPART_BUFFER_OVERFLOW);
+    }
+
+    if (more) {
+        p->timeout = time_msec() + 1000;
+        return NULL;
+    } else {
+        /* Concatenate the collected messages into one big message. */
+        struct ofpbuf *sum = ofpbuf_new(p->size);
+        struct ofpbuf *b;
+        LIST_FOR_EACH (b, list_node, &p->msgs) {
+            ofpbuf_put(sum, b->data, b->size);
+        }
+        ovs_assert(sum->size == p->size);
+        ofpmsg_update_length(sum);
+
+        /* Check that the reassembled message's length is valid for its type.
+         * Some messages have a fixed payload size, so that concatenating
+         * multiple individually valid messages could exceed that size.
+         *
+         * We can't use ofpraw_decode() here because the ofp_header's 'length'
+         * will be inaccurate if sum->size >= 64 kB. */
+        struct ofpbuf tmp = ofpbuf_const_initializer(sum->data, sum->size);
+        error = ofpraw_pull(&raw, &tmp);
+        if (error) {
+            ofpbuf_delete(sum);
+            return ofpmp_partial_error(assembler, p, error);
+        }
+
+        ofpmp_partial_destroy(assembler, p);
+        return sum;
+    }
 }
 
 static void ofpmsgs_init(void);
