@@ -49,6 +49,8 @@ ovsdb\-client \- command-line interface to \fBovsdb-server\fR(1)
 \fBovsdb\-client\fR [\fIoptions\fR] \fBmonitor\-cond\fR [\fIserver\fR] [\fIdatabase\fR] \fIconditions
 \fItable\fR [\fIcolumn\fR[\fB,\fIcolumn\fR]...]...
 .br
+\fBovsdb\-client\fR [\fIoptions\fR] \fBsync\fR [\fIserver\fR] [\fIdatabase\fR]
+.br
 \fBovsdb\-client \fR[\fIoptions\fR] \fBwait\fR \fR[\fIserver\fR] \fIdatabase\fR \fIstate\fR
 .IP "Testing Commands:"
 \fBovsdb\-client\fR [\fIoptions\fR] \fBlock\fR [\fIserver\fR] \fIlock\fR
@@ -316,6 +318,14 @@ do not work.
 This command acts on a particular database server, not on a cluster,
 so \fIserver\fR must name a single server, not a comma-delimited list
 of servers.
+.IP "\fBsync\fR [\fIserver\fR] [\fIdatabase\fR]"
+Connects to \fIserver\fR and monitors the contents of \fIdatabase\fR.
+Prints the initial contents of the database on stdout as a series of
+\fBinsert\fR commands in the syntax understood by Differential Datalog
+for testing, within a single transaction.  Then, as the database
+contents change, prints additional transactions in the same syntax to
+resynchronize with the database's contents.  If the database
+connection drops, exits.
 .SS "Testing commands"
 These commands are mostly of interest for testing the correctness
 of the OVSDB server.
@@ -357,8 +367,9 @@ seconds.  If the timeout expires, \fBovsdb\-client\fR will exit with a
 \fBSIGALRM\fR signal.
 .
 .SS "Daemon Options"
-The daemon options apply only to the \fBmonitor\fR and \fBmonitor\-cond\fR commands.
-With any other command, they have no effect.
+The daemon options apply only to the \fBmonitor\fR,
+\fBmonitor\-cond\fR, and \fBsync\fR commands.  With any other command,
+they have no effect.
 .ds DD
 .so lib/daemon.man
 .SS "Logging Options"

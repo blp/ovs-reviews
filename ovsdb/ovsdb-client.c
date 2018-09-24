@@ -2080,7 +2080,389 @@ do_restore(struct jsonrpc *rpc, const char *database,
     check_transaction_reply(reply);
     jsonrpc_msg_destroy(reply);
 }
+
+/* Formats a UUID as a string, with - replaced by _. */
+#define UUID_FMT_UNDERSCORES "%08x_%04x_%04x_%04x_%04x%08x"
 
+static void
+sync_format_atom(const union ovsdb_atom *atom, enum ovsdb_atomic_type type,
+                 struct ds *s)
+{
+    switch (type) {
+    case OVSDB_TYPE_VOID:
+        OVS_NOT_REACHED();
+
+    case OVSDB_TYPE_INTEGER:
+        ds_put_format(s, "%"PRId64, atom->integer);
+        break;
+
+    case OVSDB_TYPE_REAL:
+        ds_put_format(s, "%.*g", DBL_DIG, atom->real);
+        break;
+
+    case OVSDB_TYPE_BOOLEAN:
+        ds_put_cstr(s, atom->boolean ? "true" : "false");
+        break;
+
+    case OVSDB_TYPE_STRING:
+        json_string_escape(atom->string, s);
+        break;
+
+    case OVSDB_TYPE_UUID:
+        ds_put_format(s, "0x"UUID_FMT_UNDERSCORES, UUID_ARGS(&atom->uuid));
+        break;
+
+    case OVSDB_N_TYPES:
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
+static void
+sync_print_atom(const union ovsdb_atom *atom, enum ovsdb_atomic_type type)
+{
+    struct ds s = DS_EMPTY_INITIALIZER;
+    sync_format_atom(atom, type, &s);
+    fputs(ds_cstr(&s), stdout);
+    ds_destroy(&s);
+}
+
+static void
+sync_print_row_op(const struct monitored_table *mt,
+                  const char *op, const struct uuid *row_uuid,
+                  struct json *data1, struct json *data2,
+                  const struct ovsdb_column_set *columns)
+{
+    struct ds row_s = DS_EMPTY_INITIALIZER;
+    for (size_t i = 0; i < columns->n_columns; i++) {
+        const struct ovsdb_column *column = columns->columns[i];
+        if (ovsdb_type_is_composite(&column->type)) {
+            continue;
+        }
+
+        ds_put_cstr(&row_s, ",\n    ");
+
+        struct json *value = shash_find_data(json_object(data1), column->name);
+        if (!value) {
+            if (data2) {
+                value = shash_find_data(json_object(data2), column->name);
+            }
+            if (!value) {
+                ovs_error(0, "missing value");
+                /* XXX */
+                continue;
+            }
+        }
+
+        struct ovsdb_datum datum;
+        struct ovsdb_error *error = ovsdb_datum_from_json(
+            &datum, &column->type, value, NULL);
+        if (error) {
+            /* XXX */
+            ovs_error(0, "bad datum");
+            continue;
+        }
+
+        if (column->type.n_min == 0) {
+            if (datum.n) {
+                ds_put_cstr(&row_s, "types.Some{");
+            } else {
+                ds_put_cstr(&row_s, "types.None");
+                continue;
+            }
+        }
+        ovs_assert(datum.n == 1);
+
+        if (column->type.value.type == OVSDB_TYPE_VOID) {
+            sync_format_atom(&datum.keys[0], column->type.key.type, &row_s);
+        } else {
+            ds_put_char(&row_s, '(');
+            sync_format_atom(&datum.keys[0], column->type.key.type, &row_s);
+            ds_put_char(&row_s, ',');
+            sync_format_atom(&datum.values[0], column->type.value.type,
+                             &row_s);
+            ds_put_char(&row_s, ')');
+        }
+
+        if (column->type.n_min == 0) {
+            ds_put_char(&row_s, '}');
+        }
+    }
+    printf("%s %s(0x"UUID_FMT_UNDERSCORES"%s);\n",
+           op, mt->table->name, UUID_ARGS(row_uuid), ds_cstr(&row_s));
+    ds_destroy(&row_s);
+}
+
+static void
+sync_print_deltas(const char *table_name, const struct ovsdb_column *column,
+                  const struct uuid *row_uuid,
+                  const struct ovsdb_datum *changes, const char *op)
+{
+    for (size_t i = 0; i < changes->n; i++) {
+        printf("%s %s_%s(0x"UUID_FMT_UNDERSCORES", ",
+               op, table_name, column->name, UUID_ARGS(row_uuid));
+
+        sync_print_atom(&changes->keys[i], column->type.key.type);
+        if (column->type.value.type != OVSDB_TYPE_VOID) {
+            fputs(", ", stdout);
+            sync_print_atom(&changes->values[i], column->type.value.type);
+        }
+        fputs(");\n", stdout);
+    }
+
+}
+
+static void
+sync_print_row(const struct monitored_table *mt, const char *row_uuid_s,
+               struct json *old, struct json *new,
+               const struct ovsdb_column_set *columns)
+{
+    if (old && old->type != JSON_OBJECT) {
+        ovs_error(0, "old <row> is not object");
+        return;
+    } else if (new && new->type != JSON_OBJECT) {
+        ovs_error(0, "new <row> is not object");
+        return;
+    } else if (!old && !new) {
+        ovs_error(0, "missing row in update");
+        return;
+    }
+
+    struct uuid row_uuid;
+    if (!uuid_from_string(&row_uuid, row_uuid_s)) {
+        ovs_error(0, "%s: bad row uuid", row_uuid_s);
+        return;
+    }
+
+    if (1 /* XXX !old || !new || a non-composite column changed */) {
+        if (old) {
+            sync_print_row_op(mt, "delete", &row_uuid, old, new, columns);
+        }
+
+        if (new) {
+            sync_print_row_op(mt, "insert", &row_uuid, new, NULL, columns);
+        }
+    }
+
+    for (size_t i = 0; i < columns->n_columns; i++) {
+        const struct ovsdb_column *column = columns->columns[i];
+        if (!ovsdb_type_is_composite(&column->type)) {
+            continue;
+        }
+
+        struct ovsdb_datum old_datum = OVSDB_DATUM_INITIALIZER;
+        if (old) {
+            struct json *value = shash_find_data(json_object(old),
+                                                 column->name);
+            if (!value) {
+                if (!new) {
+                    ovs_error(0, "missing old datum");
+                } else {
+                    /* When old and new rows are present, and only a new value
+                     * is present for a column, then the column's value didn't
+                     * change. */
+                }
+                continue;
+            }
+
+            struct ovsdb_error *error = ovsdb_datum_from_json(
+                &old_datum, &column->type, value, NULL);
+            if (error) {
+                /* XXX */
+                ovs_error(0, "bad old datum");
+                continue;
+            }
+        }
+
+        struct ovsdb_datum new_datum = OVSDB_DATUM_INITIALIZER;
+        if (new) {
+            struct json *value = shash_find_data(json_object(new),
+                                                 column->name);
+            if (!value) {
+                ovsdb_datum_destroy(&old_datum, &column->type);
+                ovs_error(0, "missing new datum");
+                continue;
+            }
+
+            struct ovsdb_error *error = ovsdb_datum_from_json(
+                &new_datum, &column->type, value, NULL);
+            if (error) {
+                /* XXX */
+                ovsdb_datum_destroy(&old_datum, &column->type);
+                ovs_error(0, "bad new datum");
+                continue;
+            }
+        }
+
+        struct ovsdb_datum added, removed;
+        ovsdb_datum_deltas(&old_datum, &new_datum, &column->type,
+                           &added, &removed);
+        sync_print_deltas(mt->table->name, column, &row_uuid,
+                          &added, "insert");
+        sync_print_deltas(mt->table->name, column, &row_uuid,
+                          &removed, "delete");
+        ovsdb_datum_destroy(&added, &column->type);
+        ovsdb_datum_destroy(&removed, &column->type);
+    }
+}
+
+static void
+sync_print_table(struct json *table_update, const struct monitored_table *mt)
+{
+    if (table_update->type != JSON_OBJECT) {
+        ovs_error(0, "<table-update> for table %s is not object",
+                  mt->table->name);
+        return;
+    }
+
+    const struct ovsdb_column_set *columns = &mt->columns;
+
+    struct shash_node *node;
+    SHASH_FOR_EACH (node, json_object(table_update)) {
+        struct json *row_update = node->data;
+        if (row_update->type != JSON_OBJECT) {
+            ovs_error(0, "<row-update> is not object");
+            continue;
+        }
+
+        struct json *old = shash_find_data(json_object(row_update), "old");
+        struct json *new = shash_find_data(json_object(row_update), "new");
+        sync_print_row(mt, node->name, old, new, columns);
+    }
+}
+
+static void
+sync_print(struct json *table_updates,
+           const struct monitored_table *mts, size_t n_mts)
+{
+    size_t i;
+
+    if (table_updates->type != JSON_OBJECT) {
+        ovs_error(0, "<table-updates> is not object");
+        return;
+    }
+
+    puts("start;");
+    for (i = 0; i < n_mts; i++) {
+        const struct monitored_table *mt = &mts[i];
+        struct json *table_update = shash_find_data(json_object(table_updates),
+                                                    mt->table->name);
+        if (table_update) {
+            sync_print_table(table_update, mt);
+        }
+    }
+    puts("commit;\n");
+}
+
+static void
+do_sync(struct jsonrpc *rpc, const char *database,
+        int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
+{
+    const char *server = jsonrpc_get_name(rpc);
+    struct unixctl_server *unixctl;
+    struct ovsdb_schema *schema;
+    struct json *monitor, *monitor_requests, *request_id;
+    bool exiting = false;
+
+    struct monitored_table *mts;
+    size_t n_mts, allocated_mts;
+
+    daemon_save_fd(STDOUT_FILENO);
+    daemon_save_fd(STDERR_FILENO);
+    daemonize_start(false);
+    if (get_detach()) {
+        int error;
+
+        error = unixctl_server_create(NULL, &unixctl);
+        if (error) {
+            ovs_fatal(error, "failed to create unixctl server");
+        }
+
+        unixctl_command_register("exit", "", 0, 0,
+                                 ovsdb_client_exit, &exiting);
+    } else {
+        unixctl = NULL;
+    }
+
+    schema = fetch_schema(rpc, database);
+
+    monitor_requests = json_object_create();
+
+    mts = NULL;
+    n_mts = allocated_mts = 0;
+    size_t n = shash_count(&schema->tables);
+    const struct shash_node **nodes = shash_sort(&schema->tables);
+    for (size_t i = 0; i < n; i++) {
+        struct ovsdb_table_schema *table = nodes[i]->data;
+
+        add_monitored_table(argc, argv, server, database, NULL, table,
+                            monitor_requests,
+                            &mts, &n_mts, &allocated_mts);
+    }
+    free(nodes);
+
+    monitor = json_array_create_3(json_string_create(database),
+                                  json_null_create(), monitor_requests);
+
+    struct jsonrpc_msg *request;
+    request = jsonrpc_create_request("monitor", monitor, NULL);
+    request_id = json_clone(request->id);
+    jsonrpc_send(rpc, request);
+
+    for (;;) {
+        unixctl_server_run(unixctl);
+        for (;;) {
+            struct jsonrpc_msg *msg;
+            int error;
+
+            error = jsonrpc_recv(rpc, &msg);
+            if (error == EAGAIN) {
+                break;
+            } else if (error) {
+                ovs_fatal(error, "%s: receive failed", server);
+            }
+
+            if (msg->type == JSONRPC_REQUEST && !strcmp(msg->method, "echo")) {
+                jsonrpc_send(rpc, jsonrpc_create_reply(json_clone(msg->params),
+                                                       msg->id));
+            } else if (msg->type == JSONRPC_REPLY
+                       && json_equal(msg->id, request_id)) {
+                sync_print(msg->result, mts, n_mts);
+                fflush(stdout);
+                daemonize_complete();
+            } else if (msg->type == JSONRPC_NOTIFY
+                       && !strcmp(msg->method, "update")) {
+                struct json *params = msg->params;
+                if (params->type == JSON_ARRAY
+                    && params->array.n == 2
+                    && params->array.elems[0]->type == JSON_NULL) {
+                    sync_print(params->array.elems[1], mts, n_mts);
+                    fflush(stdout);
+                }
+            } else if (msg->type == JSONRPC_NOTIFY
+                       && !strcmp(msg->method, "monitor_canceled")) {
+                ovs_fatal(0, "%s: %s database was removed",
+                          server, database);
+            }
+            jsonrpc_msg_destroy(msg);
+        }
+
+        if (exiting) {
+            break;
+        }
+
+        jsonrpc_run(rpc);
+        jsonrpc_wait(rpc);
+        jsonrpc_recv_wait(rpc);
+        unixctl_server_wait(unixctl);
+        poll_block();
+    }
+
+    json_destroy(request_id);
+    unixctl_server_destroy(unixctl);
+    ovsdb_schema_destroy(schema);
+    destroy_monitored_table(mts, n_mts);
+}
 
 static void
 do_help(struct jsonrpc *rpc OVS_UNUSED, const char *database OVS_UNUSED,
@@ -2415,6 +2797,7 @@ static const struct ovsdb_client_command all_commands[] = {
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },
     { "backup",             NEED_DATABASE, 0, 0,       do_backup },
     { "restore",            NEED_DATABASE, 0, 0,       do_restore },
+    { "sync",               NEED_DATABASE, 0, 0,       do_sync },
     { "lock",               NEED_RPC,      1, 1,       do_lock_create },
     { "steal",              NEED_RPC,      1, 1,       do_lock_steal },
     { "unlock",             NEED_RPC,      1, 1,       do_lock_unlock },
