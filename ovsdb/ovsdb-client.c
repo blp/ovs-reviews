@@ -2364,6 +2364,8 @@ sync_print(const char *database, struct json *table_updates,
         }
     }
     puts("commit;\n");
+
+    fflush(stdout);
 }
 
 static void
@@ -2440,7 +2442,6 @@ do_sync(struct jsonrpc *rpc, const char *database,
             } else if (msg->type == JSONRPC_REPLY
                        && json_equal(msg->id, request_id)) {
                 sync_print(database, msg->result, mts, n_mts);
-                fflush(stdout);
                 daemonize_complete();
             } else if (msg->type == JSONRPC_NOTIFY
                        && !strcmp(msg->method, "update")) {
@@ -2449,7 +2450,6 @@ do_sync(struct jsonrpc *rpc, const char *database,
                     && params->array.n == 2
                     && params->array.elems[0]->type == JSON_NULL) {
                     sync_print(database, params->array.elems[1], mts, n_mts);
-                    fflush(stdout);
                 }
             } else if (msg->type == JSONRPC_NOTIFY
                        && !strcmp(msg->method, "monitor_canceled")) {
