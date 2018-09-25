@@ -2218,7 +2218,20 @@ sync_print_deltas(const char *database, const char *table_name,
         }
         fputs(");\n", stdout);
     }
+}
 
+static bool
+noncomposite_column_changed(const struct json *old,
+                            const struct ovsdb_column_set *columns)
+{
+    for (size_t i = 0; i < columns->n_columns; i++) {
+        const struct ovsdb_column *column = columns->columns[i];
+        if (!ovsdb_type_is_composite(&column->type) &&
+            shash_find(json_object(old), column->name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void
@@ -2243,7 +2256,7 @@ sync_print_row(const char *database, const struct monitored_table *mt,
         return;
     }
 
-    if (1 /* XXX !old || !new || a non-composite column changed */) {
+    if (!old || !new || noncomposite_column_changed(old, columns)) {
         if (old) {
             sync_print_row_op(database, mt, "delete",
                               &row_uuid, old, new, columns);
