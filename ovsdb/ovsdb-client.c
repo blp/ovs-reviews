@@ -2144,8 +2144,6 @@ sync_print_row_op(const struct monitored_table *mt,
             continue;
         }
 
-        ds_put_cstr(&row_s, ",\n    ");
-
         struct json *value = shash_find_data(json_object(data1), column->name);
         if (!value) {
             if (data2) {
@@ -2167,6 +2165,7 @@ sync_print_row_op(const struct monitored_table *mt,
             continue;
         }
 
+        ds_put_format(&row_s, ",\n    .%s = ", column->name);
         if (column->type.n_min == 0) {
             if (datum.n) {
                 ds_put_cstr(&row_s, "types.Some{");
@@ -2192,7 +2191,8 @@ sync_print_row_op(const struct monitored_table *mt,
             ds_put_char(&row_s, '}');
         }
     }
-    printf("%s %s(0x"UUID_FMT_UNDERSCORES"%s);\n",
+    printf("%s %s(\n"
+           "    ._uuid = 0x"UUID_FMT_UNDERSCORES"%s);\n",
            op, mt->table->name, UUID_ARGS(row_uuid), ds_cstr(&row_s));
     ds_destroy(&row_s);
 }
@@ -2203,12 +2203,14 @@ sync_print_deltas(const char *table_name, const struct ovsdb_column *column,
                   const struct ovsdb_datum *changes, const char *op)
 {
     for (size_t i = 0; i < changes->n; i++) {
-        printf("%s %s_%s(\n    0x"UUID_FMT_UNDERSCORES",\n    ",
+        printf("%s %s_%s(\n"
+               "    ._uuid = 0x"UUID_FMT_UNDERSCORES",\n"
+               "    .key = ",
                op, table_name, column->name, UUID_ARGS(row_uuid));
 
         sync_print_atom(&changes->keys[i], column->type.key.type);
         if (column->type.value.type != OVSDB_TYPE_VOID) {
-            fputs(",\n    ", stdout);
+            fputs(",\n    .value = ", stdout);
             sync_print_atom(&changes->values[i], column->type.value.type);
         }
         fputs(");\n", stdout);
