@@ -2132,7 +2132,8 @@ sync_print_atom(const union ovsdb_atom *atom, enum ovsdb_atomic_type type)
 }
 
 static void
-sync_print_row_op(const struct monitored_table *mt,
+sync_print_row_op(const char *database,
+                  const struct monitored_table *mt,
                   const char *op, const struct uuid *row_uuid,
                   struct json *data1, struct json *data2,
                   const struct ovsdb_column_set *columns)
@@ -2191,22 +2192,24 @@ sync_print_row_op(const struct monitored_table *mt,
             ds_put_char(&row_s, '}');
         }
     }
-    printf("%s %s(\n"
+    printf("%s %s.%s(\n"
            "    ._uuid = 0x"UUID_FMT_UNDERSCORES"%s);\n",
-           op, mt->table->name, UUID_ARGS(row_uuid), ds_cstr(&row_s));
+           op, database, mt->table->name, UUID_ARGS(row_uuid),
+           ds_cstr(&row_s));
     ds_destroy(&row_s);
 }
 
 static void
-sync_print_deltas(const char *table_name, const struct ovsdb_column *column,
+sync_print_deltas(const char *database, const char *table_name,
+                  const struct ovsdb_column *column,
                   const struct uuid *row_uuid,
                   const struct ovsdb_datum *changes, const char *op)
 {
     for (size_t i = 0; i < changes->n; i++) {
-        printf("%s %s_%s(\n"
+        printf("%s %s.%s_%s(\n"
                "    ._uuid = 0x"UUID_FMT_UNDERSCORES",\n"
                "    .key = ",
-               op, table_name, column->name, UUID_ARGS(row_uuid));
+               op, database, table_name, column->name, UUID_ARGS(row_uuid));
 
         sync_print_atom(&changes->keys[i], column->type.key.type);
         if (column->type.value.type != OVSDB_TYPE_VOID) {
@@ -2219,8 +2222,8 @@ sync_print_deltas(const char *table_name, const struct ovsdb_column *column,
 }
 
 static void
-sync_print_row(const struct monitored_table *mt, const char *row_uuid_s,
-               struct json *old, struct json *new,
+sync_print_row(const char *database, const struct monitored_table *mt,
+               const char *row_uuid_s, struct json *old, struct json *new,
                const struct ovsdb_column_set *columns)
 {
     if (old && old->type != JSON_OBJECT) {
@@ -2242,11 +2245,13 @@ sync_print_row(const struct monitored_table *mt, const char *row_uuid_s,
 
     if (1 /* XXX !old || !new || a non-composite column changed */) {
         if (old) {
-            sync_print_row_op(mt, "delete", &row_uuid, old, new, columns);
+            sync_print_row_op(database, mt, "delete",
+                              &row_uuid, old, new, columns);
         }
 
         if (new) {
-            sync_print_row_op(mt, "insert", &row_uuid, new, NULL, columns);
+            sync_print_row_op(database, mt, "insert",
+                              &row_uuid, new, NULL, columns);
         }
     }
 
@@ -2303,9 +2308,9 @@ sync_print_row(const struct monitored_table *mt, const char *row_uuid_s,
         struct ovsdb_datum added, removed;
         ovsdb_datum_deltas(&old_datum, &new_datum, &column->type,
                            &added, &removed);
-        sync_print_deltas(mt->table->name, column, &row_uuid,
+        sync_print_deltas(database, mt->table->name, column, &row_uuid,
                           &added, "insert");
-        sync_print_deltas(mt->table->name, column, &row_uuid,
+        sync_print_deltas(database, mt->table->name, column, &row_uuid,
                           &removed, "delete");
         ovsdb_datum_destroy(&added, &column->type);
         ovsdb_datum_destroy(&removed, &column->type);
@@ -2313,7 +2318,8 @@ sync_print_row(const struct monitored_table *mt, const char *row_uuid_s,
 }
 
 static void
-sync_print_table(struct json *table_update, const struct monitored_table *mt)
+sync_print_table(const char *database, struct json *table_update,
+                 const struct monitored_table *mt)
 {
     if (table_update->type != JSON_OBJECT) {
         ovs_error(0, "<table-update> for table %s is not object",
@@ -2333,12 +2339,12 @@ sync_print_table(struct json *table_update, const struct monitored_table *mt)
 
         struct json *old = shash_find_data(json_object(row_update), "old");
         struct json *new = shash_find_data(json_object(row_update), "new");
-        sync_print_row(mt, node->name, old, new, columns);
+        sync_print_row(database, mt, node->name, old, new, columns);
     }
 }
 
 static void
-sync_print(struct json *table_updates,
+sync_print(const char *database, struct json *table_updates,
            const struct monitored_table *mts, size_t n_mts)
 {
     size_t i;
@@ -2354,7 +2360,7 @@ sync_print(struct json *table_updates,
         struct json *table_update = shash_find_data(json_object(table_updates),
                                                     mt->table->name);
         if (table_update) {
-            sync_print_table(table_update, mt);
+            sync_print_table(database, table_update, mt);
         }
     }
     puts("commit;\n");
@@ -2433,7 +2439,7 @@ do_sync(struct jsonrpc *rpc, const char *database,
                                                        msg->id));
             } else if (msg->type == JSONRPC_REPLY
                        && json_equal(msg->id, request_id)) {
-                sync_print(msg->result, mts, n_mts);
+                sync_print(database, msg->result, mts, n_mts);
                 fflush(stdout);
                 daemonize_complete();
             } else if (msg->type == JSONRPC_NOTIFY
@@ -2442,7 +2448,7 @@ do_sync(struct jsonrpc *rpc, const char *database,
                 if (params->type == JSON_ARRAY
                     && params->array.n == 2
                     && params->array.elems[0]->type == JSON_NULL) {
-                    sync_print(params->array.elems[1], mts, n_mts);
+                    sync_print(database, params->array.elems[1], mts, n_mts);
                     fflush(stdout);
                 }
             } else if (msg->type == JSONRPC_NOTIFY
