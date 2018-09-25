@@ -180,6 +180,8 @@ ovn_init_db () {
     as $1 start_daemon ovsdb-server --remote=punix:"$d"/$1.sock "$d"/$1.db
     local var=`echo $1_db | tr a-z- A-Z_`
     AS_VAR_SET([$var], [unix:$ovs_base/$1/$1.sock]); export $var
+    AS_VAR_COPY([sock], [$var])
+    as $1 start_daemon ovsdb-client sync "$sock" > $1.sync
 }
 
 # ovn_start
