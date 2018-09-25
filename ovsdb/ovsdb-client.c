@@ -1141,7 +1141,7 @@ add_column(const char *server, const struct ovsdb_column *column,
 static struct json *
 parse_monitor_columns(char *arg, const char *server, const char *database,
                       const struct ovsdb_table_schema *table,
-                      struct ovsdb_column_set *columns)
+                      bool include_version, struct ovsdb_column_set *columns)
 {
     bool initial, insert, delete, modify;
     struct json *mr, *columns_json;
@@ -1191,8 +1191,11 @@ parse_monitor_columns(char *arg, const char *server, const char *database,
         }
         free(nodes);
 
-        add_column(server, ovsdb_table_schema_get_column(table, "_version"),
-                   columns, columns_json);
+        if (include_version) {
+            add_column(server,
+                       ovsdb_table_schema_get_column(table, "_version"),
+                       columns, columns_json);
+        }
     }
 
     if (!initial || !insert || !delete || !modify) {
@@ -1274,7 +1277,7 @@ static void
 add_monitored_table(int argc, char *argv[],
                     const char *server, const char *database,
                     struct json *condition,
-                    struct ovsdb_table_schema *table,
+                    struct ovsdb_table_schema *table, bool include_version,
                     struct json *monitor_requests,
                     struct monitored_table **mts,
                     size_t *n_mts, size_t *allocated_mts)
@@ -1295,7 +1298,7 @@ add_monitored_table(int argc, char *argv[],
 
         for (i = 1; i < argc; i++) {
             mr = parse_monitor_columns(argv[i], server, database, table,
-                                       &mt->columns);
+                                       include_version, &mt->columns);
             if (i == 1 && condition) {
                 json_object_put(mr, "where", condition);
             }
@@ -1307,7 +1310,7 @@ add_monitored_table(int argc, char *argv[],
         char empty[] = "";
 
         mr = parse_monitor_columns(empty, server, database,
-                                   table, &mt->columns);
+                                   table, include_version, &mt->columns);
         if (condition) {
             json_object_put(mr, "where", condition);
         }
@@ -1387,7 +1390,8 @@ do_monitor__(struct jsonrpc *rpc, const char *database,
         }
 
         add_monitored_table(argc, argv, server, database, condition, table,
-                            monitor_requests, &mts, &n_mts, &allocated_mts);
+                            true, monitor_requests,
+                            &mts, &n_mts, &allocated_mts);
     } else {
         size_t n = shash_count(&schema->tables);
         const struct shash_node **nodes = shash_sort(&schema->tables);
@@ -1401,7 +1405,7 @@ do_monitor__(struct jsonrpc *rpc, const char *database,
             struct ovsdb_table_schema *table = nodes[i]->data;
 
             add_monitored_table(argc, argv, server, database, NULL, table,
-                                monitor_requests,
+                                true, monitor_requests,
                                 &mts, &n_mts, &allocated_mts);
         }
         free(nodes);
@@ -2396,7 +2400,7 @@ do_sync(struct jsonrpc *rpc, const char *database,
         struct ovsdb_table_schema *table = nodes[i]->data;
 
         add_monitored_table(argc, argv, server, database, NULL, table,
-                            monitor_requests,
+                            false, monitor_requests,
                             &mts, &n_mts, &allocated_mts);
     }
     free(nodes);
