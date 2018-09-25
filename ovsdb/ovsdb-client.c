@@ -2199,12 +2199,12 @@ sync_print_deltas(const char *table_name, const struct ovsdb_column *column,
                   const struct ovsdb_datum *changes, const char *op)
 {
     for (size_t i = 0; i < changes->n; i++) {
-        printf("%s %s_%s(0x"UUID_FMT_UNDERSCORES", ",
+        printf("%s %s_%s(\n    0x"UUID_FMT_UNDERSCORES",\n    ",
                op, table_name, column->name, UUID_ARGS(row_uuid));
 
         sync_print_atom(&changes->keys[i], column->type.key.type);
         if (column->type.value.type != OVSDB_TYPE_VOID) {
-            fputs(", ", stdout);
+            fputs(",\n    ", stdout);
             sync_print_atom(&changes->values[i], column->type.value.type);
         }
         fputs(");\n", stdout);
