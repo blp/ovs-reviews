@@ -2193,7 +2193,7 @@ sync_print_row_op(const char *database,
         }
     }
     printf("%s %s.%s(\n"
-           "    ._uuid = 0x"UUID_FMT_UNDERSCORES"%s);\n",
+           "    ._uuid = 0x"UUID_FMT_UNDERSCORES"%s),\n",
            op, database, mt->table->name, UUID_ARGS(row_uuid),
            ds_cstr(&row_s));
     ds_destroy(&row_s);
@@ -2216,7 +2216,7 @@ sync_print_deltas(const char *database, const char *table_name,
             fputs(",\n    .value = ", stdout);
             sync_print_atom(&changes->values[i], column->type.value.type);
         }
-        fputs(");\n", stdout);
+        fputs("),\n", stdout);
     }
 }
 
