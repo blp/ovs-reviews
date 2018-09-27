@@ -1267,23 +1267,27 @@ netdev_dummy_get_queue(const struct netdev *netdev OVS_UNUSED,
 }
 
 static void
-netdev_dummy_init_queue_stats(struct netdev_queue_stats *stats)
+netdev_dummy_init_queue_stats(const struct netdev *netdev,
+                              struct netdev_queue_stats *stats)
 {
+    struct netdev_dummy *dev = netdev_dummy_cast(netdev);
+    ovs_mutex_lock(&dev->mutex);
     *stats = (struct netdev_queue_stats) {
-        .tx_bytes = UINT64_MAX,
-        .tx_packets = UINT64_MAX,
-        .tx_errors = UINT64_MAX,
+        .tx_bytes = dev->stats.tx_bytes,
+        .tx_packets = dev->stats.tx_packets,
+        .tx_errors = 0,
         .created = LLONG_MIN,
     };
+    ovs_mutex_unlock(&dev->mutex);
 }
 
 static int
-netdev_dummy_get_queue_stats(const struct netdev *netdev OVS_UNUSED,
+netdev_dummy_get_queue_stats(const struct netdev *netdev,
                              unsigned int queue_id,
                              struct netdev_queue_stats *stats)
 {
     if (queue_id == 0) {
-        netdev_dummy_init_queue_stats(stats);
+        netdev_dummy_init_queue_stats(netdev, stats);
         return 0;
     } else {
         return EINVAL;
@@ -1329,14 +1333,14 @@ netdev_dummy_queue_dump_done(const struct netdev *netdev OVS_UNUSED,
 }
 
 static int
-netdev_dummy_dump_queue_stats(const struct netdev *netdev OVS_UNUSED,
+netdev_dummy_dump_queue_stats(const struct netdev *netdev,
                               void (*cb)(unsigned int queue_id,
                                          struct netdev_queue_stats *,
                                          void *aux),
                               void *aux)
 {
     struct netdev_queue_stats stats;
-    netdev_dummy_init_queue_stats(&stats);
+    netdev_dummy_init_queue_stats(netdev, &stats);
     cb(0, &stats, aux);
     return 0;
 }
