@@ -44,24 +44,12 @@
 
 VLOG_DEFINE_THIS_MODULE(route_table);
 
-struct route_data {
-    /* Copied from struct rtmsg. */
-    unsigned char rtm_dst_len;
-    bool local;
-
-    /* Extracted from Netlink attributes. */
-    struct in6_addr rta_dst; /* 0 if missing. */
-    struct in6_addr rta_gw;
-    char ifname[IFNAMSIZ]; /* Interface name. */
-    uint32_t mark;
-};
-
 /* A digested version of a route message sent down by the kernel to indicate
  * that a route has changed. */
 struct route_table_msg {
     bool relevant;        /* Should this message be processed? */
     int nlmsg_type;       /* e.g. RTM_NEWROUTE, RTM_DELROUTE. */
-    struct route_data rd; /* Data parsed from this message. */
+    struct ovs_route rd;  /* Data parsed from this message. */
 };
 
 static struct ovs_mutex route_table_mutex = OVS_MUTEX_INITIALIZER;
@@ -245,12 +233,12 @@ route_table_parse(struct ofpbuf *buf, struct route_table_msg *change)
             change->relevant = false;
         }
         change->nlmsg_type     = nlmsg->nlmsg_type;
-        change->rd.rtm_dst_len = rtm->rtm_dst_len + (ipv4 ? 96 : 0);
+        change->rd.plen = rtm->rtm_dst_len + (ipv4 ? 96 : 0);
         change->rd.local = rtm->rtm_type == RTN_LOCAL;
         if (attrs[RTA_OIF]) {
             rta_oif = nl_attr_get_u32(attrs[RTA_OIF]);
 
-            if (!if_indextoname(rta_oif, change->rd.ifname)) {
+            if (!if_indextoname(rta_oif, change->rd.output_bridge)) {
                 int error = errno;
 
                 VLOG_DBG_RL(&rl, "Could not find interface name[%u]: %s",
@@ -267,20 +255,20 @@ route_table_parse(struct ofpbuf *buf, struct route_table_msg *change)
             if (ipv4) {
                 ovs_be32 dst;
                 dst = nl_attr_get_be32(attrs[RTA_DST]);
-                in6_addr_set_mapped_ipv4(&change->rd.rta_dst, dst);
+                in6_addr_set_mapped_ipv4(&change->rd.ip_dst, dst);
             } else {
-                change->rd.rta_dst = nl_attr_get_in6_addr(attrs[RTA_DST]);
+                change->rd.ip_dst = nl_attr_get_in6_addr(attrs[RTA_DST]);
             }
         } else if (ipv4) {
-            in6_addr_set_mapped_ipv4(&change->rd.rta_dst, 0);
+            in6_addr_set_mapped_ipv4(&change->rd.ip_dst, 0);
         }
         if (attrs[RTA_GATEWAY]) {
             if (ipv4) {
                 ovs_be32 gw;
                 gw = nl_attr_get_be32(attrs[RTA_GATEWAY]);
-                in6_addr_set_mapped_ipv4(&change->rd.rta_gw, gw);
+                in6_addr_set_mapped_ipv4(&change->rd.gw, gw);
             } else {
-                change->rd.rta_gw = nl_attr_get_in6_addr(attrs[RTA_GATEWAY]);
+                change->rd.gw = nl_attr_get_in6_addr(attrs[RTA_GATEWAY]);
             }
         }
         if (attrs[RTA_MARK]) {
@@ -306,10 +294,7 @@ static void
 route_table_handle_msg(const struct route_table_msg *change)
 {
     if (change->relevant && change->nlmsg_type == RTM_NEWROUTE) {
-        const struct route_data *rd = &change->rd;
-
-        ovs_router_insert(rd->mark, &rd->rta_dst, rd->rtm_dst_len,
-                          rd->local, rd->ifname, &rd->rta_gw);
+        ovs_router_insert(&change->rd);
     }
 }
 

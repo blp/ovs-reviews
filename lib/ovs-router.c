@@ -213,65 +213,75 @@ out:
 }
 
 static int
-ovs_router_insert__(uint32_t mark, uint8_t priority, bool local,
-                    const struct in6_addr *ip6_dst,
-                    uint8_t plen, const char output_bridge[],
-                    const struct in6_addr *gw)
+ovs_router_entry_create(const struct ovs_route *route, int priority,
+                        struct ovs_router_entry **entryp)
 {
-    const struct cls_rule *cr;
-    struct ovs_router_entry *p;
+    struct ovs_router_entry *entry;
     struct match match;
     int err;
 
-    rt_init_match(&match, mark, ip6_dst, plen);
+    rt_init_match(&match, route->mark, &route->ip_dst, route->plen);
 
-    p = xzalloc(sizeof *p);
-    ovs_strlcpy(p->output_bridge, output_bridge, sizeof p->output_bridge);
-    if (ipv6_addr_is_set(gw)) {
-        p->gw = *gw;
+    entry = xzalloc(sizeof *entry);
+    ovs_strlcpy(entry->output_bridge, route->output_bridge,
+                sizeof entry->output_bridge);
+    if (ipv6_addr_is_set(&route->gw)) {
+        entry->gw = route->gw;
     }
-    p->mark = mark;
-    p->nw_addr = match.flow.ipv6_dst;
-    p->plen = plen;
-    p->local = local;
-    p->priority = priority;
-    err = get_src_addr(ip6_dst, output_bridge, &p->src_addr);
-    if (err && ipv6_addr_is_set(gw)) {
-        err = get_src_addr(gw, output_bridge, &p->src_addr);
+    entry->mark = route->mark;
+    entry->nw_addr = match.flow.ipv6_dst;
+    entry->plen = route->plen;
+    entry->local = route->local;
+    entry->priority = priority;
+    err = get_src_addr(&route->ip_dst, route->output_bridge, &entry->src_addr);
+    if (err && ipv6_addr_is_set(&route->gw)) {
+        err = get_src_addr(&route->gw, route->output_bridge, &entry->src_addr);
     }
     if (err) {
         struct ds ds = DS_EMPTY_INITIALIZER;
 
-        ipv6_format_mapped(ip6_dst, &ds);
+        ipv6_format_mapped(&route->ip_dst, &ds);
         VLOG_DBG_RL(&rl, "src addr not available for route %s", ds_cstr(&ds));
-        free(p);
+        free(entry);
         ds_destroy(&ds);
         return err;
     }
     /* Longest prefix matches first. */
-    cls_rule_init(&p->cr, &match, priority);
+    cls_rule_init(&entry->cr, &match, priority);
+
+    *entryp = entry;
+    return 0;
+}
+
+static int
+ovs_router_insert__(const struct ovs_route *route, int priority)
+{
+    struct ovs_router_entry *entry;
+    int error = ovs_router_entry_create(route, priority, &entry);
+    if (error) {
+        return error;
+    }
 
     ovs_mutex_lock(&mutex);
-    cr = classifier_replace(&cls, &p->cr, OVS_VERSION_MIN, NULL, 0);
+    const struct cls_rule *cr = classifier_replace(&cls, &entry->cr,
+                                                   OVS_VERSION_MIN, NULL, 0);
     ovs_mutex_unlock(&mutex);
 
     if (cr) {
         /* An old rule with the same match was displaced. */
         ovsrcu_postpone(rt_entry_free, ovs_router_entry_cast(cr));
     }
-    tnl_port_map_insert_ipdev(output_bridge);
+    tnl_port_map_insert_ipdev(route->output_bridge);
     seq_change(tnl_conf_seq);
     return 0;
 }
 
 void
-ovs_router_insert(uint32_t mark, const struct in6_addr *ip_dst, uint8_t plen,
-                  bool local, const char output_bridge[], 
-                  const struct in6_addr *gw)
+ovs_router_insert(const struct ovs_route *route)
 {
     if (use_system_routing_table) {
-        uint8_t priority = local ? plen + 64 : plen;
-        ovs_router_insert__(mark, priority, local, ip_dst, plen, output_bridge, gw);
+        int priority = route->local ? route->plen + 64 : route->plen;
+        ovs_router_insert__(route, priority);
     }
 }
 
@@ -379,7 +389,15 @@ ovs_router_add(struct unixctl_conn *conn, int argc,
         }
     }
 
-    err = ovs_router_insert__(mark, plen + 32, false, &ip6, plen, argv[2], &gw6);
+    struct ovs_route route = {
+        .mark = mark,
+        .ip_dst = ip6,
+        .plen = plen,
+        .local = false,
+        .gw = gw6,
+    };
+    ovs_strlcpy(route.output_bridge, argv[2], sizeof route.output_bridge);
+    err = ovs_router_insert__(&route, plen + 32);
     if (err) {
         unixctl_command_reply_error(conn, "Error while inserting route.");
     } else {
