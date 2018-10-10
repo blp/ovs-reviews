@@ -117,7 +117,7 @@ struct bond {
      * (To prevent the bond_slave from disappearing they must also hold
      * 'rwlock'.) */
     struct ovs_mutex mutex OVS_ACQ_AFTER(rwlock);
-    struct ovs_list enabled_slaves OVS_GUARDED; /* Contains struct bond_slaves. */
+    struct ovs_list enabled_slaves OVS_GUARDED; /* Holds struct bond_slaves. */
 
     /* Bonding info. */
     enum bond_mode balance;     /* Balancing mode, one of BM_*. */
@@ -133,7 +133,7 @@ struct bond {
     long long int next_rebalance; /* Next rebalancing time. */
     bool send_learning_packets;
     uint32_t recirc_id;          /* Non zero if recirculation can be used.*/
-    struct hmap pr_rule_ops;     /* Helps to maintain post recirculation rules.*/
+    struct hmap pr_rule_ops;     /* Post recirculation rules. */
 
     /* Store active slave to OVSDB. */
     bool active_slave_changed; /* Set to true whenever the bond changes
@@ -300,7 +300,7 @@ add_pr_rule(struct bond *bond, const struct match *match,
     uint32_t hash = match_hash(match, 0);
     struct bond_pr_rule_op *pr_op;
 
-    HMAP_FOR_EACH_WITH_HASH(pr_op, hmap_node, hash, &bond->pr_rule_ops) {
+    HMAP_FOR_EACH_WITH_HASH (pr_op, hmap_node, hash, &bond->pr_rule_ops) {
         if (match_equal(&pr_op->match, match)) {
             pr_op->op = ADD;
             pr_op->out_ofport = out_ofport;
@@ -337,7 +337,7 @@ update_recirc_rules__(struct bond *bond)
 
     ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
 
-    HMAP_FOR_EACH(pr_op, hmap_node, &bond->pr_rule_ops) {
+    HMAP_FOR_EACH (pr_op, hmap_node, &bond->pr_rule_ops) {
         pr_op->op = DEL;
     }
 
@@ -356,7 +356,7 @@ update_recirc_rules__(struct bond *bond)
         }
     }
 
-    HMAP_FOR_EACH_SAFE(pr_op, next_op, hmap_node, &bond->pr_rule_ops) {
+    HMAP_FOR_EACH_SAFE (pr_op, next_op, hmap_node, &bond->pr_rule_ops) {
         int error;
         switch (pr_op->op) {
         case ADD:
@@ -481,7 +481,7 @@ bond_find_slave_by_mac(const struct bond *bond, const struct eth_addr mac)
     struct bond_slave *slave;
 
     /* Find the last active slave */
-    HMAP_FOR_EACH(slave, hmap_node, &bond->slaves) {
+    HMAP_FOR_EACH (slave, hmap_node, &bond->slaves) {
         struct eth_addr slave_mac;
 
         if (netdev_get_etheraddr(slave->netdev, &slave_mac)) {
@@ -817,10 +817,10 @@ bond_check_admissibility(struct bond *bond, const void *slave_,
 
     switch (bond->balance) {
     case BM_TCP:
-        /* TCP balanced bonds require successful LACP negotiations. Based on the
-         * above check, LACP is off or lacp_fallback_ab is true on this bond.
-         * If lacp_fallback_ab is true fall through to BM_AB case else, we
-         * drop all incoming traffic. */
+        /* TCP balanced bonds require successful LACP negotiations. Based on
+         * the above check, LACP is off or lacp_fallback_ab is true on this
+         * bond.  If lacp_fallback_ab is true fall through to BM_AB case else,
+         * we drop all incoming traffic. */
         if (!bond->lacp_fallback_ab) {
             goto out;
         }
@@ -908,7 +908,7 @@ bond_recirculation_account(struct bond *bond)
 {
     int i;
 
-    for (i=0; i<=BOND_MASK; i++) {
+    for (i = 0; i <= BOND_MASK; i++) {
         struct bond_entry *entry = &bond->hash[i];
         struct rule *rule = entry->pr_rule;
 
@@ -931,7 +931,7 @@ bond_may_recirc(const struct bond *bond)
 }
 
 static void
-bond_update_post_recirc_rules__(struct bond* bond, const bool force)
+bond_update_post_recirc_rules__(struct bond *bond, const bool force)
     OVS_REQ_WRLOCK(rwlock)
 {
    struct bond_entry *e;
@@ -1091,7 +1091,7 @@ choose_entry_to_migrate(const struct bond_slave *from, uint64_t to_tx_bytes)
 
     LIST_FOR_EACH (e, list_node, &from->entries) {
         uint64_t delta = e->tx_bytes;  /* The amount to rebalance.  */
-        uint64_t ideal_tx_bytes = (from->tx_bytes + to_tx_bytes)/2;
+        uint64_t ideal_tx_bytes = (from->tx_bytes + to_tx_bytes) / 2;
                              /* Note, the ideal traffic is the mid point
                               * between 'from' and 'to'. This value does
                               * not change by rebalancing.  */
@@ -1141,8 +1141,8 @@ reinsert_bal(struct ovs_list *bals, struct bond_slave *slave)
 
 /* If 'bond' needs rebalancing, does so.
  *
- * The caller should have called bond_account() for each active flow, or in case
- * of recirculation is used, have called bond_recirculation_account(bond),
+ * The caller should have called bond_account() for each active flow, or in
+ * case of recirculation is used, have called bond_recirculation_account(bond),
  * to ensure that flow data is consistently accounted at this point.
  */
 void
@@ -1194,7 +1194,8 @@ bond_rebalance(struct bond *bond)
 
     /* Shift load from the most-loaded slaves to the least-loaded slaves. */
     while (!ovs_list_is_short(&bals)) {
-        struct bond_slave *from = bond_slave_from_bal_node(ovs_list_front(&bals));
+        struct bond_slave *from
+            = bond_slave_from_bal_node(ovs_list_front(&bals));
         struct bond_slave *to = bond_slave_from_bal_node(ovs_list_back(&bals));
         uint64_t overload;
 
@@ -1810,7 +1811,7 @@ choose_output_slave(const struct bond *bond, const struct flow *flow,
         }
         e = lookup_bond_entry(bond, flow, vlan);
         if (!e->slave || !e->slave->enabled) {
-            e->slave = get_enabled_slave(CONST_CAST(struct bond*, bond));
+            e->slave = get_enabled_slave(CONST_CAST(struct bond *, bond));
         }
         return e->slave;
 
