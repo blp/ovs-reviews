@@ -88,7 +88,7 @@ struct bond_slave {
     struct netdev *netdev;      /* Network device, owned by the client. */
     uint64_t change_seq;        /* Tracks changes in 'netdev'. */
     char *name;                 /* Name (a copy of netdev_get_name(netdev)). */
-    ofp_port_t  ofp_port;       /* OpenFlow port number. */
+    ofp_port_t ofp_port;        /* OpenFlow port number. */
 
     /* Link status. */
     bool enabled;               /* May be chosen for flows? */
@@ -121,11 +121,17 @@ struct bond {
 
     /* Bonding info. */
     enum bond_mode balance;     /* Balancing mode, one of BM_*. */
-    struct bond_slave *active_slave;
     int updelay, downdelay;     /* Delay before slave goes up/down, in ms. */
     enum lacp_status lacp_status; /* Status of LACP negotiations. */
     bool bond_revalidate;       /* True if flows need revalidation. */
     uint32_t basis;             /* Basis for flow hash function. */
+
+    /* Active slave. */
+    struct bond_slave *active_slave;
+    bool active_slave_changed; /* Set to true whenever the bond changes
+                                   active slave. It will be reset to false
+                                   after it is stored into OVSDB */
+    struct eth_addr active_slave_mac;
 
     /* SLB specific bonding info. */
     struct bond_entry *hash;     /* An array of BOND_BUCKETS elements. */
@@ -136,14 +142,11 @@ struct bond {
     struct hmap pr_rule_ops;     /* Post recirculation rules. */
 
     /* Store active slave to OVSDB. */
-    bool active_slave_changed; /* Set to true whenever the bond changes
-                                   active slave. It will be reset to false
-                                   after it is stored into OVSDB */
 
-    /* Interface name may not be persistent across an OS reboot, use
+    /* Interface name may not be persistent across an OS reboot, so we use
      * MAC address for identifing the active slave */
-    struct eth_addr active_slave_mac;
                                /* The MAC address of the active interface. */
+
     /* Legacy compatibility. */
     bool lacp_fallback_ab; /* Fallback to active-backup on LACP failure. */
 
