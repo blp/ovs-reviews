@@ -96,6 +96,9 @@ static bool force;
 /* --leader-only, --no-leader-only: Only accept the leader in a cluster. */
 static bool leader_only = true;
 
+/* --raw: Print raw JSON <table-updates> on "sync" command. */
+static bool raw;
+
 /* Format for table output. */
 static struct table_style table_style = TABLE_STYLE_DEFAULT;
 
@@ -303,6 +306,7 @@ parse_options(int argc, char *argv[])
         OPT_FORCE,
         OPT_LEADER_ONLY,
         OPT_NO_LEADER_ONLY,
+        OPT_RAW,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS,
         TABLE_OPTION_ENUMS,
@@ -318,6 +322,7 @@ parse_options(int argc, char *argv[])
         {"no-db-change-aware", no_argument, &db_change_aware, 0},
         {"leader-only", no_argument, NULL, OPT_LEADER_ONLY},
         {"no-leader-only", no_argument, NULL, OPT_NO_LEADER_ONLY},
+        {"raw", no_argument, NULL, OPT_RAW},
         VLOG_LONG_OPTIONS,
         DAEMON_LONG_OPTIONS,
 #ifdef HAVE_OPENSSL
@@ -377,6 +382,10 @@ parse_options(int argc, char *argv[])
 
         case OPT_NO_LEADER_ONLY:
             leader_only = false;
+            break;
+
+        case OPT_RAW:
+            raw = true;
             break;
 
         case '?':
@@ -2364,6 +2373,12 @@ sync_print(const char *database, struct json *table_updates,
 
     if (table_updates->type != JSON_OBJECT) {
         ovs_error(0, "<table-updates> is not object");
+        return;
+    }
+
+    if (raw) {
+        print_json(table_updates);
+        fflush(stdout);
         return;
     }
 
