@@ -75,6 +75,7 @@ ovsdb_torture_test () {
     AT_CHECK([ovsdb-tool '-vPATTERN:console:%c|%p|%m' create-cluster s1.db schema unix:s1.raft], [0], [], [dnl
 ovsdb|WARN|schema: changed 2 columns in 'OVN_Southbound' database from ephemeral to persistent, including 'status' column in 'Connection' table, because clusters do not support ephemeral columns
 ])
+    on_exit 'kill `cat *.pid`'
 
     join_cluster() {
         local i=$1
@@ -105,7 +106,7 @@ ovsdb|WARN|schema: changed 2 columns in 'OVN_Southbound' database from ephemeral
     remove_server() {
         local i=$1
         printf "\ns$i: removing from cluster\n"
-        AT_CHECK([ovs-appctl --timeout=30 -t "`pwd`"/s$i cluster/leave OVN_Southbound])
+        AT_CHECK([ovs-appctl --timeout=30 -t "`pwd`"/s2 cluster/kick OVN_Southbound unix:s$i.raft], [0], [ignore])
         printf "\ns$i: waiting for removal to complete\n"
         AT_CHECK([ovsdb_client_wait --log-file=remove$i.log unix:s$i.ovsdb $schema removed])
         stop_server $i
@@ -136,12 +137,15 @@ ovsdb|WARN|schema: changed 2 columns in 'OVN_Southbound' database from ephemeral
     for i in $(seq 0 $(expr $n1 - 1) ); do
         (for j in $(seq $n2); do
              : > $i-$j.running
-             run_as "ovn-sbctl($i-$j)" ovn-sbctl "-vPATTERN:console:ovn-sbctl($i-$j)|%D{%H:%M:%S}|%05N|%c|%p|%m" --log-file=$i-$j.log -vfile -vsyslog:off -vtimeval:off --timeout=120 --no-leader-only add SB_Global . external_ids $i-$j=$i-$j
+             ovn-sbctl "-vPATTERN:console:ovn-sbctl($i-$j)|%D{%H:%M:%S}|%05N|%c|%p|%m" --log-file=$i-$j.log -vfile -vsyslog:off -vtimeval:off --timeout=120 --no-leader-only add SB_Global . external_ids $i-$j=$i-$j&
+             echo $! > $i.pid
+             wait $!
              status=$?
+             rm $i-$j.running
              if test $status != 0; then
                  echo "$i-$j exited with status $status" > $i-$j:$status
+                 break
              fi
-             rm $i-$j.running
          done
          : > $i.done)&
     done
@@ -194,7 +198,7 @@ ovsdb|WARN|schema: changed 2 columns in 'OVN_Southbound' database from ephemeral
         i=$(expr $i + 1)
     done
     echo "...done"
-    AT_CHECK([if test $(cat phase) != 2; then exit 77; fi])
+    AT_CHECK([test $(cat phase) = 2])
 
     for i in $(seq 0 $(expr $n1 - 1) ); do
         for j in `seq $n2`; do
