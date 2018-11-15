@@ -220,3 +220,8 @@ export OVS_SYSLOG_METHOD
 # Set default timeout for control utils
 OVS_CTL_TIMEOUT=30
 export OVS_CTL_TIMEOUT
+
+# Add some default flags to make the tests run better under Address
+# Sanitizer, if it was used for the build.
+ASAN_OPTIONS=detect_leaks=0:abort_on_error=true:log_path=asan:$ASAN_OPTIONS
+export ASAN_OPTIONS
