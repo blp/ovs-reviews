@@ -1,2 +1,5 @@
 /ovn-northd
 /ovn-northd.8
+/OVN_Northbound.dl
+/OVN_Southbound.dl
+/OVN_Northbound_ddlog/

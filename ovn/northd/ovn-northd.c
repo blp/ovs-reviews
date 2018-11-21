@@ -47,6 +47,11 @@
 #include "uuid.h"
 #include "openvswitch/vlog.h"
 
+#ifdef DDLOG
+#include "ovn/northd/OVN_Northbound_ddlog/OVN_Northbound_ddlog.h"
+#endif
+
+
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
 static unixctl_cb_func ovn_northd_exit;
@@ -7845,6 +7850,17 @@ main(int argc, char *argv[])
      * and then only performing DB transactions if the lock is held. */
     ovsdb_idl_set_lock(ovnsb_idl_loop.idl, "ovn_northd");
     bool had_lock = false;
+
+#ifdef DDLOG
+    /* xxx Check compiling/linking. */
+    OVN_Northbound_ddlog_prog ddlog_prog;
+    ddlog_prog = OVN_Northbound_run(1);
+    if (!ddlog_prog) {
+        VLOG_EMER("xxx Couldn't create ddlog instance");
+    } else {
+        VLOG_INFO("xxx Started ddlog instance");
+    }
+#endif
 
     /* Main loop. */
     exiting = false;
