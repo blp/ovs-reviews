@@ -1215,13 +1215,22 @@ in6_is_lla(struct in6_addr *addr)
 #endif
 }
 
+static inline void
+ipv6_multicast_to_ethernet(struct eth_addr *eth, const struct in6_addr *ip6)
+{
+    eth->ea[0] = 0x33;
+    eth->ea[1] = 0x33;
+    eth->ea[2] = ip6->s6_addr[12];
+    eth->ea[3] = ip6->s6_addr[13];
+    eth->ea[4] = ip6->s6_addr[14];
+    eth->ea[5] = ip6->s6_addr[15];
+}
+
 static inline bool dl_type_is_ip_any(ovs_be16 dl_type)
 {
     return dl_type == htons(ETH_TYPE_IP)
         || dl_type == htons(ETH_TYPE_IPV6);
 }
-
-void ipv6_multicast_to_ethernet(struct eth_addr *, const struct in6_addr *);
 
 /* Tunnel header */
 
