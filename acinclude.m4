@@ -369,10 +369,6 @@ AC_DEFUN([OVS_CHECK_DDLOG], [
       AC_MSG_ERROR([ddlog required for ddlog])
     fi
 
-    if !(stack --version) >/dev/null 2>&1; then
-      AC_MSG_ERROR([Haskell required for ddlog])
-    fi
-
     if !(cargo --version) >/dev/null 2>&1; then
       AC_MSG_ERROR([Rust required for ddlog])
     fi
