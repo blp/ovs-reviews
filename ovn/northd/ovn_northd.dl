@@ -991,34 +991,172 @@ function build_port_security_ipv6_nd_flow(
     }
 }
 
-/*
+relation PortInGroup(port: uuid, group: uuid)
+
+PortInGroup(port, group) :-
+    nb.Port_Group(._uuid = group, .ports = ports),
+    var port = FlatMap(ports).
+
+/* Logical switches with stateful ACLs */
 relation LogicalSwitchHasStatefulACL(ls: uuid)
 
-LogicalSwitchHasStatefulACL(ls._uuid) :-
+LogicalSwitchHasStatefulACL(ls) :-
     nb.Logical_Switch(._uuid = ls, .acls = acls),
     var acl = FlatMap(acls),
-    nb.ACL(._uuid = acl)
-    
-    for (size_t i = 0; i < od->nbs->n_acls; i++) {
-        struct nbrec_acl *acl = od->nbs->acls[i];
-        if (!strcmp(acl->action, "allow-related")) {
-            return true;
+    nb.ACL(._uuid = acl, .action = "allow-related").
+
+LogicalSwitchHasStatefulACL(ls) :-
+    nb.Logical_Switch(._uuid = ls, .acls = acls, .ports = ports),
+    var port_id = FlatMap(ports),
+    PortInGroup(port_id, group_id),
+    nb.Port_Group(._uuid = group_id, .acls = acls),
+    var acl = FlatMap(acls),
+    nb.ACL(._uuid = acl, .action = "allow-related").
+
+/* Logical switch ports of type router */
+relation LogicalSwitchRouterPort(ls: uuid, lrp: uuid)
+
+LogicalSwitchRouterPort(ls, port) :-
+    nb.Logical_Switch(._uuid = ls, .ports = ports),
+    var port = FlatMap(ports),
+    nb.Logical_Switch_Port(._uuid = port, .__type = "router", .options = options),
+    Some{var router_port} = map_get(options, "router-port").
+
+
+relation LogicalSwitchLocalnetPort(ls: uuid, lsp: uuid)
+
+LogicalSwitchLocalnetPort(ls, port) :-
+    nb.Logical_Switch(._uuid = ls, .ports = ports),
+    var port = FlatMap(ports),
+    nb.Logical_Switch_Port(._uuid = port, .__type = "localnet").
+
+for (ls in nb.Logical_Switch) {
+    var lsname = uuid2str(ls._uuid) in {
+        /* Ingress and Egress Pre-ACL Table (Priority 0): Packets are
+         * allowed by default. */
+        sb.Out_Logical_Flow(
+            .logical_datapath = lsname,
+            .pipeline         = "ingress",
+            .table_id         = switch_stage(IN, PRE_ACL),
+            .priority         = 0,
+            .__match          = "1",
+            .actions          = "next;",
+            .external_ids     = map_empty());
+        sb.Out_Logical_Flow(
+            .logical_datapath = lsname,
+            .pipeline         = "egress",
+            .table_id         = switch_stage(OUT, PRE_ACL),
+            .priority         = 0,
+            .__match          = "1",
+            .actions          = "next;",
+            .external_ids     = map_empty());
+        /* If there are any stateful ACL rules in this datapath, we must
+         * send all IP packets through the conntrack action, which handles
+         * defragmentation, in order to match L4 headers. */
+        for (LogicalSwitchHasStatefulACL(ls._uuid)) {
+            for (LogicalSwitchRouterPort(ls._uuid, lsp_uuid)) {
+                for (nb.Logical_Switch_Port(._uuid = lsp_uuid, .name = lsp_name)) {
+                    /* Can't use ct() for router ports. Consider the
+                     * following configuration: lp1(10.0.0.2) on
+                     * hostA--ls1--lr0--ls2--lp2(10.0.1.2) on hostB, For a
+                     * ping from lp1 to lp2, First, the response will go
+                     * through ct() with a zone for lp2 in the ls2 ingress
+                     * pipeline on hostB.  That ct zone knows about this
+                     * connection. Next, it goes through ct() with the zone
+                     * for the router port in the egress pipeline of ls2 on
+                     * hostB.  This zone does not know about the connection,
+                     * as the icmp request went through the logical router
+                     * on hostA, not hostB. This would only work with
+                     * distributed conntrack state across all chassis. */
+                    sb.Out_Logical_Flow(
+                        .logical_datapath = lsname,
+                        .pipeline         = "ingress",
+                        .table_id         = switch_stage(IN, PRE_ACL),
+                        .priority         = 110,
+                        .__match          = $"ip && inport == ${json_string_escape(lsp_name)}",
+                        .actions          = "next;",
+                        .external_ids     = map_empty());
+                    sb.Out_Logical_Flow(
+                        .logical_datapath = lsname,
+                        .pipeline         = "egress",
+                        .table_id         = switch_stage(OUT, PRE_ACL),
+                        .priority         = 110,
+                        .__match          = $"ip && outport == ${json_string_escape(lsp_name)}",
+                        .actions          = "next;",
+                        .external_ids     = map_empty())
+                }
+            };
+            for (LogicalSwitchLocalnetPort(.ls = ls._uuid, .lsp = lsp_uuid)) {
+                for (nb.Logical_Switch_Port(._uuid = lsp_uuid, .name = lsp_name)) {
+                    sb.Out_Logical_Flow(
+                        .logical_datapath = lsname,
+                        .pipeline         = "ingress",
+                        .table_id         = switch_stage(IN, PRE_ACL),
+                        .priority         = 110,
+                        .__match          = $"ip && inport == ${json_string_escape(lsp_name)}",
+                        .actions          = "next;",
+                        .external_ids     = map_empty());
+                    sb.Out_Logical_Flow(
+                        .logical_datapath = lsname,
+                        .pipeline         = "egress",
+                        .table_id         = switch_stage(OUT, PRE_ACL),
+                        .priority         = 110,
+                        .__match          = $"ip && outport == ${json_string_escape(lsp_name)}",
+                        .actions          = "next;",
+                        .external_ids     = map_empty())
+                }
+            };
+
+            /* Ingress and Egress Pre-ACL Table (Priority 110).
+             *
+             * Not to do conntrack on ND and ICMP destination
+             * unreachable packets. */
+            sb.Out_Logical_Flow(
+                .logical_datapath = lsname,
+                .pipeline         = "ingress",
+                .table_id         = switch_stage(IN, PRE_ACL),
+                .priority         = 110,
+                .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || " ++
+                                    "icmp6.type == 1 || (tcp && tcp.flags == 4)",
+                .actions          = "next;",
+                .external_ids     = map_empty());
+            sb.Out_Logical_Flow(
+                .logical_datapath = lsname,
+                .pipeline         = "egress",
+                .table_id         = switch_stage(OUT, PRE_ACL),
+                .priority         = 110,
+                .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || " ++
+                                    "icmp6.type == 1 || (tcp && tcp.flags == 4)",
+                .actions          = "next;",
+                .external_ids     = map_empty());
+
+            /* Ingress and Egress Pre-ACL Table (Priority 100).
+             *
+             * Regardless of whether the ACL is "from-lport" or "to-lport",
+             * we need rules in both the ingress and egress table, because
+             * the return traffic needs to be followed.
+             *
+             * 'REGBIT_CONNTRACK_DEFRAG' is set to let the pre-stateful table send
+             * it to conntrack for tracking and defragmentation. */
+            sb.Out_Logical_Flow(
+                .logical_datapath = lsname,
+                .pipeline         = "ingress",
+                .table_id         = switch_stage(IN, PRE_ACL),
+                .priority         = 100,
+                .__match          = "ip",
+                .actions          = $"${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+                .external_ids     = map_empty());
+            sb.Out_Logical_Flow(
+                .logical_datapath = lsname,
+                .pipeline         = "egress",
+                .table_id         = switch_stage(OUT, PRE_ACL),
+                .priority         = 100,
+                .__match          = "ip",
+                .actions          = $"${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+                .external_ids     = map_empty())
         }
     }
-
-    struct ovn_ls_port_group *ls_pg;
-    HMAP_FOR_EACH (ls_pg, key_node, &od->nb_pgs) {
-        for (size_t i = 0; i < ls_pg->nb_pg->n_acls; i++) {
-            struct nbrec_acl *acl = ls_pg->nb_pg->acls[i];
-            if (!strcmp(acl->action, "allow-related")) {
-                return true;
-            }
-        }
-    }
-
-    return false;
 }
-*/
 
 /* Logical switch ingress table 0: ingress port security - L2 (priority 50)
                   ingress table 1: ingress port security - IP (priority 90 and 80)

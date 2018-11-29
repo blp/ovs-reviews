@@ -28,13 +28,26 @@ insert OVN_Northbound.Meter (
     .external_ids = []
 ),
 
+insert OVN_Northbound.ACL (
+    ._uuid          = 0x2a093fd8_3c15_4c37_9761_0392d6eb4767,
+    .name           = "acl1",
+    .priority       = 0,
+    .direction      = "from-lport",
+    .match          = "1",
+    .action         = "allow-related",
+    .log            = true,
+    .severity       = [],
+    .meter          = [],
+    .external_ids   = []
+),
+
 insert OVN_Northbound.Logical_Switch (
     ._uuid = 0x06a2cf7c_7ea1_4ca2_a0a2_6176fd1c6d90,
     .name = "ls1",
     .ports = [0x564bb317_7362_47d9_a328_8bd44600a370,
               0x4421b061_b531_4f57_a4e5_79dd5e19220a,
               0xde3bdf3c_c537_4954_9a9e_8e6abec67b5a],
-    .acls = [],
+    .acls = [0x2a093fd8_3c15_4c37_9761_0392d6eb4767],
     .qos_rules = [],
     .load_balancer = [],
     .dns_records = [0xf85fdfb3_235c_436e_9648_5bf86ecea25d],
@@ -181,7 +194,7 @@ insert OVN_Northbound.DHCP_Options(
 insert OVN_Northbound.Logical_Switch_Port(
     ._uuid = 0x564bb317_7362_47d9_a328_8bd44600a370,
     .name = "lsp1",
-    .type = "",
+    .type = "localnet",
     .options = [("option1", "val_option1")],
     .parent_name = [],
     .tag_request = [],
