@@ -7888,6 +7888,10 @@ main(int argc, char *argv[])
         }
     }
 
+#ifdef DDLOG
+    ovn_northd_stop(ddlog_prog);
+#endif
+
     unixctl_server_destroy(unixctl);
     ovsdb_idl_loop_destroy(&ovnnb_idl_loop);
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
