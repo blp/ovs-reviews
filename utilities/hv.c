@@ -16,20 +16,73 @@
 
 #include <config.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "command-line.h"
+#include "process.h"
 #include "util.h"
 
 static void usage(void);
 static void parse_command_line(int argc, char *argv[]);
+
+static void
+read_file(const char *fn)
+{
+    int fd = open(fn, O_RDONLY);
+    if (fd < 0) {
+        ovs_fatal(errno, "%s: open failed", fn);
+    }
+
+    int size = 4096 * 1024;
+    char *buffer = xmalloc(size);
+    for (;;) {
+        ssize_t n = read(fd, buffer, size);
+        if (n < 0) {
+            ovs_fatal(errno, "%s: read failed", fn);
+        } else if (!n) {
+            break;
+        }
+    }
+    free(buffer);
+
+    close(fd);
+}
 
 int
 main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
-    printf ("%s\n", argv[optind]);
+
+    for (int i = optind; i < argc; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            ovs_fatal(errno, "fork failed");
+        } else if (!pid) {
+            /* Child. */
+            read_file(argv[i]);
+            exit(0);
+        }
+    }
+
+    for (;;) {
+        int status;
+        pid_t pid = wait(&status);
+        if (pid < 0) {
+            break;
+        }
+
+        printf ("child %ld exited (%s)\n",
+                (long int) pid, process_status_msg (status));
+    }
+    if (errno != ECHILD) {
+        ovs_fatal(errno, "wait failed");
+    }
 
     return 0;
 }
