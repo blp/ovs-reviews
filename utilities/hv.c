@@ -24,33 +24,46 @@
 #include <unistd.h>
 
 #include "command-line.h"
+#include "ovs-thread.h"
 #include "process.h"
 #include "util.h"
 
 static void usage(void);
 static void parse_command_line(int argc, char *argv[]);
 
-static void
-read_file(const char *fn)
+static void *
+read_file(void *fn_)
 {
-    int fd = open(fn, O_RDONLY);
-    if (fd < 0) {
-        ovs_fatal(errno, "%s: open failed", fn);
-    }
-
-    int size = 4096 * 1024;
-    char *buffer = xmalloc(size);
-    for (;;) {
-        ssize_t n = read(fd, buffer, size);
-        if (n < 0) {
-            ovs_fatal(errno, "%s: read failed", fn);
-        } else if (!n) {
-            break;
+    for (int i = 0; i < 10; i++) {
+        const char *fn = fn_;
+        int fd = open(fn, O_RDONLY);
+        if (fd < 0) {
+            ovs_fatal(errno, "%s: open failed", fn);
         }
-    }
-    free(buffer);
 
-    close(fd);
+        int size = 4096;
+        char *buffer = xmalloc(size);
+        size_t count = 0;
+        for (;;) {
+            ssize_t n = read(fd, buffer, size);
+            if (n < 0) {
+                ovs_fatal(errno, "%s: read failed", fn);
+            } else if (!n) {
+                break;
+            }
+            char *end = buffer + n;
+            for (char *p = memchr(buffer, '\n', n); p;
+                 p = memchr(p + 1, '\n', end - (p + 1))) {
+                count++;
+            }
+        }
+        free(buffer);
+
+        close(fd);
+        printf ("%"PRIuSIZE"\n", count);
+    }
+
+    return NULL;
 }
 
 int
@@ -60,31 +73,10 @@ main(int argc, char *argv[])
     parse_command_line (argc, argv);
 
     for (int i = optind; i < argc; i++) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            ovs_fatal(errno, "fork failed");
-        } else if (!pid) {
-            /* Child. */
-            read_file(argv[i]);
-            exit(0);
-        }
+        ovs_thread_create(argv[i], read_file, argv[i]);
     }
 
-    for (;;) {
-        int status;
-        pid_t pid = wait(&status);
-        if (pid < 0) {
-            break;
-        }
-
-        printf ("child %ld exited (%s)\n",
-                (long int) pid, process_status_msg (status));
-    }
-    if (errno != ECHILD) {
-        ovs_fatal(errno, "wait failed");
-    }
-
-    return 0;
+    pthread_exit(NULL);
 }
 
 static void
