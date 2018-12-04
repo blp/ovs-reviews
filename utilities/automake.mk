@@ -1,4 +1,5 @@
 bin_PROGRAMS += \
+	utilities/hv \
 	utilities/ovs-appctl \
 	utilities/ovs-testcontroller \
 	utilities/ovs-dpctl \
@@ -120,6 +121,9 @@ man_MANS += \
 	utilities/ovs-tcpundump.1 \
 	utilities/ovs-vlan-bug-workaround.8 \
 	utilities/ovs-vsctl.8
+
+utilities_hv_SOURCES = utilities/hv.c
+utilities_hv_LDADD = lib/libopenvswitch.la
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
 utilities_ovs_appctl_LDADD = lib/libopenvswitch.la
