@@ -19,6 +19,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -32,36 +34,38 @@ static void usage(void);
 static void parse_command_line(int argc, char *argv[]);
 
 static void *
-read_file(void *fn_)
+read_file(const char *fn)
 {
+    int fd = open(fn, O_RDONLY);
+    if (fd < 0) {
+        ovs_fatal(errno, "%s: open failed", fn);
+    }
+
+    struct stat s;
+    if (fstat(fd, &s) < 0) {
+        ovs_fatal(errno, "%s; stat failed", fn);
+    }
+
+    off_t size = s.st_size;
+    char *buffer = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+    if (buffer == MAP_FAILED) {
+        ovs_fatal(errno, "%s: mmap failed", fn);
+    }
+
+    if (madvise(buffer, size, MADV_WILLNEED) < 0) {
+        ovs_fatal(errno, "%s: madvise failed", fn);
+    }
+
     for (int i = 0; i < 10; i++) {
-        const char *fn = fn_;
-        int fd = open(fn, O_RDONLY);
-        if (fd < 0) {
-            ovs_fatal(errno, "%s: open failed", fn);
-        }
-
-        int size = 4096;
-        char *buffer = xmalloc(size);
         size_t count = 0;
-        for (;;) {
-            ssize_t n = read(fd, buffer, size);
-            if (n < 0) {
-                ovs_fatal(errno, "%s: read failed", fn);
-            } else if (!n) {
-                break;
-            }
-            char *end = buffer + n;
-            for (char *p = memchr(buffer, '\n', n); p;
-                 p = memchr(p + 1, '\n', end - (p + 1))) {
-                count++;
-            }
+        char *end = buffer + size;
+        for (char *p = memchr(buffer, '\n', end - buffer); p;
+             p = memchr(p + 1, '\n', end - (p + 1))) {
+            count++;
         }
-        free(buffer);
-
-        close(fd);
         printf ("%"PRIuSIZE"\n", count);
     }
+    close(fd);
 
     return NULL;
 }
@@ -73,7 +77,28 @@ main(int argc, char *argv[])
     parse_command_line (argc, argv);
 
     for (int i = optind; i < argc; i++) {
-        ovs_thread_create(argv[i], read_file, argv[i]);
+        pid_t pid = fork();
+        if (pid < 0) {
+            ovs_fatal(errno, "fork failed");
+        } else if (!pid) {
+            /* Child. */
+            read_file(argv[i]);
+            exit(0);
+        }
+    }
+
+    for (;;) {
+        int status;
+        pid_t pid = wait(&status);
+        if (pid < 0) {
+            break;
+        }
+
+        printf ("child %ld exited (%s)\n",
+                (long int) pid, process_status_msg (status));
+    }
+    if (errno != ECHILD) {
+        ovs_fatal(errno, "wait failed");
     }
 
     pthread_exit(NULL);
