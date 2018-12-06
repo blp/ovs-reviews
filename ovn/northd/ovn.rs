@@ -119,6 +119,26 @@ pub fn ovn_extract_lsp_addresses(address: &arcval::DDString) -> std_Option<ovn_l
     }
 }
 
+
+pub fn ovn_extract_lrp_networks(mac: &arcval::DDString, networks: &std_Set<arcval::DDString>) -> std_Option<ovn_lport_addresses>
+{
+    unsafe {
+        let mut laddrs: lport_addresses = Default::default();
+        let mut networks_cstrs = Vec::with_capacity(networks.x.len());
+        let mut networks_ptrs = Vec::with_capacity(networks.x.len());
+        for net in networks.x.iter() {
+            networks_cstrs.push(ddstring2cstr(net));
+            networks_ptrs.push(networks_cstrs.last().unwrap().as_ptr());
+        };
+        if extract_lrp_networks__(ddstring2cstr(mac).as_ptr(), networks_ptrs.as_ptr() as *const *const raw::c_char,
+                                   networks_ptrs.len(), &mut laddrs as *mut lport_addresses) {
+            std_Option::std_Some{x: laddrs.into_ddlog()}
+        } else {
+            std_Option::std_None
+        }
+    }
+}
+
 pub fn ovn_ipv6_parse_masked(s: &arcval::DDString) -> std_Either<arcval::DDString, (ovn_in6_addr, ovn_in6_addr)>
 {
     unsafe {
@@ -151,6 +171,18 @@ pub fn ovn_ip_parse_masked(s: &arcval::DDString) -> std_Either<arcval::DDString,
     }
 }
 
+pub fn ovn_ip_parse(s: &arcval::DDString) -> std_Option<ovn_ovs_be32>
+{
+    unsafe {
+        let mut ip: ovn_ovs_be32 = 0;
+        if (ip_parse(ddstring2cstr(s).as_ptr(), &mut ip as *mut ovn_ovs_be32)) {
+            std_Option::std_Some{x:ip}
+        } else {
+            std_Option::std_None
+        }
+    }
+}
+
 pub fn ovn_is_dynamic_lsp_address(address: &arcval::DDString) -> bool {
     unsafe {
         is_dynamic_lsp_address(ddstring2cstr(address).as_ptr())
@@ -177,6 +209,25 @@ pub fn ovn_scan_eth_addr(s: &arcval::DDString) -> std_Option<ovn_eth_addr> {
             std_Option::std_Some{x: ea}
         } else {
             std_Option::std_None
+        }
+    }
+}
+
+pub fn ovn_ip_address_and_port_from_lb_key(k: &arcval::DDString) ->
+    std_Option<(arcval::DDString, u16, u32)> {
+        unsafe {
+        let mut ip_address: *mut raw::c_char = ptr::null_mut();
+        let mut port: libc::uint16_t = 0;
+        let mut addr_family: raw::c_int = 0;
+
+        ip_address_and_port_from_lb_key(ddstring2cstr(k).as_ptr(), &mut ip_address as *mut *mut raw::c_char,
+                                &mut port as *mut libc::uint16_t, &mut addr_family as *mut raw::c_int);
+        if (ip_address == ptr::null_mut()) {
+            std_Option::std_None
+        } else {
+            let res = (cstr2ddstring(ip_address), port as u16, addr_family as u32);
+            free(ip_address as *mut raw::c_void);
+            std_Option::std_Some{x: res}
         }
     }
 }
@@ -381,9 +432,13 @@ impl lport_addresses {
 extern "C" {
     // ovn/lib/ovn-util.h
     fn extract_lsp_addresses(address: *const raw::c_char, laddrs: *mut lport_addresses) -> bool;
+    fn extract_lrp_networks__(mac: *const raw::c_char, networks: *const *const raw::c_char,
+                               n_networks: libc::size_t, laddrs: *mut lport_addresses) -> bool;
     fn destroy_lport_addresses(addrs: *mut lport_addresses);
     fn is_dynamic_lsp_address(address: *const raw::c_char) -> bool;
     fn split_addresses(addresses: *const raw::c_char, ip4_addrs: *mut ovs_svec, ipv6_addrs: *mut ovs_svec);
+    fn ip_address_and_port_from_lb_key(key: *const raw::c_char, ip_address: *mut *mut raw::c_char,
+                                port: *mut libc::uint16_t, addr_family: *mut raw::c_int);
 }
 
 /* functions imported from libopenvswitch */
@@ -396,6 +451,7 @@ extern "C" {
     fn ipv6_addr_bitxor(a: *const ovn_in6_addr, b: *const ovn_in6_addr) -> ovn_in6_addr;
     fn ipv6_addr_bitand(a: *const ovn_in6_addr, b: *const ovn_in6_addr) -> ovn_in6_addr;
     fn ip_parse_masked(s: *const raw::c_char, ip: *mut ovn_ovs_be32, mask: *mut ovn_ovs_be32) -> *mut raw::c_char;
+    fn ip_parse(s: *const raw::c_char, ip: *mut ovn_ovs_be32) -> bool;
     fn eth_addr_from_string(s: *const raw::c_char, ea: *mut ovn_eth_addr) -> bool;
     // include/openvswitch/json.h
     fn json_string_escape(str: *const raw::c_char, out: *mut ovs_ds);

@@ -41,6 +41,16 @@ insert OVN_Northbound.ACL (
     .external_ids   = []
 ),
 
+insert OVN_Northbound.QoS (
+    ._uuid          = 0x56c22335_4eed_45b1_a566_d6e4ae4cd132,
+    .priority       = 125,
+    .direction      = "from-lport",
+    .match          = "1",
+    .action         = [("dscp", 54321)],
+    .bandwidth      = [("burst", 1234),("rate", 123456)],
+    .external_ids   = []
+),
+
 insert OVN_Northbound.Logical_Switch (
     ._uuid = 0x06a2cf7c_7ea1_4ca2_a0a2_6176fd1c6d90,
     .name = "ls1",
@@ -48,8 +58,8 @@ insert OVN_Northbound.Logical_Switch (
               0x4421b061_b531_4f57_a4e5_79dd5e19220a,
               0xde3bdf3c_c537_4954_9a9e_8e6abec67b5a],
     .acls = [0x2a093fd8_3c15_4c37_9761_0392d6eb4767],
-    .qos_rules = [],
-    .load_balancer = [],
+    .qos_rules = [0x56c22335_4eed_45b1_a566_d6e4ae4cd132],
+    .load_balancer = [0xcfe7be4c_3e96_45a1_833a_f0af252fc41a],
     .dns_records = [0xf85fdfb3_235c_436e_9648_5bf86ecea25d],
     .other_config = [],
     .external_ids = [("neutron:network_name","neutron_network_1")]
@@ -65,6 +75,18 @@ insert OVN_Northbound.NAT (
     .external_ids   = []
 ),
 
+insert OVN_Northbound.NAT (
+    ._uuid          = 0x176a7187_05fb_42fb_b098_57954401210b,
+    .external_ip    = "10.13.1.6",
+    .external_mac   = ["14:15:16:17:18:20"],
+    .logical_ip     = "192.168.1.6",
+    .logical_port   = ["some_port"],
+    .type           = "snat",
+    .external_ids   = []
+),
+
+
+
 insert OVN_Northbound.Logical_Router (
     ._uuid = 0x9bc0b2b1_50f6_42e3_ae36_4fba9bb7a77c,
     .name = "lr1",
@@ -72,7 +94,8 @@ insert OVN_Northbound.Logical_Router (
              , 0xba2e141e_9fdb_44c2_a3d0_90f2fdcd0daf],
     .static_routes = [],
     .enabled = true,
-    .nat = [0x8751892f_b813_43d8_a6e7_b5376c765aac],
+    .nat = [ 0x8751892f_b813_43d8_a6e7_b5376c765aac
+           , 0x176a7187_05fb_42fb_b098_57954401210b],
     .load_balancer = [],
     .options = [("chassis", "690dc4b6-3a95-46ea-90f5-e46818f2f1a3")],
     .external_ids = []
@@ -153,7 +176,7 @@ insert OVN_Northbound.Logical_Router_Port(
     .name               = "redirect_port2",
     .gateway_chassis    = [],
     .options            = [("redirect-chassis", "chassis1")],
-    .networks           = [],
+    .networks           = ["10.13.1.7"],
     .mac                = "11:22:33:44:55:66",
     .peer               = [],
     .enabled            = [true],
@@ -189,7 +212,13 @@ insert OVN_Northbound.DHCP_Options(
     .external_ids       = []
 ),
 
-
+insert OVN_Northbound.Load_Balancer (
+    ._uuid          = 0xcfe7be4c_3e96_45a1_833a_f0af252fc41a,
+    .name           = "lb1",
+    .vips           = [("172.16.217.1:25", "10.10.10.5")],
+    .protocol       = [],
+    .external_ids   = []
+),
 
 insert OVN_Northbound.Logical_Switch_Port(
     ._uuid = 0x564bb317_7362_47d9_a328_8bd44600a370,
@@ -299,3 +328,5 @@ commit;
 
 dump OVN_Southbound.DeltaPlus_Datapath_Binding;
 dump OVN_Southbound.DeltaMinus_Datapath_Binding;
+
+
