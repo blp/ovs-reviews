@@ -48,7 +48,7 @@
 #include "openvswitch/vlog.h"
 
 #ifdef DDLOG
-#include "ovn/northd/ovn_northd_ddlog/ovn_northd_ddlog.h"
+#include "ovn/northd/ovn_northd_ddlog/ddlog.h"
 #endif
 
 
@@ -7835,9 +7835,9 @@ main(int argc, char *argv[])
 
 #ifdef DDLOG
     /* xxx Check compiling/linking. */
-    ovn_northd_ddlog_prog ddlog_prog;
-    ddlog_prog = ovn_northd_run(1);
-    if (!ddlog_prog) {
+    ddlog_prog ddlog;
+    ddlog = ddlog_run(1);
+    if (!ddlog) {
         VLOG_EMER("xxx Couldn't create ddlog instance");
     } else {
         VLOG_INFO("xxx Started ddlog instance");
@@ -7889,7 +7889,7 @@ main(int argc, char *argv[])
     }
 
 #ifdef DDLOG
-    ovn_northd_stop(ddlog_prog);
+    ddlog_stop(ddlog);
 #endif
 
     unixctl_server_destroy(unixctl);
