@@ -8,7 +8,9 @@ ovn_northd_ovn_northd_LDADD = \
 man_MANS += ovn/northd/ovn-northd.8
 EXTRA_DIST += ovn/northd/ovn-northd.8.xml
 
-EXTRA_DIST += ovn/northd/ovn_northd.dl ovn/northd/ovn.dl ovn/northd/ovn.rs
+EXTRA_DIST += ovn/northd/ovn_northd.dl ovn/northd/ovn.dl ovn/northd/ovn.rs \
+			  ovn/northd/ovn_northd.dat ovn/northd/ovn_northd.dump.expected \
+			  ovn/northd/test.sh
 CLEANFILES += ovn/northd/ovn-northd.8
 
 if DDLOG
