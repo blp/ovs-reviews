@@ -28,7 +28,27 @@
 #include "command-line.h"
 #include "ovs-thread.h"
 #include "process.h"
+#include "random.h"
 #include "util.h"
+
+enum datum_type {
+    DATUM_STRING,
+    DATUM_REAL,
+    DATUM_INTEGER,
+    DATUM_INSTANT,
+    DATUM_DURATION,
+};
+
+union datum {
+    struct {
+        char *string;
+        size_t length;
+    };
+    double real;
+    int64_t integer;
+    long long int instant;      /* Milliseconds since the epoch. */
+    long long int duration;     /* Milliseconds. */
+};
 
 static void usage(void);
 static void parse_command_line(int argc, char *argv[]);
@@ -51,19 +71,56 @@ read_file(const char *fn)
     if (buffer == MAP_FAILED) {
         ovs_fatal(errno, "%s: mmap failed", fn);
     }
+    char *end = buffer + size;
 
     if (madvise(buffer, size, MADV_WILLNEED) < 0) {
         ovs_fatal(errno, "%s: madvise failed", fn);
     }
 
-    for (int i = 0; i < 10; i++) {
-        size_t count = 0;
-        char *end = buffer + size;
-        for (char *p = memchr(buffer, '\n', end - buffer); p;
-             p = memchr(p + 1, '\n', end - (p + 1))) {
-            count++;
+    struct field {
+        const char *s;
+        size_t length;
+    };
+
+    enum { RESERVOIR_SIZE = 10000 };
+    struct field reservoir[RESERVOIR_SIZE];
+    size_t n_reservoir = 0;
+
+    size_t count = 0;
+    for (const char *p = buffer; p < end; ) {
+        count++;
+
+        char *line_end = memchr(p, '\n', end - p);
+        if (!line_end) {
+            line_end = end;
         }
-        printf ("%"PRIuSIZE"\n", count);
+
+        size_t line_len = line_end - p;
+
+        enum { MAX_FIELDS = 256 };
+        struct field fields[MAX_FIELDS];
+        int n_fields = 0;
+        for (size_t i = 0; i < line_len; ) {
+            size_t j;
+            for (j = i; j < line_len; j++) {
+                if (p[j] == ',') {
+                    break;
+                }
+            }
+            ovs_assert(n_fields < MAX_FIELDS);
+            fields[n_fields].s = &p[i];
+            fields[n_fields].length = j - i;
+            n_fields++;
+            i = j + 1;
+        }
+
+        if (n_reservoir < RESERVOIR_SIZE) {
+            reservoir[n_reservoir++] = fields[6];
+        } else if (random_range(count) < RESERVOIR_SIZE) {
+            reservoir[random_range(RESERVOIR_SIZE)] = fields[6];
+        }
+
+        p = line_end + 1;
     }
     close(fd);
 
@@ -82,6 +139,7 @@ main(int argc, char *argv[])
             ovs_fatal(errno, "fork failed");
         } else if (!pid) {
             /* Child. */
+            random_init();
             read_file(argv[i]);
             exit(0);
         }
