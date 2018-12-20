@@ -25,6 +25,7 @@ TESTSUITE_AT = \
 	tests/testsuite.at \
 	tests/completion.at \
 	tests/checkpatch.at \
+	tests/ddlog.at \
 	tests/library.at \
 	tests/heap.at \
 	tests/bundle.at \
@@ -467,6 +468,10 @@ EXTRA_DIST += $(CHECK_PYFILES)
 PYCOV_CLEAN_FILES += $(CHECK_PYFILES:.py=.py,cover) .coverage
 
 FLAKE8_PYFILES += $(CHECK_PYFILES)
+
+if DDLOG
+EXTRA_DIST += tests/ddlog/ovn_northd.dat tests/ddlog/ovn_northd.dump.expected
+endif
 
 if HAVE_OPENSSL
 TESTPKI_FILES = \

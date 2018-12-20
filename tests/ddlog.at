@@ -1,0 +1,13 @@
+AT_BANNER([ddlog])
+
+AT_SETUP([ddlog -- northd])
+AT_SKIP_IF([test "$TEST_DDLOG" != "true"])
+
+DDLOG_TEST_DIR="$(cd $abs_top_builddir/tests/ddlog && pwd)"
+DDLOG_CLI_DIR="$(cd $abs_top_builddir/ovn/northd/ovn_northd_ddlog/target/debug/ && pwd)"
+
+cp $DDLOG_TEST_DIR/ovn_northd.dump.expected expout
+AT_CHECK([$DDLOG_CLI_DIR/ovn_northd_cli < $DDLOG_TEST_DIR/ovn_northd.dat],
+  [0], [expout], [stderr])
+
+AT_CLEANUP
