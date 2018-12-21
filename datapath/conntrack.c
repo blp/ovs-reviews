@@ -1216,7 +1216,7 @@ static int ovs_ct_commit(struct net *net, struct sw_flow_key *key,
 				&ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple);
 			if (err) {
 				net_warn_ratelimited("openvswitch: zone: %u "
-					"execeeds conntrack limit\n",
+					"exceeds conntrack limit\n",
 					info->zone.id);
 				return err;
 			}
@@ -1370,6 +1370,10 @@ static int ovs_ct_add_helper(struct ovs_conntrack_info *info, const char *name,
 
 	rcu_assign_pointer(help->helper, helper);
 	info->helper = helper;
+
+	if (info->nat)
+		request_module("ip_nat_%s", name);
+
 	return 0;
 }
 

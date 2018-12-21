@@ -608,14 +608,23 @@ pinctrl_handle_put_dhcp_opts(
      *| UDP HEADER  | DHCP HEADER  | 4 Byte DHCP Cookie | DHCP OPTIONS(var len)|
      * ------------------------------------------------------------------------
      */
-    if (dp_packet_l4_size(pkt_in) < (UDP_HEADER_LEN +
-        sizeof (struct dhcp_header) + sizeof(uint32_t) + 3)) {
+
+    const char *end = (char *)dp_packet_l4(pkt_in) + dp_packet_l4_size(pkt_in);
+    const char *in_dhcp_ptr = dp_packet_get_udp_payload(pkt_in);
+    if (!in_dhcp_ptr) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Invalid or incomplete DHCP packet received");
         goto exit;
     }
 
-    struct dhcp_header const *in_dhcp_data = dp_packet_get_udp_payload(pkt_in);
+    const struct dhcp_header *in_dhcp_data
+        = (const struct dhcp_header *) in_dhcp_ptr;
+    in_dhcp_ptr += sizeof *in_dhcp_data;
+    if (in_dhcp_ptr > end) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "Invalid or incomplete DHCP packet received");
+        goto exit;
+    }
     if (in_dhcp_data->op != DHCP_OP_REQUEST) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Invalid opcode in the DHCP packet : %d",
@@ -626,41 +635,90 @@ pinctrl_handle_put_dhcp_opts(
     /* DHCP options follow the DHCP header. The first 4 bytes of the DHCP
      * options is the DHCP magic cookie followed by the actual DHCP options.
      */
-    const uint8_t *in_dhcp_opt =
-        (const uint8_t *)dp_packet_get_udp_payload(pkt_in) +
-        sizeof (struct dhcp_header);
-
     ovs_be32 magic_cookie = htonl(DHCP_MAGIC_COOKIE);
-    if (memcmp(in_dhcp_opt, &magic_cookie, sizeof(ovs_be32))) {
+    if (in_dhcp_ptr + sizeof magic_cookie > end ||
+        get_unaligned_be32((const void *) in_dhcp_ptr) != magic_cookie) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "DHCP magic cookie not present in the DHCP packet");
         goto exit;
     }
+    in_dhcp_ptr += sizeof magic_cookie;
 
-    in_dhcp_opt += 4;
+    const uint8_t *in_dhcp_msg_type = NULL;
+    ovs_be32 request_ip = in_dhcp_data->ciaddr;
+    while (in_dhcp_ptr < end) {
+        const struct dhcp_opt_header *in_dhcp_opt =
+            (const struct dhcp_opt_header *)in_dhcp_ptr;
+        if (in_dhcp_opt->code == DHCP_OPT_END) {
+            break;
+        }
+        if (in_dhcp_opt->code == DHCP_OPT_PAD) {
+            in_dhcp_ptr += 1;
+            continue;
+        }
+        in_dhcp_ptr += sizeof *in_dhcp_opt;
+        if (in_dhcp_ptr > end) {
+            break;
+        }
+        in_dhcp_ptr += in_dhcp_opt->len;
+        if (in_dhcp_ptr > end) {
+            break;
+        }
+
+        switch (in_dhcp_opt->code) {
+        case DHCP_OPT_MSG_TYPE:
+            if (in_dhcp_opt->len == 1) {
+                in_dhcp_msg_type = DHCP_OPT_PAYLOAD(in_dhcp_opt);
+            }
+            break;
+        case DHCP_OPT_REQ_IP:
+            if (in_dhcp_opt->len == 4) {
+                request_ip = get_unaligned_be32(DHCP_OPT_PAYLOAD(in_dhcp_opt));
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
     /* Check that the DHCP Message Type (opt 53) is present or not with
-     * valid values - DHCP_MSG_DISCOVER or DHCP_MSG_REQUEST as the first
-     * DHCP option.
+     * valid values - DHCP_MSG_DISCOVER or DHCP_MSG_REQUEST.
      */
-    if (!(in_dhcp_opt[0] == DHCP_OPT_MSG_TYPE && in_dhcp_opt[1] == 1 && (
-            in_dhcp_opt[2] == DHCP_MSG_DISCOVER ||
-            in_dhcp_opt[2] == DHCP_MSG_REQUEST))) {
+    if (!in_dhcp_msg_type) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid DHCP message type : opt code = %d,"
-                     " opt value = %d", in_dhcp_opt[0], in_dhcp_opt[2]);
+        VLOG_WARN_RL(&rl, "Missing DHCP message type");
+        goto exit;
+    }
+    if (*in_dhcp_msg_type != DHCP_MSG_DISCOVER &&
+        *in_dhcp_msg_type != DHCP_MSG_REQUEST) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "Invalid DHCP message type : %d", *in_dhcp_msg_type);
         goto exit;
     }
 
     uint8_t msg_type;
-    if (in_dhcp_opt[2] == DHCP_MSG_DISCOVER) {
+    if (*in_dhcp_msg_type == DHCP_MSG_DISCOVER) {
         msg_type = DHCP_MSG_OFFER;
     } else {
+        /* This is a DHCPREQUEST. If the client has requested an IP that
+         * does not match the offered IP address, reply with a NAK. The
+         * requested IP address may be supplied either via Requested IP Address
+         * (opt 50) or via ciaddr, depending on the client's state.
+         */
         msg_type = DHCP_MSG_ACK;
+        if (request_ip != *offer_ip) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_WARN_RL(&rl, "DHCPREQUEST requested IP "IP_FMT" does not "
+                         "match offer "IP_FMT, IP_ARGS(request_ip),
+                         IP_ARGS(*offer_ip));
+            msg_type = DHCP_MSG_NAK;
+        }
     }
 
     /* Frame the DHCP reply packet
      * Total DHCP options length will be options stored in the userdata +
-     * 16 bytes.
+     * 16 bytes. Note that the DHCP options stored in userdata are not included
+     * in DHCPNAK messages.
      *
      * --------------------------------------------------------------
      *| 4 Bytes (dhcp cookie) | 3 Bytes (option type) | DHCP options |
@@ -668,8 +726,10 @@ pinctrl_handle_put_dhcp_opts(
      *| 4 Bytes padding | 1 Byte (option end 0xFF ) | 4 Bytes padding|
      * --------------------------------------------------------------
      */
-    uint16_t new_l4_size = UDP_HEADER_LEN + DHCP_HEADER_LEN + \
-                           userdata->size + 16;
+    uint16_t new_l4_size = UDP_HEADER_LEN + DHCP_HEADER_LEN + 16;
+    if (msg_type != DHCP_MSG_NAK) {
+        new_l4_size += userdata->size;
+    }
     size_t new_packet_size = pkt_in->l4_ofs + new_l4_size;
 
     struct dp_packet pkt_out;
@@ -693,19 +753,26 @@ pinctrl_handle_put_dhcp_opts(
     struct dhcp_header *dhcp_data = dp_packet_put(
         &pkt_out, dp_packet_pull(pkt_in, DHCP_HEADER_LEN), DHCP_HEADER_LEN);
     dhcp_data->op = DHCP_OP_REPLY;
-    dhcp_data->yiaddr = *offer_ip;
+    dhcp_data->yiaddr = (msg_type == DHCP_MSG_NAK) ? 0 : *offer_ip;
     dp_packet_put(&pkt_out, &magic_cookie, sizeof(ovs_be32));
 
+    uint16_t out_dhcp_opts_size = 12;
+    if (msg_type != DHCP_MSG_NAK) {
+      out_dhcp_opts_size += userdata->size;
+    }
     uint8_t *out_dhcp_opts = dp_packet_put_zeros(&pkt_out,
-                                                 userdata->size + 12);
+                                                 out_dhcp_opts_size);
     /* DHCP option - type */
     out_dhcp_opts[0] = DHCP_OPT_MSG_TYPE;
     out_dhcp_opts[1] = 1;
     out_dhcp_opts[2] = msg_type;
     out_dhcp_opts += 3;
 
-    memcpy(out_dhcp_opts, userdata->data, userdata->size);
-    out_dhcp_opts += userdata->size;
+    if (msg_type != DHCP_MSG_NAK) {
+      memcpy(out_dhcp_opts, userdata->data, userdata->size);
+      out_dhcp_opts += userdata->size;
+    }
+
     /* Padding */
     out_dhcp_opts += 4;
     /* End */
@@ -727,7 +794,8 @@ pinctrl_handle_put_dhcp_opts(
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(20, 40);
     const struct eth_header *l2 = dp_packet_eth(&pkt_out);
     VLOG_INFO_RL(&rl, "DHCP%s "ETH_ADDR_FMT" "IP_FMT"",
-                 msg_type == DHCP_MSG_OFFER ? "OFFER" : "ACK",
+                 msg_type == DHCP_MSG_OFFER ? "OFFER" :
+                   (msg_type == DHCP_MSG_ACK ? "ACK": "NAK"),
                  ETH_ADDR_ARGS(l2->eth_src), IP_ARGS(*offer_ip));
 
     success = 1;
@@ -2019,8 +2087,8 @@ struct garp_data {
     ovs_be32 ipv4;               /* Ipv4 address of port. */
     long long int announce_time; /* Next announcement in ms. */
     int backoff;                 /* Backoff for the next announcement. */
-    ofp_port_t ofport;           /* ofport used to output this GARP. */
-    int tag;                     /* VLAN tag of this GARP packet, or -1. */
+    uint32_t dp_key;             /* Datapath used to output this GARP. */
+    uint32_t port_key;           /* Port to inject the GARP into. */
 };
 
 /* Contains GARPs to be sent. */
@@ -2043,37 +2111,24 @@ destroy_send_garps(void)
 }
 
 static void
-add_garp(const char *name, ofp_port_t ofport, int tag,
-         const struct eth_addr ea, ovs_be32 ip)
+add_garp(const char *name, const struct eth_addr ea, ovs_be32 ip,
+         uint32_t dp_key, uint32_t port_key)
 {
     struct garp_data *garp = xmalloc(sizeof *garp);
     garp->ea = ea;
     garp->ipv4 = ip;
     garp->announce_time = time_msec() + 1000;
     garp->backoff = 1;
-    garp->ofport = ofport;
-    garp->tag = tag;
+    garp->dp_key = dp_key;
+    garp->port_key = port_key;
     shash_add(&send_garp_data, name, garp);
 }
 
 /* Add or update a vif for which GARPs need to be announced. */
 static void
 send_garp_update(const struct sbrec_port_binding *binding_rec,
-                 struct simap *localnet_ofports,
-                 const struct hmap *local_datapaths,
                  struct shash *nat_addresses)
 {
-    /* Find the localnet ofport to send this GARP. */
-    struct local_datapath *ld
-        = get_local_datapath(local_datapaths,
-                             binding_rec->datapath->tunnel_key);
-    if (!ld || !ld->localnet_port) {
-        return;
-    }
-    ofp_port_t ofport = u16_to_ofp(simap_get(localnet_ofports,
-                                             ld->localnet_port->logical_port));
-    int tag = ld->localnet_port->n_tag ? *ld->localnet_port->tag : -1;
-
     volatile struct garp_data *garp = NULL;
     /* Update GARP for NAT IP if it exists.  Consider port bindings with type
      * "l3gateway" for logical switch ports attached to gateway routers, and
@@ -2090,11 +2145,13 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
                                                 laddrs->ipv4_addrs[i].addr_s);
                 garp = shash_find_data(&send_garp_data, name);
                 if (garp) {
-                    garp->ofport = ofport;
-                    garp->tag = tag;
+                    garp->dp_key = binding_rec->datapath->tunnel_key;
+                    garp->port_key = binding_rec->tunnel_key;
                 } else {
-                    add_garp(name, ofport, tag, laddrs->ea,
-                             laddrs->ipv4_addrs[i].addr);
+                    add_garp(name, laddrs->ea,
+                             laddrs->ipv4_addrs[i].addr,
+                             binding_rec->datapath->tunnel_key,
+                             binding_rec->tunnel_key);
                 }
                 free(name);
             }
@@ -2107,7 +2164,8 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
     /* Update GARP for vif if it exists. */
     garp = shash_find_data(&send_garp_data, binding_rec->logical_port);
     if (garp) {
-        garp->ofport = ofport;
+        garp->dp_key = binding_rec->datapath->tunnel_key;
+        garp->port_key = binding_rec->tunnel_key;
         return;
     }
 
@@ -2120,8 +2178,9 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
             continue;
         }
 
-        add_garp(binding_rec->logical_port, ofport, tag,
-                 laddrs.ea, laddrs.ipv4_addrs[0].addr);
+        add_garp(binding_rec->logical_port,
+                 laddrs.ea, laddrs.ipv4_addrs[0].addr,
+                 binding_rec->datapath->tunnel_key, binding_rec->tunnel_key);
 
         destroy_lport_addresses(&laddrs);
         break;
@@ -2150,16 +2209,15 @@ send_garp(struct garp_data *garp, long long int current_time)
     compose_arp(&packet, ARP_OP_REQUEST, garp->ea, eth_addr_zero,
                 true, garp->ipv4, garp->ipv4);
 
-    /* Compose a GARP request packet's vlan if exist. */
-    if (garp->tag >= 0) {
-        eth_push_vlan(&packet, htons(ETH_TYPE_VLAN), htons(garp->tag));
-    }
-
-    /* Compose actions.  The garp request is output on localnet ofport. */
+    /* Inject GARP request. */
     uint64_t ofpacts_stub[4096 / 8];
     struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
     enum ofp_version version = rconn_get_version(swconn);
-    ofpact_put_OUTPUT(&ofpacts)->port = garp->ofport;
+    put_load(garp->dp_key, MFF_LOG_DATAPATH, 0, 64, &ofpacts);
+    put_load(garp->port_key, MFF_LOG_INPORT, 0, 32, &ofpacts);
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->in_port = OFPP_CONTROLLER;
+    resubmit->table_id = OFTABLE_LOG_INGRESS_PIPELINE;
 
     struct ofputil_packet_out po = {
         .packet = dp_packet_data(&packet),
@@ -2194,7 +2252,6 @@ get_localnet_vifs_l3gwports(
     const struct sbrec_chassis *chassis,
     const struct hmap *local_datapaths,
     struct sset *localnet_vifs,
-    struct simap *localnet_ofports,
     struct sset *local_l3gw_ports)
 {
     for (int i = 0; i < br_int->n_ports; i++) {
@@ -2209,18 +2266,12 @@ get_localnet_vifs_l3gwports(
         }
         const char *localnet = smap_get(&port_rec->external_ids,
                                         "ovn-localnet-port");
+        if (localnet) {
+            continue;
+        }
         for (int j = 0; j < port_rec->n_interfaces; j++) {
             const struct ovsrec_interface *iface_rec = port_rec->interfaces[j];
             if (!iface_rec->n_ofport) {
-                continue;
-            }
-            /* Get localnet port with its ofport. */
-            if (localnet) {
-                int64_t ofport = iface_rec->ofport[0];
-                if (ofport < 1 || ofport > ofp_to_u16(OFPP_MAX)) {
-                    continue;
-                }
-                simap_put(localnet_ofports, localnet, ofport);
                 continue;
             }
             /* Get localnet vif. */
@@ -2458,7 +2509,6 @@ send_garp_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
     struct sset localnet_vifs = SSET_INITIALIZER(&localnet_vifs);
     struct sset local_l3gw_ports = SSET_INITIALIZER(&local_l3gw_ports);
     struct sset nat_ip_keys = SSET_INITIALIZER(&nat_ip_keys);
-    struct simap localnet_ofports = SIMAP_INITIALIZER(&localnet_ofports);
     struct shash nat_addresses;
 
     shash_init(&nat_addresses);
@@ -2466,8 +2516,7 @@ send_garp_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
     get_localnet_vifs_l3gwports(sbrec_port_binding_by_datapath,
                                 sbrec_port_binding_by_name,
                                 br_int, chassis, local_datapaths,
-                                &localnet_vifs, &localnet_ofports,
-                                &local_l3gw_ports);
+                                &localnet_vifs, &local_l3gw_ports);
 
     get_nat_addresses_and_keys(sbrec_chassis_by_name,
                                sbrec_port_binding_by_name,
@@ -2489,8 +2538,7 @@ send_garp_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
         const struct sbrec_port_binding *pb = lport_lookup_by_name(
             sbrec_port_binding_by_name, iface_id);
         if (pb) {
-            send_garp_update(pb, &localnet_ofports, local_datapaths,
-                             &nat_addresses);
+            send_garp_update(pb, &nat_addresses);
         }
     }
 
@@ -2500,8 +2548,7 @@ send_garp_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
         const struct sbrec_port_binding *pb
             = lport_lookup_by_name(sbrec_port_binding_by_name, gw_port);
         if (pb) {
-            send_garp_update(pb, &localnet_ofports, local_datapaths,
-                             &nat_addresses);
+            send_garp_update(pb, &nat_addresses);
         }
     }
 
@@ -2516,7 +2563,6 @@ send_garp_run(struct ovsdb_idl_index *sbrec_chassis_by_name,
     }
     sset_destroy(&localnet_vifs);
     sset_destroy(&local_l3gw_ports);
-    simap_destroy(&localnet_ofports);
 
     SHASH_FOR_EACH_SAFE (iter, next, &nat_addresses) {
         struct lport_addresses *laddrs = iter->data;

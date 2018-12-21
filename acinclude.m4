@@ -287,6 +287,19 @@ AC_DEFUN([OVS_CHECK_DPDK], [
        [AC_DEFINE([DPDK_PDUMP], [1], [DPDK pdump enabled in OVS.])])
      ])
 
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if RTE_LIBRTE_MLX5_PMD
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([mnl_attr_put],[mnl],[],[AC_MSG_ERROR([unable to find libmnl, install the dependency package])])
+       DPDK_EXTRA_LIB="-lmnl"
+       AC_DEFINE([DPDK_MNL], [1], [MLX5 PMD detected in DPDK.])])
+
     # On some systems we have to add -ldl to link with dpdk
     #
     # This code, at first, tries to link without -ldl (""),
@@ -508,8 +521,10 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [IS_ERR_OR_NULL])
   OVS_GREP_IFELSE([$KSRC/include/linux/err.h], [PTR_ERR_OR_ZERO])
 
-  OVS_GREP_IFELSE([$KSRC/include/linux/jump_label.h], [DEFINE_STATIC_KEY_FALSE],
+  OVS_GREP_IFELSE([$KSRC/include/linux/jump_label.h], [static_branch_unlikely(],
                   [OVS_DEFINE([HAVE_UPSTREAM_STATIC_KEY])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/jump_label.h], [DEFINE_STATIC_KEY_FALSE],
+                  [OVS_DEFINE([HAVE_DEFINE_STATIC_KEY])])
 
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [eth_hw_addr_random])
   OVS_GREP_IFELSE([$KSRC/include/linux/etherdevice.h], [ether_addr_copy])
@@ -935,6 +950,9 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
                   [OVS_DEFINE([HAVE_VOID_NDO_GET_STATS64])])
   OVS_GREP_IFELSE([$KSRC/include/linux/timer.h], [init_timer_deferrable],
                   [OVS_DEFINE([HAVE_INIT_TIMER_DEFERRABLE])])
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/net/ip_tunnels.h],
+                        [ip_tunnel_info_opts_set], [flags],
+                        [OVS_DEFINE([HAVE_IP_TUNNEL_INFO_OPTS_SET_FLAGS])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

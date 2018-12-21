@@ -5005,11 +5005,11 @@ scan_geneve(const char *s, struct geneve_scan *key, struct geneve_scan *mask)
 
         if (s[0] == ',') {
             s++;
+            if (parse_int_string(s, (uint8_t *)(opt + 1),
+                                 data_len, (char **)&s)) {
+                return 0;
+            }
         }
-        if (parse_int_string(s, (uint8_t *)(opt + 1), data_len, (char **)&s)) {
-            return 0;
-        }
-
         if (mask) {
             if (s[0] == '/') {
                 s++;
@@ -5173,7 +5173,7 @@ erspan_to_attr(struct ofpbuf *a, const void *data_)
 /* Beginning of nested attribute. */
 #define SCAN_BEGIN_NESTED(NAME, ATTR)                      \
     SCAN_IF(NAME);                                         \
-        size_t key_offset, mask_offset;                    \
+        size_t key_offset, mask_offset = 0;                \
         key_offset = nl_msg_start_nested(key, ATTR);       \
         if (mask) {                                        \
             mask_offset = nl_msg_start_nested(mask, ATTR); \

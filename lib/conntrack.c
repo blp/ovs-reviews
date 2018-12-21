@@ -803,11 +803,14 @@ nat_clean(struct conntrack *ct, struct conn *conn,
     ct_lock_lock(&ctb->lock);
 }
 
+/* Must be called with 'CT_CONN_TYPE_DEFAULT' 'conn_type'. */
 static void
 conn_clean(struct conntrack *ct, struct conn *conn,
            struct conntrack_bucket *ctb)
     OVS_REQUIRES(ctb->lock)
 {
+    ovs_assert(conn->conn_type == CT_CONN_TYPE_DEFAULT);
+
     if (conn->alg) {
         expectation_clean(ct, &conn->key, ct->hash_basis);
     }
@@ -2172,7 +2175,9 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
 
     uint16_t port = first_port;
     bool all_ports_tried = false;
-    bool original_ports_tried = false;
+    /* For DNAT, we don't use ephemeral ports. */
+    bool ephemeral_ports_tried = conn->nat_info->nat_action & NAT_ACTION_DST
+                                 ? true : false;
     struct ct_addr first_addr = ct_addr;
 
     while (true) {
@@ -2218,9 +2223,10 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
                 ct_addr = conn->nat_info->min_addr;
             }
             if (!memcmp(&ct_addr, &first_addr, sizeof ct_addr)) {
-                if (!original_ports_tried) {
-                    original_ports_tried = true;
+                if (!ephemeral_ports_tried) {
+                    ephemeral_ports_tried = true;
                     ct_addr = conn->nat_info->min_addr;
+                    first_addr = ct_addr;
                     min_port = MIN_NAT_EPHEMERAL_PORT;
                     max_port = MAX_NAT_EPHEMERAL_PORT;
                 } else {
@@ -2569,9 +2575,10 @@ conntrack_flush_tuple(struct conntrack *ct, const struct ct_dpif_tuple *tuple,
 
     ct_lock_lock(&ct->buckets[bucket].lock);
     conn_key_lookup(&ct->buckets[bucket], &ctx, time_msec());
-    if (ctx.conn) {
+    if (ctx.conn && ctx.conn->conn_type == CT_CONN_TYPE_DEFAULT) {
         conn_clean(ct, ctx.conn, &ct->buckets[bucket]);
     } else {
+        VLOG_WARN("Must flush tuple using the original pre-NATed tuple");
         error = ENOENT;
     }
     ct_lock_unlock(&ct->buckets[bucket].lock);
@@ -3170,7 +3177,7 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     struct ip_header *l3_hdr = dp_packet_l3(pkt);
     ovs_be32 v4_addr_rep = 0;
     struct ct_addr v6_addr_rep;
-    size_t addr_offset_from_ftp_data_start;
+    size_t addr_offset_from_ftp_data_start = 0;
     size_t addr_size = 0;
     char *ftp_data_start;
     bool do_seq_skew_adj = true;
