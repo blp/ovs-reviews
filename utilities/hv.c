@@ -31,6 +31,23 @@
 #include "random.h"
 #include "util.h"
 
+struct substring {
+    const char *s;
+    size_t length;
+};
+
+struct log_record {
+    int facility;               /* 0...23. */
+    int priority;               /* 0...7. */
+    struct substring host;      /* Hostname. */
+    struct substring app;       /* Application. */
+    struct substring id;        /* Message ID. */
+    struct substring sdid;      /* Structured data ID. */
+    struct substring comp;      /* From structured data. */
+    struct substring subcomp;   /* From structured data. */
+    struct substring msg;       /* Message content. */
+};
+
 enum datum_type {
     DATUM_STRING,
     DATUM_REAL,
