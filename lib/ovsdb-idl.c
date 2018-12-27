@@ -242,6 +242,8 @@ struct ovsdb_idl {
 
     uint64_t min_index;
     bool leader_only;
+
+    struct svec updates;
 };
 
 static void ovsdb_idl_transition_at(struct ovsdb_idl *, enum ovsdb_idl_state,
@@ -482,6 +484,8 @@ ovsdb_idl_create_unconnected(const struct ovsdb_idl_class *class,
     ovsdb_idl_db_set_condition(&idl->server, &serverrec_table_database, &cond);
     ovsdb_idl_condition_destroy(&cond);
 
+    svec_init(&idl->updates);
+
     return idl;
 }
 
@@ -553,6 +557,7 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
         ovsdb_idl_db_destroy(&idl->server);
         ovsdb_idl_db_destroy(&idl->data);
         json_destroy(idl->request_id);
+        svec_destroy(&idl->updates);
         free(idl);
     }
 }
@@ -2059,6 +2064,8 @@ ovsdb_idl_db_parse_update_rpc(struct ovsdb_idl_db *db,
             && json_equal(msg->params->array.elems[0], db->monitor_id)) {
             ovsdb_idl_db_parse_update(db, msg->params->array.elems[1],
                                       is_update2);
+            svec_add_nocopy(&db->idl->updates,
+                            json_to_string(msg->params->array.elems[1], 0));
             return true;
         }
     }
@@ -4199,6 +4206,14 @@ ovsdb_idl_txn_get_error(const struct ovsdb_idl_txn *txn)
     } else {
         return "no error details available";
     }
+}
+
+/* Move the latest set of updates from 'idl' into 'updates'.  The caller
+ * is responsible for calling svec_destroy() on 'updates'. */
+void
+ovsdb_idl_get_updates(struct ovsdb_idl *idl, struct svec *updates)
+{
+    svec_swap(updates, &idl->updates);
 }
 
 static void
