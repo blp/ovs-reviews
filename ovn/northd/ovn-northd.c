@@ -7725,6 +7725,91 @@ add_column_noalert(struct ovsdb_idl *idl,
     ovsdb_idl_omit_alert(idl, column);
 }
 
+#ifdef DDLOG
+static void
+ddlog_table_update(ddlog_prog ddlog, const char *table)
+{
+    int error;
+    char *json;
+
+    error = ddlog_dump_ovsdb_deltaplus_table(ddlog, table, &json);
+    if (error) {
+        VLOG_WARN("xxx delta-plus (%s): %d", table, error);
+        return;
+    }
+    VLOG_WARN("xxx delta-plus (%s): %s", table, json);
+    ddlog_free_json(json);
+
+    error = ddlog_dump_ovsdb_deltaminus_table(ddlog, table, &json);
+    if (error) {
+        VLOG_WARN("xxx delta-minus (%s): %d", table, error);
+        return;
+    }
+    VLOG_WARN("xxx delta-minus (%s): %s", table, json);
+    ddlog_free_json(json);
+
+#if 0
+    error = ddlog_dump_ovsdb_deltaupdate_table(ddlog, table, &json);
+    if (error) {
+        VLOG_WARN("xxx delta-update (%s): %d", table, error);
+        return;
+    }
+    VLOG_WARN("xxx delta-update (%s): %s", table, json);
+    ddlog_free_json(json);
+#endif
+}
+
+static void
+ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
+{
+    struct svec updates = SVEC_EMPTY_INITIALIZER;
+    ovsdb_idl_get_updates(ctx->ovnnb_idl, &updates);
+
+    if (svec_is_empty(&updates)) {
+        return;
+    }
+
+    if (ddlog_transaction_start(ddlog)) {
+        VLOG_ERR("xxx Couldn't start transaction");
+        return;
+    }
+
+    VLOG_WARN("xxx 1");
+    size_t i;
+    const char *update;
+    SVEC_FOR_EACH (i, update, &updates) {
+        VLOG_WARN("xxx update: %s", update);
+        if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound_", update)) {
+            VLOG_ERR("xxx Couldn't add update");
+            goto error;
+        }
+        VLOG_WARN("xxx 2");
+    }
+    svec_destroy(&updates);
+
+    VLOG_WARN("xxx 3");
+    if (ddlog_transaction_commit(ddlog)) {
+        VLOG_ERR("xxx Couldn't commit transaction");
+        goto error;
+    }
+
+    VLOG_WARN("xxx 4");
+
+    ddlog_table_update(ddlog, "SB_Global");
+    ddlog_table_update(ddlog, "OVN_Southbound_Logical_Flow");
+    ddlog_table_update(ddlog, "OVN_Southbound_Meter");
+    ddlog_table_update(ddlog, "OVN_Southbound_Meter_Band");
+    ddlog_table_update(ddlog, "OVN_Southbound_Datapath_Binding");
+    ddlog_table_update(ddlog, "OVN_Southbound_Port_Binding");
+
+    VLOG_WARN("xxx 5");
+    return;
+
+error:
+    ddlog_transaction_rollback(ddlog);
+}
+#endif
+
 int
 main(int argc, char *argv[])
 {
@@ -7883,8 +7968,6 @@ main(int argc, char *argv[])
     ddlog = ddlog_run(1);
     if (!ddlog) {
         VLOG_EMER("xxx Couldn't create ddlog instance");
-    } else {
-        VLOG_INFO("xxx Started ddlog instance");
     }
 #endif
 
@@ -7909,6 +7992,9 @@ main(int argc, char *argv[])
         }
 
         if (ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
+#ifdef DDLOG
+            ovn_northd_ddlog_run(&ctx, ddlog);
+#endif
             ovnnb_db_run(&ctx, sbrec_chassis_by_name, &ovnsb_idl_loop);
             ovnsb_db_run(&ctx, &ovnsb_idl_loop);
             if (ctx.ovnsb_txn) {

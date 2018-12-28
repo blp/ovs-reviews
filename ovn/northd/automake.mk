@@ -41,7 +41,6 @@ ovn/northd/OVN_Southbound.dl: ovn/ovn-sb.ovsschema
 				-o RBAC_Permission  	\
 				-p Datapath_Binding 	\
 				-p Port_Binding     	\
-				-p Datapath_Binding 	\
 				--ro Port_Binding.chassis       \
 				-k Multicast_Group.datapath     \
 				-k Multicast_Group.name         \
