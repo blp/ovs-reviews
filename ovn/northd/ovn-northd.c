@@ -7731,31 +7731,38 @@ ddlog_table_update(ddlog_prog ddlog, const char *table)
 {
     int error;
     char *json;
+    char *ddlog_table;
 
-    error = ddlog_dump_ovsdb_deltaplus_table(ddlog, table, &json);
+    ddlog_table = xasprintf("OVN_Southbound.DeltaPlus_%s", table);
+    error = ddlog_dump_ovsdb_deltaplus_table(ddlog, ddlog_table, &json);
     if (error) {
-        VLOG_WARN("xxx delta-plus (%s): %d", table, error);
+        VLOG_WARN("xxx delta-plus (%s) error: %d", ddlog_table, error);
         return;
     }
-    VLOG_WARN("xxx delta-plus (%s): %s", table, json);
+    VLOG_WARN("xxx delta-plus (%s): %s", ddlog_table, json);
     ddlog_free_json(json);
+    free(ddlog_table);
 
-    error = ddlog_dump_ovsdb_deltaminus_table(ddlog, table, &json);
+    ddlog_table = xasprintf("OVN_Southbound.DeltaMinus_%s", table);
+    error = ddlog_dump_ovsdb_deltaminus_table(ddlog, ddlog_table, &json);
     if (error) {
-        VLOG_WARN("xxx delta-minus (%s): %d", table, error);
+        VLOG_WARN("xxx delta-minus (%s) error: %d", ddlog_table, error);
         return;
     }
-    VLOG_WARN("xxx delta-minus (%s): %s", table, json);
+    VLOG_WARN("xxx delta-minus (%s): %s", ddlog_table, json);
     ddlog_free_json(json);
+    free(ddlog_table);
 
 #if 0
-    error = ddlog_dump_ovsdb_deltaupdate_table(ddlog, table, &json);
+    ddlog_table = xasprintf("OVN_Southbound.DeltaUpdate_%s", table);
+    error = ddlog_dump_ovsdb_deltaupdate_table(ddlog, ddlog_table, &json);
     if (error) {
-        VLOG_WARN("xxx delta-update (%s): %d", table, error);
+        VLOG_WARN("xxx delta-update (%s) error: %d", ddlog_table, error);
         return;
     }
-    VLOG_WARN("xxx delta-update (%s): %s", table, json);
+    VLOG_WARN("xxx delta-update (%s): %s", ddlog_table, json);
     ddlog_free_json(json);
+    free(ddlog_table);
 #endif
 }
 
@@ -7774,7 +7781,6 @@ ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
         return;
     }
 
-    VLOG_WARN("xxx 1");
     size_t i;
     const char *update;
     SVEC_FOR_EACH (i, update, &updates) {
@@ -7783,26 +7789,21 @@ ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
             VLOG_ERR("xxx Couldn't add update");
             goto error;
         }
-        VLOG_WARN("xxx 2");
     }
     svec_destroy(&updates);
 
-    VLOG_WARN("xxx 3");
     if (ddlog_transaction_commit(ddlog)) {
         VLOG_ERR("xxx Couldn't commit transaction");
         goto error;
     }
 
-    VLOG_WARN("xxx 4");
-
     ddlog_table_update(ddlog, "SB_Global");
-    ddlog_table_update(ddlog, "OVN_Southbound_Logical_Flow");
-    ddlog_table_update(ddlog, "OVN_Southbound_Meter");
-    ddlog_table_update(ddlog, "OVN_Southbound_Meter_Band");
-    ddlog_table_update(ddlog, "OVN_Southbound_Datapath_Binding");
-    ddlog_table_update(ddlog, "OVN_Southbound_Port_Binding");
+    ddlog_table_update(ddlog, "Logical_Flow");
+    ddlog_table_update(ddlog, "Meter");
+    ddlog_table_update(ddlog, "Meter_Band");
+    ddlog_table_update(ddlog, "Datapath_Binding");
+    ddlog_table_update(ddlog, "Port_Binding");
 
-    VLOG_WARN("xxx 5");
     return;
 
 error:
