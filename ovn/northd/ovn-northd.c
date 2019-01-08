@@ -7785,7 +7785,7 @@ ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
     const char *update;
     SVEC_FOR_EACH (i, update, &updates) {
         VLOG_WARN("xxx update: %s", update);
-        if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound_", update)) {
+        if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound.", update)) {
             VLOG_ERR("xxx Couldn't add update");
             goto error;
         }
