@@ -1,13 +1,20 @@
+#[macro_use] extern crate nom;
+
 use differential_datalog::arcval;
 use differential_datalog::record;
 use std::ffi;
 use std::ptr;
 use std::default;
+use std::process;
 use libc;
 
 // TODO: proper implementation
 pub fn ovn_warn(msg: &arcval::DDString) {
     warn(msg.as_ref())
+}
+
+pub fn ovn_abort(msg: &arcval::DDString) {
+    abort(msg.as_ref())
 }
 
 const ETH_ADDR_SIZE:    usize = 6;
@@ -44,6 +51,21 @@ pub fn ovn_eth_addr_from_string(s: &arcval::DDString) -> std_Option<ovn_eth_addr
     }
 }
 
+pub fn ovn_eth_addr_from_uint64(x: &u64) -> ovn_eth_addr {
+    let mut ea: ovn_eth_addr = Default::default();
+    unsafe {
+        eth_addr_from_uint64(*x as libc::uint64_t, &mut ea as *mut ovn_eth_addr);
+        ea
+    }
+}
+
+pub fn ovn_eth_addr_to_uint64(ea: &ovn_eth_addr) -> u64 {
+    unsafe {
+        eth_addr_to_uint64(ea.clone()) as u64
+    }
+}
+
+
 impl FromRecord for ovn_eth_addr {
     fn from_record(val: &record::Record) -> Result<Self, String> {
         Ok(ovn_eth_addr{x: <[u8; ETH_ADDR_SIZE]>::from_record(val)?})
@@ -74,15 +96,27 @@ pub fn ovn_in6_generate_lla(ea: &ovn_eth_addr) -> ovn_in6_addr {
     addr
 }
 
-pub fn ovn_ipv6_addr_bitxor(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
-    unsafe {
-        ipv6_addr_bitxor(a as *const ovn_in6_addr, b as *const ovn_in6_addr)
-    }
+pub fn ovn_in6_generate_eui64(ea: &ovn_eth_addr, prefix: &ovn_in6_addr) -> ovn_in6_addr {
+    let mut addr: ovn_in6_addr = Default::default();
+    unsafe {in6_generate_eui64(ea.clone(),
+                               prefix as *const ovn_in6_addr,
+                               &mut addr as *mut ovn_in6_addr)};
+    addr
+}
+
+pub fn ovn_in6_is_lla(addr: &ovn_in6_addr) -> bool {
+    unsafe {in6_is_lla(addr as *const ovn_in6_addr)}
 }
 
 pub fn ovn_ipv6_addr_bitand(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
     unsafe {
         ipv6_addr_bitand(a as *const ovn_in6_addr, b as *const ovn_in6_addr)
+    }
+}
+
+pub fn ovn_ipv6_addr_bitxor(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
+    unsafe {
+        ipv6_addr_bitxor(a as *const ovn_in6_addr, b as *const ovn_in6_addr)
     }
 }
 
@@ -119,6 +153,19 @@ pub fn ovn_extract_lsp_addresses(address: &arcval::DDString) -> std_Option<ovn_l
     }
 }
 
+pub fn ovn_extract_addresses(address: &arcval::DDString) -> std_Option<ovn_lport_addresses> {
+    unsafe {
+        let mut laddrs: lport_addresses = Default::default();
+        let mut ofs: raw::c_int = 0;
+        if extract_addresses(ddstring2cstr(address).as_ptr(),
+                             &mut laddrs as *mut lport_addresses,
+                             &mut ofs as *mut raw::c_int) {
+            std_Option::std_Some{x: laddrs.into_ddlog()}
+        } else {
+            std_Option::std_None
+        }
+    }
+}
 
 pub fn ovn_extract_lrp_networks(mac: &arcval::DDString, networks: &std_Set<arcval::DDString>) -> std_Option<ovn_lport_addresses>
 {
@@ -155,6 +202,46 @@ pub fn ovn_ipv6_parse_masked(s: &arcval::DDString) -> std_Either<arcval::DDStrin
     }
 }
 
+pub fn ovn_ipv6_parse_cidr(s: &arcval::DDString) -> std_Either<arcval::DDString, (ovn_in6_addr, u32)>
+{
+    unsafe {
+        let mut ip: ovn_in6_addr = Default::default();
+        let mut plen: raw::c_uint = 0;
+        let err = ipv6_parse_cidr(ddstring2cstr(s).as_ptr(), &mut ip as *mut ovn_in6_addr, &mut plen as *mut raw::c_uint);
+        if (err != ptr::null_mut()) {
+            let errstr = cstr2ddstring(err);
+            free(err as *mut raw::c_void);
+            std_Either::std_Left{l: errstr}
+        } else {
+            std_Either::std_Right{r: (ip, plen as u32)}
+        }
+    }
+}
+
+pub fn ovn_ipv6_parse(s: &arcval::DDString) -> std_Option<ovn_in6_addr>
+{
+    unsafe {
+        let mut ip: ovn_in6_addr = Default::default();
+        let res = ipv6_parse(ddstring2cstr(s).as_ptr(), &mut ip as *mut ovn_in6_addr);
+        if (res) {
+            std_Option::std_Some{x: ip}
+        } else {
+            std_Option::std_None
+        }
+    }
+}
+
+pub fn ovn_ipv6_create_mask(mask: &u32) -> ovn_in6_addr
+{
+    unsafe {ipv6_create_mask(*mask as raw::c_uint)}
+}
+
+
+pub fn ovn_ipv6_is_zero(a: &ovn_in6_addr) -> bool
+{
+    unsafe{ipv6_is_zero(a as *const ovn_in6_addr)}
+}
+
 pub fn ovn_ip_parse_masked(s: &arcval::DDString) -> std_Either<arcval::DDString, (ovn_ovs_be32, ovn_ovs_be32)>
 {
     unsafe {
@@ -167,6 +254,22 @@ pub fn ovn_ip_parse_masked(s: &arcval::DDString) -> std_Either<arcval::DDString,
             std_Either::std_Left{l: errstr}
         } else {
             std_Either::std_Right{r: (ip, mask)}
+        }
+    }
+}
+
+pub fn ovn_ip_parse_cidr(s: &arcval::DDString) -> std_Either<arcval::DDString, (ovn_ovs_be32, u32)>
+{
+    unsafe {
+        let mut ip: ovn_ovs_be32 = 0;
+        let mut plen: raw::c_uint = 0;
+        let err = ip_parse_cidr(ddstring2cstr(s).as_ptr(), &mut ip as *mut ovn_ovs_be32, &mut plen as *mut raw::c_uint);
+        if (err != ptr::null_mut()) {
+            let errstr = cstr2ddstring(err);
+            free(err as *mut raw::c_void);
+            std_Either::std_Left{l: errstr}
+        } else {
+            std_Either::std_Right{r: (ip, plen as u32)}
         }
     }
 }
@@ -213,6 +316,23 @@ pub fn ovn_scan_eth_addr(s: &arcval::DDString) -> std_Option<ovn_eth_addr> {
     }
 }
 
+pub fn ovn_scan_eth_addr_prefix(s: &arcval::DDString) -> std_Option<u64> {
+    let mut b2: u8 = 0;
+    let mut b1: u8 = 0;
+    let mut b0: u8 = 0;
+    unsafe {
+        if ovs_scan(ddstring2cstr(s).as_ptr(), b"%hhx:%hhx:%hhx\0".as_ptr() as *const raw::c_char,
+                    &mut b2 as *mut u8, &mut b1 as *mut u8, &mut b0 as *mut u8)
+        {
+            std_Option::std_Some{x: ((b2 as u64) << 40) | ((b1 as u64) << 32) | ((b0 as u64) << 24) }
+        } else {
+            std_Option::std_None
+        }
+    }
+}
+
+
+
 pub fn ovn_ip_address_and_port_from_lb_key(k: &arcval::DDString) ->
     std_Option<(arcval::DDString, u16, u32)> {
         unsafe {
@@ -230,6 +350,39 @@ pub fn ovn_ip_address_and_port_from_lb_key(k: &arcval::DDString) ->
             std_Option::std_Some{x: res}
         }
     }
+}
+
+pub fn ovn_count_1bits(x: u64) -> u8 {
+    unsafe { count_1bits(x as libc::uint64_t) as u8 }
+}
+
+
+pub fn ovn_str_to_int(s: &arcval::DDString, base: &u16) -> std_Option<u64> {
+    let mut i: raw::c_int = 0;
+    let ok = unsafe {
+        str_to_int(ddstring2cstr(s).as_ptr(), *base as raw::c_int, &mut i as *mut raw::c_int)
+    };
+    if ok {
+        std_Option::std_Some{x: i as u64}
+    } else {
+        std_Option::std_None
+    }
+}
+
+pub fn ovn_inet6_ntop(addr: &ovn_in6_addr) -> arcval::DDString {
+
+    let mut buf = [0 as i8; INET6_ADDRSTRLEN];
+    unsafe {
+        let res = inet_ntop(ovn_aF_INET6() as raw::c_int, addr as *const ovn_in6_addr as *const raw::c_void,
+                            &mut buf[0] as *mut raw::c_char, INET6_ADDRSTRLEN as libc::socklen_t);
+        if res == ptr::null() {
+            warn(format!("inet_ntop({:?}) failed", *addr).as_ref());
+            arcval::DDString::from_str("")
+        } else {
+            cstr2ddstring(&buf as *const raw::c_char)
+        }
+    }
+
 }
 
 /* Internals */
@@ -250,6 +403,13 @@ fn ddstring2cstr(s: &arcval::DDString) -> ffi::CString {
 fn warn(msg: &str) {
     eprintln!("{}", msg)
 }
+
+fn abort(msg: &str) {
+    eprintln!("{}", msg);
+    process::abort()    ;
+}
+
+
 
 /* OVS dynamic string type */
 #[repr(C)]
@@ -432,6 +592,7 @@ impl lport_addresses {
 extern "C" {
     // ovn/lib/ovn-util.h
     fn extract_lsp_addresses(address: *const raw::c_char, laddrs: *mut lport_addresses) -> bool;
+    fn extract_addresses(address: *const raw::c_char, laddrs: *mut lport_addresses, ofs: *mut raw::c_int) -> bool;
     fn extract_lrp_networks__(mac: *const raw::c_char, networks: *const *const raw::c_char,
                                n_networks: libc::size_t, laddrs: *mut lport_addresses) -> bool;
     fn destroy_lport_addresses(addrs: *mut lport_addresses);
@@ -447,24 +608,99 @@ extern "C" {
     // lib/packets.h
     fn ipv6_string_mapped(addr_str: *mut raw::c_char, addr: *const ovn_in6_addr) -> *const raw::c_char;
     fn ipv6_parse_masked(s: *const raw::c_char, ip: *mut ovn_in6_addr, mask: *mut ovn_in6_addr) -> *mut raw::c_char;
+    fn ipv6_parse_cidr(s: *const raw::c_char, ip: *mut ovn_in6_addr, plen: *mut raw::c_uint) -> *mut raw::c_char;
+    fn ipv6_parse(s: *const raw::c_char, ip: *mut ovn_in6_addr) -> bool;
     fn ipv6_mask_is_any(mask: *const ovn_in6_addr) -> bool;
     fn ipv6_addr_bitxor(a: *const ovn_in6_addr, b: *const ovn_in6_addr) -> ovn_in6_addr;
     fn ipv6_addr_bitand(a: *const ovn_in6_addr, b: *const ovn_in6_addr) -> ovn_in6_addr;
+    fn ipv6_create_mask(mask: raw::c_uint) -> ovn_in6_addr;
+    fn ipv6_is_zero(a: *const ovn_in6_addr) -> bool;
     fn ip_parse_masked(s: *const raw::c_char, ip: *mut ovn_ovs_be32, mask: *mut ovn_ovs_be32) -> *mut raw::c_char;
+    fn ip_parse_cidr(s: *const raw::c_char, ip: *mut ovn_ovs_be32, plen: *mut raw::c_uint) -> *mut raw::c_char;
     fn ip_parse(s: *const raw::c_char, ip: *mut ovn_ovs_be32) -> bool;
     fn eth_addr_from_string(s: *const raw::c_char, ea: *mut ovn_eth_addr) -> bool;
+    fn eth_addr_to_uint64(ea: ovn_eth_addr) -> libc::uint64_t;
+    fn eth_addr_from_uint64(x: libc::uint64_t, ea: *mut ovn_eth_addr);
     // include/openvswitch/json.h
     fn json_string_escape(str: *const raw::c_char, out: *mut ovs_ds);
     // openvswitch/dynamic-string.h
     fn ds_destroy(ds: *mut ovs_ds);
     fn ds_cstr(ds: *const ovs_ds) -> *const raw::c_char;
     fn in6_generate_lla(ea: ovn_eth_addr, lla: *mut ovn_in6_addr);
+    fn in6_generate_eui64(ea: ovn_eth_addr, prefix: *const ovn_in6_addr, lla: *mut ovn_in6_addr);
+    fn in6_is_lla(addr: *const ovn_in6_addr) -> bool;
     fn svec_destroy(v: *mut ovs_svec);
     fn ovs_scan(s: *const raw::c_char, format: *const raw::c_char, ...) -> bool;
+    fn count_1bits(x: libc::uint64_t) -> raw::c_uint;
+    fn str_to_int(s: *const raw::c_char, base: raw::c_int, i: *mut raw::c_int) -> bool;
 }
 
 /* functions imported from libc */
 #[link(name = "c")]
 extern "C" {
     fn free(ptr: *mut raw::c_void);
+}
+
+/* functions imported from arp/inet6 */
+extern "C" {
+    fn inet_ntop(af: raw::c_int, cp: *const raw::c_void,
+                 buf: *mut raw::c_char, len: libc::socklen_t) -> *const raw::c_char;
+}
+
+/*
+ * Parse IPv4 address list.
+ */
+
+named!(parse_spaces<nom::types::CompleteStr, ()>,
+    do_parse!(many1!(one_of!(&" \t\n\r\x0c\x0b")) >> (()) )
+);
+
+named!(parse_opt_spaces<nom::types::CompleteStr, ()>,
+    do_parse!(opt!(parse_spaces) >> (()))
+);
+
+named!(parse_ipv4_range<nom::types::CompleteStr, (String, Option<String>)>,
+    do_parse!(addr1: many_till!(complete!(nom::anychar), alt!(do_parse!(eof!() >> (nom::types::CompleteStr(""))) | peek!(tag!("..")) | tag!(" ") )) >>
+              parse_opt_spaces >>
+              addr2: opt!(do_parse!(tag!("..") >>
+                                    parse_opt_spaces >>
+                                    addr2: many_till!(complete!(nom::anychar), alt!(do_parse!(eof!() >> (' ')) | char!(' ')) ) >>
+                                    (addr2) )) >>
+              parse_opt_spaces >>
+              (addr1.0.into_iter().collect(), addr2.map(|x|x.0.into_iter().collect())) )
+);
+
+named!(parse_ipv4_address_list<nom::types::CompleteStr, Vec<(String, Option<String>)>>,
+    do_parse!(parse_opt_spaces >>
+              ranges: many0!(parse_ipv4_range) >>
+              (ranges)));
+
+pub fn ovn_parse_ip_list(ips: &arcval::DDString) -> std_Either<arcval::DDString, std_Vec<(ovn_ovs_be32, std_Option<ovn_ovs_be32>)>>
+{
+    match parse_ipv4_address_list(nom::types::CompleteStr(ips.str())) {
+        Err(e) => {
+            std_Either::std_Left{l: arcval::DDString::from(format!("invalid IP list format: \"{}\"", ips.str()))}
+        },
+        Ok((nom::types::CompleteStr(""), ranges)) => {
+            let mut res = vec![];
+            for (ip1, ip2) in ranges.iter() {
+                let start = match ovn_ip_parse(&arcval::DDString::from(ip1.clone())) {
+                    std_Option::std_None => return std_Either::std_Left{l: arcval::DDString::from(format!("invalid IP address: \"{}\"", *ip1))},
+                    std_Option::std_Some{x: ip} => ip
+                };
+                let end = match ip2 {
+                    None => std_Option::std_None,
+                    Some(ip_str) => match ovn_ip_parse(&arcval::DDString::from(ip_str.clone())) {
+                        std_Option::std_None => return std_Either::std_Left{l: arcval::DDString::from(format!("invalid IP address: \"{}\"", *ip_str))},
+                        x => x
+                    }
+                };
+                res.push((start, end));
+            };
+            std_Either::std_Right{r: std_Vec{x: res}}
+        },
+        Ok((suffix, _)) => {
+            std_Either::std_Left{l: arcval::DDString::from(format!("IP address list contains trailing characters: \"{}\"", suffix))}
+        }
+    }
 }

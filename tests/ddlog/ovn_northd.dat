@@ -9,7 +9,7 @@ insert OVN_Northbound.NB_Global (
     .connections    = [],
     .ssl            = [],
     .ipsec          = true,
-    .options        = [("option1", "opt_value1")]
+    .options        = [("option1", "opt_value1"), ("mac_prefix", "55:aa:ff")]
 ),
 
 insert OVN_Northbound.Meter_Band (
@@ -61,8 +61,22 @@ insert OVN_Northbound.Logical_Switch (
     .qos_rules = [0x56c22335_4eed_45b1_a566_d6e4ae4cd132],
     .load_balancer = [0xcfe7be4c_3e96_45a1_833a_f0af252fc41a],
     .dns_records = [0xf85fdfb3_235c_436e_9648_5bf86ecea25d],
-    .other_config = [],
+    .other_config = [("subnet", "10.0.0.0/8"),
+                     ("exclude_ips", " 10.0.0.4 10.0.0.10 10.0.0.20..10.0.0.50 10.0.0.100 .. 10.0.0.110 ")],
     .external_ids = [("neutron:network_name","neutron_network_1")]
+),
+
+insert OVN_Northbound.Logical_Switch (
+    ._uuid = 0xb2499778_1469_4536_88ad_a49fd4fb792e,
+    .name = "ls2",
+    .ports = [],
+    .acls = [],
+    .qos_rules = [],
+    .load_balancer = [],
+    .dns_records = [],
+    .other_config = [("subnet", "192.168.0.0/16"),
+                     ("exclude_ips", "192.168.0.1..192.168.0.3")],
+    .external_ids = []
 ),
 
 insert OVN_Northbound.NAT (
@@ -85,18 +99,25 @@ insert OVN_Northbound.NAT (
     .external_ids   = []
 ),
 
-
+insert OVN_Northbound.Logical_Router_Static_Route (
+    ._uuid          = 0xa6f5b92e_6f75_43e7_ad8e_cecb7151f1d6,
+    .ip_prefix      = "134.134.255.255/16",
+    .policy         = [],
+    .nexthop        = "10.13.1.7",
+    .output_port    = ["redirect_port2"],
+    .external_ids   = []
+),
 
 insert OVN_Northbound.Logical_Router (
     ._uuid = 0x9bc0b2b1_50f6_42e3_ae36_4fba9bb7a77c,
     .name = "lr1",
     .ports = [ 0x6d7ec8cb_48f1_4b77_8e9f_ea8980dd870b
              , 0xba2e141e_9fdb_44c2_a3d0_90f2fdcd0daf],
-    .static_routes = [],
+    .static_routes = [0xa6f5b92e_6f75_43e7_ad8e_cecb7151f1d6],
     .enabled = true,
     .nat = [ 0x8751892f_b813_43d8_a6e7_b5376c765aac
            , 0x176a7187_05fb_42fb_b098_57954401210b],
-    .load_balancer = [],
+    .load_balancer = [0xcfe7be4c_3e96_45a1_833a_f0af252fc41a],
     .options = [("chassis", "690dc4b6-3a95-46ea-90f5-e46818f2f1a3")],
     .external_ids = []
 ),
@@ -135,7 +156,7 @@ insert OVN_Northbound.Logical_Router_Port(
     .mac = "9c:b6:d0:11:ae:c1",
     .peer = [],
     .enabled = [true],
-    .ipv6_ra_configs = [],
+    .ipv6_ra_configs = [("address_mode","slaac")],
     .external_ids = []
 ),
 
@@ -167,7 +188,7 @@ insert OVN_Northbound.Logical_Router_Port(
     .mac = "aa:bb:cc:dd:ee:ff",
     .peer = [],
     .enabled = [true],
-    .ipv6_ra_configs = [],
+    .ipv6_ra_configs = [("address_mode","slaac")],
     .external_ids = []
 ),
 
@@ -176,11 +197,11 @@ insert OVN_Northbound.Logical_Router_Port(
     .name               = "redirect_port2",
     .gateway_chassis    = [],
     .options            = [("redirect-chassis", "chassis1")],
-    .networks           = ["10.13.1.7"],
+    .networks           = ["10.13.1.7", "fe80::123:56ff:fec0:5", "abcd::1ff:fe23:4567:890a"],
     .mac                = "11:22:33:44:55:66",
     .peer               = [],
     .enabled            = [true],
-    .ipv6_ra_configs    = [],
+    .ipv6_ra_configs    = [("address_mode","slaac"), ("send_periodic", "true")],
     .external_ids       = []
 ),
 
@@ -193,7 +214,7 @@ insert OVN_Northbound.Logical_Router_Port(
     .mac                = "12:34:56:78:9a:bc",
     .peer               = [],
     .enabled            = [true],
-    .ipv6_ra_configs    = [],
+    .ipv6_ra_configs    = [("address_mode","slaac")],
     .external_ids       = []
 ),
 
@@ -230,7 +251,8 @@ insert OVN_Northbound.Logical_Switch_Port(
     .tag = [],
     .addresses = ["66:55:44:33:22:11 10.10.10.101",
                   "ff:ff:ff:ff:ff:ff 10.10.10.102",
-                  "aa:aa:aa:aa:aa:aa fe80::250:56ff:fec0:8"],
+                  "aa:aa:aa:aa:aa:aa fe80::250:56ff:fec0:8",
+                  "dynamic"],
     .dynamic_addresses = [],
     .port_security = ["aa:bb:cc:dd:ee:ff 10.13.1.1 10.13.1.2",
                       "11:22:33:44:55:66 192.168.0.1 fe80::742a:ad2c:b47d:e7a"],

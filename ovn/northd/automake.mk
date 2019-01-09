@@ -8,7 +8,8 @@ ovn_northd_ovn_northd_LDADD = \
 man_MANS += ovn/northd/ovn-northd.8
 EXTRA_DIST += ovn/northd/ovn-northd.8.xml
 
-EXTRA_DIST += ovn/northd/ovn_northd.dl ovn/northd/ovn.dl ovn/northd/ovn.rs
+EXTRA_DIST += ovn/northd/ovn_northd.dl ovn/northd/ovn.dl ovn/northd/ovn.rs ovn/northd/ovn.toml \
+			  ovn/northd/lswitch.dl ovn/northd/lrouter.dl ovn/northd/helpers.dl ovn/northd/ipam.dl
 CLEANFILES += ovn/northd/ovn-northd.8
 
 if DDLOG
@@ -16,7 +17,9 @@ if DDLOG
 ovn/northd/ovn-northd.c: ovn/northd/ovn_northd_ddlog/ovn_northd_ddlog.h
 
 ovn/northd/OVN_Northbound.dl: ovn/ovn-nb.ovsschema
-	ovsdb2ddlog -f ovn/ovn-nb.ovsschema  > $@
+	ovsdb2ddlog -f ovn/ovn-nb.ovsschema  	\
+				-o Logical_Switch_Port		\
+				> $@
 
 ovn/northd/OVN_Southbound.dl: ovn/ovn-sb.ovsschema
 	ovsdb2ddlog -f ovn/ovn-sb.ovsschema \
@@ -56,6 +59,12 @@ CLEANFILES += ovn/northd/OVN_Northbound.dl ovn/northd/OVN_Southbound.dl
 
 ovn/northd/ovn_northd_ddlog/target/debug/ovn_northd_cli: \
 	ovn/northd/ovn_northd.dl	 \
+	ovn/northd/lswitch.dl	 	 \
+	ovn/northd/lrouter.dl	 	 \
+	ovn/northd/ipam.dl			 \
+	ovn/northd/ovn.dl			 \
+	ovn/northd/ovn.rs			 \
+	ovn/northd/helpers.dl		 \
 	ovn/northd/OVN_Northbound.dl \
 	ovn/northd/OVN_Southbound.dl
 	$(AM_V_GEN)ddlog -i $< -L @DDLOG_LIB@
