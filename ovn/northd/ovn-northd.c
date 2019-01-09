@@ -7734,7 +7734,9 @@ ddlog_table_update(ddlog_prog ddlog, const char *table)
     char *ddlog_table;
 
     ddlog_table = xasprintf("OVN_Southbound.DeltaPlus_%s", table);
-    error = ddlog_dump_ovsdb_deltaplus_table(ddlog, ddlog_table, &json);
+    error = ddlog_dump_ovsdb_deltaplus_table(ddlog,
+                                             ddlog_get_table_id(ddlog_table),
+                                             &json);
     if (error) {
         VLOG_WARN("xxx delta-plus (%s) error: %d", ddlog_table, error);
         return;
@@ -7744,7 +7746,9 @@ ddlog_table_update(ddlog_prog ddlog, const char *table)
     free(ddlog_table);
 
     ddlog_table = xasprintf("OVN_Southbound.DeltaMinus_%s", table);
-    error = ddlog_dump_ovsdb_deltaminus_table(ddlog, ddlog_table, &json);
+    error = ddlog_dump_ovsdb_deltaminus_table(ddlog,
+                                              ddlog_get_table_id(ddlog_table),
+                                              &json);
     if (error) {
         VLOG_WARN("xxx delta-minus (%s) error: %d", ddlog_table, error);
         return;
@@ -7809,7 +7813,18 @@ ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
 error:
     ddlog_transaction_rollback(ddlog);
 }
+
+/* Callback used by the ddlog engine to print error messages.  Note that this is
+ * only used by the ddlog runtime, as opposed to the application code in
+ * ovn_northd.dl, which uses the vlog facility directly.  */
+static void
+ddlog_print_error(const char *msg)
+{
+    VLOG_ERR("%s", msg);
+}
+
 #endif
+
 
 int
 main(int argc, char *argv[])
@@ -7966,7 +7981,7 @@ main(int argc, char *argv[])
 #ifdef DDLOG
     /* xxx Check compiling/linking. */
     ddlog_prog ddlog;
-    ddlog = ddlog_run(1);
+    ddlog = ddlog_run(1, true, NULL, 0, ddlog_print_error);
     if (!ddlog) {
         VLOG_EMER("xxx Couldn't create ddlog instance");
     }
