@@ -14,7 +14,7 @@ CLEANFILES += ovn/northd/ovn-northd.8
 
 if DDLOG
 
-ovn/northd/ovn-northd.c: ovn/northd/ovn_northd_ddlog/ovn_northd_ddlog.h
+ovn/northd/ovn-northd.c: ovn/northd/ovn_northd_ddlog/ddlog.h
 
 ovn/northd/OVN_Northbound.dl: ovn/ovn-nb.ovsschema
 	ovsdb2ddlog -f ovn/ovn-nb.ovsschema  	\
@@ -78,17 +78,17 @@ clean-ddlog:
 ovn/northd/ovn_northd_ddlog/target/debug/libovn_northd_ddlog.la: \
 	ovn/northd/ovn_northd_ddlog/target/debug/ovn_northd_cli
 
-ovn/northd/ovn_northd_ddlog/ovn_northd_ddlog.h: \
+ovn/northd/ovn_northd_ddlog/ddlog.h: \
 	ovn/northd/ovn_northd_ddlog/target/debug/ovn_northd_cli
 
 ovn_northd_ovn_northd_SOURCES += \
-	ovn/northd/ovn_northd_ddlog/ovn_northd_ddlog.h
+	ovn/northd/ovn_northd_ddlog/ddlog.h
 
 ovn_northd_ovn_northd_LDADD += \
 	ovn/northd/ovn_northd_ddlog/target/debug/libovn_northd_ddlog.la
 
 CLEANFILES += \
 	ovn/northd/ovn_northd_ddlog/target/debug/libovn_northd_ddlog.la \
-	ovn/northd/ovn_northd_ddlog/ovn_northd_ddlog.h \
+	ovn/northd/ovn_northd_ddlog/ddlog.h \
 	ovn/northd/ovn_northd_ddlog/target/debug/ovn_northd_cli
 endif
