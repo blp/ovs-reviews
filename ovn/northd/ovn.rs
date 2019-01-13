@@ -73,6 +73,8 @@ impl FromRecord for ovn_eth_addr {
 }
 
 decl_struct_into_record!(ovn_eth_addr, <>, x);
+decl_record_mutator_struct!(ovn_eth_addr, <>, x: [u8; ETH_ADDR_SIZE]);
+
 
 #[repr(C)]
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug)]
@@ -89,6 +91,7 @@ impl FromRecord for ovn_in6_addr {
 }
 
 decl_struct_into_record!(ovn_in6_addr, <>, x);
+decl_record_mutator_struct!(ovn_in6_addr, <>, x: [u8; IN6_ADDR_SIZE]);
 
 pub fn ovn_in6_generate_lla(ea: &ovn_eth_addr) -> ovn_in6_addr {
     let mut addr: ovn_in6_addr = Default::default();
