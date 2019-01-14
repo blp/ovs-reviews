@@ -86,11 +86,16 @@ sb.Out_Port_Binding(.uuid_name          = uuid2str(lsp._uuid),
                     .datapath           = uuid2str(sw.ls._uuid),
                     .tunnel_key         = 0,
                     .parent_port        = lsp.parent_name,
-                    .tag                = set_empty(),
+                    .tag                = tag,
                     .mac                = lsp.addresses,
                     .nat_addresses      = set_empty(),
                     .external_ids       = eids) :-
     &SwitchPort(.lsp = lsp, .sw = &sw),
+    SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
+    var tag: Set<integer> = match (opt_tag) {
+        None -> set_empty(),
+        Some{t} -> set_singleton(t)
+    },
     lsp.__type != "router",
     var eids = {
         var eids = lsp.external_ids;
@@ -665,7 +670,7 @@ nb.Out_Logical_Switch_Port(.uuid_name              = uuid2str(lsp._uuid),
                            .options                = lsp.options,
                            .parent_name            = lsp.parent_name,
                            .tag_request            = lsp.tag_request,
-                           .tag                    = lsp.tag,
+                           .tag                    = tag,
                            .addresses              = lsp.addresses,
                            .dynamic_addresses      = dynamic_addresses,
                            .port_security          = lsp.port_security,
@@ -678,6 +683,11 @@ nb.Out_Logical_Switch_Port(.uuid_name              = uuid2str(lsp._uuid),
     var dynamic_addresses: Set<string> = match (opt_dyn_addr) {
         None -> set_empty(),
         Some{dyn_addr} -> set_singleton($"${dyn_addr}")
+    },
+    SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
+    var tag: Set<integer> = match (opt_tag) {
+        None -> set_empty(),
+        Some{t} -> set_singleton(t)
     }.
 
 typedef Direction = IN | OUT
@@ -4923,3 +4933,78 @@ QueueIDAllocation(port, Some{qid}) :-
     not AllocatedQIDs(chassis, _),
     var allocations = FlatMap(adjust_allocation(map_empty(): Map<string, integer>, ports, 64'h1, 64'hf000)),
     (var port, var qid) = allocations.
+
+/*
+ * Tag allocation for nested containers.
+ */
+
+/* Reserved tags for each parent port, including:
+ * 1. For ports that need a dynamically allocated tag, existing tag, if any,
+ * 2. For ports that have a statically assigned tag (via `tag_request`), the
+ *    `tag_request` value.
+ */
+output relation SwitchPortReservedTag(parent_name: string, tags: integer)
+
+SwitchPortReservedTag(parent_name, tag) :-
+    &SwitchPort(.lsp = lsp, .needs_dynamic_tag = needs_dynamic_tag, .parent_name = Some{parent_name}),
+    Some{var tag} = if (needs_dynamic_tag) {
+        set_nth(lsp.tag, 0)
+    } else {
+        set_nth(lsp.tag_request, 0)
+    }.
+
+output relation SwitchPortReservedTags(parent_name: string, tags: Set<integer>)
+
+SwitchPortReservedTags(parent_name, tags) :-
+    SwitchPortReservedTag(parent_name, tag),
+    var tags = Aggregate((parent_name), group2set(tag)).
+
+SwitchPortReservedTags(parent_name, set_empty()) :-
+    nb.Logical_Switch_Port(.name = parent_name),
+    not SwitchPortReservedTag(.parent_name = parent_name).
+
+/* Allocate tags for ports that require dynamically allocated tags and do not
+ * have any yet.
+ */
+output relation SwitchPortAllocatedTags(lsp_uuid: uuid, tag: Option<integer>)
+
+SwitchPortAllocatedTags(lsp_uuid, tag) :-
+    &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true, .parent_name = Some{parent_name}),
+    set_is_empty(lsp.tag),
+    var lsps_need_tag = Aggregate((parent_name), group2vec(lsp._uuid)),
+    SwitchPortReservedTags(parent_name, reserved),
+    var dyn_tags = allocate_opt(reserved,
+                                lsps_need_tag,
+                                1: integer, /* Tag 0 is invalid for nested containers. */
+                                4095: integer),
+    var lsp_tag = FlatMap(dyn_tags),
+    (var lsp_uuid, var tag) = lsp_tag.
+
+/* New tag-to-port assignment:
+ * Case 1. None for ports that do not require a tag (i.e., do not have a parent or
+ *    do not have a tag request).
+ * Case 2. Statically reserved tag (via `tag_request`), if any.
+ * Case 3. Existing tag for ports that require a dynamically allocated tag and already have one.
+ * Case 4. Use newly allocated tags (from `SwitchPortAllocatedTags`) for all other ports.
+ */
+output relation SwitchPortNewDynamicTag(port: uuid, tag: Option<integer>)
+
+SwitchPortNewDynamicTag(lsp._uuid, tag) :-
+    &SwitchPort(.lsp = lsp, .needs_dynamic_tag = false, .parent_name = parent_name),
+    var tag: Option<integer> =
+        if (is_none(parent_name)) {
+            None /* Case 1 */
+        } else {
+            set_nth(lsp.tag_request, 0) /* Case 2 */
+        }.
+
+/* Case 3 */
+SwitchPortNewDynamicTag(lsp._uuid, Some{tag}) :-
+    &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true),
+    Some{var tag} = set_nth(lsp.tag, 0).
+
+/* Case 4 */
+SwitchPortNewDynamicTag(lsp._uuid, tag) :-
+    &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true),
+    set_is_empty(lsp.tag),
+    SwitchPortAllocatedTags(lsp._uuid, tag).

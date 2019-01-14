@@ -223,6 +223,7 @@ relation &SwitchACL(sw: Ref<Switch>,
  *    e.g., "80:fa:5b:06:72:b7 dynamic"
  * - `needs_dynamic_ipv4address` - port requires a dynamically allocated IPv4 address
  * - `needs_dynamic_macaddress`  - port requires a dynamically allocated MAC address
+ * - `needs_dynamic_tag`         - port requires a dynamically allocated tag
  */
 relation &SwitchPort(
     lsp:                        nb.Logical_Switch_Port,
@@ -234,9 +235,11 @@ relation &SwitchPort(
     static_dynamic_mac:         Option<bit<64>>,
     ps_addresses:               Vec<lport_addresses>,
     ps_eth_addresses:           Vec<string>,
+    parent_name:                Option<string>,
     needs_dynamic_ipv4address:  bool,
     needs_dynamic_macaddress:   bool,
-    needs_dynamic_ipv6address:  bool
+    needs_dynamic_ipv6address:  bool,
+    needs_dynamic_tag:          bool
 )
 
 &SwitchPort(.lsp                        = lsp,
@@ -248,9 +251,11 @@ relation &SwitchPort(
             .static_dynamic_mac         = static_dynamic_mac,
             .ps_addresses               = ps_addresses,
             .ps_eth_addresses           = ps_eth_addresses,
+            .parent_name                = parent_name,
             .needs_dynamic_ipv4address  = needs_dynamic_ipv4address,
             .needs_dynamic_macaddress   = needs_dynamic_macaddress,
-            .needs_dynamic_ipv6address  = needs_dynamic_ipv6address) :-
+            .needs_dynamic_ipv6address  = needs_dynamic_ipv6address,
+            .needs_dynamic_tag          = needs_dynamic_tag) :-
     nb.Logical_Switch_Port[lsp],
     LogicalPortSwitch(lsp._uuid, lswitch_uuid),
     sw in &Switch(.ls = nb.Logical_Switch{._uuid = lswitch_uuid},
@@ -311,7 +316,14 @@ relation &SwitchPort(
     },
     var needs_dynamic_ipv4address = has_dyn_lsp_addr and is_none(peer) and is_some(subnet),
     var needs_dynamic_macaddress = has_dyn_lsp_addr and is_none(peer) and is_none(static_dynamic_mac),
-    var needs_dynamic_ipv6address = has_dyn_lsp_addr and is_none(peer) and is_some(ipv6_prefix).
+    var needs_dynamic_ipv6address = has_dyn_lsp_addr and is_none(peer) and is_some(ipv6_prefix),
+    var parent_name: Option<string> = match (set_nth(lsp.parent_name, 0)) {
+        None -> None,
+        Some{pname} -> if (pname == "") { None } else { Some{pname} }
+    },
+    /* Port needs dynamic tag if it has a parent and its `tag_request` is 0. */
+    var needs_dynamic_tag = is_some(parent_name) and
+                            set_nth(lsp.tag_request, 0) == Some{0: integer}.
 
 /* Switch port port security addresses */
 relation SwitchPortPSAddresses(port:     Ref<SwitchPort>,

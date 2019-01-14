@@ -33,7 +33,7 @@ function mAC_ADDR_SPACE(): bit<64>  = 64'hffffff
  *
  * Addresses are kept in host-endian format (i.e., bit<32> vs ovs_be32).
  */
-output relation SwitchIPv4ReservedAddress(lswitch: uuid, addr: bit<32>)
+relation SwitchIPv4ReservedAddress(lswitch: uuid, addr: bit<32>)
 
 /* Add reserved address groups (1) and (2). */
 SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
@@ -116,7 +116,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
     var addr = FlatMap(addrs).
 
 /* Aggregate all reserved addresses for each switch. */
-output relation SwitchIPv4ReservedAddresses(lswitch: uuid, addrs: Set<bit<32>>)
+relation SwitchIPv4ReservedAddresses(lswitch: uuid, addrs: Set<bit<32>>)
 
 SwitchIPv4ReservedAddresses(lswitch, addrs) :-
     SwitchIPv4ReservedAddress(lswitch, addr),
@@ -128,7 +128,7 @@ SwitchIPv4ReservedAddresses(lswitch_uuid, set_empty()) :-
 
 /* Allocate dynamic IP addresses for ports that require them:
  */
-output relation SwitchPortAllocatedIPv4DynAddress(lsport: uuid, dyn_addr: bit<32>)
+relation SwitchPortAllocatedIPv4DynAddress(lsport: uuid, dyn_addr: bit<32>)
 
 SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
     /* Aggregate all ports of a switch that need a dynamic IP address */
@@ -201,7 +201,7 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
  * - a new address has been allocated for port - use this address
  * - otherwise, use existing dynamic IP
  */
-output relation SwitchPortNewIPv4DynAddress(lsport: uuid, dyn_addr: Option<ovs_be32>)
+relation SwitchPortNewIPv4DynAddress(lsport: uuid, dyn_addr: Option<ovs_be32>)
 
 SwitchPortNewIPv4DynAddress(lsp._uuid, None) :-
     &SwitchPort(.needs_dynamic_ipv4address = false, .lsp = lsp).
@@ -233,7 +233,7 @@ SwitchPortNewIPv4DynAddress(lsp._uuid, addr) :-
  *
  * Addresses are kept in 64-bit host-endian format.
  */
-output relation ReservedMACAddress(addr: bit<64>)
+relation ReservedMACAddress(addr: bit<64>)
 
 /* Add reserved address group (1). */
 ReservedMACAddress(.addr = eth_addr_to_uint64(lport_addrs.ea)) :-
@@ -248,7 +248,7 @@ ReservedMACAddress(.addr = eth_addr_to_uint64(rport.networks.ea)) :-
     &SwitchPort(.peer = Some{&rport}).
 
 /* Aggregate all reserved MAC addresses. */
-output relation ReservedMACAddresses(addrs: Set<bit<64>>)
+relation ReservedMACAddresses(addrs: Set<bit<64>>)
 
 ReservedMACAddresses(addrs) :-
     ReservedMACAddress(addr),
@@ -267,7 +267,7 @@ ReservedMACAddresses(set_empty()) :-
  * Case 2: needs dynamic MAC, has dynamic MAC, has existing dynamic MAC with the right prefix
  * needs dynamic MAC, does not have fixed dynamic MAC, doesn't have existing dynamic MAC with correct prefix
  */
-output relation SwitchPortAllocatedMACDynAddress(lsport: uuid, dyn_addr: bit<64>)
+relation SwitchPortAllocatedMACDynAddress(lsport: uuid, dyn_addr: bit<64>)
 
 SwitchPortAllocatedMACDynAddress(lsport, dyn_addr) :-
     /* Group all ports that need a dynamic IP address */
@@ -324,7 +324,7 @@ SwitchPortAllocatedMACDynAddress(lsport, dyn_addr) :-
  * - a new address has been allocated for port - use this address
  * - otherwise, use existing dynamic MAC
  */
-output relation SwitchPortNewMACDynAddress(lsport: uuid, dyn_addr: Option<eth_addr>)
+relation SwitchPortNewMACDynAddress(lsport: uuid, dyn_addr: Option<eth_addr>)
 
 SwitchPortNewMACDynAddress(lsp._uuid, mac_addr) :-
     &SwitchPort(.needs_dynamic_macaddress = false,
@@ -350,7 +350,7 @@ SwitchPortNewMACDynAddress(lsp._uuid, addr) :-
  * Dynamic IPv6 address allocation.
  * `needs_dynamic_ipv6address` -> in6_generate_eui64(mac, ipv6_prefix)
  */
-output relation SwitchPortNewDynamicAddress(port: Ref<SwitchPort>, address: Option<lport_addresses>)
+relation SwitchPortNewDynamicAddress(port: Ref<SwitchPort>, address: Option<lport_addresses>)
 
 SwitchPortNewDynamicAddress(port, None) :-
     port in &SwitchPort(.lsp = lsp),
