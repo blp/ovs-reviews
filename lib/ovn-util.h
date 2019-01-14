@@ -226,4 +226,9 @@ bool ip_address_and_port_from_lb_key(const char *key, char **ip_address,
  * value. */
 char *ovn_get_internal_version(void);
 
+#ifdef DDLOG
+void ddlog_warn(const char *msg);
+void ddlog_err(const char *msg);
+#endif
+
 #endif
