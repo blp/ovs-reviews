@@ -261,4 +261,9 @@ BUILD_ASSERT_DECL(SCTP_INIT_CHUNK_LEN == sizeof(struct sctp_init_chunk));
 /* See RFC 4960 Sections 3.3.7 and 8.5.1 for information on this flag. */
 #define SCTP_ABORT_CHUNK_FLAG_T (1 << 0)
 
+#ifdef DDLOG
+void ddlog_warn(const char *msg);
+void ddlog_err(const char *msg);
+#endif
+
 #endif
