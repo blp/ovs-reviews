@@ -8,7 +8,6 @@ use std::default;
 use std::process;
 use libc;
 
-// TODO: proper implementation
 pub fn ovn_warn(msg: &arcval::DDString) {
     warn(msg.as_ref())
 }
@@ -16,6 +15,24 @@ pub fn ovn_warn(msg: &arcval::DDString) {
 pub fn ovn_abort(msg: &arcval::DDString) {
     abort(msg.as_ref())
 }
+
+pub fn warn(msg: &str) {
+    unsafe {
+        ddlog_warn(ffi::CString::new(msg).unwrap().as_ptr());
+    }
+}
+
+pub fn err(msg: &str) {
+    unsafe {
+        ddlog_err(ffi::CString::new(msg).unwrap().as_ptr());
+    }
+}
+
+fn abort(msg: &str) {
+    err(format!("DDlog error: {}.", msg).as_ref());
+    process::abort();
+}
+
 
 const ETH_ADDR_SIZE:    usize = 6;
 const IN6_ADDR_SIZE:    usize = 16;
@@ -403,17 +420,6 @@ fn ddstring2cstr(s: &arcval::DDString) -> ffi::CString {
     ffi::CString::new(s.str()).unwrap()
 }
 
-fn warn(msg: &str) {
-    eprintln!("{}", msg)
-}
-
-fn abort(msg: &str) {
-    eprintln!("{}", msg);
-    process::abort()    ;
-}
-
-
-
 /* OVS dynamic string type */
 #[repr(C)]
 struct ovs_ds {
@@ -588,6 +594,12 @@ impl lport_addresses {
         destroy_lport_addresses(&mut self as *mut lport_addresses);
         res
     }
+}
+
+/* functions imported from ovn-northd.c */
+extern "C" {
+    fn ddlog_warn(msg: *const raw::c_char);
+    fn ddlog_err(msg: *const raw::c_char);
 }
 
 /* functions imported from libovn */

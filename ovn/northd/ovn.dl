@@ -84,7 +84,11 @@ function lport_addresses2string(addr: lport_addresses): string = {
 function aF_INET(): bit<32> = 2
 function aF_INET6(): bit<32> = 10
 
+/*
+ * Logging
+ */
 extern function warn(msg: string): ()
+extern function err(msg: string): ()
 extern function abort(msg: string): ()
 
 /*
