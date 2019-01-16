@@ -62,6 +62,10 @@ ovn/northd/ovn_northd_ddlog/target/debug/ovn_northd_cli: \
 	$(AM_V_at)cd ovn/northd/ovn_northd_ddlog && \
 		RUSTFLAGS='-L ../../lib/.libs -L ../../../lib/.libs -lssl -lcrypto' cargo build
 
+CLEAN_LOCAL += clean-ddlog
+clean-ddlog:
+	rm -rf ovn/northd/ovn_northd_ddlog
+
 ovn/northd/ovn_northd_ddlog/target/debug/libovn_northd_ddlog.la: \
 	ovn/northd/ovn_northd_ddlog/target/debug/ovn_northd_cli
 
