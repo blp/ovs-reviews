@@ -27,11 +27,16 @@ import ovs.ovsuuid
 import ovs.poller
 import ovs.stream
 import ovs.util
+import ovs.vlog
 from ovs.db import data
 from ovs.db import error
 from ovs.fatal_signal import signal_alarm
 
 import six
+
+vlog = ovs.vlog.Vlog("test-ovsdb")
+vlog.set_levels_from_string("console:dbg")
+vlog.init(None)
 
 
 def unbox_json(json):
@@ -162,7 +167,7 @@ def get_simple_printable_row_string(row, columns):
             s += "%s=%s " % (column, value)
     s = s.strip()
     s = re.sub('""|,|u?\'', "", s)
-    s = re.sub('UUID\(([^)]+)\)', r'\1', s)
+    s = re.sub(r'UUID\(([^)]+)\)', r'\1', s)
     s = re.sub('False', 'false', s)
     s = re.sub('True', 'true', s)
     s = re.sub(r'(ba)=([^[][^ ]*) ', r'\1=[\2] ', s)
@@ -599,7 +604,7 @@ def do_idl(schema_file, remote, *commands):
         stream = None
         for r in remotes:
             error, stream = ovs.stream.Stream.open_block(
-                ovs.stream.Stream.open(r))
+                ovs.stream.Stream.open(r), 2000)
             if not error and stream:
                 break
             stream = None

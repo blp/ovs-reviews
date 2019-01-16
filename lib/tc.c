@@ -93,6 +93,11 @@ static struct flower_key_to_pedit flower_pedit_map[] = {
         MEMBER_SIZEOF(struct tc_flower_key, ipv4.rewrite_ttl)
     }, {
         TCA_PEDIT_KEY_EX_HDR_TYPE_IP6,
+        7,
+        offsetof(struct tc_flower_key, ipv6.rewrite_hlimit),
+        MEMBER_SIZEOF(struct tc_flower_key, ipv6.rewrite_hlimit)
+    }, {
+        TCA_PEDIT_KEY_EX_HDR_TYPE_IP6,
         8,
         offsetof(struct tc_flower_key, ipv6.ipv6_src),
         MEMBER_SIZEOF(struct tc_flower_key, ipv6.ipv6_src)
@@ -1661,7 +1666,9 @@ nl_msg_put_act_tunnel_key_set(struct ofpbuf *request, ovs_be64 id,
         if (ttl) {
             nl_msg_put_u8(request, TCA_TUNNEL_KEY_ENC_TTL, ttl);
         }
-        nl_msg_put_be16(request, TCA_TUNNEL_KEY_ENC_DST_PORT, tp_dst);
+        if (tp_dst) {
+            nl_msg_put_be16(request, TCA_TUNNEL_KEY_ENC_DST_PORT, tp_dst);
+        }
         nl_msg_put_act_tunnel_geneve_option(request, tun_metadata);
         nl_msg_put_u8(request, TCA_TUNNEL_KEY_NO_CSUM, no_csum);
     }
@@ -2035,7 +2042,9 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL, ttl);
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL_MASK, ttl_mask);
     }
-    nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT, tp_dst);
+    if (tp_dst) {
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT, tp_dst);
+    }
     nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_KEY_ID, id);
     nl_msg_put_flower_tunnel_opts(request, TCA_FLOWER_KEY_ENC_OPTS,
                                   flower->key.tunnel.metadata);

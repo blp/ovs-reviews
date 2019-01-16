@@ -58,6 +58,8 @@ int vconn_transact(struct vconn *, struct ofpbuf *, struct ofpbuf **);
 int vconn_transact_noreply(struct vconn *, struct ofpbuf *, struct ofpbuf **);
 int vconn_transact_multiple_noreply(struct vconn *, struct ovs_list *requests,
                                     struct ofpbuf **replyp);
+int vconn_transact_multipart(struct vconn *, struct ovs_list *request,
+                             struct ovs_list *replies);
 
 int vconn_dump_flows(struct vconn *, const struct ofputil_flow_stats_request *,
                      enum ofputil_protocol,
@@ -73,8 +75,8 @@ void vconn_run_wait(struct vconn *);
 int vconn_get_status(const struct vconn *);
 
 int vconn_open_block(const char *name, uint32_t allowed_versions, uint8_t dscp,
-                     struct vconn **);
-int vconn_connect_block(struct vconn *);
+                     long long int timeout, struct vconn **);
+int vconn_connect_block(struct vconn *, long long int timeout);
 int vconn_send_block(struct vconn *, struct ofpbuf *);
 int vconn_recv_block(struct vconn *, struct ofpbuf **);
 

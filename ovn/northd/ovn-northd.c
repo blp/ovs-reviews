@@ -418,6 +418,7 @@ struct ipam_info {
     unsigned long *allocated_ipv4s; /* A bitmap of allocated IPv4s */
     bool ipv6_prefix_set;
     struct in6_addr ipv6_prefix;
+    bool mac_only;
 };
 
 /* The 'key' comes from nbs->header_.uuid or nbr->header_.uuid or
@@ -563,6 +564,10 @@ init_ipam_info_for_datapath(struct ovn_datapath *od)
     }
 
     if (!subnet_str) {
+        if (!ipv6_prefix) {
+            od->ipam_info.mac_only = smap_get_bool(&od->nbs->other_config,
+                                                   "mac_only", false);
+        }
         return;
     }
 
@@ -1108,6 +1113,7 @@ struct dynamic_address_update {
 
     struct lport_addresses current_addresses;
     struct eth_addr static_mac;
+    ovs_be32 static_ip;
     enum dynamic_update_type mac;
     enum dynamic_update_type ipv4;
     enum dynamic_update_type ipv6;
@@ -1146,7 +1152,8 @@ dynamic_mac_changed(const char *lsp_addresses,
 }
 
 static enum dynamic_update_type
-dynamic_ip4_changed(struct dynamic_address_update *update)
+dynamic_ip4_changed(const char *lsp_addrs,
+                    struct dynamic_address_update *update)
 {
     const struct ipam_info *ipam = &update->op->od->ipam_info;
     const struct lport_addresses *cur_addresses = &update->current_addresses;
@@ -1179,6 +1186,25 @@ dynamic_ip4_changed(struct dynamic_address_update *update)
          */
         return DYNAMIC;
     } else {
+        ovs_be32 new_ip;
+        int n = 0;
+
+        if (ovs_scan(lsp_addrs, "dynamic "IP_SCAN_FMT"%n",
+                     IP_SCAN_ARGS(&new_ip), &n)
+            && lsp_addrs[n] == '\0') {
+
+            index = ntohl(new_ip) - ipam->start_ipv4;
+            if (ntohl(new_ip) < ipam->start_ipv4 ||
+                index > ipam->total_ipv4s ||
+                bitmap_is_set(ipam->allocated_ipv4s, index)) {
+                /* new static ip is not valid */
+                return DYNAMIC;
+            } else if (cur_addresses->ipv4_addrs[0].addr != new_ip) {
+                update->ipv4 = STATIC;
+                update->static_ip = new_ip;
+                return STATIC;
+            }
+        }
         return NONE;
     }
 }
@@ -1230,7 +1256,7 @@ dynamic_addresses_check_for_updates(const char *lsp_addrs,
                                     struct dynamic_address_update *update)
 {
     update->mac = dynamic_mac_changed(lsp_addrs, update);
-    update->ipv4 = dynamic_ip4_changed(update);
+    update->ipv4 = dynamic_ip4_changed(lsp_addrs, update);
     update->ipv6 = dynamic_ip6_changed(update);
     if (update->mac == NONE &&
         update->ipv4 == NONE &&
@@ -1273,6 +1299,7 @@ set_dynamic_updates(const char *addrspec,
                     struct dynamic_address_update *update)
 {
     struct eth_addr mac;
+    ovs_be32 ip;
     int n = 0;
     if (ovs_scan(addrspec, ETH_ADDR_SCAN_FMT" dynamic%n",
                  ETH_ADDR_SCAN_ARGS(mac), &n)
@@ -1282,7 +1309,13 @@ set_dynamic_updates(const char *addrspec,
     } else {
         update->mac = DYNAMIC;
     }
-    if (update->op->od->ipam_info.allocated_ipv4s) {
+
+    if (ovs_scan(addrspec, "dynamic "IP_SCAN_FMT"%n",
+                 IP_SCAN_ARGS(&ip), &n)
+        && addrspec[n] == '\0') {
+        update->ipv4 = STATIC;
+        update->static_ip = ip;
+    } else if (update->op->od->ipam_info.allocated_ipv4s) {
         update->ipv4 = DYNAMIC;
     } else {
         update->ipv4 = NONE;
@@ -1307,7 +1340,8 @@ update_dynamic_addresses(struct dynamic_address_update *update)
     case REMOVE:
         break;
     case STATIC:
-        OVS_NOT_REACHED();
+        ip4 = update->static_ip;
+        break;
     case DYNAMIC:
         ip4 = htonl(ipam_get_unused_ip(update->od));
     }
@@ -1386,7 +1420,8 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
             const struct nbrec_logical_switch_port *nbsp = od->nbs->ports[i];
 
             if (!od->ipam_info.allocated_ipv4s &&
-                !od->ipam_info.ipv6_prefix_set) {
+                !od->ipam_info.ipv6_prefix_set &&
+                !od->ipam_info.mac_only) {
                 if (nbsp->dynamic_addresses) {
                     nbrec_logical_switch_port_set_dynamic_addresses(nbsp,
                                                                     NULL);
@@ -1440,7 +1475,7 @@ build_ipam(struct hmap *datapaths, struct hmap *ports)
                 }
             }
 
-            if (!nbsp->n_addresses && nbsp->dynamic_addresses) {
+            if (!num_dynamic_addresses && nbsp->dynamic_addresses) {
                 nbrec_logical_switch_port_set_dynamic_addresses(nbsp, NULL);
             }
         }
@@ -1654,7 +1689,6 @@ join_logical_ports(struct northd_context *ctx,
                 }
 
                 op->od = od;
-                ipam_add_port_addresses(od, op);
                 tag_alloc_add_existing_tags(tag_alloc_table, nbsp);
             }
         } else {
@@ -1698,7 +1732,6 @@ join_logical_ports(struct northd_context *ctx,
 
                 op->lrp_networks = lrp_networks;
                 op->od = od;
-                ipam_add_port_addresses(op->od, op);
 
                 const char *redirect_chassis = smap_get(&op->nbrp->options,
                                                         "redirect-chassis");
@@ -1800,6 +1833,8 @@ join_logical_ports(struct northd_context *ctx,
                 }
             }
         }
+
+        ipam_add_port_addresses(op->od, op);
     }
 }
 
@@ -6989,7 +7024,7 @@ bands_need_update(const struct nbrec_meter *nb_meter,
     for (size_t i = 0; i < nb_meter->n_bands; i++) {
         if (nb_bands[i].rate != sb_bands[i].rate
             || nb_bands[i].burst_size != sb_bands[i].burst_size
-            || strcmp(nb_bands[i].action, nb_bands[i].action)) {
+            || strcmp(nb_bands[i].action, sb_bands[i].action)) {
             need_update = true;
             goto done;
         }

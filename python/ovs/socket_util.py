@@ -90,7 +90,7 @@ def make_unix_socket(style, nonblock, bind_path, connect_path, short=False):
 
             try:
                 os.fchmod(sock.fileno(), 0o700)
-            except OSError as e:
+            except OSError:
                 pass
         if connect_path is not None:
             try:
@@ -178,7 +178,7 @@ def check_connection_completion(sock):
     pfds = p.poll(0)
     if len(pfds) == 1:
         revents = pfds[0][1]
-        if revents & ovs.poller.POLLERR:
+        if revents & ovs.poller.POLLERR or revents & ovs.poller.POLLHUP:
             try:
                 # The following should raise an exception.
                 sock.send("\0".encode(), socket.MSG_DONTWAIT)

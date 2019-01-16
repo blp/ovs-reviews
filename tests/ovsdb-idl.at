@@ -42,6 +42,40 @@ m4_define([OVSDB_CHECK_IDL_C],
    OVSDB_SERVER_SHUTDOWN
    AT_CLEANUP])
 
+# same as OVSDB_CHECK_IDL but uses tcp.
+m4_define([OVSDB_CHECK_IDL_TCP_C],
+  [AT_SETUP([$1 - C - tcp])
+   AT_KEYWORDS([ovsdb server idl positive tcp socket $5])
+   AT_CHECK([ovsdb_start_idltest "ptcp:0:127.0.0.1"])
+   PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
+
+   m4_if([$2], [], [],
+     [AT_CHECK([ovsdb-client transact tcp:127.0.0.1:$TCP_PORT $2], [0], [ignore], [ignore])])
+   AT_CHECK([test-ovsdb '-vPATTERN:console:test-ovsdb|%c|%m' -vjsonrpc -t10 idl tcp:127.0.0.1:$TCP_PORT $3],
+            [0], [stdout], [ignore])
+   AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
+            [0], [$4])
+   OVSDB_SERVER_SHUTDOWN
+   AT_CLEANUP])
+
+# same as OVSDB_CHECK_IDL but uses tcp6.
+m4_define([OVSDB_CHECK_IDL_TCP6_C],
+  [AT_SETUP([$1 - C - tcp6])
+   AT_SKIP_IF([test "$IS_WIN32" = "yes"])
+   AT_SKIP_IF([test $HAVE_IPV6 = no])
+   AT_KEYWORDS([ovsdb server idl positive tcp6 socket $5])
+   AT_CHECK([ovsdb_start_idltest "ptcp:0:[[::1]]"])
+   PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
+
+   m4_if([$2], [], [],
+     [AT_CHECK([ovsdb-client transact tcp:[[::1]]:$TCP_PORT $2], [0], [ignore], [ignore])])
+   AT_CHECK([test-ovsdb '-vPATTERN:console:test-ovsdb|%c|%m' -vjsonrpc -t10 idl tcp:[[::1]]:$TCP_PORT $3],
+            [0], [stdout], [ignore])
+   AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
+            [0], [$4])
+   OVSDB_SERVER_SHUTDOWN
+   AT_CLEANUP])
+
 # same as OVSDB_CHECK_IDL but uses the Python IDL implementation.
 m4_define([OVSDB_CHECK_IDL_PYN],
   [AT_SETUP([$1])
@@ -114,12 +148,12 @@ m4_define([OVSDB_CHECK_IDL_TCP_MULTIPLE_REMOTES_PYN],
    AT_KEYWORDS([ovsdb server idl positive Python with tcp socket $5])
    AT_CHECK([ovsdb_start_idltest "ptcp:0:127.0.0.1"])
    PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
-   WRONG_PORT_1=$((TCP_PORT + 1))
-   WRONG_PORT_2=$((TCP_PORT + 2))
+   WRONG_PORT_1=$((TCP_PORT + 101))
+   WRONG_PORT_2=$((TCP_PORT + 102))
    remote=tcp:127.0.0.1:$WRONG_PORT_1,tcp:127.0.0.1:$TCP_PORT,tcp:127.0.0.1:$WRONG_PORT_2
    m4_if([$2], [], [],
      [AT_CHECK([ovsdb-client transact tcp:127.0.0.1:$TCP_PORT $2], [0], [ignore], [ignore])])
-   AT_CHECK([$8 $srcdir/test-ovsdb.py  -t10 idl $srcdir/idltest.ovsschema $remote $3],
+   AT_CHECK([$8 $srcdir/test-ovsdb.py  -t20 idl $srcdir/idltest.ovsschema $remote $3],
             [0], [stdout], [ignore])
    AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
             [0], [$4])
@@ -166,12 +200,12 @@ m4_define([OVSDB_CHECK_IDL_TCP6_MULTIPLE_REMOTES_PYN],
    AT_KEYWORDS([ovsdb server idl positive Python with tcp6 socket $5])
    AT_CHECK([ovsdb_start_idltest "ptcp:0:[[::1]]"])
    PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
-   WRONG_PORT_1=$((TCP_PORT + 1))
-   WRONG_PORT_2=$((TCP_PORT + 2))
+   WRONG_PORT_1=$((TCP_PORT + 101))
+   WRONG_PORT_2=$((TCP_PORT + 102))
    remote="tcp:[[::1]]:$WRONG_PORT_1,tcp:[[::1]]:$TCP_PORT,tcp:[[::1]]:$WRONG_PORT_2"
    m4_if([$2], [], [],
      [AT_CHECK([ovsdb-client transact "tcp:[[::1]]:$TCP_PORT" $2], [0], [ignore], [ignore])])
-   AT_CHECK([$8 $srcdir/test-ovsdb.py  -t10 idl $srcdir/idltest.ovsschema $remote $3],
+   AT_CHECK([$8 $srcdir/test-ovsdb.py  -t20 idl $srcdir/idltest.ovsschema $remote $3],
             [0], [stdout], [ignore])
    AT_CHECK([sort stdout | uuidfilt]m4_if([$6],,, [[| $6]]),
             [0], [$4])
@@ -227,6 +261,8 @@ m4_define([OVSDB_CHECK_IDL_SSL_PY],
 
 m4_define([OVSDB_CHECK_IDL],
   [OVSDB_CHECK_IDL_C($@)
+   OVSDB_CHECK_IDL_TCP_C($@)
+   OVSDB_CHECK_IDL_TCP6_C($@)
    OVSDB_CHECK_IDL_PY($@)
    OVSDB_CHECK_IDL_REGISTER_COLUMNS_PY($@)
    OVSDB_CHECK_IDL_TCP_PY($@)
@@ -1785,13 +1821,30 @@ OVSDB_CHECK_IDL_COMPOUND_INDEX_WITH_REF([set, simple3 idl-compound-index-with-re
 008: End test
 ]])
 
+m4_define([CHECK_STREAM_OPEN_BLOCK],
+  [AT_SETUP([Check Stream open block - C - $1])
+   AT_SKIP_IF([test "$1" = "tcp6" && test "$IS_WIN32" = "yes"])
+   AT_SKIP_IF([test "$1" = "tcp6" && test "$HAVE_IPV6" = "no"])
+   AT_KEYWORDS([Check Stream open block $1])
+   AT_CHECK([ovsdb_start_idltest "ptcp:0:$2"])
+   PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
+   WRONG_PORT=$(($TCP_PORT + 101))
+   AT_CHECK([test-stream tcp:$2:$TCP_PORT], [0], [ignore])
+   AT_CHECK([test-stream tcp:$2:$WRONG_PORT], [1], [ignore], [ignore])
+   OVSDB_SERVER_SHUTDOWN
+   AT_CHECK([test-stream tcp:$2:$TCP_PORT], [1], [ignore], [ignore])
+   AT_CLEANUP])
+
+CHECK_STREAM_OPEN_BLOCK([tcp], [127.0.0.1])
+CHECK_STREAM_OPEN_BLOCK([tcp6], [[[::1]]])
+
 m4_define([CHECK_STREAM_OPEN_BLOCK_PY],
   [AT_SETUP([$1])
    AT_SKIP_IF([test $2 = no])
    AT_KEYWORDS([Check PY Stream open block - $3])
    AT_CHECK([ovsdb_start_idltest "ptcp:0:127.0.0.1"])
    PARSE_LISTENING_PORT([ovsdb-server.log], [TCP_PORT])
-   WRONG_PORT=$(($TCP_PORT+1))
+   WRONG_PORT=$(($TCP_PORT + 101))
    AT_CHECK([$3 $srcdir/test-stream.py tcp:127.0.0.1:$TCP_PORT], [0], [ignore])
    AT_CHECK([$3 $srcdir/test-stream.py tcp:127.0.0.1:$WRONG_PORT], [1], [ignore])
    OVSDB_SERVER_SHUTDOWN

@@ -76,6 +76,10 @@ static struct netlink_field set_flower_map[][3] = {
           offsetof(struct tc_flower_key, ipv6.ipv6_dst),
           MEMBER_SIZEOF(struct tc_flower_key, ipv6.ipv6_dst)
         },
+        { offsetof(struct ovs_key_ipv6, ipv6_hlimit),
+          offsetof(struct tc_flower_key, ipv6.rewrite_hlimit),
+          MEMBER_SIZEOF(struct tc_flower_key, ipv6.rewrite_hlimit)
+        },
     },
     [OVS_KEY_ATTR_ETHERNET] = {
         { offsetof(struct ovs_key_ethernet, eth_src),
@@ -651,8 +655,10 @@ parse_tc_flower_to_match(struct tc_flower *flower,
                     nl_msg_put_u8(buf, OVS_TUNNEL_KEY_ATTR_TTL,
                                   action->encap.ttl);
                 }
-                nl_msg_put_be16(buf, OVS_TUNNEL_KEY_ATTR_TP_DST,
-                                action->encap.tp_dst);
+                if (action->encap.tp_dst) {
+                    nl_msg_put_be16(buf, OVS_TUNNEL_KEY_ATTR_TP_DST,
+                                    action->encap.tp_dst);
+                }
                 if (!action->encap.no_csum) {
                     nl_msg_put_u8(buf, OVS_TUNNEL_KEY_ATTR_CSUM,
                                   !action->encap.no_csum);

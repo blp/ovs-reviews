@@ -21,10 +21,13 @@ import sys
 
 import six
 
+PARSER_C = 'C'
+PARSER_PY = 'PYTHON'
 try:
     import ovs._json
+    PARSER = PARSER_C
 except ImportError:
-    pass
+    PARSER = PARSER_PY
 
 __pychecker__ = 'no-stringiter'
 
@@ -91,10 +94,9 @@ class Parser(object):
     MAX_HEIGHT = 1000
 
     def __new__(cls, *args, **kwargs):
-        try:
+        if PARSER == PARSER_C:
             return ovs._json.Parser(*args, **kwargs)
-        except NameError:
-            return super(Parser, cls).__new__(cls)
+        return super(Parser, cls).__new__(cls)
 
     def __init__(self, check_trailer=False):
         self.check_trailer = check_trailer
@@ -177,7 +179,7 @@ class Parser(object):
             return False
 
     __number_re = re.compile("(-)?(0|[1-9][0-9]*)"
-            "(?:\.([0-9]+))?(?:[eE]([-+]?[0-9]+))?$")
+            r"(?:\.([0-9]+))?(?:[eE]([-+]?[0-9]+))?$")
 
     def __lex_finish_number(self):
         s = self.buffer
@@ -234,7 +236,7 @@ class Parser(object):
             self.__error("leading zeros not allowed")
         elif re.match("-([^0-9]|$)", s):
             self.__error("'-' must be followed by digit")
-        elif re.match("-?(0|[1-9][0-9]*)\.([^0-9]|$)", s):
+        elif re.match(r"-?(0|[1-9][0-9]*)\.([^0-9]|$)", s):
             self.__error("decimal point must be followed by digit")
         elif re.search("e[-+]?([^0-9]|$)", s):
             self.__error("exponent must contain at least one digit")

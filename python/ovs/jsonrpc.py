@@ -272,7 +272,8 @@ class Connection(object):
                 # data, so we convert it here as soon as possible.
                 if data and not error:
                     try:
-                        data = decoder.decode(data)
+                        if six.PY3 or ovs.json.PARSER == ovs.json.PARSER_PY:
+                            data = decoder.decode(data)
                     except UnicodeError:
                         error = errno.EILSEQ
                 if error:
@@ -298,7 +299,11 @@ class Connection(object):
             else:
                 if self.parser is None:
                     self.parser = ovs.json.Parser()
-                self.input = self.input[self.parser.feed(self.input):]
+                if six.PY3 and ovs.json.PARSER == ovs.json.PARSER_C:
+                    self.input = self.input.encode('utf-8')[
+                        self.parser.feed(self.input):].decode()
+                else:
+                    self.input = self.input[self.parser.feed(self.input):]
                 if self.parser.is_done():
                     msg = self.__process_msg()
                     if msg:
@@ -448,11 +453,14 @@ class Session(object):
             self.rpc.error(EOF)
             self.rpc.close()
             self.rpc = None
-            self.seqno += 1
         elif self.stream is not None:
             self.stream.close()
             self.stream = None
-            self.seqno += 1
+        else:
+            return
+
+        self.seqno += 1
+        self.pick_remote()
 
     def __connect(self):
         self.__disconnect()
@@ -472,6 +480,7 @@ class Session(object):
                 self.reconnect.listening(ovs.timeval.msec())
             else:
                 self.reconnect.connect_failed(ovs.timeval.msec(), error)
+                self.pick_remote()
 
         self.seqno += 1
 
@@ -508,7 +517,6 @@ class Session(object):
             if error != 0:
                 self.reconnect.disconnected(ovs.timeval.msec(), error)
                 self.__disconnect()
-                self.pick_remote()
         elif self.stream is not None:
             self.stream.run()
             error = self.stream.connect()

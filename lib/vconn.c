@@ -306,7 +306,7 @@ vconn_get_status(const struct vconn *vconn)
 
 int
 vconn_open_block(const char *name, uint32_t allowed_versions, uint8_t dscp,
-                 struct vconn **vconnp)
+                 long long int timeout, struct vconn **vconnp)
 {
     struct vconn *vconn;
     int error;
@@ -315,7 +315,7 @@ vconn_open_block(const char *name, uint32_t allowed_versions, uint8_t dscp,
 
     error = vconn_open(name, allowed_versions, dscp, &vconn);
     if (!error) {
-        error = vconn_connect_block(vconn);
+        error = vconn_connect_block(vconn, timeout);
     }
 
     if (error) {
@@ -697,16 +697,28 @@ do_send(struct vconn *vconn, struct ofpbuf *msg)
 }
 
 /* Same as vconn_connect(), except that it waits until the connection on
- * 'vconn' completes or fails.  Thus, it will never return EAGAIN. */
+ * 'vconn' completes or fails, but no more than 'timeout' milliseconds.
+ * Thus, it will never return EAGAIN.  Negative value of 'timeout' means
+ * infinite waiting.*/
 int
-vconn_connect_block(struct vconn *vconn)
+vconn_connect_block(struct vconn *vconn, long long int timeout)
 {
-    int error;
+    long long int deadline = (timeout >= 0
+                              ? time_msec() + timeout
+                              : LLONG_MAX);
 
+    int error;
     while ((error = vconn_connect(vconn)) == EAGAIN) {
+        if (time_msec() > deadline) {
+            error = ETIMEDOUT;
+            break;
+        }
         vconn_run(vconn);
         vconn_run_wait(vconn);
         vconn_connect_wait(vconn);
+        if (deadline != LLONG_MAX) {
+            poll_timer_wait_until(deadline);
+        }
         poll_block();
     }
     ovs_assert(error != EINPROGRESS);
@@ -931,6 +943,46 @@ vconn_transact_multiple_noreply(struct vconn *vconn, struct ovs_list *requests,
     }
 
     *replyp = NULL;
+    return 0;
+}
+
+/* Sends 'requests' (which should be a multipart request) on 'vconn' and waits
+ * for the replies, which are put into 'replies'.  Returns 0 if successful,
+ * otherwise an errno value. */
+int
+vconn_transact_multipart(struct vconn *vconn,
+                         struct ovs_list *requests,
+                         struct ovs_list *replies)
+{
+    struct ofpbuf *rq = ofpbuf_from_list(ovs_list_front(requests));
+    ovs_be32 send_xid = ((struct ofp_header *) rq->data)->xid;
+
+    ovs_list_init(replies);
+
+    /* Send all the requests. */
+    struct ofpbuf *b, *next;
+    LIST_FOR_EACH_SAFE (b, next, list_node, requests) {
+        ovs_list_remove(&b->list_node);
+        int error = vconn_send_block(vconn, b);
+        if (error) {
+            ofpbuf_delete(b);
+        }
+    }
+
+    /* Receive all the replies. */
+    bool more;
+    do {
+        struct ofpbuf *reply;
+        int error = vconn_recv_xid__(vconn, send_xid, &reply, NULL);
+        if (error) {
+            ofpbuf_list_delete(replies);
+            return error;
+        }
+
+        ovs_list_push_back(replies, &reply->list_node);
+        more = ofpmsg_is_stat_reply(reply->data) && ofpmp_more(reply->data);
+    } while (more);
+
     return 0;
 }
 
