@@ -303,9 +303,8 @@ read_file(const char *fn)
     struct log_record reservoir[RESERVOIR_SIZE];
     size_t n_reservoir = 0;
 
-    for (struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
-         ctx.line_start < end;
-         ctx.line_start = ctx.line_end + 1, ctx.ln++) {
+    struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
+    for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
         ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
         if (!ctx.line_end) {
             /* Don't bother with lines that lack a new-line. */
@@ -328,6 +327,8 @@ read_file(const char *fn)
         parse_record(&ctx, rec);
     }
     close(fd);
+
+    printf("selected %zu records out of %d\n", n_reservoir, ctx.ln);
 
     return NULL;
 }
