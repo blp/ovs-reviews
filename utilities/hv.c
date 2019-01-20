@@ -16,6 +16,7 @@
 
 #include <config.h>
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -30,6 +31,11 @@
 #include "process.h"
 #include "random.h"
 #include "util.h"
+
+#include "openvswitch/vlog.h"
+VLOG_DEFINE_THIS_MODULE(hv);
+
+static const char *grep;
 
 struct substring {
     const char *s;
@@ -130,6 +136,25 @@ must_match(struct parse_ctx *ctx, char c)
 }
 
 static bool
+c_isdigit(int c)
+{
+    return c >= '0' && c <= '9';
+}
+
+static bool OVS_UNUSED
+c_isalpha(int c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+static int
+c_tolower(int c)
+{
+    //return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+    return c;
+}
+
+static bool
 get_header_token(struct parse_ctx *ctx, struct substring *token)
 {
     if (!must_match(ctx, ' ')) {
@@ -217,7 +242,7 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
         return false;
     }
     unsigned int pri = 0;
-    while (*ctx->p >= '0' && *ctx->p <= '9') {
+    while (c_isdigit(*ctx->p)) {
         pri = pri * 10 + (*ctx->p++ - '0');
     }
     rec->facility = pri / 8;
@@ -270,6 +295,58 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
     return true;
 }
 
+#if 0
+static int
+compare_strings(const void *a_, const void *b_)
+{
+    const char *const *a = a_;
+    const char *const *b = b_;
+    return strcmp(*a, *b);
+}
+#endif
+
+static void
+split(const struct substring *msg)
+{
+    char *tokens[64];
+    size_t n_tokens = 0;
+
+    char *s = xmemdup0(msg->s, msg->length);
+    char *save_ptr = NULL;
+    for (char *token = strtok_r(s, " \t\r\n", &save_ptr); token;
+         token = strtok_r(NULL, " \t\r\n", &save_ptr)) {
+        char *q = token;
+        for (char *p = token; *p; p++) {
+            if (c_isdigit(*p)) {
+                q = token;
+                *q++ = '_';
+                break;
+            } else {
+                *q++ = c_tolower(*p);
+            }
+        }
+        if (q > token) {
+            tokens[n_tokens++] = xmemdup0(token, q - token);
+            if (n_tokens >= ARRAY_SIZE(tokens)) {
+                break;
+            }
+        }
+    }
+
+    if (n_tokens) {
+        for (size_t i = 0; i < n_tokens; i++) {
+            if (i) {
+                putchar(' ');
+            }
+            fputs(tokens[i], stdout);
+            free(tokens[i]);
+        }
+        putchar('\n');
+    }
+
+    free(s);
+}
+
 static void *
 read_file(const char *fn)
 {
@@ -289,6 +366,7 @@ read_file(const char *fn)
         ovs_fatal(errno, "%s: mmap failed", fn);
     }
     char *end = buffer + size;
+    close(fd);
 
     if (madvise(buffer, size, MADV_WILLNEED) < 0) {
         ovs_fatal(errno, "%s: madvise failed", fn);
@@ -312,6 +390,11 @@ read_file(const char *fn)
         }
         ctx.p = ctx.line_start;
 
+        if (grep && !memmem (ctx.line_start, ctx.line_end - ctx.line_start,
+                             grep, strlen (grep))) {
+            continue;
+        }
+
         /* If this record won't be sampled, don't even bother parsing it. */
         if (n_reservoir >= RESERVOIR_SIZE
             && random_range(ctx.ln) >= RESERVOIR_SIZE) {
@@ -326,11 +409,58 @@ read_file(const char *fn)
 
         parse_record(&ctx, rec);
     }
-    close(fd);
 
-    printf("selected %zu records out of %d\n", n_reservoir, ctx.ln);
+    for (size_t i = 0; i < n_reservoir; i++) {
+        split(&reservoir[i].msg);
+    }
+
+    printf("selected %zu records out of %d\n", n_reservoir, ctx.ln - 1);
 
     return NULL;
+}
+
+static void
+open_target(const char *name)
+{
+    struct stat s;
+    if (stat(name, &s) < 0) {
+        ovs_error(errno, "%s; stat failed", name);
+        return;
+    }
+
+    if (S_ISREG(s.st_mode)) {
+        read_file(name);
+        return;
+    } else if (!S_ISDIR(s.st_mode)) {
+        VLOG_DBG("%s: ignoring special file", name);
+        return;
+    }
+
+    DIR *dir = opendir(name);
+    if (!dir) {
+        ovs_error(errno, "%s: open failed", name);
+        return;
+    }
+
+    for (;;) {
+        errno = 0;
+        struct dirent *de = readdir(dir);
+        if (!de) {
+            if (errno) {
+                ovs_error(errno, "%s: readdir failed", name);
+            }
+            break;
+        }
+
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) {
+            continue;
+        }
+
+        char *name2 = xasprintf("%s/%s", name, de->d_name);
+        open_target(name2);
+        free(name2);
+    }
+    closedir(dir);
 }
 
 int
@@ -339,15 +469,11 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
 
-    for (int i = optind; i < argc; i++) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            ovs_fatal(errno, "fork failed");
-        } else if (!pid) {
-            /* Child. */
-            random_init();
-            read_file(argv[i]);
-            exit(0);
+    if (optind >= argc) {
+        open_target(".");
+    } else {
+        for (int i = optind; i < argc; i++) {
+            open_target(argv[i]);
         }
     }
 
@@ -377,16 +503,7 @@ usage(void)
 usage: %s [TARGET] COMMAND [ARG...]\n\
 \n\
 Common commands:\n\
-  list-commands      List commands supported by the target\n\
-  version            Print version of the target\n\
-  vlog/list          List current logging levels\n\
-  vlog/list-pattern  List logging patterns for each destination.\n\
-  vlog/set [SPEC]\n\
-      Set log levels as detailed in SPEC, which may include:\n\
-      A valid module name (all modules, by default)\n\
-      'syslog', 'console', 'file' (all destinations, by default))\n\
-      'off', 'emer', 'err', 'warn', 'info', or 'dbg' ('dbg', bydefault)\n\
-  vlog/reopen        Make the program reopen its log file\n\
+  hh   List sampled heavy hitters\n\
 Other options:\n\
   -h, --help         Print this helpful information\n\
   -V, --version      Display ovs-appctl version information\n",
@@ -401,6 +518,7 @@ parse_command_line(int argc, char *argv[])
         OPT_START = UCHAR_MAX + 1,
     };
     static const struct option long_options[] = {
+        {"grep", required_argument, NULL, 'g'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0},
@@ -416,6 +534,9 @@ parse_command_line(int argc, char *argv[])
             break;
         }
         switch (option) {
+        case 'g':
+            grep = optarg;
+            break;
 
         case 'h':
             usage();
