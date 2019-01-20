@@ -36,12 +36,27 @@ struct substring {
     size_t length;
 };
 
+static bool
+ss_equals(struct substring a, struct substring b)
+{
+    return a.length == b.length && !memcmp(a.s, b.s, a.length);
+}
+
+static struct substring
+ss_cstr(const char *s)
+{
+    return (struct substring) { .s = s, .length = strlen(s) };
+}
+
 struct log_record {
+    bool valid;                 /* Fully parsed record? */
     int facility;               /* 0...23. */
     int priority;               /* 0...7. */
-    struct substring host;      /* Hostname. */
-    struct substring app;       /* Application. */
-    struct substring id;        /* Message ID. */
+    struct substring timestamp; /* Date and time. */
+    struct substring hostname;  /* Hostname. */
+    struct substring app_name;  /* Application. */
+    struct substring procid;    /* Process ID. */
+    struct substring msgid;     /* Message ID. */
     struct substring sdid;      /* Structured data ID. */
     struct substring comp;      /* From structured data. */
     struct substring subcomp;   /* From structured data. */
@@ -69,6 +84,191 @@ union datum {
 
 static void usage(void);
 static void parse_command_line(int argc, char *argv[]);
+
+struct parse_ctx {
+    const char *fn;
+    int ln;
+
+    const char *line_start;
+    const char *line_end;
+    const char *p;
+};
+
+static void OVS_PRINTF_FORMAT(2, 3)
+warn(const struct parse_ctx *ctx, const char *format, ...)
+{
+    fprintf(stderr, "%s:%d.%td: ",
+            ctx->fn, ctx->ln, ctx->p - ctx->line_start + 1);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+
+    putc('\n', stderr);
+}
+
+static bool
+match(struct parse_ctx *ctx, char c)
+{
+    if (*ctx->p == c) {
+        ctx->p++;
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static bool
+must_match(struct parse_ctx *ctx, char c)
+{
+    bool matched = match(ctx, c);
+    if (!matched) {
+        warn(ctx, "expected '%c'", c);
+    }
+    return matched;
+}
+
+static bool
+get_header_token(struct parse_ctx *ctx, struct substring *token)
+{
+    if (!must_match(ctx, ' ')) {
+        return false;
+    }
+
+    if (*ctx->p == ' ') {
+        warn(ctx, "unexpected space in header");
+        return false;
+    }
+
+    token->s = ctx->p;
+    token->length = 0;
+    while (token->s[token->length] != ' ') {
+        if (token->s[token->length] == '\n') {
+            warn(ctx, "unexpected end of message parsing header");
+            return false;
+        }
+        token->length++;
+    }
+    ctx->p += token->length;
+
+    /* Turn NILVALUE into empty string. */
+    if (token->length == 1 && token->s[0] == '-') {
+        token->length = 0;
+    }
+
+    return true;
+}
+
+static bool
+get_sd_name(struct parse_ctx *ctx, struct substring *dst)
+{
+    dst->s = ctx->p;
+    dst->length = strcspn (dst->s, " =]\"\n");
+    if (dst->length == 0) {
+        warn(ctx, "parse error expecting SDNAME");
+        return false;
+    }
+    ctx->p += dst->length;
+    return true;
+}
+
+static bool
+get_sd_param(struct parse_ctx *ctx, struct log_record *rec)
+{
+    struct substring name;
+    if (!get_sd_name(ctx, &name)) {
+        return false;
+    }
+
+    if (!must_match(ctx, '=') || !must_match(ctx, '"')) {
+        return false;
+    }
+
+    struct substring value;
+    value.s = ctx->p;
+    for (;;) {
+        if (*ctx->p == '\\' && ctx->p[1] != '\n') {
+            ctx->p++;
+        } else if (*ctx->p == '"') {
+            break;
+        } else if (*ctx->p == '\n') {
+            warn(ctx, "unexpected end of line parsing parameter value");
+            return false;
+        }
+        ctx->p++;
+    }
+    value.length = ctx->p - value.s;
+    ctx->p++;                   /* Skip end quote. */
+
+    if (ss_equals(name, ss_cstr("comp"))) {
+        rec->comp = value;
+    } else if (ss_equals(name, ss_cstr("subcomp"))) {
+        rec->subcomp = value;
+    }
+    return true;
+}
+
+static bool
+parse_record(struct parse_ctx *ctx, struct log_record *rec)
+{
+    /* PRI. */
+    if (!must_match(ctx, '<')) {
+        return false;
+    }
+    unsigned int pri = 0;
+    while (*ctx->p >= '0' && *ctx->p <= '9') {
+        pri = pri * 10 + (*ctx->p++ - '0');
+    }
+    rec->facility = pri / 8;
+    rec->priority = pri % 8;
+    if (!must_match(ctx, '>')) {
+        return false;
+    }
+
+    /* VERSION. */
+    if (!must_match(ctx, '1')) {
+        return false;
+    }
+
+    /* Identifiers. */
+    if (!get_header_token(ctx, &rec->timestamp)
+        || !get_header_token(ctx, &rec->hostname)
+        || !get_header_token(ctx, &rec->app_name)
+        || !get_header_token(ctx, &rec->procid)
+        || !get_header_token(ctx, &rec->msgid)) {
+        return false;
+    }
+
+    /* Structured data. */
+    if (!must_match(ctx, ' ')) {
+        return false;
+    }
+    if (match(ctx, '[')) {
+        if (!get_sd_name(ctx, &rec->sdid)) {
+            return false;
+        }
+        while (match(ctx, ' ')) {
+            if (!get_sd_param(ctx, rec)) {
+                return false;
+            }
+        }
+        if (!must_match(ctx, ']')) {
+            return false;
+        }
+    } else if (!match(ctx, '-')) {
+        warn(ctx, "expected '-' or '['");
+        return false;
+    }
+
+    if (!match(ctx, ' ')) {
+        return must_match(ctx, '\n');
+    }
+
+    rec->msg.s = ctx->p;
+    rec->msg.length = ctx->line_end - ctx->p;
+    return true;
+}
 
 static void *
 read_file(const char *fn)
@@ -100,44 +300,32 @@ read_file(const char *fn)
     };
 
     enum { RESERVOIR_SIZE = 10000 };
-    struct field reservoir[RESERVOIR_SIZE];
+    struct log_record reservoir[RESERVOIR_SIZE];
     size_t n_reservoir = 0;
 
-    size_t count = 0;
-    for (const char *p = buffer; p < end; ) {
-        count++;
+    for (struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
+         ctx.line_start < end;
+         ctx.line_start = ctx.line_end + 1, ctx.ln++) {
+        ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
+        if (!ctx.line_end) {
+            /* Don't bother with lines that lack a new-line. */
+            break;
+        }
+        ctx.p = ctx.line_start;
 
-        char *line_end = memchr(p, '\n', end - p);
-        if (!line_end) {
-            line_end = end;
+        /* If this record won't be sampled, don't even bother parsing it. */
+        if (n_reservoir >= RESERVOIR_SIZE
+            && random_range(ctx.ln) >= RESERVOIR_SIZE) {
+            continue;
         }
 
-        size_t line_len = line_end - p;
+        size_t rec_idx = (n_reservoir < RESERVOIR_SIZE
+                          ? n_reservoir++
+                          : random_range(RESERVOIR_SIZE));
+        struct log_record *rec = &reservoir[rec_idx];
+        memset(rec, 0, sizeof *rec);
 
-        enum { MAX_FIELDS = 256 };
-        struct field fields[MAX_FIELDS];
-        int n_fields = 0;
-        for (size_t i = 0; i < line_len; ) {
-            size_t j;
-            for (j = i; j < line_len; j++) {
-                if (p[j] == ',') {
-                    break;
-                }
-            }
-            ovs_assert(n_fields < MAX_FIELDS);
-            fields[n_fields].s = &p[i];
-            fields[n_fields].length = j - i;
-            n_fields++;
-            i = j + 1;
-        }
-
-        if (n_reservoir < RESERVOIR_SIZE) {
-            reservoir[n_reservoir++] = fields[6];
-        } else if (random_range(count) < RESERVOIR_SIZE) {
-            reservoir[random_range(RESERVOIR_SIZE)] = fields[6];
-        }
-
-        p = line_end + 1;
+        parse_record(&ctx, rec);
     }
     close(fd);
 
@@ -169,8 +357,9 @@ main(int argc, char *argv[])
             break;
         }
 
-        printf ("child %ld exited (%s)\n",
-                (long int) pid, process_status_msg (status));
+        char *status_msg = process_status_msg (status);
+        printf ("child %ld exited (%s)\n", (long int) pid, status_msg);
+        free(status_msg);
     }
     if (errno != ECHILD) {
         ovs_fatal(errno, "wait failed");
