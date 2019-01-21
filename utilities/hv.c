@@ -20,13 +20,16 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include "command-line.h"
+#include "openvswitch/dynamic-string.h"
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
@@ -36,6 +39,7 @@
 VLOG_DEFINE_THIS_MODULE(hv);
 
 static const char *grep;
+static int n_processes;
 
 struct substring {
     const char *s;
@@ -52,6 +56,13 @@ static struct substring
 ss_cstr(const char *s)
 {
     return (struct substring) { .s = s, .length = strlen(s) };
+}
+
+static bool OVS_UNUSED
+ss_ends_with(struct substring s, struct substring suffix)
+{
+    return s.length >= suffix.length && !memcmp(&s.s[s.length - suffix.length],
+                                                suffix.s, suffix.length);
 }
 
 struct log_record {
@@ -114,6 +125,43 @@ warn(const struct parse_ctx *ctx, const char *format, ...)
     putc('\n', stderr);
 }
 
+static void OVS_PRINTF_FORMAT(2, 3)
+debug(const struct parse_ctx *ctx, const char *format, ...)
+{
+    if (VLOG_IS_DBG_ENABLED()) {
+        va_list args;
+        va_start(args, format);
+        char *msg = xvasprintf(format, args);
+        va_end(args);
+
+        VLOG_DBG("%s:%d.%td: %s",
+                 ctx->fn, ctx->ln, ctx->p - ctx->line_start + 1, msg);
+        free(msg);
+    }
+}
+
+static bool
+match_spaces(struct parse_ctx *ctx)
+{
+    if (*ctx->p != ' ') {
+        return false;
+    }
+    do {
+        ctx->p++;
+    } while (*ctx->p == ' ');
+    return true;
+}
+
+static bool
+must_match_spaces(struct parse_ctx *ctx)
+{
+    bool matched = match_spaces(ctx);
+    if (!matched) {
+        warn(ctx, "expected ' '");
+    }
+    return matched;
+}
+
 static bool
 match(struct parse_ctx *ctx, char c)
 {
@@ -157,12 +205,7 @@ c_tolower(int c)
 static bool
 get_header_token(struct parse_ctx *ctx, struct substring *token)
 {
-    if (!must_match(ctx, ' ')) {
-        return false;
-    }
-
-    if (*ctx->p == ' ') {
-        warn(ctx, "unexpected space in header");
+    if (!must_match_spaces(ctx)) {
         return false;
     }
 
@@ -266,14 +309,14 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
     }
 
     /* Structured data. */
-    if (!must_match(ctx, ' ')) {
+    if (!must_match_spaces(ctx)) {
         return false;
     }
     if (match(ctx, '[')) {
         if (!get_sd_name(ctx, &rec->sdid)) {
             return false;
         }
-        while (match(ctx, ' ')) {
+        while (match_spaces(ctx)) {
             if (!get_sd_param(ctx, rec)) {
                 return false;
             }
@@ -282,13 +325,11 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
             return false;
         }
     } else if (!match(ctx, '-')) {
-        warn(ctx, "expected '-' or '['");
-        return false;
+        /* Some NSX log files have this problem.  Keep going. */
+        debug(ctx, "expected '-' or '['");
     }
 
-    if (!match(ctx, ' ')) {
-        return must_match(ctx, '\n');
-    }
+    match_spaces(ctx);
 
     rec->msg.s = ctx->p;
     rec->msg.length = ctx->line_end - ctx->p;
@@ -335,41 +376,28 @@ split(const struct substring *msg)
 
     if (n_tokens) {
         for (size_t i = 0; i < n_tokens; i++) {
+#if 0
             if (i) {
                 putchar(' ');
             }
             fputs(tokens[i], stdout);
+#endif
             free(tokens[i]);
         }
-        putchar('\n');
+        //putchar('\n');
     }
 
     free(s);
 }
 
-static void *
-read_file(const char *fn)
+static void
+parse_file(const char *fn, const char *buffer, off_t size)
 {
-    int fd = open(fn, O_RDONLY);
-    if (fd < 0) {
-        ovs_fatal(errno, "%s: open failed", fn);
-    }
+    const char *end = buffer + size;
 
-    struct stat s;
-    if (fstat(fd, &s) < 0) {
-        ovs_fatal(errno, "%s; stat failed", fn);
-    }
-
-    off_t size = s.st_size;
-    char *buffer = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-    if (buffer == MAP_FAILED) {
-        ovs_fatal(errno, "%s: mmap failed", fn);
-    }
-    char *end = buffer + size;
-    close(fd);
-
-    if (madvise(buffer, size, MADV_WILLNEED) < 0) {
-        ovs_fatal(errno, "%s: madvise failed", fn);
+    if (size < 2 || buffer[0] != '<' || !c_isdigit(buffer[1])) {
+        VLOG_DBG("%s: not an RFC 5424 log file", fn);
+        return;
     }
 
     struct field {
@@ -414,9 +442,128 @@ read_file(const char *fn)
         split(&reservoir[i].msg);
     }
 
-    printf("selected %zu records out of %d\n", n_reservoir, ctx.ln - 1);
+    printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
+}
 
-    return NULL;
+static void
+read_gzipped(const char *name, const char *in, size_t in_size)
+{
+    z_stream z = {
+        .next_in = (unsigned char *) in,
+        .avail_in = in_size,
+    };
+    int retval = inflateInit2(&z, 15 + 16);
+    if (retval != Z_OK) {
+        VLOG_WARN("%s: failed to initiate decompression (%s)", name, z.msg);
+        return;
+    }
+
+    char sample[128];
+    z.next_out = (unsigned char *) sample;
+    z.avail_out = sizeof sample;
+    retval = inflate(&z, Z_SYNC_FLUSH);
+    if (retval != Z_OK && retval != Z_STREAM_END) {
+        VLOG_WARN("%s: decompression failed (%s)", name, z.msg);
+        inflateEnd(&z);
+        return;
+    }
+
+    if (sample[0] != '<' || !c_isdigit(sample[1])) {
+        VLOG_DBG("%s: not a gzipped RFC 5424 log file", name);
+        inflateEnd(&z);
+        return;
+    }
+
+    size_t allocated = in_size * 16;
+    char *out = xmalloc(allocated);
+    memcpy(out, sample, z.total_out);
+    for (;;) {
+        if (z.total_out >= allocated) {
+            allocated = allocated * 5 / 4;
+            out = xrealloc(out, allocated);
+            ovs_assert(z.total_out < allocated);
+        }
+        z.next_out = (unsigned char *) &out[z.total_out];
+        z.avail_out = allocated - z.total_out;
+
+        retval = inflate(&z, Z_SYNC_FLUSH);
+        if (retval == Z_STREAM_END) {
+            break;
+        } else if (retval != Z_OK) {
+            VLOG_WARN("%s: decompression failed (%s)", name, z.msg);
+            inflateEnd(&z);
+            free(out);
+            return;
+        }
+    }
+    parse_file(name, out, z.total_out);
+    free(out);
+
+    inflateEnd(&z);
+}
+
+static void
+read_file(const char *fn)
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        ovs_fatal(errno, "fork failed");
+    } else if (pid) {
+        static int n_children;
+        n_children++;
+        while (n_children >= n_processes) {
+            int status;
+            pid = wait(&status);
+            if (pid < 0) {
+                if (errno != ECHILD) {
+                    ovs_fatal(errno, "wait failed");
+                }
+                break;
+            }
+
+            n_children--;
+#if 0
+            char *status_msg = process_status_msg (status);
+            printf ("child %ld exited (%s)\n", (long int) pid, status_msg);
+            free(status_msg);
+#endif
+        }
+
+        return;
+    }
+
+    random_init();
+    int fd = open(fn, O_RDONLY);
+    if (fd < 0) {
+        ovs_fatal(errno, "%s: open failed", fn);
+    }
+
+    struct stat s;
+    if (fstat(fd, &s) < 0) {
+        ovs_fatal(errno, "%s; stat failed", fn);
+    }
+
+    off_t size = s.st_size;
+    char *buffer = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+    if (buffer == MAP_FAILED) {
+        ovs_fatal(errno, "%s: mmap failed", fn);
+    }
+    close(fd);
+
+    if (size > 2 && !memcmp(buffer, "\x1f\x8b", 2)) {
+        read_gzipped(fn, buffer, size);
+    } else {
+        if (madvise(buffer, size, MADV_WILLNEED) < 0) {
+            ovs_fatal(errno, "%s: madvise failed", fn);
+        }
+        parse_file(fn, buffer, size);
+    }
+
+    if (munmap(buffer, size) < 0) {
+        ovs_error(errno, "%s: munmap failed", fn);
+    }
+
+    exit(0);
 }
 
 static void
@@ -429,7 +576,9 @@ open_target(const char *name)
     }
 
     if (S_ISREG(s.st_mode)) {
-        read_file(name);
+        if (s.st_size > 0 && !strstr(name, "metrics")) {
+            read_file(name);
+        }
         return;
     } else if (!S_ISDIR(s.st_mode)) {
         VLOG_DBG("%s: ignoring special file", name);
@@ -463,9 +612,23 @@ open_target(const char *name)
     closedir(dir);
 }
 
+static int
+count_cores(void)
+{
+    cpu_set_t cpus;
+    if (sched_getaffinity(0, sizeof cpus, &cpus) < 0) {
+        ovs_error(errno, "sched_getaffinity failed");
+        return 1;
+    } else {
+        return CPU_COUNT(&cpus);
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
+    n_processes = count_cores();
+
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
 

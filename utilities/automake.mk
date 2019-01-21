@@ -123,7 +123,7 @@ man_MANS += \
 	utilities/ovs-vsctl.8
 
 utilities_hv_SOURCES = utilities/hv.c
-utilities_hv_LDADD = lib/libopenvswitch.la
+utilities_hv_LDADD = lib/libopenvswitch.la -lz
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
 utilities_ovs_appctl_LDADD = lib/libopenvswitch.la
