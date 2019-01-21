@@ -65,6 +65,13 @@ ss_ends_with(struct substring s, struct substring suffix)
                                                 suffix.s, suffix.length);
 }
 
+static bool OVS_UNUSED
+ss_contains(struct substring haystack, struct substring needle)
+{
+    return memmem(haystack.s, haystack.length,
+                  needle.s, needle.length) != NULL;
+}
+
 struct log_record {
     bool valid;                 /* Fully parsed record? */
     int facility;               /* 0...23. */
@@ -408,6 +415,7 @@ parse_file(const char *fn, const char *buffer, off_t size)
     enum { RESERVOIR_SIZE = 10000 };
     struct log_record reservoir[RESERVOIR_SIZE];
     size_t n_reservoir = 0;
+    size_t n_sampled = 0;
 
     struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
     for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
@@ -418,24 +426,23 @@ parse_file(const char *fn, const char *buffer, off_t size)
         }
         ctx.p = ctx.line_start;
 
-        if (grep && !memmem (ctx.line_start, ctx.line_end - ctx.line_start,
-                             grep, strlen (grep))) {
+        struct log_record rec;
+        memset(&rec, 0, sizeof rec);
+
+        parse_record(&ctx, &rec);
+        if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
             continue;
         }
 
-        /* If this record won't be sampled, don't even bother parsing it. */
         if (n_reservoir >= RESERVOIR_SIZE
-            && random_range(ctx.ln) >= RESERVOIR_SIZE) {
+            && random_range(++n_sampled) >= RESERVOIR_SIZE) {
             continue;
         }
 
         size_t rec_idx = (n_reservoir < RESERVOIR_SIZE
                           ? n_reservoir++
                           : random_range(RESERVOIR_SIZE));
-        struct log_record *rec = &reservoir[rec_idx];
-        memset(rec, 0, sizeof *rec);
-
-        parse_record(&ctx, rec);
+        reservoir[rec_idx] = rec;
     }
 
     for (size_t i = 0; i < n_reservoir; i++) {
@@ -503,35 +510,8 @@ read_gzipped(const char *name, const char *in, size_t in_size)
 }
 
 static void
-read_file(const char *fn)
+read_file__(const char *fn)
 {
-    pid_t pid = fork();
-    if (pid < 0) {
-        ovs_fatal(errno, "fork failed");
-    } else if (pid) {
-        static int n_children;
-        n_children++;
-        while (n_children >= n_processes) {
-            int status;
-            pid = wait(&status);
-            if (pid < 0) {
-                if (errno != ECHILD) {
-                    ovs_fatal(errno, "wait failed");
-                }
-                break;
-            }
-
-            n_children--;
-#if 0
-            char *status_msg = process_status_msg (status);
-            printf ("child %ld exited (%s)\n", (long int) pid, status_msg);
-            free(status_msg);
-#endif
-        }
-
-        return;
-    }
-
     random_init();
     int fd = open(fn, O_RDONLY);
     if (fd < 0) {
@@ -562,8 +542,40 @@ read_file(const char *fn)
     if (munmap(buffer, size) < 0) {
         ovs_error(errno, "%s: munmap failed", fn);
     }
+}
 
-    exit(0);
+static void
+read_file(const char *fn)
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        ovs_fatal(errno, "fork failed");
+    } else if (pid) {
+        static int n_children;
+        n_children++;
+        while (n_children >= n_processes) {
+            int status;
+            pid = wait(&status);
+            if (pid < 0) {
+                if (errno != ECHILD) {
+                    ovs_fatal(errno, "wait failed");
+                }
+                break;
+            }
+
+            n_children--;
+#if 0
+            char *status_msg = process_status_msg (status);
+            printf ("child %ld exited (%s)\n", (long int) pid, status_msg);
+            free(status_msg);
+#endif
+        }
+
+        return;
+    } else {
+        read_file__(fn);
+        exit(0);
+    }
 }
 
 static void
