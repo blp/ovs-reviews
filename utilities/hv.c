@@ -77,6 +77,7 @@ struct log_record {
     int facility;               /* 0...23. */
     int priority;               /* 0...7. */
     struct substring timestamp; /* Date and time. */
+    double when;                /* Seconds since the epoch. */
     struct substring hostname;  /* Hostname. */
     struct substring app_name;  /* Application. */
     struct substring procid;    /* Process ID. */
@@ -202,13 +203,6 @@ c_isalpha(int c)
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
-static int
-c_tolower(int c)
-{
-    //return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
-    return c;
-}
-
 static bool
 get_header_token(struct parse_ctx *ctx, struct substring *token)
 {
@@ -285,6 +279,117 @@ get_sd_param(struct parse_ctx *ctx, struct log_record *rec)
 }
 
 static bool
+matches_template(const char *s, const char *template)
+{
+    size_t i;
+    for (i = 0; template[i]; i++) {
+        if (!(template[i] == '#' ? c_isdigit(s[i]) : s[i] == template[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int
+atoi2(const char *s)
+{
+    int d1 = s[0] - '0';
+    int d2 = s[1] - '0';
+    return d1 * 10 + d2;
+}
+
+static int
+atoi4(const char *s)
+{
+    int d1 = s[0] - '0';
+    int d2 = s[1] - '0';
+    int d3 = s[2] - '0';
+    int d4 = s[3] - '0';
+    return d1 * 1000 + d2 * 100 + d3 * 10 + d4;
+}
+
+static bool
+is_leap_year (int y)
+{
+  return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+}
+
+/* Expects y >= 1900, 1 <= m <= 12, 1 <= d <= 31. */
+static int
+ymd_to_julian(int y, int m, int d)
+{
+    return (365 * (y - 1)
+            + (y - 1) / 4
+            - (y - 1) / 100
+            + (y - 1) / 400
+            + (367 * m - 362) / 12
+            + (m <= 2 ? 0 : (m >= 2 && is_leap_year (y) ? -1 : -2))
+            + d);
+}
+
+static int
+epoch(void)
+{
+    return ymd_to_julian(1970, 1, 1);
+}
+
+static double
+parse_timestamp(const char *s, size_t len)
+{
+    static const char template[] = "####-##-##T##:##:##";
+    if (len < strlen(template + 1) || !matches_template(s, template)) {
+        return -1;
+    }
+
+    int tz_ofs = strlen(template);
+    int numerator = 0;
+    int denominator = 1;
+    if (s[tz_ofs] == '.') {
+        for (tz_ofs++; tz_ofs < len; tz_ofs++) {
+            int c = s[tz_ofs];
+            if (!c_isdigit(c) || denominator > INT_MAX / 10) {
+                break;
+            }
+            numerator = numerator * 10 + (c - '0');
+            denominator *= 10;
+        }
+    }
+
+    int gmtoff;
+    if (tz_ofs >= len) {
+        return -1;
+    }
+    if (len - tz_ofs == 1 && s[tz_ofs] == 'Z') {
+        gmtoff = 0;
+    } else if (len - tz_ofs == 6
+               && (s[tz_ofs] == '+' || s[tz_ofs] == '-')
+               && matches_template(&s[tz_ofs + 1], "##:##")) {
+        int h_off = atoi2(&s[tz_ofs + 1]);
+        int m_off = atoi2(&s[tz_ofs + 4]);
+        gmtoff = h_off * 60 + m_off;
+        if (s[tz_ofs] == '-') {
+            gmtoff = -gmtoff;
+        }
+    } else {
+        return -1;
+    }
+
+    int y = atoi4(s);
+    int m = atoi2(s + 5);
+    int d = atoi2(s + 5);
+    int H = atoi2(s + 11);
+    int M = atoi2(s + 14);
+    int S = atoi2(s + 17);
+    int date = ymd_to_julian(y, m, d) - epoch();
+    int time = H * 3600 + M * 60 + S - gmtoff * 60;
+    double t = date * 86400 + time;
+    if (numerator) {
+        t += (double) numerator / denominator;
+    }
+    return t;
+}
+
+static bool
 parse_record(struct parse_ctx *ctx, struct log_record *rec)
 {
     /* PRI. */
@@ -314,6 +419,8 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
         || !get_header_token(ctx, &rec->msgid)) {
         return false;
     }
+
+    rec->when = parse_timestamp(rec->timestamp.s, rec->timestamp.length);
 
     /* Structured data. */
     if (!must_match_spaces(ctx)) {
@@ -353,6 +460,17 @@ compare_strings(const void *a_, const void *b_)
 }
 #endif
 
+static bool
+has_digit(const char *s)
+{
+    for (; *s; s++) {
+        if (c_isdigit(*s)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 split(const struct substring *msg)
 {
@@ -363,21 +481,9 @@ split(const struct substring *msg)
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, " \t\r\n", &save_ptr); token;
          token = strtok_r(NULL, " \t\r\n", &save_ptr)) {
-        char *q = token;
-        for (char *p = token; *p; p++) {
-            if (c_isdigit(*p)) {
-                q = token;
-                *q++ = '_';
-                break;
-            } else {
-                *q++ = c_tolower(*p);
-            }
-        }
-        if (q > token) {
-            tokens[n_tokens++] = xmemdup0(token, q - token);
-            if (n_tokens >= ARRAY_SIZE(tokens)) {
-                break;
-            }
+        tokens[n_tokens++] = has_digit(token) ? "_" : token;
+        if (n_tokens >= ARRAY_SIZE(tokens)) {
+            break;
         }
     }
 
@@ -389,7 +495,6 @@ split(const struct substring *msg)
             }
             fputs(tokens[i], stdout);
 #endif
-            free(tokens[i]);
         }
         //putchar('\n');
     }
@@ -449,7 +554,7 @@ parse_file(const char *fn, const char *buffer, off_t size)
         split(&reservoir[i].msg);
     }
 
-    printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
+    //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
 static void
