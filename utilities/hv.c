@@ -74,6 +74,7 @@ ss_contains(struct substring haystack, struct substring needle)
 
 struct log_record {
     bool valid;                 /* Fully parsed record? */
+    struct substring line;      /* Full log line. */
     int facility;               /* 0...23. */
     int priority;               /* 0...7. */
     struct substring timestamp; /* Date and time. */
@@ -471,7 +472,7 @@ has_digit(const char *s)
     return false;
 }
 
-static void
+static void OVS_UNUSED
 split(const struct substring *msg)
 {
     char *tokens[64];
@@ -500,6 +501,14 @@ split(const struct substring *msg)
     }
 
     free(s);
+}
+
+static int
+compare_log_records(const void *a_, const void *b_)
+{
+    const struct log_record *a = a_;
+    const struct log_record *b = b_;
+    return a->when < b->when ? -1 : a->when > b->when;
 }
 
 static void
@@ -533,6 +542,8 @@ parse_file(const char *fn, const char *buffer, off_t size)
 
         struct log_record rec;
         memset(&rec, 0, sizeof rec);
+        rec.line.s = ctx.line_start;
+        rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
         if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
@@ -550,8 +561,10 @@ parse_file(const char *fn, const char *buffer, off_t size)
         reservoir[rec_idx] = rec;
     }
 
+    qsort(reservoir, n_reservoir, sizeof *reservoir, compare_log_records);
     for (size_t i = 0; i < n_reservoir; i++) {
-        split(&reservoir[i].msg);
+        fwrite(reservoir[i].line.s, reservoir[i].line.length, 1, stdout);
+        putchar('\n');
     }
 
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
