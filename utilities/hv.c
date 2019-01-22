@@ -30,16 +30,29 @@
 
 #include "command-line.h"
 #include "openvswitch/dynamic-string.h"
+#include "openvswitch/poll-loop.h"
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
+#include "socket-util.h"
 #include "util.h"
 
 #include "openvswitch/vlog.h"
 VLOG_DEFINE_THIS_MODULE(hv);
 
+struct child_process {
+    struct process *process;
+    int pipefd;
+    struct ds output;
+};
+static struct child_process *children;
+static int n_children;
+static int max_children;
+
+static struct ds *outputs;
+static size_t n_outputs, allocated_outputs;
+
 static const char *grep;
-static int n_processes;
 
 struct substring {
     const char *s;
@@ -511,6 +524,34 @@ compare_log_records(const void *a_, const void *b_)
     return a->when < b->when ? -1 : a->when > b->when;
 }
 
+struct state {
+    struct log_record *reservoir;
+    int allocated;
+    int n;
+    int population;
+};
+
+static void
+state_init(struct state *state)
+{
+    state->allocated = 10000;
+    state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
+    state->n = 0;
+    state->population = 0;
+}
+
+static void
+state_add(struct state *state, const struct log_record *rec)
+{
+    size_t idx = (state->n < state->allocated
+                  ? state->n++
+                  : random_range(state->population + 1));
+    if (idx < state->allocated) {
+        state->reservoir[idx] = *rec;
+    }
+    state->population++;
+}
+
 static void
 parse_file(const char *fn, const char *buffer, off_t size)
 {
@@ -521,15 +562,8 @@ parse_file(const char *fn, const char *buffer, off_t size)
         return;
     }
 
-    struct field {
-        const char *s;
-        size_t length;
-    };
-
-    enum { RESERVOIR_SIZE = 10000 };
-    struct log_record reservoir[RESERVOIR_SIZE];
-    size_t n_reservoir = 0;
-    size_t n_sampled = 0;
+    struct state state;
+    state_init(&state);
 
     struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
     for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
@@ -550,20 +584,14 @@ parse_file(const char *fn, const char *buffer, off_t size)
             continue;
         }
 
-        if (n_reservoir >= RESERVOIR_SIZE
-            && random_range(++n_sampled) >= RESERVOIR_SIZE) {
-            continue;
-        }
-
-        size_t rec_idx = (n_reservoir < RESERVOIR_SIZE
-                          ? n_reservoir++
-                          : random_range(RESERVOIR_SIZE));
-        reservoir[rec_idx] = rec;
+        state_add(&state, &rec);
     }
 
-    qsort(reservoir, n_reservoir, sizeof *reservoir, compare_log_records);
-    for (size_t i = 0; i < n_reservoir; i++) {
-        fwrite(reservoir[i].line.s, reservoir[i].line.length, 1, stdout);
+    qsort(state.reservoir, state.n, sizeof *state.reservoir,
+          compare_log_records);
+    for (size_t i = 0; i < state.n; i++) {
+        fwrite(state.reservoir[i].line.s, state.reservoir[i].line.length,
+               1, stdout);
         putchar('\n');
     }
 
@@ -663,37 +691,104 @@ read_file__(const char *fn)
 }
 
 static void
-read_file(const char *fn)
+wait_children(int limit)
 {
-    pid_t pid = fork();
-    if (pid < 0) {
-        ovs_fatal(errno, "fork failed");
-    } else if (pid) {
-        static int n_children;
-        n_children++;
-        while (n_children >= n_processes) {
-            int status;
-            pid = wait(&status);
-            if (pid < 0) {
-                if (errno != ECHILD) {
-                    ovs_fatal(errno, "wait failed");
+    do {
+        process_run();
+
+        for (size_t i = 0; i < n_children; i++) {
+            struct child_process *cp = &children[i];
+
+            if (cp->pipefd >= 0) {
+                struct ds *output = &cp->output;
+                for (;;) {
+                    if (output->allocated <= output->length) {
+                        ds_reserve(output, output->allocated + 4096);
+                    }
+                    int retval = read(cp->pipefd,
+                                      &output->string[output->length],
+                                      output->allocated - output->length);
+                    if (retval > 0) {
+                        output->length += retval;
+                    } else {
+                        if (!retval) {
+                            close(cp->pipefd);
+                            cp->pipefd = -1;
+                        } else if (errno != EAGAIN) {
+                            VLOG_WARN("read from child failed (%s)",
+                                      ovs_strerror(errno));
+                        }
+                        break;
+                    }
                 }
-                break;
             }
 
-            n_children--;
-#if 0
-            char *status_msg = process_status_msg (status);
-            printf ("child %ld exited (%s)\n", (long int) pid, status_msg);
-            free(status_msg);
-#endif
+            if (process_exited(cp->process)) {
+                printf("\b \b");
+                fflush(stdout);
+                if (n_outputs >= allocated_outputs) {
+                    outputs = x2nrealloc(outputs, &allocated_outputs,
+                                         sizeof *outputs);
+                }
+                outputs[n_outputs++] = cp->output;
+
+                process_destroy(cp->process);
+                if (cp->pipefd >= 0) {
+                    close(cp->pipefd);
+                }
+                children[i] = children[--n_children];
+                i--;
+                continue;
+            }
+
+            process_wait(cp->process);
+            if (cp->pipefd >= 0) {
+                poll_fd_wait(cp->pipefd, POLLIN);
+            }
         }
 
-        return;
-    } else {
+        if (n_children < limit) {
+            poll_immediate_wake();
+        }
+        poll_block();
+    } while (n_children >= limit);
+}
+
+static void
+read_file(const char *fn)
+{
+    wait_children(max_children);
+
+    putchar('+');
+    fflush(stdout);
+    int fds[2];
+    if (pipe(fds) < 0) {
+        ovs_fatal(errno, "pipe failed");
+    }
+
+    struct process *process;
+    pid_t pid = process_fork(&process);
+    if (pid < 0) {
+        ovs_fatal(errno, "fork failed");
+    } else if (!pid) {
+        close(fds[0]);
+        dup2(fds[1], 1);
+        close(fds[1]);
+
+        for (size_t i = 0; i < n_children; i++) {
+            close(children[i].pipefd);
+        }
         read_file__(fn);
         exit(0);
     }
+
+    xset_nonblocking(fds[0]);
+    close(fds[1]);
+
+    struct child_process *cp = &children[n_children++];
+    cp->process = process;
+    cp->pipefd = fds[0];
+    ds_init(&cp->output);
 }
 
 static void
@@ -754,10 +849,66 @@ count_cores(void)
     }
 }
 
+static void
+parse_lines(const char *name, const char *buffer, size_t length,
+            struct state *state)
+{
+    const char *end = buffer + length;
+    struct parse_ctx ctx = { .fn = name, .ln = 1, .line_start = buffer };
+    for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
+        ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
+        if (!ctx.line_end) {
+            /* Don't bother with lines that lack a new-line. */
+            break;
+        }
+        ctx.p = ctx.line_start;
+
+        struct log_record rec;
+        memset(&rec, 0, sizeof rec);
+        rec.line.s = ctx.line_start;
+        rec.line.length = ctx.line_end - ctx.line_start;
+
+        parse_record(&ctx, &rec);
+        if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
+            continue;
+        }
+
+        state_add(state, &rec);
+    }
+}
+
+static void
+parse_results(void)
+{
+    struct state state;
+    state_init(&state);
+
+    printf("%s:%d\n", __FILE__, __LINE__);
+    for (size_t i = 0; i < n_outputs; i++) {
+        parse_lines("<child process>", outputs[i].string, outputs[i].length,
+                    &state);
+    }
+    printf("%s:%d\n", __FILE__, __LINE__);
+
+    qsort(state.reservoir, state.n, sizeof *state.reservoir,
+          compare_log_records);
+    printf("%s:%d\n", __FILE__, __LINE__);
+#if 0
+    for (size_t i = 0; i < state.n; i++) {
+        fwrite(state.reservoir[i].line.s, state.reservoir[i].line.length,
+               1, stdout);
+        putchar('\n');
+    }
+#endif
+
+    //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
+}
+
 int
 main(int argc, char *argv[])
 {
-    n_processes = count_cores();
+    max_children = count_cores() * 2;
+    children = xmalloc(max_children * sizeof *children);
 
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
@@ -770,22 +921,9 @@ main(int argc, char *argv[])
         }
     }
 
-    for (;;) {
-        int status;
-        pid_t pid = wait(&status);
-        if (pid < 0) {
-            break;
-        }
+    wait_children(1);
 
-        char *status_msg = process_status_msg (status);
-        printf ("child %ld exited (%s)\n", (long int) pid, status_msg);
-        free(status_msg);
-    }
-    if (errno != ECHILD) {
-        ovs_fatal(errno, "wait failed");
-    }
-
-    pthread_exit(NULL);
+    parse_results();
 }
 
 static void

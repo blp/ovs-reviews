@@ -40,6 +40,7 @@
 VLOG_DEFINE_THIS_MODULE(process);
 
 COVERAGE_DEFINE(process_start);
+COVERAGE_DEFINE(process_fork);
 
 #ifdef __linux__
 #define LINUX 1
@@ -285,6 +286,38 @@ process_start(char **argv, struct process **pp)
 #else
     *pp = NULL;
     return ENOSYS;
+#endif
+}
+
+pid_t
+process_fork(struct process **pp)
+{
+#ifndef _WIN32
+    assert_single_threaded();
+
+    *pp = NULL;
+    COVERAGE_INC(process_fork);
+    process_init();
+
+    sigset_t prev_mask;
+    fatal_signal_block(&prev_mask);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        VLOG_WARN("fork failed: %s", ovs_strerror(errno));
+    } else if (pid) {
+        /* Running in parent process. */
+        *pp = process_register(program_name, pid);
+    } else {
+        /* Running in child process. */
+        fatal_signal_fork();
+    }
+    xpthread_sigmask(SIG_SETMASK, &prev_mask, NULL);
+    return pid;
+#else
+    *pp = NULL;
+    errno = ENOSYS;
+    return -1;
 #endif
 }
 
