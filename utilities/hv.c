@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <math.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -57,6 +58,10 @@ static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&complete_tasks);
 
 static const char *grep;
+static unsigned int priorities = 0xff;
+static unsigned int facilities = (1u << 24) - 1;
+static const char *component;
+static const char *subcomponent;
 
 struct substring {
     const char *s;
@@ -407,6 +412,22 @@ parse_timestamp(const char *s, size_t len)
     return t;
 }
 
+static void
+format_timestamp(double t, struct ds *s)
+{
+    time_t time = t;
+    struct tm tm;
+    if (gmtime_r(&time, &tm) != &tm) {
+        ds_put_format(s, "<error>");
+        return;
+    }
+
+    ds_put_format(s, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec,
+                  (int) ((t - floor(t)) * 1000 + .5));
+}
+
 static bool
 parse_record(struct parse_ctx *ctx, struct log_record *rec)
 {
@@ -465,6 +486,9 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
 
     rec->msg.s = ctx->p;
     rec->msg.length = ctx->line_end - ctx->p;
+
+    rec->valid = true;
+
     return true;
 }
 
@@ -538,7 +562,7 @@ struct state {
 static void
 state_init(struct state *state)
 {
-    state->allocated = 10000;
+    state->allocated = 100;
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
@@ -584,6 +608,18 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
+        if (!(priorities & (1u << rec.priority))) {
+            continue;
+        }
+        if (!(facilities & (1u << rec.facility))) {
+            continue;
+        }
+        if (component && !ss_contains(rec.comp, ss_cstr(component))) {
+            continue;
+        }
+        if (subcomponent && !ss_contains(rec.subcomp, ss_cstr(subcomponent))) {
+            continue;
+        }
         if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
             continue;
         }
@@ -794,32 +830,103 @@ parse_lines(const char *name, const char *buffer, size_t length,
     }
 }
 
+static const char *
+priority_to_string(int priority)
+{
+    const char *levels[] = {
+        [0] = "EMER",
+        [1] = "ALER",
+        [2] = "CRIT",
+        [3] = "ERR ",
+        [4] = "WARN",
+        [5] = "NOTI",
+        [6] = "INFO",
+        [7] = "DBG ",
+    };
+
+    return (priority >= 0 && priority < ARRAY_SIZE(levels)
+            ? levels[priority]
+            : "****");
+}
+
+static const char *
+facility_to_string(int facility)
+{
+    const char *facility_strings[] = {
+        [0] = "kern",
+        [1] = "user",
+        [2] = "mail",
+        [3] = "sys ",
+        [4] = "auth",
+        [5] = "log ",
+        [6] = "lpd ",
+        [7] = "news",
+        [8] = "uucp",
+        [9] = "clck",
+        [10] = "auth",
+        [11] = "ftp ",
+        [12] = "ntp ",
+        [13] = "audt",
+        [14] = "alrt",
+        [15] = "clck",
+        [16] = "lcl0",
+        [17] = "lcl1",
+        [18] = "lcl2",
+        [19] = "lcl3",
+        [20] = "lcl4",
+        [21] = "lcl5",
+        [22] = "lcl6",
+        [23] = "lcl7",
+    };
+
+    return (facility >= 0 && facility < ARRAY_SIZE(facility_strings)
+            ? facility_strings[facility]
+            : "****");
+}
+
+static void
+put_substring(struct ds *dst, const struct substring *src)
+{
+    ds_put_char(dst, ' ');
+    if (src->length) {
+        ds_put_buffer(dst, src->s, src->length);
+    } else {
+        ds_put_char(dst, '-');
+    }
+}
+
 static void
 parse_results(void)
 {
     struct state state;
     state_init(&state);
 
-    printf("%s:%d\n", __FILE__, __LINE__);
     struct task *task;
     LIST_FOR_EACH (task, list_node, &complete_tasks) {
         parse_lines("<child process>", task->output.string,
                     task->output.length, &state);
     }
-    printf("%s:%d\n", __FILE__, __LINE__);
 
-#if 0
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
-    printf("%s:%d\n", __FILE__, __LINE__);
-#if 0
     for (size_t i = 0; i < state.n; i++) {
-        fwrite(state.reservoir[i].line.s, state.reservoir[i].line.length,
-               1, stdout);
-        putchar('\n');
+        const struct log_record *rec = &state.reservoir[i];
+        if (!rec->valid) {
+            fwrite(rec->line.s, rec->line.length, 1, stdout);
+            putchar('\n');
+            continue;
+        }
+
+        struct ds s = DS_EMPTY_INITIALIZER;
+        format_timestamp(rec->when, &s);
+        ds_put_format(&s, " %s %s", priority_to_string(rec->priority),
+                      facility_to_string(rec->facility));
+        put_substring(&s, &rec->app_name);
+        put_substring(&s, &rec->comp);
+        put_substring(&s, &rec->subcomp);
+        puts(ds_cstr(&s));
+        ds_destroy(&s);
     }
-#endif
-#endif
     free(state.reservoir);
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
@@ -901,6 +1008,79 @@ Other options:\n\
     exit(EXIT_SUCCESS);
 }
 
+static int
+level_from_string(const char *s)
+{
+    const char *levels[] = {
+        [0] = "emergency",
+        [1] = "alert",
+        [2] = "critical",
+        [3] = "error",
+        [4] = "warning",
+        [5] = "notice",
+        [6] = "informational",
+        [7] = "debug"
+    };
+
+    int s_len = strcspn(s, "-+");
+    for (size_t i = 0; i < ARRAY_SIZE(levels); i++) {
+        if (!strncmp(s, levels[i], s_len)) {
+            return i;
+        }
+    }
+    ovs_fatal(0, "%.*s: unknown priority", s_len, s);
+}
+
+static void
+parse_priorities(char *s)
+{
+    priorities = 0;
+
+    char *save_ptr = NULL;
+    for (char *token = strtok_r(s, ", ", &save_ptr); token;
+         token = strtok_r(NULL, ", ", &save_ptr)) {
+        int level = level_from_string(s);
+        if (strchr(s, '+')) {
+            priorities |= (1u << (level + 1)) - 1;
+        } else if (strchr(s, '-')) {
+            priorities |= ((1u << level) - 1) ^ 0xff;
+        } else {
+            priorities |= 1u << level;
+        }
+    }
+}
+
+static int
+facility_from_string(const char *s)
+{
+    for (int i = 0; i < 24; i++) {
+        if (!strcmp(s, facility_to_string(i))) {
+            return i;
+        }
+    }
+    ovs_fatal(0, "%s: unknown facility", s);
+
+}
+
+static void
+parse_facilities(char *s)
+{
+    unsigned int xor = 0;
+    if (*s == '^' || *s == '!') {
+        s++;
+        xor = (1u << 24) - 1;
+    }
+
+    facilities = 0;
+
+    char *save_ptr = NULL;
+    for (char *token = strtok_r(s, ", ", &save_ptr); token;
+         token = strtok_r(NULL, ", ", &save_ptr)) {
+        facilities |= 1u << facility_from_string(s);
+    }
+    facilities ^= xor;
+}
+
 static void
 parse_command_line(int argc, char *argv[])
 {
@@ -909,6 +1089,10 @@ parse_command_line(int argc, char *argv[])
     };
     static const struct option long_options[] = {
         {"grep", required_argument, NULL, 'g'},
+        {"priorities", required_argument, NULL, 'p'},
+        {"facilities", required_argument, NULL, 'f'},
+        {"component", required_argument, NULL, 'c'},
+        {"subcomponent", required_argument, NULL, 's'},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0},
@@ -926,6 +1110,22 @@ parse_command_line(int argc, char *argv[])
         switch (option) {
         case 'g':
             grep = optarg;
+            break;
+
+        case 'p':
+            parse_priorities(optarg);
+            break;
+
+        case 'f':
+            parse_facilities(optarg);
+            break;
+
+        case 'c':
+            component = optarg;
+            break;
+
+        case 's':
+            subcomponent = optarg;
             break;
 
         case 'h':
