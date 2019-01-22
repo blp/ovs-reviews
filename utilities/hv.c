@@ -63,6 +63,9 @@ static unsigned int facilities = (1u << 24) - 1;
 static const char *component;
 static const char *subcomponent;
 
+static unsigned long long int total_bytes;
+static unsigned long long int total_decompressed;
+
 struct substring {
     const char *s;
     size_t length;
@@ -638,6 +641,7 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
 #endif
     free(state.reservoir);
 
+    total_bytes += size;
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
@@ -696,6 +700,7 @@ read_gzipped(const char *name, const char *in, size_t in_size,
     parse_file(name, out, z.total_out, output);
     free(out);
 
+    total_decompressed += z.total_out;
     inflateEnd(&z);
 }
 
@@ -990,6 +995,10 @@ main(int argc, char *argv[])
     free(queued_tasks);
 
     parse_results();
+
+    printf("parsed %.1f MB of logs\n", total_bytes / 1024.0 / 1024.0);
+    printf("decompressed %.1f MB of gzipped data\n",
+           total_decompressed / 1024.0 / 1024.0);
 }
 
 static void
