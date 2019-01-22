@@ -591,12 +591,13 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
 
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
-#if 0
+#if 1
     for (size_t i = 0; i < state.n; i++) {
         ds_put_buffer(output, state.reservoir[i].line.s,
                       state.reservoir[i].line.length);
         ds_put_char(output, '\n');
     }
+    free(state.reservoir);
 #endif
 
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
