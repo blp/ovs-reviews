@@ -55,9 +55,6 @@ static struct ovs_list running_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&running_tasks);
 static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&complete_tasks);
-static pthread_cond_t task_cond;
-
-static int max_tasks;
 
 static const char *grep;
 
@@ -702,35 +699,6 @@ read_file__(const char *fn, struct ds *output)
 }
 
 static void
-wait_tasks(int limit)
-{
-    ovs_mutex_lock(&task_lock);
-    for (;;) {
-        size_t n_running_tasks = ovs_list_size(&running_tasks);
-        if (n_running_tasks < limit) {
-            break;
-        }
-        ovs_mutex_cond_wait(&task_cond, &task_lock);
-    }
-    ovs_mutex_unlock(&task_lock);
-}
-
-static void *
-read_file_thread(void *task_)
-{
-    struct task *task = task_;
-    read_file__(task->filename, &task->output);
-
-    ovs_mutex_lock(&task_lock);
-    ovs_list_remove(&task->list_node);
-    ovs_list_push_back(&complete_tasks, &task->list_node);
-    xpthread_cond_signal(&task_cond);
-    ovs_mutex_unlock(&task_lock);
-
-    return NULL;
-}
-
-static void
 open_target(const char *name)
 {
     struct stat s;
@@ -866,14 +834,33 @@ compare_tasks(const void *a_, const void *b_)
     return a->size < b->size ? -1 : a->size > b->size;
 }
 
+static void *
+task_thread(void *unused OVS_UNUSED)
+{
+    for (;;) {
+        ovs_mutex_lock(&task_lock);
+        struct task *task = (n_queued_tasks
+                             ? queued_tasks[--n_queued_tasks]
+                             : NULL);
+        ovs_mutex_unlock(&task_lock);
+
+        if (!task) {
+            return NULL;
+        }
+
+        read_file__(task->filename, &task->output);
+
+        ovs_mutex_lock(&task_lock);
+        ovs_list_push_back(&complete_tasks, &task->list_node);
+        ovs_mutex_unlock(&task_lock);
+    }
+}
+
 int
 main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
-
-    max_tasks = count_cores() * 4;
-    xpthread_cond_init(&task_cond, NULL);
 
     if (optind >= argc) {
         open_target(".");
@@ -882,22 +869,17 @@ main(int argc, char *argv[])
             open_target(argv[i]);
         }
     }
-
-    /* Execute the tasks from biggest to smallest. */
     qsort(queued_tasks, n_queued_tasks, sizeof *queued_tasks, compare_tasks);
-    while (n_queued_tasks) {
-        wait_tasks(max_tasks);
 
-        struct task *task = queued_tasks[--n_queued_tasks];
-
-        ovs_mutex_lock(&task_lock);
-        ovs_list_push_back(&running_tasks, &task->list_node);
-        ovs_mutex_unlock(&task_lock);
-
-        ovs_thread_create("read", read_file_thread, task);
+    int cores = count_cores();
+    int n_threads = MIN(4 * cores, n_queued_tasks);
+    pthread_t *threads = xmalloc(n_threads * sizeof *threads);
+    for (int i = 0; i < n_threads; i++) {
+        threads[i] = ovs_thread_create("read", task_thread, NULL);
     }
-    wait_tasks(1);
-
+    for (int i = 0; i < n_threads; i++) {
+        xpthread_join(threads[i], NULL);
+    }
     free(queued_tasks);
 
     parse_results();
