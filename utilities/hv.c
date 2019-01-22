@@ -597,8 +597,8 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
                       state.reservoir[i].line.length);
         ds_put_char(output, '\n');
     }
-    free(state.reservoir);
 #endif
+    free(state.reservoir);
 
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
@@ -853,7 +853,7 @@ parse_results(void)
     }
 #endif
 #endif
-    
+    free(state.reservoir);
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
@@ -863,7 +863,7 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
 
-    max_tasks = count_cores() * 2;
+    max_tasks = count_cores() * 3;
     xpthread_cond_init(&task_cond, NULL);
 
     if (optind >= argc) {
