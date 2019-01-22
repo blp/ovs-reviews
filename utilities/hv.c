@@ -34,23 +34,26 @@
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
+#include "seq.h"
 #include "socket-util.h"
 #include "util.h"
 
 #include "openvswitch/vlog.h"
 VLOG_DEFINE_THIS_MODULE(hv);
 
-struct child_process {
-    struct process *process;
-    int pipefd;
+struct task {
+    struct ovs_list list_node;
+    char *filename;
     struct ds output;
 };
-static struct child_process *children;
-static int n_children;
-static int max_children;
+static struct ovs_mutex task_lock = OVS_MUTEX_INITIALIZER;
+static struct ovs_list running_tasks OVS_GUARDED_BY(task_lock)
+    = OVS_LIST_INITIALIZER(&running_tasks);
+static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
+    = OVS_LIST_INITIALIZER(&complete_tasks);
+static struct seq *task_seq;
 
-static struct ds *outputs;
-static size_t n_outputs, allocated_outputs;
+static int max_tasks;
 
 static const char *grep;
 
@@ -553,7 +556,7 @@ state_add(struct state *state, const struct log_record *rec)
 }
 
 static void
-parse_file(const char *fn, const char *buffer, off_t size)
+parse_file(const char *fn, const char *buffer, off_t size, struct ds *output)
 {
     const char *end = buffer + size;
 
@@ -590,16 +593,17 @@ parse_file(const char *fn, const char *buffer, off_t size)
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
     for (size_t i = 0; i < state.n; i++) {
-        fwrite(state.reservoir[i].line.s, state.reservoir[i].line.length,
-               1, stdout);
-        putchar('\n');
+        ds_put_buffer(output, state.reservoir[i].line.s,
+                      state.reservoir[i].line.length);
+        ds_put_char(output, '\n');
     }
 
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
 static void
-read_gzipped(const char *name, const char *in, size_t in_size)
+read_gzipped(const char *name, const char *in, size_t in_size,
+             struct ds *output)
 {
     z_stream z = {
         .next_in = (unsigned char *) in,
@@ -649,14 +653,14 @@ read_gzipped(const char *name, const char *in, size_t in_size)
             return;
         }
     }
-    parse_file(name, out, z.total_out);
+    parse_file(name, out, z.total_out, output);
     free(out);
 
     inflateEnd(&z);
 }
 
 static void
-read_file__(const char *fn)
+read_file__(const char *fn, struct ds *output)
 {
     random_init();
     int fd = open(fn, O_RDONLY);
@@ -677,12 +681,12 @@ read_file__(const char *fn)
     close(fd);
 
     if (size > 2 && !memcmp(buffer, "\x1f\x8b", 2)) {
-        read_gzipped(fn, buffer, size);
+        read_gzipped(fn, buffer, size, output);
     } else {
         if (madvise(buffer, size, MADV_WILLNEED) < 0) {
             ovs_fatal(errno, "%s: madvise failed", fn);
         }
-        parse_file(fn, buffer, size);
+        parse_file(fn, buffer, size, output);
     }
 
     if (munmap(buffer, size) < 0) {
@@ -691,104 +695,53 @@ read_file__(const char *fn)
 }
 
 static void
-wait_children(int limit)
+wait_tasks(int limit)
 {
-    do {
-        process_run();
+    for (;;) {
+        ovs_mutex_lock(&task_lock);
+        size_t n_running_tasks = ovs_list_size(&running_tasks);
+        if (n_running_tasks >= limit) {
+            seq_wait(task_seq, seq_read(task_seq));
+        }
+        ovs_mutex_unlock(&task_lock);
 
-        for (size_t i = 0; i < n_children; i++) {
-            struct child_process *cp = &children[i];
-
-            if (cp->pipefd >= 0) {
-                struct ds *output = &cp->output;
-                for (;;) {
-                    if (output->allocated <= output->length) {
-                        ds_reserve(output, output->allocated + 4096);
-                    }
-                    int retval = read(cp->pipefd,
-                                      &output->string[output->length],
-                                      output->allocated - output->length);
-                    if (retval > 0) {
-                        output->length += retval;
-                    } else {
-                        if (!retval) {
-                            close(cp->pipefd);
-                            cp->pipefd = -1;
-                        } else if (errno != EAGAIN) {
-                            VLOG_WARN("read from child failed (%s)",
-                                      ovs_strerror(errno));
-                        }
-                        break;
-                    }
-                }
-            }
-
-            if (process_exited(cp->process)) {
-                printf("\b \b");
-                fflush(stdout);
-                if (n_outputs >= allocated_outputs) {
-                    outputs = x2nrealloc(outputs, &allocated_outputs,
-                                         sizeof *outputs);
-                }
-                outputs[n_outputs++] = cp->output;
-
-                process_destroy(cp->process);
-                if (cp->pipefd >= 0) {
-                    close(cp->pipefd);
-                }
-                children[i] = children[--n_children];
-                i--;
-                continue;
-            }
-
-            process_wait(cp->process);
-            if (cp->pipefd >= 0) {
-                poll_fd_wait(cp->pipefd, POLLIN);
-            }
+        if (n_running_tasks < limit) {
+            break;
         }
 
-        if (n_children < limit) {
-            poll_immediate_wake();
-        }
         poll_block();
-    } while (n_children >= limit);
+    }
+}
+
+static void *
+read_file_thread(void *task_)
+{
+    struct task *task = task_;
+    read_file__(task->filename, &task->output);
+
+    ovs_mutex_lock(&task_lock);
+    ovs_list_remove(&task->list_node);
+    ovs_list_push_back(&complete_tasks, &task->list_node);
+    ovs_mutex_unlock(&task_lock);
+    seq_change(task_seq);
+
+    return NULL;
 }
 
 static void
 read_file(const char *fn)
 {
-    wait_children(max_children);
+    wait_tasks(max_tasks);
 
-    putchar('+');
-    fflush(stdout);
-    int fds[2];
-    if (pipe(fds) < 0) {
-        ovs_fatal(errno, "pipe failed");
-    }
+    struct task *task = xmalloc(sizeof *task);
+    task->filename = xstrdup(fn);
+    ds_init(&task->output);
 
-    struct process *process;
-    pid_t pid = process_fork(&process);
-    if (pid < 0) {
-        ovs_fatal(errno, "fork failed");
-    } else if (!pid) {
-        close(fds[0]);
-        dup2(fds[1], 1);
-        close(fds[1]);
+    ovs_mutex_lock(&task_lock);
+    ovs_list_push_back(&running_tasks, &task->list_node);
+    ovs_mutex_unlock(&task_lock);
 
-        for (size_t i = 0; i < n_children; i++) {
-            close(children[i].pipefd);
-        }
-        read_file__(fn);
-        exit(0);
-    }
-
-    xset_nonblocking(fds[0]);
-    close(fds[1]);
-
-    struct child_process *cp = &children[n_children++];
-    cp->process = process;
-    cp->pipefd = fds[0];
-    ds_init(&cp->output);
+    ovs_thread_create("read", read_file_thread, task);
 }
 
 static void
@@ -884,12 +837,14 @@ parse_results(void)
     state_init(&state);
 
     printf("%s:%d\n", __FILE__, __LINE__);
-    for (size_t i = 0; i < n_outputs; i++) {
-        parse_lines("<child process>", outputs[i].string, outputs[i].length,
-                    &state);
+    struct task *task;
+    LIST_FOR_EACH (task, list_node, &complete_tasks) {
+        parse_lines("<child process>", task->output.string,
+                    task->output.length, &state);
     }
     printf("%s:%d\n", __FILE__, __LINE__);
 
+#if 0
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
     printf("%s:%d\n", __FILE__, __LINE__);
@@ -900,18 +855,19 @@ parse_results(void)
         putchar('\n');
     }
 #endif
-
+#endif
+    
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
 int
 main(int argc, char *argv[])
 {
-    max_children = count_cores() * 2;
-    children = xmalloc(max_children * sizeof *children);
-
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
+
+    max_tasks = count_cores() * 2;
+    task_seq = seq_create();
 
     if (optind >= argc) {
         open_target(".");
@@ -921,7 +877,7 @@ main(int argc, char *argv[])
         }
     }
 
-    wait_children(1);
+    wait_tasks(1);
 
     parse_results();
 }
