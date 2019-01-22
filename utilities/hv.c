@@ -48,6 +48,8 @@ struct child_process {
 static struct child_process *children;
 static int n_children;
 static int max_children;
+static int total_children;
+static size_t total_bytes;
 
 static struct ds *outputs;
 static size_t n_outputs, allocated_outputs;
@@ -589,11 +591,13 @@ parse_file(const char *fn, const char *buffer, off_t size)
 
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
+    struct ds output = DS_EMPTY_INITIALIZER;
     for (size_t i = 0; i < state.n; i++) {
-        fwrite(state.reservoir[i].line.s, state.reservoir[i].line.length,
-               1, stdout);
-        putchar('\n');
+        ds_put_buffer(&output, state.reservoir[i].line.s,
+                      state.reservoir[i].line.length);
+        ds_put_char(&output, '\n');
     }
+    write(STDOUT_FILENO, output.string, output.length);
 
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
@@ -693,7 +697,7 @@ read_file__(const char *fn)
 static void
 wait_children(int limit)
 {
-    do {
+    while (n_children >= limit) {
         process_run();
 
         for (size_t i = 0; i < n_children; i++) {
@@ -710,6 +714,7 @@ wait_children(int limit)
                                       output->allocated - output->length);
                     if (retval > 0) {
                         output->length += retval;
+                        total_bytes += retval;
                     } else {
                         if (!retval) {
                             close(cp->pipefd);
@@ -751,7 +756,7 @@ wait_children(int limit)
             poll_immediate_wake();
         }
         poll_block();
-    } while (n_children >= limit);
+    }
 }
 
 static void
@@ -759,6 +764,7 @@ read_file(const char *fn)
 {
     wait_children(max_children);
 
+    total_children++;
     putchar('+');
     fflush(stdout);
     int fds[2];
@@ -907,7 +913,7 @@ parse_results(void)
 int
 main(int argc, char *argv[])
 {
-    max_children = count_cores() * 2;
+    max_children = count_cores() * 50;
     children = xmalloc(max_children * sizeof *children);
 
     set_program_name(argv[0]);
@@ -922,6 +928,7 @@ main(int argc, char *argv[])
     }
 
     wait_children(1);
+    printf("%d children, %"PRIuSIZE" bytes\n", total_children, total_bytes);
 
     parse_results();
 }
