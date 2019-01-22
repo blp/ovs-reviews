@@ -43,9 +43,14 @@ VLOG_DEFINE_THIS_MODULE(hv);
 struct task {
     struct ovs_list list_node;
     char *filename;
+    off_t size;
     struct ds output;
 };
 static struct ovs_mutex task_lock = OVS_MUTEX_INITIALIZER;
+
+static struct task **queued_tasks;
+static size_t n_queued_tasks, allocated_queued_tasks;
+
 static struct ovs_list running_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&running_tasks);
 static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
@@ -726,22 +731,6 @@ read_file_thread(void *task_)
 }
 
 static void
-read_file(const char *fn)
-{
-    wait_tasks(max_tasks);
-
-    struct task *task = xmalloc(sizeof *task);
-    task->filename = xstrdup(fn);
-    ds_init(&task->output);
-
-    ovs_mutex_lock(&task_lock);
-    ovs_list_push_back(&running_tasks, &task->list_node);
-    ovs_mutex_unlock(&task_lock);
-
-    ovs_thread_create("read", read_file_thread, task);
-}
-
-static void
 open_target(const char *name)
 {
     struct stat s;
@@ -752,7 +741,17 @@ open_target(const char *name)
 
     if (S_ISREG(s.st_mode)) {
         if (s.st_size > 0 && !strstr(name, "metrics")) {
-            read_file(name);
+            struct task *task = xmalloc(sizeof *task);
+            task->filename = xstrdup(name);
+            task->size = s.st_size;
+            ds_init(&task->output);
+
+            if (n_queued_tasks >= allocated_queued_tasks) {
+                queued_tasks = x2nrealloc(queued_tasks,
+                                          &allocated_queued_tasks,
+                                          sizeof *queued_tasks);
+            }
+            queued_tasks[n_queued_tasks++] = task;
         }
         return;
     } else if (!S_ISDIR(s.st_mode)) {
@@ -857,13 +856,23 @@ parse_results(void)
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
+static int
+compare_tasks(const void *a_, const void *b_)
+{
+    const struct task *const *ap = a_;
+    const struct task *const *bp = b_;
+    const struct task *a = *ap;
+    const struct task *b = *bp;
+    return a->size < b->size ? -1 : a->size > b->size;
+}
+
 int
 main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
 
-    max_tasks = count_cores() * 3;
+    max_tasks = count_cores() * 4;
     xpthread_cond_init(&task_cond, NULL);
 
     if (optind >= argc) {
@@ -874,7 +883,22 @@ main(int argc, char *argv[])
         }
     }
 
+    /* Execute the tasks from biggest to smallest. */
+    qsort(queued_tasks, n_queued_tasks, sizeof *queued_tasks, compare_tasks);
+    while (n_queued_tasks) {
+        wait_tasks(max_tasks);
+
+        struct task *task = queued_tasks[--n_queued_tasks];
+
+        ovs_mutex_lock(&task_lock);
+        ovs_list_push_back(&running_tasks, &task->list_node);
+        ovs_mutex_unlock(&task_lock);
+
+        ovs_thread_create("read", read_file_thread, task);
+    }
     wait_tasks(1);
+
+    free(queued_tasks);
 
     parse_results();
 }
