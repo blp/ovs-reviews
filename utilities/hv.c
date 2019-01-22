@@ -34,7 +34,6 @@
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
-#include "seq.h"
 #include "socket-util.h"
 #include "util.h"
 
@@ -51,7 +50,7 @@ static struct ovs_list running_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&running_tasks);
 static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&complete_tasks);
-static struct seq *task_seq;
+static pthread_cond_t task_cond;
 
 static int max_tasks;
 
@@ -556,7 +555,7 @@ state_add(struct state *state, const struct log_record *rec)
 }
 
 static void
-parse_file(const char *fn, const char *buffer, off_t size, struct ds *output)
+parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS_UNUSED)
 {
     const char *end = buffer + size;
 
@@ -592,11 +591,13 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output)
 
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
+#if 0
     for (size_t i = 0; i < state.n; i++) {
         ds_put_buffer(output, state.reservoir[i].line.s,
                       state.reservoir[i].line.length);
         ds_put_char(output, '\n');
     }
+#endif
 
     //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
@@ -697,20 +698,15 @@ read_file__(const char *fn, struct ds *output)
 static void
 wait_tasks(int limit)
 {
+    ovs_mutex_lock(&task_lock);
     for (;;) {
-        ovs_mutex_lock(&task_lock);
         size_t n_running_tasks = ovs_list_size(&running_tasks);
-        if (n_running_tasks >= limit) {
-            seq_wait(task_seq, seq_read(task_seq));
-        }
-        ovs_mutex_unlock(&task_lock);
-
         if (n_running_tasks < limit) {
             break;
         }
-
-        poll_block();
+        ovs_mutex_cond_wait(&task_cond, &task_lock);
     }
+    ovs_mutex_unlock(&task_lock);
 }
 
 static void *
@@ -722,8 +718,8 @@ read_file_thread(void *task_)
     ovs_mutex_lock(&task_lock);
     ovs_list_remove(&task->list_node);
     ovs_list_push_back(&complete_tasks, &task->list_node);
+    xpthread_cond_signal(&task_cond);
     ovs_mutex_unlock(&task_lock);
-    seq_change(task_seq);
 
     return NULL;
 }
@@ -867,7 +863,7 @@ main(int argc, char *argv[])
     parse_command_line (argc, argv);
 
     max_tasks = count_cores() * 2;
-    task_seq = seq_create();
+    xpthread_cond_init(&task_cond, NULL);
 
     if (optind >= argc) {
         open_target(".");
