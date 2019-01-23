@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+/* TODO: mode for selecting records in error. */
+
 #include <config.h>
 
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <float.h>
 #include <getopt.h>
 #include <math.h>
 #include <sched.h>
@@ -62,6 +65,8 @@ static unsigned int priorities = 0xff;
 static unsigned int facilities = (1u << 24) - 1;
 static const char *component;
 static const char *subcomponent;
+static double date_since = -DBL_MAX;
+static double date_until = DBL_MAX;
 
 static unsigned long long int total_bytes;
 static unsigned long long int total_decompressed;
@@ -148,7 +153,7 @@ struct parse_ctx {
 static void OVS_PRINTF_FORMAT(2, 3)
 warn(const struct parse_ctx *ctx, const char *format, ...)
 {
-    fprintf(stderr, "%s:%d.%td: ",
+    fprintf(stderr, "%s:%d.%"PRIdPTR": ",
             ctx->fn, ctx->ln, ctx->p - ctx->line_start + 1);
 
     va_list args;
@@ -168,7 +173,7 @@ debug(const struct parse_ctx *ctx, const char *format, ...)
         char *msg = xvasprintf(format, args);
         va_end(args);
 
-        VLOG_DBG("%s:%d.%td: %s",
+        VLOG_DBG("%s:%d.%"PRIdPTR": %s",
                  ctx->fn, ctx->ln, ctx->p - ctx->line_start + 1, msg);
         free(msg);
     }
@@ -362,6 +367,10 @@ epoch(void)
 static double
 parse_timestamp(const char *s, size_t len)
 {
+    if (!len) {
+        return 0;
+    }
+
     static const char template[] = "####-##-##T##:##:##";
     if (len < strlen(template + 1) || !matches_template(s, template)) {
         return -1;
@@ -463,6 +472,9 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
     }
 
     rec->when = parse_timestamp(rec->timestamp.s, rec->timestamp.length);
+    if (rec->when == -1) {
+        return false;
+    }
 
     /* Structured data. */
     if (!must_match_spaces(ctx)) {
@@ -611,6 +623,9 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
+        if (rec.when < date_since || rec.when > date_until) {
+            continue;
+        }
         if (!(priorities & (1u << rec.priority))) {
             continue;
         }
@@ -642,7 +657,6 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
     free(state.reservoir);
 
     total_bytes += size;
-    //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
 static void
@@ -933,7 +947,6 @@ parse_results(void)
         ds_destroy(&s);
     }
     free(state.reservoir);
-    //printf("%s: selected %zu records out of %d\n", fn, n_reservoir, ctx.ln - 1);
 }
 
 static int
@@ -1090,11 +1103,40 @@ parse_facilities(char *s)
     facilities ^= xor;
 }
 
+static double
+parse_date(const char *s)
+{
+    /* XXX Date parsing is hard.  This might be a cop-out. */
+    char *args[] = { "date", "-d", CONST_CAST(char *, s), "+%s", NULL };
+    char *command = process_escape_args(args);
+    FILE *stream = popen(command, "r");
+    if (!stream) {
+        ovs_fatal(errno, "%s: popen failed", command);
+    }
+    double when;
+    bool ok = fscanf(stream, "%lf", &when) == 1;
+    int status = pclose(stream);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        if (ok) {
+            free(command);
+            return when;
+        } else {
+            ovs_fatal(errno, "%s: unexpected output parsing date %s",
+                      command, s);
+        }
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) == 1) {
+        ovs_fatal(errno, "%s: bad date", s);
+    }
+    ovs_fatal(errno, "%s: error parsing date (%s)",
+              command, process_status_msg(status));
+}
+
 static void
 parse_command_line(int argc, char *argv[])
 {
     enum {
-        OPT_START = UCHAR_MAX + 1,
+        OPT_SINCE = UCHAR_MAX + 1,
+        OPT_UNTIL,
     };
     static const struct option long_options[] = {
         {"grep", required_argument, NULL, 'g'},
@@ -1102,6 +1144,10 @@ parse_command_line(int argc, char *argv[])
         {"facilities", required_argument, NULL, 'f'},
         {"component", required_argument, NULL, 'c'},
         {"subcomponent", required_argument, NULL, 's'},
+        {"since", required_argument, NULL, OPT_SINCE},
+        {"after", required_argument, NULL, OPT_SINCE},
+        {"until", required_argument, NULL, OPT_UNTIL},
+        {"before", required_argument, NULL, OPT_UNTIL},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0},
@@ -1127,6 +1173,14 @@ parse_command_line(int argc, char *argv[])
 
         case 'f':
             parse_facilities(optarg);
+            break;
+
+        case OPT_SINCE:
+            date_since = parse_date(optarg);
+            break;
+
+        case OPT_UNTIL:
+            date_until = parse_date(optarg);
             break;
 
         case 'c':
