@@ -26,19 +26,14 @@ hash_name__(const char *name, size_t length)
     return hash_bytes(name, length, 0);
 }
 
-static uint32_t
-hash_name(const char *name)
-{
-    return hash_name__(name, strlen(name));
-}
-
 static struct sset_node *
-sset_find__(const struct sset *set, const char *name, size_t hash)
+sset_find__(const struct sset *set, const char *name, size_t length,
+            size_t hash)
 {
     struct sset_node *node;
 
     HMAP_FOR_EACH_WITH_HASH (node, hmap_node, hash, &set->map) {
-        if (!strcmp(node->name, name)) {
+        if (!strncmp(node->name, name, length) && !node->name[length]) {
             return node;
         }
     }
@@ -99,16 +94,13 @@ sset_moved(struct sset *set)
     hmap_moved(&set->map);
 }
 
-/* Initializes 'set' with substrings of 's' that are delimited by any of the
+/* Add to 'set' the substrings of 's' that are delimited by any of the
  * characters in 'delimiters'.  For example,
- *     sset_from_delimited_string(&set, "a b,c", " ,");
- * initializes 'set' with three strings "a", "b", and "c". */
+ *     sset_add_delimited(&set, "a b,c", " ,");
+ * adds to 'set' the three strings "a", "b", and "c". */
 void
-sset_from_delimited_string(struct sset *set, const char *s_,
-                           const char *delimiters)
+sset_add_delimited(struct sset *set, const char *s_, const char *delimiters)
 {
-    sset_init(set);
-
     char *s = xstrdup(s_);
     char *token, *save_ptr = NULL;
     for (token = strtok_r(s, delimiters, &save_ptr); token != NULL;
@@ -141,7 +133,7 @@ sset_add(struct sset *set, const char *name)
     size_t length = strlen(name);
     uint32_t hash = hash_name__(name, length);
 
-    return (sset_find__(set, name, hash)
+    return (sset_find__(set, name, length, hash)
             ? NULL
             : sset_add__(set, name, length, hash));
 }
@@ -238,14 +230,26 @@ sset_pop(struct sset *set)
 struct sset_node *
 sset_find(const struct sset *set, const char *name)
 {
-    return sset_find__(set, name, hash_name(name));
+    return sset_find_len(set, name, strlen(name));
+}
+
+struct sset_node *
+sset_find_len(const struct sset *set, const char *name, size_t length)
+{
+    return sset_find__(set, name, length, hash_name__(name, length));
 }
 
 /* Returns true if 'set' contains a copy of 'name', false otherwise. */
 bool
 sset_contains(const struct sset *set, const char *name)
 {
-    return sset_find(set, name) != NULL;
+    return sset_contains_len(set, name, strlen(name));
+}
+
+bool
+sset_contains_len(const struct sset *set, const char *name, size_t length)
+{
+    return sset_find_len(set, name, length) != NULL;
 }
 
 /* Returns true if 'a' and 'b' contain the same strings, false otherwise. */
@@ -259,7 +263,8 @@ sset_equals(const struct sset *a, const struct sset *b)
     }
 
     HMAP_FOR_EACH (node, hmap_node, &a->map) {
-        if (!sset_find__(b, node->name, node->hmap_node.hash)) {
+        if (!sset_find__(b, node->name, strlen(node->name),
+                         node->hmap_node.hash)) {
             return false;
         }
     }

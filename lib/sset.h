@@ -43,9 +43,6 @@ void sset_clone(struct sset *, const struct sset *);
 void sset_swap(struct sset *, struct sset *);
 void sset_moved(struct sset *);
 
-void sset_from_delimited_string(struct sset *, const char *s,
-                                const char *delimiters);
-
 /* Count. */
 bool sset_is_empty(const struct sset *);
 size_t sset_count(const struct sset *);
@@ -55,6 +52,7 @@ struct sset_node *sset_add(struct sset *, const char *);
 struct sset_node *sset_add_and_free(struct sset *, char *);
 void sset_add_assert(struct sset *, const char *);
 void sset_add_array(struct sset *, char **, size_t n);
+void sset_add_delimited(struct sset *, const char *s, const char *delimiters);
 
 /* Deletion. */
 void sset_clear(struct sset *);
@@ -65,7 +63,10 @@ char *sset_pop(struct sset *);
 
 /* Search. */
 struct sset_node *sset_find(const struct sset *, const char *);
+struct sset_node *sset_find_len(const struct sset *,
+                                const char *, size_t length);
 bool sset_contains(const struct sset *, const char *);
+bool sset_contains_len(const struct sset *, const char *, size_t length);
 bool sset_equals(const struct sset *, const struct sset *);
 
 struct sset_position {

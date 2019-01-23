@@ -392,7 +392,7 @@ set_blacklist_tables(const char *blacklist, bool dryrun)
             blacklist_tables_clear();
         }
 
-        sset_from_delimited_string(&set, blacklist, " ,");
+        sset_add_delimited(&set, blacklist, " ,");
         SSET_FOR_EACH (longname, &set) {
             char *database = xstrdup(longname), *table = NULL;
             strtok_r(database, ":", &table);

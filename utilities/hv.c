@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-/* TODO: mode for selecting records in error. */
+/* TODO:
+ *
+ * - mode for selecting records in error.
+ * - avoid degzipping whole file at a time.
+ */
 
 #include <config.h>
 
@@ -38,6 +42,7 @@
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
+#include "sset.h"
 #include "socket-util.h"
 #include "util.h"
 
@@ -63,8 +68,8 @@ static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
 static const char *grep;
 static unsigned int priorities = 0xff;
 static unsigned int facilities = (1u << 24) - 1;
-static const char *component;
-static const char *subcomponent;
+static struct sset components = SSET_INITIALIZER(&components);
+static struct sset subcomponents = SSET_INITIALIZER(&subcomponents);
 static double date_since = -DBL_MAX;
 static double date_until = DBL_MAX;
 
@@ -632,10 +637,13 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
         if (!(facilities & (1u << rec.facility))) {
             continue;
         }
-        if (component && !ss_contains(rec.comp, ss_cstr(component))) {
+        if (!sset_is_empty(&components)
+            && !sset_contains_len(&components, rec.comp.s, rec.comp.length)) {
             continue;
         }
-        if (subcomponent && !ss_contains(rec.subcomp, ss_cstr(subcomponent))) {
+        if (!sset_is_empty(&subcomponents)
+            && !sset_contains_len(&components,
+                                  rec.subcomp.s, rec.subcomp.length)) {
             continue;
         }
         if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
@@ -1184,11 +1192,11 @@ parse_command_line(int argc, char *argv[])
             break;
 
         case 'c':
-            component = optarg;
+            sset_add_delimited(&components, optarg, " ,");
             break;
 
         case 's':
-            subcomponent = optarg;
+            sset_add_delimited(&subcomponents, optarg, " ,");
             break;
 
         case 'h':
