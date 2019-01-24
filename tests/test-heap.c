@@ -30,7 +30,7 @@
 
 /* Sample heap element. */
 struct element {
-    uint32_t full_pri;
+    uint32_t priority;
     struct heap_node heap_node;
 };
 
@@ -46,6 +46,21 @@ compare_uint32s(const void *a_, const void *b_)
     const uint32_t *a = a_;
     const uint32_t *b = b_;
     return *a < *b ? -1 : *a > *b;
+}
+
+static int
+compare_heap_nodes(const struct heap_node *a, const struct heap_node *b,
+                   const void *aux OVS_UNUSED)
+{
+    uint32_t pa = element_from_heap_node(a)->priority;
+    uint32_t pb = element_from_heap_node(b)->priority;
+    return pa < pb ? -1 : pa > pb;
+}
+
+static uint32_t
+get_pri(const struct heap_node *node)
+{
+    return element_from_heap_node(node)->priority;
 }
 
 /* Verifies that 'heap' is internally consistent and contains all 'n' of the
@@ -69,12 +84,6 @@ check_heap(const struct heap *heap, const uint32_t priorities[], size_t n)
         assert(heap->array[i]->idx == i);
     }
 
-    /* Check that priority values are internally consistent. */
-    for (i = 1; i <= n; i++) {
-        element = element_from_heap_node(heap->array[i]);
-        assert(element->heap_node.priority == (element->full_pri >> 16));
-    }
-
     /* Check the heap property. */
     for (i = 1; i <= n; i++) {
         size_t parent = heap_parent__(i);
@@ -82,13 +91,13 @@ check_heap(const struct heap *heap, const uint32_t priorities[], size_t n)
         size_t right = heap_right__(i);
 
         if (parent >= 1) {
-            assert(heap->array[parent]->priority >= heap->array[i]->priority);
+            assert(get_pri(heap->array[parent]) >= get_pri(heap->array[i]));
         }
         if (left <= n) {
-            assert(heap->array[left]->priority <= heap->array[i]->priority);
+            assert(get_pri(heap->array[left]) <= get_pri(heap->array[i]));
         }
         if (right <= n) {
-            assert(heap->array[right]->priority <= heap->array[i]->priority);
+            assert(get_pri(heap->array[right]) <= get_pri(heap->array[i]));
         }
     }
 
@@ -105,7 +114,7 @@ check_heap(const struct heap *heap, const uint32_t priorities[], size_t n)
     elements_copy = xmalloc(n * sizeof *priorities);
     i = 0;
     HEAP_FOR_EACH (element, heap_node, heap) {
-        elements_copy[i++] = element->heap_node.priority;
+        elements_copy[i++] = element->priority;
     }
 
     qsort(priorities_copy, n, sizeof *priorities_copy, compare_uint32s);
@@ -137,7 +146,7 @@ print_heap(const char *name, struct heap *heap)
 
     printf("%s:", name);
     HEAP_FOR_EACH (e, heap_node, heap) {
-        printf(" %"PRIu32":%"PRIu32, e->full_pri >> 16, e->full_pri & 0xffff);
+        printf(" %"PRIu32":%"PRIu32, e->priority >> 16, e->priority & 0xffff);
     }
     printf("\n");
 }
@@ -203,13 +212,11 @@ test_insert_delete__(struct element *elements,
     struct heap heap;
     size_t i;
 
-    heap_init(&heap);
+    heap_init(&heap, compare_heap_nodes, NULL);
     check_heap(&heap, NULL, 0);
     for (i = 0; i < n; i++) {
-        uint32_t priority = insert[i];
-
-        elements[i].full_pri = priority;
-        heap_insert(&heap, &elements[i].heap_node, priority >> 16);
+        elements[i].priority = insert[i];
+        heap_insert(&heap, &elements[i].heap_node);
         check_heap(&heap, insert, i + 1);
     }
 
@@ -217,7 +224,7 @@ test_insert_delete__(struct element *elements,
         struct element *element;
 
         HEAP_FOR_EACH (element, heap_node, &heap) {
-            if (element->full_pri == delete[i]) {
+            if (element->priority == delete[i]) {
                 goto found;
             }
         }
@@ -239,13 +246,11 @@ test_insert_delete_raw__(struct element *elements,
     struct heap heap;
     size_t i;
 
-    heap_init(&heap);
+    heap_init(&heap, compare_heap_nodes, NULL);
     check_heap(&heap, NULL, 0);
     for (i = 0; i < n; i++) {
-        uint32_t priority = insert[i];
-
-        elements[i].full_pri = priority;
-        heap_raw_insert(&heap, &elements[i].heap_node, priority >> 16);
+        elements[i].priority = insert[i];
+        heap_raw_insert(&heap, &elements[i].heap_node);
         if (insert_pattern & (1u << i)) {
             heap_rebuild(&heap);
             check_heap(&heap, insert, i + 1);
@@ -256,7 +261,7 @@ test_insert_delete_raw__(struct element *elements,
         struct element *element;
 
         HEAP_FOR_EACH (element, heap_node, &heap) {
-            if (element->full_pri == delete[i]) {
+            if (element->priority == delete[i]) {
                 goto found;
             }
         }

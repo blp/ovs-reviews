@@ -106,14 +106,14 @@ mac_entry_set_port(struct mac_learning *ml, struct mac_entry *e, void *port)
             ovs_list_remove(&e->port_lru_node);
 
             if (ovs_list_is_empty(&mlport->port_lrus)) {
-                ovs_assert(mlport->heap_node.priority == 1);
+                ovs_assert(mlport->usage == 1);
                 hmap_remove(&ml->ports_by_ptr, &mlport->hmap_node);
                 heap_remove(&ml->ports_by_usage, &mlport->heap_node);
                 free(mlport);
             } else {
-                ovs_assert(mlport->heap_node.priority > 1);
-                heap_change(&ml->ports_by_usage, &mlport->heap_node,
-                            mlport->heap_node.priority - 1);
+                ovs_assert(mlport->usage > 1);
+                mlport->usage--;
+                heap_change(&ml->ports_by_usage, &mlport->heap_node);
             }
             e->mlport = NULL;
         }
@@ -126,12 +126,13 @@ mac_entry_set_port(struct mac_learning *ml, struct mac_entry *e, void *port)
                 mlport = xzalloc(sizeof *mlport);
                 hmap_insert(&ml->ports_by_ptr, &mlport->hmap_node,
                             hash_pointer(port, ml->secret));
-                heap_insert(&ml->ports_by_usage, &mlport->heap_node, 1);
+                mlport->usage = 1;
+                heap_insert(&ml->ports_by_usage, &mlport->heap_node);
                 mlport->port = port;
                 ovs_list_init(&mlport->port_lrus);
             } else {
-                heap_change(&ml->ports_by_usage, &mlport->heap_node,
-                            mlport->heap_node.priority + 1);
+                mlport->usage++;
+                heap_change(&ml->ports_by_usage, &mlport->heap_node);
             }
             ovs_list_push_back(&mlport->port_lrus, &e->port_lru_node);
             e->mlport = mlport;
@@ -193,6 +194,19 @@ mac_learning_clear_statistics(struct mac_learning *ml)
     }
 }
 
+static int
+compare_ports_by_usage(const struct heap_node *a_,
+                       const struct heap_node *b_,
+                       const void *aux OVS_UNUSED)
+{
+    const struct mac_learning_port *a
+        = CONTAINER_OF(a_, struct mac_learning_port, heap_node);
+    const struct mac_learning_port *b
+        = CONTAINER_OF(b_, struct mac_learning_port, heap_node);
+
+    return a->usage < b->usage ? -1 : a->usage < b->usage;
+}
+
 /* Creates and returns a new MAC learning table with an initial MAC aging
  * timeout of 'idle_time' seconds and an initial maximum of MAC_DEFAULT_MAX
  * entries. */
@@ -210,7 +224,7 @@ mac_learning_create(unsigned int idle_time)
     ml->max_entries = MAC_DEFAULT_MAX;
     ml->need_revalidate = false;
     hmap_init(&ml->ports_by_ptr);
-    heap_init(&ml->ports_by_usage);
+    heap_init(&ml->ports_by_usage, compare_ports_by_usage, NULL);
     ovs_refcount_init(&ml->ref_cnt);
     ovs_rwlock_init(&ml->rwlock);
     mac_learning_clear_statistics(ml);

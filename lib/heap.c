@@ -27,11 +27,13 @@ static void float_up_or_down(struct heap *, size_t i);
 
 /* Initializes 'heap' as an empty heap. */
 void
-heap_init(struct heap *heap)
+heap_init(struct heap *heap, heap_node_compare_func *compare, const void *aux)
 {
     heap->array = NULL;
     heap->n = 0;
     heap->allocated = 0;
+    heap->compare = compare;
+    heap->aux = aux;
 }
 
 /* Frees memory owned internally by 'heap'.  The caller is responsible for
@@ -61,13 +63,13 @@ heap_swap(struct heap *a, struct heap *b)
     *b = tmp;
 }
 
-/* Inserts 'node' into 'heap' with the specified 'priority'.
+/* Inserts 'node' into 'heap'.
  *
  * This takes time O(lg n). */
 void
-heap_insert(struct heap *heap, struct heap_node *node, uint64_t priority)
+heap_insert(struct heap *heap, struct heap_node *node)
 {
-    heap_raw_insert(heap, node, priority);
+    heap_raw_insert(heap, node);
     float_up(heap, node->idx);
 }
 
@@ -85,18 +87,19 @@ heap_remove(struct heap *heap, struct heap_node *node)
     }
 }
 
-/* Changes the priority of 'node' (which must be in 'heap') to 'priority'.
+/* Updates 'heap' to preserve the heap invariant following the caller's change
+ * to the priority data in 'node'.
  *
- * This takes time O(lg n). */
+ * This takes time O(lg n).
+ *
+ * This only works if a single node's priority has changed. */
 void
-heap_change(struct heap *heap, struct heap_node *node, uint64_t priority)
+heap_change(struct heap *heap, struct heap_node *node)
 {
-    heap_raw_change(node, priority);
     float_up_or_down(heap, node->idx);
 }
 
-/* Inserts 'node' into 'heap' with the specified 'priority', without
- * maintaining the heap invariant.
+/* Inserts 'node' into 'heap', without maintaining the heap invariant.
  *
  * After this call, heap_max() will no longer necessarily return the maximum
  * value in the heap, and HEAP_FOR_EACH will no longer necessarily iterate in
@@ -104,7 +107,7 @@ heap_change(struct heap *heap, struct heap_node *node, uint64_t priority)
  *
  * This takes time O(1). */
 void
-heap_raw_insert(struct heap *heap, struct heap_node *node, uint64_t priority)
+heap_raw_insert(struct heap *heap, struct heap_node *node)
 {
     if (heap->n >= heap->allocated) {
         heap->allocated = heap->n == 0 ? 1 : 2 * heap->n;
@@ -113,7 +116,6 @@ heap_raw_insert(struct heap *heap, struct heap_node *node, uint64_t priority)
     }
 
     put_node(heap, node, ++heap->n);
-    node->priority = priority;
 }
 
 /* Removes 'node' from 'heap', without maintaining the heap invariant.
@@ -173,7 +175,8 @@ float_up(struct heap *heap, size_t i)
 
     for (; i > 1; i = parent) {
         parent = heap_parent__(i);
-        if (heap->array[parent]->priority >= heap->array[i]->priority) {
+        if (heap->compare(heap->array[parent],
+                          heap->array[i], heap->aux) >= 0) {
             break;
         }
         swap_nodes(heap, parent, i);
@@ -190,11 +193,13 @@ float_down(struct heap *heap, size_t i)
         size_t right = heap_right__(i);
         size_t max = i;
 
-        if (heap->array[left]->priority > heap->array[max]->priority) {
+        if (heap->compare(heap->array[left], heap->array[max],
+                          heap->aux) > 0) {
             max = left;
         }
         if (right <= heap->n
-            && heap->array[right]->priority > heap->array[max]->priority) {
+            && heap->compare(heap->array[right], heap->array[max],
+                             heap->aux) > 0) {
             max = right;
         }
         if (max == i) {

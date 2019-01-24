@@ -132,6 +132,7 @@ struct mac_learning_port {
     struct heap_node heap_node; /* In mac_learning's "ports_by_usage". */
     void *port;                 /* Client-provided port pointer. */
     struct ovs_list port_lrus;  /* Contains "struct mac_entry"s by port_lru. */
+    unsigned int usage;         /* ovs_list_size(port_lrus). */
 };
 
 /* Sets a gratuitous ARP lock on 'mac' that will expire in

@@ -24,18 +24,25 @@
 /* A heap node, to be embedded inside the data structure in the heap. */
 struct heap_node {
     size_t idx;
-    uint64_t priority;
 };
+
+typedef int heap_node_compare_func(const struct heap_node *a,
+                                   const struct heap_node *b,
+                                   const void *aux);
 
 /* A max-heap. */
 struct heap {
     struct heap_node **array;   /* Data in elements 1...n, element 0 unused. */
     size_t n;                   /* Number of nodes currently in the heap. */
     size_t allocated;           /* Max 'n' before 'array' must be enlarged. */
+
+    heap_node_compare_func *compare;
+    const void *aux;
 };
 
 /* Initialization. */
-void heap_init(struct heap *);
+void heap_init(struct heap *,
+               heap_node_compare_func *compare, const void *aux);
 void heap_destroy(struct heap *);
 void heap_clear(struct heap *);
 void heap_swap(struct heap *a, struct heap *b);
@@ -43,8 +50,8 @@ static inline size_t heap_count(const struct heap *);
 static inline bool heap_is_empty(const struct heap *);
 
 /* Insertion and deletion. */
-void heap_insert(struct heap *, struct heap_node *, uint64_t priority);
-void heap_change(struct heap *, struct heap_node *, uint64_t priority);
+void heap_insert(struct heap *, struct heap_node *);
+void heap_change(struct heap *, struct heap_node *);
 void heap_remove(struct heap *, struct heap_node *);
 static inline struct heap_node *heap_pop(struct heap *);
 
@@ -54,8 +61,7 @@ static inline struct heap_node *heap_max(const struct heap *);
 /* The "raw" functions below do not preserve the heap invariants.  After you
  * call them, heap_max() will not necessarily return the right value until you
  * subsequently call heap_rebuild(). */
-void heap_raw_insert(struct heap *, struct heap_node *, uint64_t priority);
-static inline void heap_raw_change(struct heap_node *, uint64_t priority);
+void heap_raw_insert(struct heap *, struct heap_node *);
 void heap_raw_remove(struct heap *, struct heap_node *);
 void heap_rebuild(struct heap *);
 
@@ -145,19 +151,6 @@ static inline struct heap_node *
 heap_pop(struct heap *heap)
 {
     return heap->array[heap->n--];
-}
-
-/* Changes the priority of 'node' (which must be in 'heap') to 'priority'.
- *
- * After this call, heap_max() will no longer necessarily return the maximum
- * value in the heap, and HEAP_FOR_EACH will no longer necessarily iterate in
- * heap level order, until the next call to heap_rebuild(heap).
- *
- * This takes time O(1). */
-static inline void
-heap_raw_change(struct heap_node *node, uint64_t priority)
-{
-    node->priority = priority;
 }
 
 #endif /* heap.h */
