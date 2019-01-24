@@ -37,6 +37,7 @@
 #include <zlib.h>
 
 #include "command-line.h"
+#include "heap.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/poll-loop.h"
 #include "ovs-thread.h"
@@ -73,6 +74,10 @@ static struct sset subcomponents = SSET_INITIALIZER(&subcomponents);
 static double date_since = -DBL_MAX;
 static double date_until = DBL_MAX;
 
+static double at = -DBL_MAX;
+
+static enum { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE } show = SHOW_SAMPLE;
+
 static unsigned long long int total_bytes;
 static unsigned long long int total_decompressed;
 
@@ -108,6 +113,7 @@ ss_contains(struct substring haystack, struct substring needle)
 }
 
 struct log_record {
+    struct heap_node heap_node;
     bool valid;                 /* Fully parsed record? */
     struct substring line;      /* Full log line. */
     int facility;               /* 0...23. */
@@ -257,11 +263,6 @@ get_header_token(struct parse_ctx *ctx, struct substring *token)
     }
     ctx->p += token->length;
 
-    /* Turn NILVALUE into empty string. */
-    if (token->length == 1 && token->s[0] == '-') {
-        token->length = 0;
-    }
-
     return true;
 }
 
@@ -372,7 +373,7 @@ epoch(void)
 static double
 parse_timestamp(const char *s, size_t len)
 {
-    if (!len) {
+    if (len == 1 && s[0] == '-') {
         return 0;
     }
 
@@ -572,8 +573,23 @@ compare_log_records(const void *a_, const void *b_)
     return a->when < b->when ? -1 : a->when > b->when;
 }
 
+static int
+compare_log_records_for_heap(const struct heap_node *a_,
+                             const struct heap_node *b_,
+                             const void *aux OVS_UNUSED)
+{
+    const struct log_record *a
+        = CONTAINER_OF(a_, struct log_record, heap_node);
+    const struct log_record *b
+        = CONTAINER_OF(b_, struct log_record, heap_node);
+
+    int retval = a->when < b->when ? -1 : a->when > b->when;
+    return show == SHOW_LAST ? -retval : retval;
+}
+
 struct state {
     struct log_record *reservoir;
+    struct heap heap;
     int allocated;
     int n;
     int population;
@@ -582,22 +598,52 @@ struct state {
 static void
 state_init(struct state *state)
 {
-    state->allocated = 100;
+    state->allocated = 10000;
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
+    if (show == SHOW_FIRST || show == SHOW_LAST) {
+        heap_init(&state->heap, compare_log_records_for_heap, NULL);
+    }
 }
 
 static void
 state_add(struct state *state, const struct log_record *rec)
 {
-    size_t idx = (state->n < state->allocated
-                  ? state->n++
-                  : random_range(state->population + 1));
-    if (idx < state->allocated) {
-        state->reservoir[idx] = *rec;
+    if (show == SHOW_SAMPLE) {
+        size_t idx = (state->n < state->allocated
+                      ? state->n++
+                      : random_range(state->population + 1));
+        if (idx < state->allocated) {
+            state->reservoir[idx] = *rec;
+        }
+        state->population++;
+    } else {
+        state->population++;
+        struct log_record *pos;
+        if (state->n < state->allocated) {
+            pos = &state->reservoir[state->n++];
+        } else {
+            pos = CONTAINER_OF(heap_max(&state->heap),
+                               struct log_record, heap_node);
+            if (compare_log_records_for_heap(&rec->heap_node,
+                                             &pos->heap_node, NULL) > 0) {
+                return;
+            }
+            heap_remove(&state->heap, &pos->heap_node);
+        }
+        *pos = *rec;
+        heap_insert(&state->heap, &pos->heap_node);
     }
-    state->population++;
+}
+
+static void
+state_uninit(struct state *state)
+{
+    if (show != SHOW_SAMPLE) {
+        heap_destroy(&state->heap);
+    }
+    free(state->reservoir);
 }
 
 static void
@@ -662,7 +708,7 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
         ds_put_char(output, '\n');
     }
 #endif
-    free(state.reservoir);
+    state_uninit(&state);
 
     total_bytes += size;
 }
@@ -729,7 +775,6 @@ read_gzipped(const char *name, const char *in, size_t in_size,
 static void
 read_file__(const char *fn, struct ds *output)
 {
-    random_init();
     int fd = open(fn, O_RDONLY);
     if (fd < 0) {
         ovs_fatal(errno, "%s: open failed", fn);
@@ -739,6 +784,8 @@ read_file__(const char *fn, struct ds *output)
     if (fstat(fd, &s) < 0) {
         ovs_fatal(errno, "%s; stat failed", fn);
     }
+
+    random_set_seed(s.st_size);
 
     off_t size = s.st_size;
     char *buffer = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
@@ -923,10 +970,36 @@ put_substring(struct ds *dst, const struct substring *src)
 }
 
 static void
-parse_results(void)
+print_record(const struct log_record *r, int i, int n)
+{
+    if (!r->valid) {
+        fwrite(r->line.s, r->line.length, 1, stdout);
+        putchar('\n');
+        return;
+    }
+
+    struct ds s = DS_EMPTY_INITIALIZER;
+    if (show == SHOW_SAMPLE && n) {
+        ds_put_format(&s, "%5.2f%% ", 100.0 * i / n);
+    }
+    format_timestamp(r->when, &s);
+    ds_put_format(&s, " %s %s", priority_to_string(r->priority),
+                  facility_to_string(r->facility));
+    put_substring(&s, &r->app_name);
+    put_substring(&s, &r->comp);
+    put_substring(&s, &r->subcomp);
+    put_substring(&s, &r->msg);
+    puts(ds_cstr(&s));
+    ds_destroy(&s);
+}
+
+static void
+merge_results(void)
 {
     struct state state;
     state_init(&state);
+
+    random_set_seed(1);
 
     struct task *task;
     LIST_FOR_EACH (task, list_node, &complete_tasks) {
@@ -936,25 +1009,17 @@ parse_results(void)
 
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
           compare_log_records);
-    for (size_t i = 0; i < state.n; i++) {
-        const struct log_record *rec = &state.reservoir[i];
-        if (!rec->valid) {
-            fwrite(rec->line.s, rec->line.length, 1, stdout);
-            putchar('\n');
-            continue;
+    if (!state.n) {
+        printf("no data\n");
+    } else if (at >= 0 && at <= 100) {
+        size_t pos = MIN(at / 100.0 * state.n, state.n - 1);
+        print_record(&state.reservoir[pos], pos, state.n);
+    } else {
+        for (size_t i = 0; i < state.n; i++) {
+            print_record(&state.reservoir[i], i, state.n);
         }
-
-        struct ds s = DS_EMPTY_INITIALIZER;
-        format_timestamp(rec->when, &s);
-        ds_put_format(&s, " %s %s", priority_to_string(rec->priority),
-                      facility_to_string(rec->facility));
-        put_substring(&s, &rec->app_name);
-        put_substring(&s, &rec->comp);
-        put_substring(&s, &rec->subcomp);
-        puts(ds_cstr(&s));
-        ds_destroy(&s);
     }
-    free(state.reservoir);
+    state_uninit(&state);
 }
 
 static int
@@ -1013,9 +1078,10 @@ main(int argc, char *argv[])
     for (int i = 0; i < n_threads; i++) {
         xpthread_join(threads[i], NULL);
     }
+    free(threads);
     free(queued_tasks);
 
-    parse_results();
+    merge_results();
 
     printf("parsed %.1f MB of logs\n", total_bytes / 1024.0 / 1024.0);
     printf("decompressed %.1f MB of gzipped data\n",
@@ -1114,14 +1180,23 @@ parse_facilities(char *s)
 static double
 parse_date(const char *s)
 {
-    /* XXX Date parsing is hard.  This might be a cop-out. */
+    /* XXX Date parsing is hard.  This is kind of a cop-out. */
+
+    if (!strcmp(s, "-")) {
+        return 0;
+    }
+
+    double when = parse_timestamp(s, strlen(s));
+    if (when > 0) {
+        return when;
+    }
+
     char *args[] = { "date", "-d", CONST_CAST(char *, s), "+%s", NULL };
     char *command = process_escape_args(args);
     FILE *stream = popen(command, "r");
     if (!stream) {
         ovs_fatal(errno, "%s: popen failed", command);
     }
-    double when;
     bool ok = fscanf(stream, "%lf", &when) == 1;
     int status = pclose(stream);
     if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -1147,11 +1222,13 @@ parse_command_line(int argc, char *argv[])
         OPT_UNTIL,
     };
     static const struct option long_options[] = {
+        {"at", required_argument, NULL, 'a'},
+        {"show", required_argument, NULL, 's'},
         {"grep", required_argument, NULL, 'g'},
         {"priorities", required_argument, NULL, 'p'},
         {"facilities", required_argument, NULL, 'f'},
-        {"component", required_argument, NULL, 'c'},
-        {"subcomponent", required_argument, NULL, 's'},
+        {"component", required_argument, NULL, 'C'},
+        {"subcomponent", required_argument, NULL, 'S'},
         {"since", required_argument, NULL, OPT_SINCE},
         {"after", required_argument, NULL, OPT_SINCE},
         {"until", required_argument, NULL, OPT_UNTIL},
@@ -1160,8 +1237,7 @@ parse_command_line(int argc, char *argv[])
         {"version", no_argument, NULL, 'V'},
         {NULL, 0, NULL, 0},
     };
-    char *short_options_ = ovs_cmdl_long_options_to_short_options(long_options);
-    char *short_options = xasprintf("+%s", short_options_);
+    char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
 
     for (;;) {
         int option;
@@ -1171,6 +1247,22 @@ parse_command_line(int argc, char *argv[])
             break;
         }
         switch (option) {
+        case 'a':
+            at = strtod(optarg, NULL);
+            break;
+
+        case 's':
+            if (!strcmp(optarg, "first")) {
+                show = SHOW_FIRST;
+            } else if (!strcmp(optarg, "last")) {
+                show = SHOW_LAST;
+            } else if (!strcmp(optarg, "sample")) {
+                show = SHOW_SAMPLE;
+            } else {
+                ovs_fatal(0, "%s: unknown \"show\"", optarg);
+            }
+            break;
+
         case 'g':
             grep = optarg;
             break;
@@ -1191,11 +1283,11 @@ parse_command_line(int argc, char *argv[])
             date_until = parse_date(optarg);
             break;
 
-        case 'c':
+        case 'C':
             sset_add_delimited(&components, optarg, " ,");
             break;
 
-        case 's':
+        case 'S':
             sset_add_delimited(&subcomponents, optarg, " ,");
             break;
 
@@ -1214,7 +1306,6 @@ parse_command_line(int argc, char *argv[])
             OVS_NOT_REACHED();
         }
     }
-    free(short_options_);
     free(short_options);
 
     if (optind >= argc) {
