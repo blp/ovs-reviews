@@ -18,6 +18,9 @@
  *
  * - mode for selecting records in error.
  * - avoid degzipping whole file at a time.
+ * - responsive interface via threading
+ * - support tgz or at least tar
+ * - bt is slow, use heap+hmap?
  */
 
 #include <config.h>
@@ -28,6 +31,7 @@
 #include <float.h>
 #include <getopt.h>
 #include <math.h>
+#include <ncurses.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -36,6 +40,7 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#include "bt.h"
 #include "command-line.h"
 #include "heap.h"
 #include "openvswitch/dynamic-string.h"
@@ -78,8 +83,36 @@ static double at = -DBL_MAX;
 
 static enum { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE } show = SHOW_SAMPLE;
 
+#define COLUMNS                                 \
+    COLUMN(WHEN, "when")                        \
+    COLUMN(FACILITY, "facility")                \
+    COLUMN(PRIORITY, "priority")                \
+    COLUMN(HOSTNAME, "hostname")                \
+    COLUMN(APP_NAME, "app_name")                \
+    COLUMN(PROCID, "procid")                    \
+    COLUMN(MSGID, "msgid")                      \
+    COLUMN(SDID, "sdid")                        \
+    COLUMN(COMP, "comp")                        \
+    COLUMN(SUBCOMP, "subcomp")                  \
+    COLUMN(MSG, "msg")                          \
+    COLUMN(VALID, "valid")
+
+enum column {
+#define COLUMN(ENUM, NAME) COL_##ENUM,
+    COLUMNS
+#undef COLUMN
+};
+
+#define COLUMN(ENUM, NAME) + 1
+enum { N_COLUMNS = 0 COLUMNS };
+#undef COLUMN
+
+static enum column *columns;
+static size_t n_columns;
+
 static unsigned long long int total_bytes;
 static unsigned long long int total_decompressed;
+static unsigned long long int total_recs;
 
 struct substring {
     const char *s;
@@ -90,6 +123,15 @@ static bool
 ss_equals(struct substring a, struct substring b)
 {
     return a.length == b.length && !memcmp(a.s, b.s, a.length);
+}
+
+static int
+ss_compare(struct substring a, struct substring b)
+{
+    int result = memcmp(a.s, b.s, MIN(a.length, b.length));
+    return (result ? result
+            : a.length < b.length ? -1
+            : a.length > b.length);
 }
 
 static struct substring
@@ -113,7 +155,8 @@ ss_contains(struct substring haystack, struct substring needle)
 }
 
 struct log_record {
-    struct heap_node heap_node;
+    struct bt_node bt_node;
+    long long int count;
     bool valid;                 /* Fully parsed record? */
     struct substring line;      /* Full log line. */
     int facility;               /* 0...23. */
@@ -128,25 +171,6 @@ struct log_record {
     struct substring comp;      /* From structured data. */
     struct substring subcomp;   /* From structured data. */
     struct substring msg;       /* Message content. */
-};
-
-enum datum_type {
-    DATUM_STRING,
-    DATUM_REAL,
-    DATUM_INTEGER,
-    DATUM_INSTANT,
-    DATUM_DURATION,
-};
-
-union datum {
-    struct {
-        char *string;
-        size_t length;
-    };
-    double real;
-    int64_t integer;
-    long long int instant;      /* Milliseconds since the epoch. */
-    long long int duration;     /* Milliseconds. */
 };
 
 static void usage(void);
@@ -440,15 +464,27 @@ format_timestamp(double t, struct ds *s)
         return;
     }
 
+    int msec = (t - floor(t)) * 1000 + .5;
     ds_put_format(s, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
                   tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec,
-                  (int) ((t - floor(t)) * 1000 + .5));
+                  tm.tm_hour, tm.tm_min, tm.tm_sec, MIN(999, msec));
 }
 
 static bool
 parse_record(struct parse_ctx *ctx, struct log_record *rec)
 {
+    if (match(ctx, '*')) {
+        rec->count = 0;
+        while (c_isdigit(*ctx->p)) {
+            rec->count = rec->count * 10 + (*ctx->p++ - '0');
+        }
+        if (!must_match(ctx, ' ')) {
+            return false;
+        }
+    } else {
+        rec->count = 1;
+    }
+
     /* PRI. */
     if (!must_match(ctx, '<')) {
         return false;
@@ -566,30 +602,93 @@ split(const struct substring *msg)
 }
 
 static int
-compare_log_records(const void *a_, const void *b_)
+compare_double(double a, double b)
 {
-    const struct log_record *a = a_;
-    const struct log_record *b = b_;
-    return a->when < b->when ? -1 : a->when > b->when;
+    return a < b ? -1 : a > b;
 }
 
 static int
-compare_log_records_for_heap(const struct heap_node *a_,
-                             const struct heap_node *b_,
-                             const void *aux OVS_UNUSED)
+compare_int(int a, int b)
 {
-    const struct log_record *a
-        = CONTAINER_OF(a_, struct log_record, heap_node);
-    const struct log_record *b
-        = CONTAINER_OF(b_, struct log_record, heap_node);
+    return a < b ? -1 : a > b;
+}
 
-    int retval = a->when < b->when ? -1 : a->when > b->when;
-    return show == SHOW_LAST ? -retval : retval;
+static int
+compare_log_records(const struct log_record *a, const struct log_record *b)
+{
+    for (size_t i = 0; i < n_columns; i++) {
+        int cmp;
+
+        switch (columns[i]) {
+        case COL_WHEN:
+            cmp = compare_double(a->when, b->when);
+            break;
+        case COL_FACILITY:
+            cmp = compare_int(a->facility, b->facility);
+            break;
+        case COL_PRIORITY:
+            cmp = compare_int(a->priority, b->priority);
+            break;
+        case COL_HOSTNAME:
+            cmp = ss_compare(a->hostname, b->hostname);
+            break;
+        case COL_APP_NAME:
+            cmp = ss_compare(a->app_name, b->app_name);
+            break;
+        case COL_PROCID:
+            /* XXX It would be better to compare numerically if possible,
+             * e.g. like the GNU function strverscmp(). */
+            cmp = ss_compare(a->procid, b->procid);
+            break;
+        case COL_MSGID:
+            cmp = ss_compare(a->msgid, b->msgid);
+            break;
+        case COL_SDID:
+            cmp = ss_compare(a->sdid, b->sdid);
+            break;
+        case COL_COMP:
+            cmp = ss_compare(a->comp, b->comp);
+            break;
+        case COL_SUBCOMP:
+            cmp = ss_compare(a->subcomp, b->subcomp);
+            break;
+        case COL_MSG:
+            cmp = ss_compare(a->msg, b->msg);
+            break;
+        case COL_VALID:
+            cmp = compare_int(a->valid, b->valid);
+            break;
+        default:
+            OVS_NOT_REACHED();
+        }
+        if (cmp) {
+            return show == SHOW_LAST ? -cmp : cmp;
+        }
+    }
+    return 0;
+}
+
+static int
+compare_log_records_for_qsort(const void *a_, const void *b_)
+{
+    const struct log_record *a = a_;
+    const struct log_record *b = b_;
+    return compare_log_records(a, b);
+}
+
+static int
+compare_log_records_for_bt(const struct bt_node *a_,
+                           const struct bt_node *b_,
+                           const void *aux OVS_UNUSED)
+{
+    const struct log_record *a = CONTAINER_OF(a_, struct log_record, bt_node);
+    const struct log_record *b = CONTAINER_OF(b_, struct log_record, bt_node);
+    return compare_log_records(a, b);
 }
 
 struct state {
     struct log_record *reservoir;
-    struct heap heap;
+    struct bt bt;
     int allocated;
     int n;
     int population;
@@ -603,7 +702,7 @@ state_init(struct state *state)
     state->n = 0;
     state->population = 0;
     if (show == SHOW_FIRST || show == SHOW_LAST) {
-        heap_init(&state->heap, compare_log_records_for_heap, NULL);
+        bt_init(&state->bt, compare_log_records_for_bt, NULL);
     }
 }
 
@@ -620,29 +719,37 @@ state_add(struct state *state, const struct log_record *rec)
         state->population++;
     } else {
         state->population++;
-        struct log_record *pos;
-        if (state->n < state->allocated) {
-            pos = &state->reservoir[state->n++];
-        } else {
-            pos = CONTAINER_OF(heap_max(&state->heap),
-                               struct log_record, heap_node);
-            if (compare_log_records_for_heap(&rec->heap_node,
-                                             &pos->heap_node, NULL) > 0) {
+
+        struct bt_node *last = NULL;
+        if (state->n >= state->allocated) {
+            last = bt_last(&state->bt);
+            if (compare_log_records_for_bt(&rec->bt_node, last, NULL) > 0) {
                 return;
             }
-            heap_remove(&state->heap, &pos->heap_node);
         }
-        *pos = *rec;
-        heap_insert(&state->heap, &pos->heap_node);
+
+        struct bt_node *node = bt_find(&state->bt, &rec->bt_node);
+        if (node) {
+            struct log_record *pos = CONTAINER_OF(node, struct log_record,
+                                                  bt_node);
+            pos->count += rec->count;
+        } else {
+            struct log_record *pos;
+            if (state->n < state->allocated) {
+                pos = &state->reservoir[state->n++];
+            } else {
+                bt_delete(&state->bt, last);
+                pos = CONTAINER_OF(last, struct log_record, bt_node);
+            }
+            *pos = *rec;
+            bt_insert(&state->bt, &pos->bt_node);
+        }
     }
 }
 
 static void
 state_uninit(struct state *state)
 {
-    if (show != SHOW_SAMPLE) {
-        heap_destroy(&state->heap);
-    }
     free(state->reservoir);
 }
 
@@ -699,18 +806,16 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
         state_add(&state, &rec);
     }
 
-    qsort(state.reservoir, state.n, sizeof *state.reservoir,
-          compare_log_records);
-#if 1
     for (size_t i = 0; i < state.n; i++) {
+        ds_put_format(output, "*%lld ", state.reservoir[i].count);
         ds_put_buffer(output, state.reservoir[i].line.s,
                       state.reservoir[i].line.length);
         ds_put_char(output, '\n');
     }
-#endif
     state_uninit(&state);
 
     total_bytes += size;
+    total_recs += ctx.ln - 1;
 }
 
 static void
@@ -959,11 +1064,10 @@ facility_to_string(int facility)
 }
 
 static void
-put_substring(struct ds *dst, const struct substring *src)
+put_substring(struct ds *dst, const struct substring src)
 {
-    ds_put_char(dst, ' ');
-    if (src->length) {
-        ds_put_buffer(dst, src->s, src->length);
+    if (src.length) {
+        ds_put_buffer(dst, src.s, src.length);
     } else {
         ds_put_char(dst, '-');
     }
@@ -972,23 +1076,56 @@ put_substring(struct ds *dst, const struct substring *src)
 static void
 print_record(const struct log_record *r, int i, int n)
 {
-    if (!r->valid) {
-        fwrite(r->line.s, r->line.length, 1, stdout);
-        putchar('\n');
-        return;
-    }
-
     struct ds s = DS_EMPTY_INITIALIZER;
+    ds_put_format(&s, "%7lld", r->count);
+
     if (show == SHOW_SAMPLE && n) {
         ds_put_format(&s, "%5.2f%% ", 100.0 * i / n);
     }
-    format_timestamp(r->when, &s);
-    ds_put_format(&s, " %s %s", priority_to_string(r->priority),
-                  facility_to_string(r->facility));
-    put_substring(&s, &r->app_name);
-    put_substring(&s, &r->comp);
-    put_substring(&s, &r->subcomp);
-    put_substring(&s, &r->msg);
+
+    for (size_t j = 0; j < n_columns; j++) {
+        ds_put_char(&s, ' ');
+        switch (columns[j]) {
+        case COL_WHEN:
+            format_timestamp(r->when, &s);
+            break;
+        case COL_FACILITY:
+            ds_put_cstr(&s, facility_to_string(r->facility));
+            break;
+        case COL_PRIORITY:
+            ds_put_cstr(&s, priority_to_string(r->priority));
+            break;
+        case COL_HOSTNAME:
+            put_substring(&s, r->hostname);
+            break;
+        case COL_APP_NAME:
+            put_substring(&s, r->app_name);
+            break;
+        case COL_PROCID:
+            put_substring(&s, r->procid);
+            break;
+        case COL_MSGID:
+            put_substring(&s, r->msgid);
+            break;
+        case COL_SDID:
+            put_substring(&s, r->sdid);
+            break;
+        case COL_COMP:
+            put_substring(&s, r->comp);
+            break;
+        case COL_SUBCOMP:
+            put_substring(&s, r->subcomp);
+            break;
+        case COL_MSG:
+            put_substring(&s, r->msg);
+            break;
+        case COL_VALID:
+            ds_put_cstr(&s, r->valid ? "ok" : "invalid");
+            break;
+        default:
+            OVS_NOT_REACHED();
+        }
+    }
     puts(ds_cstr(&s));
     ds_destroy(&s);
 }
@@ -1008,7 +1145,7 @@ merge_results(void)
     }
 
     qsort(state.reservoir, state.n, sizeof *state.reservoir,
-          compare_log_records);
+          compare_log_records_for_qsort);
     if (!state.n) {
         printf("no data\n");
     } else if (at >= 0 && at <= 100) {
@@ -1060,6 +1197,15 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
 
+#if 0
+    initscr();
+    cbreak();
+    noecho();
+    nonl();
+    intrflush(stdscr, false);
+    keypad(stdscr, true);
+#endif
+    
     if (optind >= argc) {
         open_target(".");
     } else {
@@ -1083,9 +1229,14 @@ main(int argc, char *argv[])
 
     merge_results();
 
-    printf("parsed %.1f MB of logs\n", total_bytes / 1024.0 / 1024.0);
+    printf("parsed %.1f MB of logs containing %llu records\n",
+           total_bytes / 1024.0 / 1024.0, total_recs);
     printf("decompressed %.1f MB of gzipped data\n",
            total_decompressed / 1024.0 / 1024.0);
+
+#if 0
+    endwin();
+#endif
 }
 
 static void
@@ -1214,6 +1365,45 @@ parse_date(const char *s)
               command, process_status_msg(status));
 }
 
+#if 0
+static const char *
+column_to_string(enum column c)
+{
+    switch (c) {
+#define COLUMN(ENUM, NAME) case COL_##ENUM: return NAME;
+        COLUMNS
+#undef COLUMN
+    default: return NULL;
+    }
+}
+#endif
+
+static enum column
+column_from_string(const char *s)
+{
+#define COLUMN(ENUM, NAME) if (!strcmp(s, NAME)) return COL_##ENUM;
+    COLUMNS
+#undef COLUMNS
+    ovs_fatal(0, "%s: unknown column", s);
+}
+
+static void
+parse_columns(const char *s_)
+{
+    char *s = xstrdup(s_);
+    size_t allocated_columns = n_columns;
+    char *save_ptr = NULL;
+    for (char *token = strtok_r(s, ", ", &save_ptr); token;
+         token = strtok_r(NULL, ", ", &save_ptr)) {
+        if (n_columns >= allocated_columns) {
+            columns = x2nrealloc(columns, &allocated_columns,
+                                 sizeof *columns);
+        }
+        columns[n_columns++] = column_from_string(token);
+    }
+    free(s);
+}
+
 static void
 parse_command_line(int argc, char *argv[])
 {
@@ -1222,6 +1412,7 @@ parse_command_line(int argc, char *argv[])
         OPT_UNTIL,
     };
     static const struct option long_options[] = {
+        {"columns", required_argument, NULL, 'c'},
         {"at", required_argument, NULL, 'a'},
         {"show", required_argument, NULL, 's'},
         {"grep", required_argument, NULL, 'g'},
@@ -1247,6 +1438,10 @@ parse_command_line(int argc, char *argv[])
             break;
         }
         switch (option) {
+        case 'c':
+            parse_columns(optarg);
+            break;
+
         case 'a':
             at = strtod(optarg, NULL);
             break;
@@ -1311,5 +1506,9 @@ parse_command_line(int argc, char *argv[])
     if (optind >= argc) {
         ovs_fatal(0, "at least one non-option argument is required "
                   "(use --help for help)");
+    }
+
+    if (!n_columns) {
+        parse_columns("when facility priority comp subcomp msg");
     }
 }
