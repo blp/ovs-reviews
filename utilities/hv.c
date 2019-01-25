@@ -42,6 +42,7 @@
 
 #include "bt.h"
 #include "command-line.h"
+#include "hash.h"
 #include "heap.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/poll-loop.h"
@@ -60,6 +61,7 @@ struct task {
     char *filename;
     off_t size;
     struct ds output;
+    struct state *state;
 };
 static struct ovs_mutex task_lock = OVS_MUTEX_INITIALIZER;
 
@@ -81,7 +83,8 @@ static double date_until = DBL_MAX;
 
 static double at = -DBL_MAX;
 
-static enum { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE } show = SHOW_SAMPLE;
+static enum { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE, SHOW_TOPK } show
+= SHOW_SAMPLE;
 
 #define COLUMNS                                 \
     COLUMN(WHEN, "when")                        \
@@ -152,6 +155,12 @@ ss_contains(struct substring haystack, struct substring needle)
 {
     return memmem(haystack.s, haystack.length,
                   needle.s, needle.length) != NULL;
+}
+
+static uint32_t
+ss_hash(struct substring substring, uint32_t basis)
+{
+    return hash_bytes(substring.s, substring.length, basis);
 }
 
 struct log_record {
@@ -602,6 +611,55 @@ split(const struct substring *msg)
 }
 
 static int
+hash_log_record(const struct log_record *r, uint32_t basis)
+{
+    uint32_t hash = basis;
+    for (size_t i = 0; i < n_columns; i++) {
+        switch (columns[i]) {
+        case COL_WHEN:
+            hash = hash_double(r->when, basis);
+            break;
+        case COL_FACILITY:
+            hash = hash_int(r->facility, basis);
+            break;
+        case COL_PRIORITY:
+            hash = hash_int(r->priority, basis);
+            break;
+        case COL_HOSTNAME:
+            hash = ss_hash(r->hostname, basis);
+            break;
+        case COL_APP_NAME:
+            hash = ss_hash(r->app_name, basis);
+            break;
+        case COL_PROCID:
+            hash = ss_hash(r->procid, basis);
+            break;
+        case COL_MSGID:
+            hash = ss_hash(r->msgid, basis);
+            break;
+        case COL_SDID:
+            hash = ss_hash(r->sdid, basis);
+            break;
+        case COL_COMP:
+            hash = ss_hash(r->comp, basis);
+            break;
+        case COL_SUBCOMP:
+            hash = ss_hash(r->subcomp, basis);
+            break;
+        case COL_MSG:
+            hash = ss_hash(r->msg, basis);
+            break;
+        case COL_VALID:
+            hash = hash_boolean(r->valid, basis);
+            break;
+        default:
+            OVS_NOT_REACHED();
+        }
+    }
+    return hash;
+}
+
+static int
 compare_double(double a, double b)
 {
     return a < b ? -1 : a > b;
@@ -686,12 +744,21 @@ compare_log_records_for_bt(const struct bt_node *a_,
     return compare_log_records(a, b);
 }
 
+struct topkapi {
+    const struct log_record *rec;
+    long long int count;
+};
+
 struct state {
     struct log_record *reservoir;
     struct bt bt;
     int allocated;
     int n;
     int population;
+
+#define TK_L 4                  /* Number of hashes */
+#define TK_B 1024               /* Number of buckets */
+    struct topkapi *tk[TK_L];
 };
 
 static void
@@ -703,6 +770,10 @@ state_init(struct state *state)
     state->population = 0;
     if (show == SHOW_FIRST || show == SHOW_LAST) {
         bt_init(&state->bt, compare_log_records_for_bt, NULL);
+    } else {
+        for (int i = 0; i < TK_L; i++) {
+            state->tk[i] = xcalloc(TK_B, sizeof *state->tk[i]);
+        }
     }
 }
 
@@ -717,7 +788,7 @@ state_add(struct state *state, const struct log_record *rec)
             state->reservoir[idx] = *rec;
         }
         state->population++;
-    } else {
+    } else if (show == SHOW_FIRST || show == SHOW_LAST) {
         state->population++;
 
         struct bt_node *last = NULL;
@@ -743,6 +814,20 @@ state_add(struct state *state, const struct log_record *rec)
             }
             *pos = *rec;
             bt_insert(&state->bt, &pos->bt_node);
+        }
+    } else if (show == SHOW_TOPK) {
+        for (int i = 0; i < TK_L; i++) {
+            uint32_t hash = hash_log_record(rec, i);
+            struct topkapi *tk = &state->tk[i][hash % TK_B];
+            if (!tk->rec) {
+                tk->rec = rec;
+                tk->count = 1;
+            } else if (!compare_log_records(rec, tk->rec)) {
+                tk->count++;
+            } else if (--tk->count < 0) {
+                tk->rec = rec;
+                tk->count = 1;
+            }
         }
     }
 }
@@ -878,8 +963,10 @@ read_gzipped(const char *name, const char *in, size_t in_size,
 }
 
 static void
-read_file__(const char *fn, struct ds *output)
+task_execute(struct task *task)
 {
+    const char *fn = task->filename;
+
     int fd = open(fn, O_RDONLY);
     if (fd < 0) {
         ovs_fatal(errno, "%s: open failed", fn);
@@ -1183,7 +1270,7 @@ task_thread(void *unused OVS_UNUSED)
             return NULL;
         }
 
-        read_file__(task->filename, &task->output);
+        task_execute(task);
 
         ovs_mutex_lock(&task_lock);
         ovs_list_push_back(&complete_tasks, &task->list_node);
@@ -1453,6 +1540,8 @@ parse_command_line(int argc, char *argv[])
                 show = SHOW_LAST;
             } else if (!strcmp(optarg, "sample")) {
                 show = SHOW_SAMPLE;
+            } else if (!strcmp(optarg, "top")) {
+                show = SHOW_TOPK;
             } else {
                 ovs_fatal(0, "%s: unknown \"show\"", optarg);
             }
