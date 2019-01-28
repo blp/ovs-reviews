@@ -56,12 +56,29 @@
 #include "openvswitch/vlog.h"
 VLOG_DEFINE_THIS_MODULE(hv);
 
+struct topkapi {
+    struct log_record *rec;
+    long long int count;
+};
+
+struct state {
+    struct log_record *reservoir;
+    struct bt bt;
+    int allocated;
+    int n;
+    int population;
+
+#define TK_L 4                  /* Number of hashes */
+#define TK_B 1024               /* Number of buckets */
+    struct topkapi *tk[TK_L];
+};
+
 struct task {
     struct ovs_list list_node;
     char *filename;
     off_t size;
     struct ds output;
-    struct state *state;
+    struct state state;
 };
 static struct ovs_mutex task_lock = OVS_MUTEX_INITIALIZER;
 
@@ -161,6 +178,13 @@ static uint32_t
 ss_hash(struct substring substring, uint32_t basis)
 {
     return hash_bytes(substring.s, substring.length, basis);
+}
+
+static struct substring
+ss_clone(struct substring substring)
+{
+    return (struct substring) { .s = xmemdup(substring.s, substring.length),
+                                .length = substring.length };
 }
 
 struct log_record {
@@ -610,7 +634,37 @@ split(const struct substring *msg)
     free(s);
 }
 
-static int
+static void
+copy_log_record(struct log_record *dst, const struct log_record *src)
+{
+    dst->count = src->count;
+    dst->valid = src->valid;
+    dst->line = ss_clone(src->line);
+    dst->facility = src->facility;
+    dst->priority = src->priority;
+    dst->timestamp = ss_clone(src->timestamp);
+    dst->when = src->when;
+    dst->hostname = ss_clone(src->hostname);
+    dst->app_name = ss_clone(src->app_name);
+    dst->procid = ss_clone(src->procid);
+    dst->msgid = ss_clone(src->msgid);
+    dst->sdid = ss_clone(src->sdid);
+    dst->comp = ss_clone(src->comp);
+    dst->subcomp = ss_clone(src->subcomp);
+    dst->msg = ss_clone(src->msg);
+}
+
+#if 0
+static struct log_record *
+clone_log_record(const struct log_record *src)
+{
+    struct log_record *dst = xmalloc(sizeof *dst);
+    copy_log_record(dst, src);
+    return dst;
+}
+#endif
+
+static uint32_t
 hash_log_record(const struct log_record *r, uint32_t basis)
 {
     uint32_t hash = basis;
@@ -744,23 +798,6 @@ compare_log_records_for_bt(const struct bt_node *a_,
     return compare_log_records(a, b);
 }
 
-struct topkapi {
-    const struct log_record *rec;
-    long long int count;
-};
-
-struct state {
-    struct log_record *reservoir;
-    struct bt bt;
-    int allocated;
-    int n;
-    int population;
-
-#define TK_L 4                  /* Number of hashes */
-#define TK_B 1024               /* Number of buckets */
-    struct topkapi *tk[TK_L];
-};
-
 static void
 state_init(struct state *state)
 {
@@ -820,12 +857,12 @@ state_add(struct state *state, const struct log_record *rec)
             uint32_t hash = hash_log_record(rec, i);
             struct topkapi *tk = &state->tk[i][hash % TK_B];
             if (!tk->rec) {
-                tk->rec = rec;
+                tk->rec = xmemdup(rec, sizeof *rec);
                 tk->count = 1;
             } else if (!compare_log_records(rec, tk->rec)) {
                 tk->count++;
             } else if (--tk->count < 0) {
-                tk->rec = rec;
+                *tk->rec = *rec;
                 tk->count = 1;
             }
         }
@@ -839,7 +876,7 @@ state_uninit(struct state *state)
 }
 
 static void
-parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS_UNUSED)
+parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
 {
     const char *end = buffer + size;
 
@@ -847,9 +884,10 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
         VLOG_DBG("%s: not an RFC 5424 log file", fn);
         return;
     }
+    total_bytes += size;
 
-    struct state state;
-    state_init(&state);
+    struct state *state = &task->state;
+    state_init(state);
 
     struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
     for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
@@ -859,6 +897,7 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
             break;
         }
         ctx.p = ctx.line_start;
+        total_recs++;
 
         struct log_record rec;
         memset(&rec, 0, sizeof rec);
@@ -888,24 +927,32 @@ parse_file(const char *fn, const char *buffer, off_t size, struct ds *output OVS
             continue;
         }
 
-        state_add(&state, &rec);
+        state_add(state, &rec);
     }
 
-    for (size_t i = 0; i < state.n; i++) {
-        ds_put_format(output, "*%lld ", state.reservoir[i].count);
-        ds_put_buffer(output, state.reservoir[i].line.s,
-                      state.reservoir[i].line.length);
-        ds_put_char(output, '\n');
+    if (show != SHOW_TOPK) {
+        for (size_t i = 0; i < state->n; i++) {
+            ds_put_format(&task->output, "*%lld ", state->reservoir[i].count);
+            ds_put_buffer(&task->output, state->reservoir[i].line.s,
+                          state->reservoir[i].line.length);
+            ds_put_char(&task->output, '\n');
+        }
+    } else {
+        for (int i = 0; i < TK_L; i++) {
+            for (int j = 0; j < TK_B; j++) {
+                struct log_record *rec = state->tk[i][j].rec;
+                if (rec) {
+                    copy_log_record(rec, rec);
+                }
+            }
+        }
     }
-    state_uninit(&state);
-
-    total_bytes += size;
-    total_recs += ctx.ln - 1;
+    state_uninit(state);
 }
 
 static void
 read_gzipped(const char *name, const char *in, size_t in_size,
-             struct ds *output)
+             struct task *task)
 {
     z_stream z = {
         .next_in = (unsigned char *) in,
@@ -955,7 +1002,7 @@ read_gzipped(const char *name, const char *in, size_t in_size,
             return;
         }
     }
-    parse_file(name, out, z.total_out, output);
+    parse_file(name, out, z.total_out, task);
     free(out);
 
     total_decompressed += z.total_out;
@@ -987,12 +1034,12 @@ task_execute(struct task *task)
     close(fd);
 
     if (size > 2 && !memcmp(buffer, "\x1f\x8b", 2)) {
-        read_gzipped(fn, buffer, size, output);
+        read_gzipped(fn, buffer, size, task);
     } else {
         if (madvise(buffer, size, MADV_WILLNEED) < 0) {
             ovs_fatal(errno, "%s: madvise failed", fn);
         }
-        parse_file(fn, buffer, size, output);
+        parse_file(fn, buffer, size, task);
     }
 
     if (munmap(buffer, size) < 0) {
@@ -1011,7 +1058,7 @@ open_target(const char *name)
 
     if (S_ISREG(s.st_mode)) {
         if (s.st_size > 0 && !strstr(name, "metrics")) {
-            struct task *task = xmalloc(sizeof *task);
+            struct task *task = xzalloc(sizeof *task);
             task->filename = xstrdup(name);
             task->size = s.st_size;
             ds_init(&task->output);
@@ -1217,33 +1264,114 @@ print_record(const struct log_record *r, int i, int n)
     ds_destroy(&s);
 }
 
+static int
+compare_tk_by_count_desc(const void *a_, const void *b_)
+{
+    const struct topkapi *a = a_;
+    const struct topkapi *b = b_;
+    return a->count > b->count ? -1 : a->count < b->count;
+}
+
 static void
 merge_results(void)
 {
-    struct state state;
-    state_init(&state);
+    if (show != SHOW_TOPK) {
+        struct state state;
+        state_init(&state);
 
-    random_set_seed(1);
+        random_set_seed(1);
 
-    struct task *task;
-    LIST_FOR_EACH (task, list_node, &complete_tasks) {
-        parse_lines("<child process>", task->output.string,
-                    task->output.length, &state);
-    }
+        struct task *task;
+        LIST_FOR_EACH (task, list_node, &complete_tasks) {
+            parse_lines("<child process>", task->output.string,
+                        task->output.length, &state);
+        }
 
-    qsort(state.reservoir, state.n, sizeof *state.reservoir,
-          compare_log_records_for_qsort);
-    if (!state.n) {
-        printf("no data\n");
-    } else if (at >= 0 && at <= 100) {
-        size_t pos = MIN(at / 100.0 * state.n, state.n - 1);
-        print_record(&state.reservoir[pos], pos, state.n);
+        qsort(state.reservoir, state.n, sizeof *state.reservoir,
+              compare_log_records_for_qsort);
+        if (!state.n) {
+            printf("no data\n");
+        } else if (at >= 0 && at <= 100) {
+            size_t pos = MIN(at / 100.0 * state.n, state.n - 1);
+            print_record(&state.reservoir[pos], pos, state.n);
+        } else {
+            for (size_t i = 0; i < state.n; i++) {
+                print_record(&state.reservoir[i], i, state.n);
+            }
+        }
+        state_uninit(&state);
     } else {
-        for (size_t i = 0; i < state.n; i++) {
-            print_record(&state.reservoir[i], i, state.n);
+        struct topkapi *tk[TK_L];
+        for (int i = 0; i < TK_L; i++) {
+            tk[i] = xcalloc(TK_B, sizeof *tk[i]);
+        }
+
+        struct task *task;
+        LIST_FOR_EACH (task, list_node, &complete_tasks) {
+            if (!task->state.tk[0]) {
+                continue;
+            }
+            for (int i = 0; i < TK_L; i++) {
+                for (int j = 0; j < TK_B; j++) {
+                    struct topkapi *dst = &tk[i][j];
+                    struct topkapi *src = &task->state.tk[i][j];
+
+                    if (!src->rec) {
+                        /* Nothing to do. */
+                    } else if (!dst->rec) {
+                        *dst = *src;
+                    } else if (!compare_log_records(dst->rec, src->rec)) {
+                        dst->count += src->count;
+                    } else if (dst->count >= src->count) {
+                        dst->count -= src->count;
+                    } else {
+                        dst->rec = src->rec;
+                        dst->count = src->count - dst->count;
+                    }
+                }
+            }
+        }
+
+#if 0
+        for (int i = 0; i < TK_L; i++) {
+            printf("%d:", i);
+            for (int j = 0; j < TK_B; j++) {
+                printf(" %lld", tk[i][j].count);
+            }
+            printf("\n");
+        }
+#endif
+
+        int K = 100;
+        int frac_epsilon = 10 * K;
+        int threshold = ((double) TK_B / K) - ((double) TK_B / frac_epsilon);
+        for (int j = 0; j < TK_B; j++) {
+            if (!tk[0][j].rec) {
+                tk[0][j].count = 0;
+                continue;
+            }
+            long long int count = tk[0][j].count;
+            for (int i = 1; i < TK_L; i++) {
+                int idx = hash_log_record(tk[0][j].rec, i) % TK_B;
+                if (!tk[i][idx].rec
+                    || compare_log_records(tk[0][j].rec, tk[i][idx].rec)) {
+                    continue;
+                }
+                count = MAX(count, tk[i][idx].count);
+            }
+            tk[0][j].count = count;
+        }
+
+        qsort(tk[0], TK_B, sizeof *tk[0], compare_tk_by_count_desc);
+        for (int j = 0; j < TK_B; j++) {
+            if (tk[0][j].count >= threshold) {
+                printf("x%lld ", tk[0][j].count);
+                print_record(tk[0][j].rec, 0, 0);
+            } else {
+                break;
+            }
         }
     }
-    state_uninit(&state);
 }
 
 static int
