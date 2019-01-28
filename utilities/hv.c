@@ -1278,8 +1278,24 @@ compare_tk_by_count_desc(const void *a_, const void *b_)
 }
 
 static void
-merge_results(void)
+add_record(struct log_record *record,
+           struct log_record ***resultsp, size_t *n_resultsp,
+           size_t *allocated_resultsp)
 {
+    if (*n_resultsp >= *allocated_resultsp) {
+        *resultsp = x2nrealloc(*resultsp, allocated_resultsp,
+                               sizeof **resultsp);
+    }
+    (*resultsp)[(*n_resultsp)++] = record;
+}
+
+static void
+merge_results(struct log_record ***resultsp, size_t *n_resultsp)
+{
+    struct log_record **results = NULL;
+    size_t n_results = 0;
+    size_t allocated_results = 0;
+
     if (show != SHOW_TOPK) {
         struct state state;
         state_init(&state);
@@ -1298,13 +1314,14 @@ merge_results(void)
             printf("no data\n");
         } else if (at >= 0 && at <= 100) {
             size_t pos = MIN(at / 100.0 * state.n, state.n - 1);
-            print_record(&state.reservoir[pos], pos, state.n);
+            add_record(&state.reservoir[pos],
+                       &results, &n_results, &allocated_results);
         } else {
             for (size_t i = 0; i < state.n; i++) {
-                print_record(&state.reservoir[i], i, state.n);
+                add_record(&state.reservoir[i],
+                           &results, &n_results, &allocated_results);
             }
         }
-        state_uninit(&state);
     } else {
         struct topkapi *tk[TK_L];
         for (int i = 0; i < TK_L; i++) {
@@ -1370,13 +1387,17 @@ merge_results(void)
         qsort(tk[0], TK_B, sizeof *tk[0], compare_tk_by_count_desc);
         for (int j = 0; j < TK_B; j++) {
             if (tk[0][j].count >= threshold) {
-                printf("x%lld ", tk[0][j].count);
-                print_record(tk[0][j].rec, 0, 0);
+                tk[0][j].rec->count = tk[0][j].count;
+                add_record(tk[0][j].rec,
+                           &results, &n_results, &allocated_results);
             } else {
                 break;
             }
         }
     }
+
+    *resultsp = results;
+    *n_resultsp = n_results;
 }
 
 static int
@@ -1450,12 +1471,20 @@ main(int argc, char *argv[])
     free(threads);
     free(queued_tasks);
 
-    merge_results();
+    struct log_record **results;
+    size_t n_results;
+    merge_results(&results, &n_results);
 
+    for (size_t i = 0; i < n_results; i++) {
+        print_record(results[i], i, n_results);
+    }
+
+#if 0
     printf("parsed %.1f MB of logs containing %llu records\n",
            total_bytes / 1024.0 / 1024.0, total_recs);
     printf("decompressed %.1f MB of gzipped data\n",
            total_decompressed / 1024.0 / 1024.0);
+#endif
 
 #if 0
     endwin();
