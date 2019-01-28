@@ -42,6 +42,7 @@
 
 #include "bt.h"
 #include "command-line.h"
+#include "fatal-signal.h"
 #include "hash.h"
 #include "heap.h"
 #include "openvswitch/dynamic-string.h"
@@ -898,6 +899,9 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         }
         ctx.p = ctx.line_start;
         total_recs++;
+        if (!(total_recs % 1024)) {
+            fatal_signal_run();
+        }
 
         struct log_record rec;
         memset(&rec, 0, sizeof rec);
@@ -992,6 +996,7 @@ read_gzipped(const char *name, const char *in, size_t in_size,
         z.next_out = (unsigned char *) &out[z.total_out];
         z.avail_out = allocated - z.total_out;
 
+        fatal_signal_run();
         retval = inflate(&z, Z_SYNC_FLUSH);
         if (retval == Z_STREAM_END) {
             break;
@@ -1399,6 +1404,7 @@ task_thread(void *unused OVS_UNUSED)
         }
 
         task_execute(task);
+        fatal_signal_run();
 
         ovs_mutex_lock(&task_lock);
         ovs_list_push_back(&complete_tasks, &task->list_node);
@@ -1420,7 +1426,9 @@ main(int argc, char *argv[])
     intrflush(stdscr, false);
     keypad(stdscr, true);
 #endif
-    
+
+    fatal_signal_init();
+
     if (optind >= argc) {
         open_target(".");
     } else {
