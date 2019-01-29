@@ -1213,60 +1213,57 @@ put_substring(struct ds *dst, const struct substring src)
 }
 
 static void
-print_record(const struct log_record *r, int i, int n)
+format_record(const struct log_record *r, int i, int n, struct ds *s)
 {
-    struct ds s = DS_EMPTY_INITIALIZER;
-    ds_put_format(&s, "%7lld", r->count);
+    ds_put_format(s, "%7lld", r->count);
 
     if (show == SHOW_SAMPLE && n) {
-        ds_put_format(&s, "%5.2f%% ", 100.0 * i / n);
+        ds_put_format(s, "%5.2f%% ", 100.0 * i / n);
     }
 
     for (size_t j = 0; j < n_columns; j++) {
-        ds_put_char(&s, ' ');
+        ds_put_char(s, ' ');
         switch (columns[j]) {
         case COL_WHEN:
-            format_timestamp(r->when, &s);
+            format_timestamp(r->when, s);
             break;
         case COL_FACILITY:
-            ds_put_cstr(&s, facility_to_string(r->facility));
+            ds_put_cstr(s, facility_to_string(r->facility));
             break;
         case COL_PRIORITY:
-            ds_put_cstr(&s, priority_to_string(r->priority));
+            ds_put_cstr(s, priority_to_string(r->priority));
             break;
         case COL_HOSTNAME:
-            put_substring(&s, r->hostname);
+            put_substring(s, r->hostname);
             break;
         case COL_APP_NAME:
-            put_substring(&s, r->app_name);
+            put_substring(s, r->app_name);
             break;
         case COL_PROCID:
-            put_substring(&s, r->procid);
+            put_substring(s, r->procid);
             break;
         case COL_MSGID:
-            put_substring(&s, r->msgid);
+            put_substring(s, r->msgid);
             break;
         case COL_SDID:
-            put_substring(&s, r->sdid);
+            put_substring(s, r->sdid);
             break;
         case COL_COMP:
-            put_substring(&s, r->comp);
+            put_substring(s, r->comp);
             break;
         case COL_SUBCOMP:
-            put_substring(&s, r->subcomp);
+            put_substring(s, r->subcomp);
             break;
         case COL_MSG:
-            put_substring(&s, r->msg);
+            put_substring(s, r->msg);
             break;
         case COL_VALID:
-            ds_put_cstr(&s, r->valid ? "ok" : "invalid");
+            ds_put_cstr(s, r->valid ? "ok" : "invalid");
             break;
         default:
             OVS_NOT_REACHED();
         }
     }
-    puts(ds_cstr(&s));
-    ds_destroy(&s);
 }
 
 static int
@@ -1439,14 +1436,13 @@ main(int argc, char *argv[])
     set_program_name(argv[0]);
     parse_command_line (argc, argv);
 
-#if 0
     initscr();
     cbreak();
     noecho();
     nonl();
     intrflush(stdscr, false);
     keypad(stdscr, true);
-#endif
+    mousemask(ALL_MOUSE_EVENTS, NULL);
 
     fatal_signal_init();
 
@@ -1475,9 +1471,73 @@ main(int argc, char *argv[])
     size_t n_results;
     merge_results(&results, &n_results);
 
-    for (size_t i = 0; i < n_results; i++) {
-        print_record(results[i], i, n_results);
+    int y_ofs = 0, x_ofs = 0;
+    for (;;) {
+        int y_max = getmaxy(stdscr);
+        int x_max = getmaxx(stdscr);
+        for (size_t i = 0; i < y_max; i++) {
+            struct ds s = DS_EMPTY_INITIALIZER;
+            if (i + y_ofs < n_results) {
+                format_record(results[i + y_ofs], i + y_ofs, n_results, &s);
+            } else {
+                ds_put_char(&s, '~');
+            }
+            ds_truncate(&s, x_ofs + x_max - 1);
+            mvprintw(i, 0, "%s", ds_cstr(&s) + MIN(x_ofs, s.length));
+            clrtoeol();
+            ds_destroy(&s);
+        }
+        refresh();
+
+        switch (getch()) {
+        case KEY_UP: case 'k':
+            if (y_ofs > 0) {
+                y_ofs--;
+            }
+            break;
+        case KEY_DOWN: case 'j':
+            if (y_ofs < n_results) {
+                y_ofs++;
+            }
+            break;
+        case KEY_LEFT: case 'h':
+            if (x_ofs > 0) {
+                x_ofs = MAX(x_ofs - 10, 0);
+            }
+            break;
+        case KEY_RIGHT: case 'l':
+            x_ofs += 10;
+            break;
+        case KEY_NPAGE: case ' ':
+            y_ofs = MIN(y_ofs + (y_max - 2), n_results);
+            break;
+        case KEY_PPAGE: case KEY_BACKSPACE:
+            y_ofs = MAX(y_ofs - (y_max - 2), 0);
+            break;
+        case KEY_HOME: case '<':
+            y_ofs = 0;
+            break;
+        case KEY_END: case '>':
+            y_ofs = MAX(n_results - (y_max - 2), 0);
+            break;
+        case KEY_MOUSE:
+            for (;;) {
+                MEVENT event;
+                if (getmouse(&event) != OK) {
+                    break;
+                }
+                if (event.bstate == BUTTON4_PRESSED) {
+                    y_ofs = MAX(y_ofs - y_max / 10, 0);
+                } else if (event.bstate == BUTTON5_PRESSED) {
+                    y_ofs = MIN(y_ofs + y_max / 10, n_results - (y_max - 2));
+                }
+            }
+            break;
+        case 'q': case 'Q':
+            goto exit;
+        }
     }
+exit:
 
 #if 0
     printf("parsed %.1f MB of logs containing %llu records\n",
@@ -1486,9 +1546,7 @@ main(int argc, char *argv[])
            total_decompressed / 1024.0 / 1024.0);
 #endif
 
-#if 0
     endwin();
-#endif
 }
 
 static void
