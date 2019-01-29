@@ -111,6 +111,9 @@ static double at = -DBL_MAX;
 static enum { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE, SHOW_TOPK } show
 = SHOW_SAMPLE;
 
+static atomic_uint progress = ATOMIC_VAR_INIT(0);
+static atomic_uint goal = ATOMIC_VAR_INIT(0);
+
 #define COLUMNS                                 \
     COLUMN(WHEN, "when")                        \
     COLUMN(FACILITY, "facility")                \
@@ -1416,6 +1419,15 @@ compare_tasks(const void *a_, const void *b_)
     return a->size < b->size ? -1 : a->size > b->size;
 }
 
+typedef OVSRCU_TYPE(struct results *) ovsrcu_results_p;
+struct merge_ctx {
+    int argc;
+    char **argv;
+    ovsrcu_results_p *resultsp;
+};
+
+static struct seq *results_seq;
+
 static void *
 task_thread(void *unused OVS_UNUSED)
 {
@@ -1433,20 +1445,15 @@ task_thread(void *unused OVS_UNUSED)
         task_execute(task);
         fatal_signal_run();
 
+        unsigned int orig;
+        atomic_add(&progress, 1, &orig);
+        seq_change(results_seq);
+
         ovs_mutex_lock(&task_lock);
         ovs_list_push_back(&complete_tasks, &task->list_node);
         ovs_mutex_unlock(&task_lock);
     }
 }
-
-typedef OVSRCU_TYPE(struct results *) ovsrcu_results_p;
-struct merge_ctx {
-    int argc;
-    char **argv;
-    ovsrcu_results_p *resultsp;
-};
-
-static struct seq *results_seq;
 
 static void *
 merge_thread(void *ctx_)
@@ -1460,6 +1467,8 @@ merge_thread(void *ctx_)
         }
     }
     qsort(queued_tasks, n_queued_tasks, sizeof *queued_tasks, compare_tasks);
+    atomic_store(&progress, 0);
+    atomic_store(&goal, n_queued_tasks);
 
     int cores = count_cores();
     int n_threads = MIN(4 * cores, n_queued_tasks);
@@ -1478,6 +1487,8 @@ merge_thread(void *ctx_)
 
     struct results *results = merge_results();
     ovsrcu_set(ctx->resultsp, results);
+
+    atomic_store(&goal, 0);
 
     seq_change(results_seq);
 
@@ -1573,7 +1584,7 @@ main(int argc, char *argv[])
             break;
         }
 
-        for (size_t i = 0; i < y_max; i++) {
+        for (size_t i = 0; i < y_max - 1; i++) {
             struct ds s = DS_EMPTY_INITIALIZER;
             if (i + y_ofs < r->n) {
                 format_record(r->recs[i + y_ofs],
@@ -1586,6 +1597,18 @@ main(int argc, char *argv[])
             clrtoeol();
             ds_destroy(&s);
         }
+        unsigned int p, g;
+        atomic_read(&progress, &p);
+        atomic_read(&goal, &g);
+        move(y_max - 1, 0);
+        if (g) {
+            int n_ = x_max * p / g;
+            int n = n_ < 0 ? 0 : n_ > x_max ? x_max : n_;
+            for (int x = 0; x < n; x++) {
+                addch(ACS_BLOCK);
+            }
+        }
+        clrtoeol();
         refresh();
 
         seq_wait(results_seq, display_seqno);
