@@ -98,18 +98,7 @@ static struct ovs_list running_tasks OVS_GUARDED_BY(task_lock)
 static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
     = OVS_LIST_INITIALIZER(&complete_tasks);
 
-static const char *grep;
-static unsigned int priorities = 0xff;
-static unsigned int facilities = (1u << 24) - 1;
-static struct sset components = SSET_INITIALIZER(&components);
-static struct sset subcomponents = SSET_INITIALIZER(&subcomponents);
-static double date_since = -DBL_MAX;
-static double date_until = DBL_MAX;
-
-static double at = -DBL_MAX;
-
-static enum { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE, SHOW_TOPK } show
-= SHOW_SAMPLE;
+enum show { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE, SHOW_TOPK };
 
 static atomic_uint progress = ATOMIC_VAR_INIT(0);
 static atomic_uint goal = ATOMIC_VAR_INIT(0);
@@ -138,8 +127,34 @@ enum column {
 enum { N_COLUMNS = 0 COLUMNS };
 #undef COLUMN
 
-static enum column *columns;
-static size_t n_columns;
+struct spec {
+    enum show show;
+
+    char *grep;
+    unsigned int priorities;
+    unsigned int facilities;
+    struct sset components;
+    struct sset subcomponents;
+    double date_since;
+    double date_until;
+    double at;
+
+    enum column *columns;
+    size_t n_columns;
+};
+
+#define SPEC_INITIALIZER(SPEC) {                                \
+    .show = SHOW_SAMPLE,                                        \
+    .priorities = 0xff,                                         \
+    .facilities = (1u << 24) - 1,                               \
+    .components = SSET_INITIALIZER(&(SPEC)->components),        \
+    .subcomponents = SSET_INITIALIZER(&(SPEC)->subcomponents),  \
+    .date_since = -DBL_MAX,                                     \
+    .date_until = DBL_MAX,                                      \
+    .at = -DBL_MAX,                                             \
+}
+
+static struct spec spec = SPEC_INITIALIZER(&spec);
 
 static unsigned long long int total_bytes;
 static unsigned long long int total_decompressed;
@@ -679,8 +694,8 @@ static uint32_t
 hash_log_record(const struct log_record *r, uint32_t basis)
 {
     uint32_t hash = basis;
-    for (size_t i = 0; i < n_columns; i++) {
-        switch (columns[i]) {
+    for (size_t i = 0; i < spec.n_columns; i++) {
+        switch (spec.columns[i]) {
         case COL_WHEN:
             hash = hash_double(r->when, basis);
             break;
@@ -739,10 +754,10 @@ compare_int(int a, int b)
 static int
 compare_log_records(const struct log_record *a, const struct log_record *b)
 {
-    for (size_t i = 0; i < n_columns; i++) {
+    for (size_t i = 0; i < spec.n_columns; i++) {
         int cmp;
 
-        switch (columns[i]) {
+        switch (spec.columns[i]) {
         case COL_WHEN:
             cmp = compare_double(a->when, b->when);
             break;
@@ -785,7 +800,7 @@ compare_log_records(const struct log_record *a, const struct log_record *b)
             OVS_NOT_REACHED();
         }
         if (cmp) {
-            return show == SHOW_LAST ? -cmp : cmp;
+            return spec.show == SHOW_LAST ? -cmp : cmp;
         }
     }
     return 0;
@@ -816,7 +831,7 @@ state_init(struct state *state)
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
-    if (show == SHOW_FIRST || show == SHOW_LAST) {
+    if (spec.show == SHOW_FIRST || spec.show == SHOW_LAST) {
         bt_init(&state->bt, compare_log_records_for_bt, NULL);
     } else {
         for (int i = 0; i < TK_L; i++) {
@@ -828,7 +843,7 @@ state_init(struct state *state)
 static void
 state_add(struct state *state, const struct log_record *rec)
 {
-    if (show == SHOW_SAMPLE) {
+    if (spec.show == SHOW_SAMPLE) {
         size_t idx = (state->n < state->allocated
                       ? state->n++
                       : random_range(state->population + 1));
@@ -836,7 +851,7 @@ state_add(struct state *state, const struct log_record *rec)
             state->reservoir[idx] = *rec;
         }
         state->population++;
-    } else if (show == SHOW_FIRST || show == SHOW_LAST) {
+    } else if (spec.show == SHOW_FIRST || spec.show == SHOW_LAST) {
         state->population++;
 
         struct bt_node *last = NULL;
@@ -863,7 +878,7 @@ state_add(struct state *state, const struct log_record *rec)
             *pos = *rec;
             bt_insert(&state->bt, &pos->bt_node);
         }
-    } else if (show == SHOW_TOPK) {
+    } else if (spec.show == SHOW_TOPK) {
         for (int i = 0; i < TK_L; i++) {
             uint32_t hash = hash_log_record(rec, i);
             struct topkapi *tk = &state->tk[i][hash % TK_B];
@@ -919,32 +934,33 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
-        if (rec.when < date_since || rec.when > date_until) {
+        if (rec.when < spec.date_since || rec.when > spec.date_until) {
             continue;
         }
-        if (!(priorities & (1u << rec.priority))) {
+        if (!(spec.priorities & (1u << rec.priority))) {
             continue;
         }
-        if (!(facilities & (1u << rec.facility))) {
+        if (!(spec.facilities & (1u << rec.facility))) {
             continue;
         }
-        if (!sset_is_empty(&components)
-            && !sset_contains_len(&components, rec.comp.s, rec.comp.length)) {
+        if (!sset_is_empty(&spec.components)
+            && !sset_contains_len(&spec.components, rec.comp.s,
+                                  rec.comp.length)) {
             continue;
         }
-        if (!sset_is_empty(&subcomponents)
-            && !sset_contains_len(&components,
+        if (!sset_is_empty(&spec.subcomponents)
+            && !sset_contains_len(&spec.subcomponents,
                                   rec.subcomp.s, rec.subcomp.length)) {
             continue;
         }
-        if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
+        if (spec.grep && !ss_contains(rec.msg, ss_cstr(spec.grep))) {
             continue;
         }
 
         state_add(state, &rec);
     }
 
-    if (show != SHOW_TOPK) {
+    if (spec.show != SHOW_TOPK) {
         for (size_t i = 0; i < state->n; i++) {
             ds_put_format(&task->output, "*%lld ", state->reservoir[i].count);
             ds_put_buffer(&task->output, state->reservoir[i].line.s,
@@ -1150,7 +1166,7 @@ parse_lines(const char *name, const char *buffer, size_t length,
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
-        if (grep && !ss_contains(rec.msg, ss_cstr(grep))) {
+        if (spec.grep && !ss_contains(rec.msg, ss_cstr(spec.grep))) {
             continue;
         }
 
@@ -1161,7 +1177,7 @@ parse_lines(const char *name, const char *buffer, size_t length,
 static const char *
 priority_to_string(int priority)
 {
-    const char *levels[] = {
+    const char *priorities[] = {
         [0] = "EMER",
         [1] = "ALER",
         [2] = "CRIT",
@@ -1172,8 +1188,8 @@ priority_to_string(int priority)
         [7] = "DBG ",
     };
 
-    return (priority >= 0 && priority < ARRAY_SIZE(levels)
-            ? levels[priority]
+    return (priority >= 0 && priority < ARRAY_SIZE(priorities)
+            ? priorities[priority]
             : "****");
 }
 
@@ -1227,13 +1243,13 @@ format_record(const struct log_record *r, int i, int n, struct ds *s)
 {
     ds_put_format(s, "%7lld", r->count);
 
-    if (show == SHOW_SAMPLE && n) {
+    if (spec.show == SHOW_SAMPLE && n) {
         ds_put_format(s, "%5.2f%% ", 100.0 * i / n);
     }
 
-    for (size_t j = 0; j < n_columns; j++) {
+    for (size_t j = 0; j < spec.n_columns; j++) {
         ds_put_char(s, ' ');
-        switch (columns[j]) {
+        switch (spec.columns[j]) {
         case COL_WHEN:
             format_timestamp(r->when, s);
             break;
@@ -1303,7 +1319,7 @@ merge_results(void)
     size_t n_results = 0;
     size_t allocated_results = 0;
 
-    if (show != SHOW_TOPK) {
+    if (spec.show != SHOW_TOPK) {
         struct state state;
         state_init(&state);
 
@@ -1319,8 +1335,8 @@ merge_results(void)
               compare_log_records_for_qsort);
         if (!state.n) {
             printf("no data\n");
-        } else if (at >= 0 && at <= 100) {
-            size_t pos = MIN(at / 100.0 * state.n, state.n - 1);
+        } else if (spec.at >= 0 && spec.at <= 100) {
+            size_t pos = MIN(spec.at / 100.0 * state.n, state.n - 1);
             add_record(&state.reservoir[pos],
                        &results, &n_results, &allocated_results);
         } else {
@@ -1578,8 +1594,8 @@ main(int argc, char *argv[])
             redrawwin(stdscr);
             break;
         case 'R' - 64:
-            columns[0] = COL_PRIORITY;
-            show = SHOW_FIRST;
+            spec.columns[0] = COL_PRIORITY;
+            spec.show = SHOW_FIRST;
             ovs_thread_create("merge", merge_thread, &ctx);
             break;
         }
@@ -1669,18 +1685,18 @@ level_from_string(const char *s)
 static void
 parse_priorities(char *s)
 {
-    priorities = 0;
+    spec.priorities = 0;
 
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
         int level = level_from_string(s);
         if (strchr(s, '+')) {
-            priorities |= (1u << (level + 1)) - 1;
+            spec.priorities |= (1u << (level + 1)) - 1;
         } else if (strchr(s, '-')) {
-            priorities |= ((1u << level) - 1) ^ 0xff;
+            spec.priorities |= ((1u << level) - 1) ^ 0xff;
         } else {
-            priorities |= 1u << level;
+            spec.priorities |= 1u << level;
         }
     }
 }
@@ -1706,14 +1722,14 @@ parse_facilities(char *s)
         xor = (1u << 24) - 1;
     }
 
-    facilities = 0;
+    spec.facilities = 0;
 
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
-        facilities |= 1u << facility_from_string(s);
+        spec.facilities |= 1u << facility_from_string(s);
     }
-    facilities ^= xor;
+    spec.facilities ^= xor;
 }
 
 static double
@@ -1779,15 +1795,15 @@ static void
 parse_columns(const char *s_)
 {
     char *s = xstrdup(s_);
-    size_t allocated_columns = n_columns;
+    size_t allocated_columns = spec.n_columns;
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
-        if (n_columns >= allocated_columns) {
-            columns = x2nrealloc(columns, &allocated_columns,
-                                 sizeof *columns);
+        if (spec.n_columns >= allocated_columns) {
+            spec.columns = x2nrealloc(spec.columns, &allocated_columns,
+                                      sizeof *spec.columns);
         }
-        columns[n_columns++] = column_from_string(token);
+        spec.columns[spec.n_columns++] = column_from_string(token);
     }
     free(s);
 }
@@ -1831,25 +1847,25 @@ parse_command_line(int argc, char *argv[])
             break;
 
         case 'a':
-            at = strtod(optarg, NULL);
+            spec.at = strtod(optarg, NULL);
             break;
 
         case 's':
             if (!strcmp(optarg, "first")) {
-                show = SHOW_FIRST;
+                spec.show = SHOW_FIRST;
             } else if (!strcmp(optarg, "last")) {
-                show = SHOW_LAST;
+                spec.show = SHOW_LAST;
             } else if (!strcmp(optarg, "sample")) {
-                show = SHOW_SAMPLE;
+                spec.show = SHOW_SAMPLE;
             } else if (!strcmp(optarg, "top")) {
-                show = SHOW_TOPK;
+                spec.show = SHOW_TOPK;
             } else {
                 ovs_fatal(0, "%s: unknown \"show\"", optarg);
             }
             break;
 
         case 'g':
-            grep = optarg;
+            spec.grep = optarg;
             break;
 
         case 'p':
@@ -1861,19 +1877,19 @@ parse_command_line(int argc, char *argv[])
             break;
 
         case OPT_SINCE:
-            date_since = parse_date(optarg);
+            spec.date_since = parse_date(optarg);
             break;
 
         case OPT_UNTIL:
-            date_until = parse_date(optarg);
+            spec.date_until = parse_date(optarg);
             break;
 
         case 'C':
-            sset_add_delimited(&components, optarg, " ,");
+            sset_add_delimited(&spec.components, optarg, " ,");
             break;
 
         case 'S':
-            sset_add_delimited(&subcomponents, optarg, " ,");
+            sset_add_delimited(&spec.subcomponents, optarg, " ,");
             break;
 
         case 'h':
@@ -1898,7 +1914,7 @@ parse_command_line(int argc, char *argv[])
                   "(use --help for help)");
     }
 
-    if (!n_columns) {
+    if (!spec.n_columns) {
         parse_columns("when facility priority comp subcomp msg");
     }
 }
