@@ -47,9 +47,11 @@
 #include "heap.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/poll-loop.h"
+#include "ovs-rcu.h"
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
+#include "seq.h"
 #include "sset.h"
 #include "socket-util.h"
 #include "util.h"
@@ -82,6 +84,11 @@ struct task {
     struct state state;
 };
 static struct ovs_mutex task_lock = OVS_MUTEX_INITIALIZER;
+
+struct results {
+    struct log_record **recs;
+    size_t n;
+};
 
 static struct task **queued_tasks;
 static size_t n_queued_tasks, allocated_queued_tasks;
@@ -1286,8 +1293,8 @@ add_record(struct log_record *record,
     (*resultsp)[(*n_resultsp)++] = record;
 }
 
-static void
-merge_results(struct log_record ***resultsp, size_t *n_resultsp)
+static struct results *
+merge_results(void)
 {
     struct log_record **results = NULL;
     size_t n_results = 0;
@@ -1393,8 +1400,10 @@ merge_results(struct log_record ***resultsp, size_t *n_resultsp)
         }
     }
 
-    *resultsp = results;
-    *n_resultsp = n_results;
+    struct results *r = xmalloc(sizeof *r);
+    r->recs = results;
+    r->n = n_results;
+    return r;
 }
 
 static int
@@ -1430,27 +1439,24 @@ task_thread(void *unused OVS_UNUSED)
     }
 }
 
-int
-main(int argc, char *argv[])
+typedef OVSRCU_TYPE(struct results *) ovsrcu_results_p;
+struct merge_ctx {
+    int argc;
+    char **argv;
+    ovsrcu_results_p *resultsp;
+};
+
+static struct seq *results_seq;
+
+static void *
+merge_thread(void *ctx_)
 {
-    set_program_name(argv[0]);
-    parse_command_line (argc, argv);
-
-    initscr();
-    cbreak();
-    noecho();
-    nonl();
-    intrflush(stdscr, false);
-    keypad(stdscr, true);
-    mousemask(ALL_MOUSE_EVENTS, NULL);
-
-    fatal_signal_init();
-
-    if (optind >= argc) {
+    struct merge_ctx *ctx = ctx_;
+    if (optind >= ctx->argc) {
         open_target(".");
     } else {
-        for (int i = optind; i < argc; i++) {
-            open_target(argv[i]);
+        for (int i = optind; i < ctx->argc; i++) {
+            open_target(ctx->argv[i]);
         }
     }
     qsort(queued_tasks, n_queued_tasks, sizeof *queued_tasks, compare_tasks);
@@ -1466,28 +1472,50 @@ main(int argc, char *argv[])
     }
     free(threads);
     free(queued_tasks);
+    queued_tasks = NULL;
+    n_queued_tasks = 0;
+    allocated_queued_tasks = 0;
 
-    struct log_record **results;
-    size_t n_results;
-    merge_results(&results, &n_results);
+    struct results *results = merge_results();
+    ovsrcu_set(ctx->resultsp, results);
+
+    seq_change(results_seq);
+
+    return NULL;
+}
+
+int
+main(int argc, char *argv[])
+{
+    set_program_name(argv[0]);
+    vlog_init();
+    parse_command_line (argc, argv);
+
+    initscr();
+    cbreak();
+    noecho();
+    nonl();
+    intrflush(stdscr, false);
+    keypad(stdscr, true);
+    mousemask(ALL_MOUSE_EVENTS, NULL);
+    nodelay(stdscr, true);
+
+    fatal_signal_init();
+
+    results_seq = seq_create();
+
+    ovsrcu_results_p results
+        = OVSRCU_INITIALIZER(xzalloc(sizeof(struct results)));
+    struct merge_ctx ctx = { argc, argv, &results };
+    ovs_thread_create("merge", merge_thread, &ctx);
 
     int y_ofs = 0, x_ofs = 0;
     for (;;) {
+        uint64_t display_seqno = seq_read(results_seq);
+        struct results *r = ovsrcu_get(struct results *, &results);
+
         int y_max = getmaxy(stdscr);
         int x_max = getmaxx(stdscr);
-        for (size_t i = 0; i < y_max; i++) {
-            struct ds s = DS_EMPTY_INITIALIZER;
-            if (i + y_ofs < n_results) {
-                format_record(results[i + y_ofs], i + y_ofs, n_results, &s);
-            } else {
-                ds_put_char(&s, '~');
-            }
-            ds_truncate(&s, x_ofs + x_max - 1);
-            mvprintw(i, 0, "%s", ds_cstr(&s) + MIN(x_ofs, s.length));
-            clrtoeol();
-            ds_destroy(&s);
-        }
-        refresh();
 
         switch (getch()) {
         case KEY_UP: case 'k':
@@ -1496,7 +1524,7 @@ main(int argc, char *argv[])
             }
             break;
         case KEY_DOWN: case 'j':
-            if (y_ofs < n_results) {
+            if (y_ofs < r->n) {
                 y_ofs++;
             }
             break;
@@ -1509,7 +1537,7 @@ main(int argc, char *argv[])
             x_ofs += 10;
             break;
         case KEY_NPAGE: case ' ':
-            y_ofs = MIN(y_ofs + (y_max - 2), n_results);
+            y_ofs = MIN(y_ofs + (y_max - 2), r->n);
             break;
         case KEY_PPAGE: case KEY_BACKSPACE:
             y_ofs = MAX(y_ofs - (y_max - 2), 0);
@@ -1518,7 +1546,7 @@ main(int argc, char *argv[])
             y_ofs = 0;
             break;
         case KEY_END: case '>':
-            y_ofs = MAX(n_results - (y_max - 2), 0);
+            y_ofs = MAX(r->n - (y_max - 2), 0);
             break;
         case KEY_MOUSE:
             for (;;) {
@@ -1529,13 +1557,40 @@ main(int argc, char *argv[])
                 if (event.bstate == BUTTON4_PRESSED) {
                     y_ofs = MAX(y_ofs - y_max / 10, 0);
                 } else if (event.bstate == BUTTON5_PRESSED) {
-                    y_ofs = MIN(y_ofs + y_max / 10, n_results - (y_max - 2));
+                    y_ofs = MIN(y_ofs + y_max / 10, r->n - (y_max - 2));
                 }
             }
             break;
         case 'q': case 'Q':
             goto exit;
+        case 'L' - 64:
+            redrawwin(stdscr);
+            break;
+        case 'R' - 64:
+            columns[0] = COL_PRIORITY;
+            show = SHOW_FIRST;
+            ovs_thread_create("merge", merge_thread, &ctx);
+            break;
         }
+
+        for (size_t i = 0; i < y_max; i++) {
+            struct ds s = DS_EMPTY_INITIALIZER;
+            if (i + y_ofs < r->n) {
+                format_record(r->recs[i + y_ofs],
+                              i + y_ofs, r->n, &s);
+            } else {
+                ds_put_char(&s, '~');
+            }
+            ds_truncate(&s, x_ofs + x_max - 1);
+            mvprintw(i, 0, "%s", ds_cstr(&s) + MIN(x_ofs, s.length));
+            clrtoeol();
+            ds_destroy(&s);
+        }
+        refresh();
+
+        seq_wait(results_seq, display_seqno);
+        poll_fd_wait(STDIN_FILENO, POLLIN);
+        poll_block();
     }
 exit:
 
