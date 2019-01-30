@@ -1277,7 +1277,7 @@ format_record(const struct log_record *r, int i, int n,
     ds_put_format(s, "%7lld", r->count);
 
     if (spec->show == SHOW_SAMPLE && n) {
-        ds_put_format(s, "%5.2f%% ", 100.0 * i / n);
+        ds_put_format(s, " %5.2f%% ", 100.0 * i / n);
     }
 
     for (enum column columns = spec->columns; columns;
@@ -1537,6 +1537,18 @@ job_thread(void *job_)
         fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
         threads[i] = ovs_thread_create("read", task_thread, job);
     }
+    for (;;) {
+        uint64_t seq = seq_read(job->seq);
+        ovs_mutex_lock(&job->stats_lock);
+        bool done = job->progress == job->goal;
+        ovs_mutex_unlock(&job->stats_lock);
+        ovsrcu_set(&job->results, merge_results(job));
+        if (done) {
+            break;
+        }
+        seq_wait(job->seq, seq);
+        poll_block();
+    }
     for (int i = 0; i < n_threads; i++) {
         fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
         xpthread_join(threads[i], NULL);
@@ -1544,7 +1556,6 @@ job_thread(void *job_)
     free(threads);
 
     fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
-    ovsrcu_set(&job->results, merge_results(job));
 
     WITH_MUTEX(&job->stats_lock, job->goal = 0);
 
