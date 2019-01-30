@@ -17,6 +17,7 @@
 
 #include "sort.h"
 
+#include "ovs-thread.h"
 #include "random.h"
 
 static size_t
@@ -67,4 +68,32 @@ sort(size_t count,
      void *aux)
 {
     quicksort(0, count, compare, swap, aux);
+}
+
+struct qsort_auxdata {
+    int (*compare)(const void *a, const void *b, const void *aux);
+    const void *aux;
+};
+DEFINE_STATIC_PER_THREAD_DATA(struct qsort_auxdata, qsort_auxdata,
+                              { NULL, NULL });
+
+static int
+compare_thunk(const void *a, const void *b)
+{
+    const struct qsort_auxdata *qsort_auxdata = qsort_auxdata_get_unsafe();
+    return qsort_auxdata->compare(a, b, qsort_auxdata->aux);
+}
+
+void
+qsort_aux(void *array, size_t count, size_t size,
+          int (*compare)(const void *a, const void *b, const void *aux),
+          const void *aux)
+{
+    struct qsort_auxdata *qsort_auxdata = qsort_auxdata_get();
+    struct qsort_auxdata save = *qsort_auxdata;
+    qsort_auxdata->compare = compare;
+    qsort_auxdata->aux = aux;
+    qsort(array, count, size, compare_thunk);
+    *qsort_auxdata = save;
+
 }

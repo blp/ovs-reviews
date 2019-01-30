@@ -51,9 +51,12 @@
 #include "ovs-thread.h"
 #include "process.h"
 #include "random.h"
+#include "rculist.h"
 #include "seq.h"
-#include "sset.h"
 #include "socket-util.h"
+#include "sort.h"
+#include "sset.h"
+#include "svec.h"
 #include "util.h"
 
 #include "openvswitch/vlog.h"
@@ -77,31 +80,15 @@ struct state {
 };
 
 struct task {
-    struct ovs_list list_node;
+    struct job *job;
+    struct rculist list_node;
     char *filename;
     off_t size;
     struct ds output;
     struct state state;
 };
-static struct ovs_mutex task_lock = OVS_MUTEX_INITIALIZER;
-
-struct results {
-    struct log_record **recs;
-    size_t n;
-};
-
-static struct task **queued_tasks;
-static size_t n_queued_tasks, allocated_queued_tasks;
-
-static struct ovs_list running_tasks OVS_GUARDED_BY(task_lock)
-    = OVS_LIST_INITIALIZER(&running_tasks);
-static struct ovs_list complete_tasks OVS_GUARDED_BY(task_lock)
-    = OVS_LIST_INITIALIZER(&complete_tasks);
 
 enum show { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE, SHOW_TOPK };
-
-static atomic_uint progress = ATOMIC_VAR_INIT(0);
-static atomic_uint goal = ATOMIC_VAR_INIT(0);
 
 #define COLUMNS                                 \
     COLUMN(WHEN, "when")                        \
@@ -117,8 +104,14 @@ static atomic_uint goal = ATOMIC_VAR_INIT(0);
     COLUMN(MSG, "msg")                          \
     COLUMN(VALID, "valid")
 
+enum {
+#define COLUMN(ENUM, NAME) COL_IDX_##ENUM,
+    COLUMNS
+#undef COLUMN
+};
+
 enum column {
-#define COLUMN(ENUM, NAME) COL_##ENUM,
+#define COLUMN(ENUM, NAME) COL_##ENUM = 1u << COL_IDX_##ENUM,
     COLUMNS
 #undef COLUMN
 };
@@ -139,26 +132,48 @@ struct spec {
     double date_until;
     double at;
 
-    enum column *columns;
-    size_t n_columns;
+    enum column columns;
+    struct svec targets;
 };
 
-#define SPEC_INITIALIZER(SPEC) {                                \
-    .show = SHOW_SAMPLE,                                        \
-    .priorities = 0xff,                                         \
-    .facilities = (1u << 24) - 1,                               \
-    .components = SSET_INITIALIZER(&(SPEC)->components),        \
-    .subcomponents = SSET_INITIALIZER(&(SPEC)->subcomponents),  \
-    .date_since = -DBL_MAX,                                     \
-    .date_until = DBL_MAX,                                      \
-    .at = -DBL_MAX,                                             \
-}
+enum job_status {
+    JOB_INIT,
+    JOB_RUNNING,
+    JOB_CANCELED,
+    JOB_FINISHED
+};
 
-static struct spec spec = SPEC_INITIALIZER(&spec);
+struct results {
+    struct log_record **recs;
+    size_t n;
+};
 
-static unsigned long long int total_bytes;
-static unsigned long long int total_decompressed;
-static unsigned long long int total_recs;
+struct job {
+    /* Job specification. */
+    struct spec spec;
+
+    /* Job progress. */
+    pthread_t thread;
+    struct seq *seq;
+    atomic_bool cancel;
+    ATOMIC(enum job_status) status;
+
+    OVSRCU_TYPE(struct results *) results;
+
+    /* Statistics. */
+    struct ovs_mutex stats_lock; /* Protects all the members below. */
+    unsigned int progress OVS_GUARDED;
+    unsigned int goal OVS_GUARDED;
+
+    unsigned long long int total_bytes OVS_GUARDED;
+    unsigned long long int total_decompressed OVS_GUARDED;
+    unsigned long long int total_recs OVS_GUARDED;
+
+    /* Internals. */
+    struct ovs_mutex task_lock;
+    struct rculist queued_tasks;
+    struct rculist completed_tasks;
+};
 
 struct substring {
     const char *s;
@@ -233,7 +248,7 @@ struct log_record {
 };
 
 static void usage(void);
-static void parse_command_line(int argc, char *argv[]);
+static void parse_command_line(int argc, char *argv[], struct spec *);
 
 struct parse_ctx {
     const char *fn;
@@ -691,11 +706,12 @@ clone_log_record(const struct log_record *src)
 #endif
 
 static uint32_t
-hash_log_record(const struct log_record *r, uint32_t basis)
+hash_log_record(const struct log_record *r, uint32_t basis,
+                enum column columns)
 {
     uint32_t hash = basis;
-    for (size_t i = 0; i < spec.n_columns; i++) {
-        switch (spec.columns[i]) {
+    for (; columns; columns = zero_rightmost_1bit(columns)) {
+        switch (rightmost_1bit(columns)) {
         case COL_WHEN:
             hash = hash_double(r->when, basis);
             break;
@@ -752,12 +768,14 @@ compare_int(int a, int b)
 }
 
 static int
-compare_log_records(const struct log_record *a, const struct log_record *b)
+compare_log_records(const struct log_record *a, const struct log_record *b,
+                    const struct spec *spec)
 {
-    for (size_t i = 0; i < spec.n_columns; i++) {
+    for (enum column columns = spec->columns; columns;
+         columns = zero_rightmost_1bit(columns)) {
         int cmp;
 
-        switch (spec.columns[i]) {
+        switch (rightmost_1bit(columns)) {
         case COL_WHEN:
             cmp = compare_double(a->when, b->when);
             break;
@@ -800,39 +818,42 @@ compare_log_records(const struct log_record *a, const struct log_record *b)
             OVS_NOT_REACHED();
         }
         if (cmp) {
-            return spec.show == SHOW_LAST ? -cmp : cmp;
+            return spec->show == SHOW_LAST ? -cmp : cmp;
         }
     }
     return 0;
 }
 
 static int
-compare_log_records_for_qsort(const void *a_, const void *b_)
+compare_log_records_for_sort(const void *a_, const void *b_,
+                             const void *spec_)
 {
+    const struct spec *spec = spec_;
     const struct log_record *a = a_;
     const struct log_record *b = b_;
-    return compare_log_records(a, b);
+    return compare_log_records(a, b, spec);
 }
 
 static int
 compare_log_records_for_bt(const struct bt_node *a_,
                            const struct bt_node *b_,
-                           const void *aux OVS_UNUSED)
+                             const void *spec_)
 {
+    const struct spec *spec = spec_;
     const struct log_record *a = CONTAINER_OF(a_, struct log_record, bt_node);
     const struct log_record *b = CONTAINER_OF(b_, struct log_record, bt_node);
-    return compare_log_records(a, b);
+    return compare_log_records(a, b, spec);
 }
 
 static void
-state_init(struct state *state)
+state_init(struct state *state, const struct spec *spec)
 {
     state->allocated = 10000;
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
-    if (spec.show == SHOW_FIRST || spec.show == SHOW_LAST) {
-        bt_init(&state->bt, compare_log_records_for_bt, NULL);
+    if (spec->show == SHOW_FIRST || spec->show == SHOW_LAST) {
+        bt_init(&state->bt, compare_log_records_for_bt, &spec->columns);
     } else {
         for (int i = 0; i < TK_L; i++) {
             state->tk[i] = xcalloc(TK_B, sizeof *state->tk[i]);
@@ -841,9 +862,10 @@ state_init(struct state *state)
 }
 
 static void
-state_add(struct state *state, const struct log_record *rec)
+state_add(struct state *state, const struct log_record *rec,
+          const struct spec *spec)
 {
-    if (spec.show == SHOW_SAMPLE) {
+    if (spec->show == SHOW_SAMPLE) {
         size_t idx = (state->n < state->allocated
                       ? state->n++
                       : random_range(state->population + 1));
@@ -851,7 +873,7 @@ state_add(struct state *state, const struct log_record *rec)
             state->reservoir[idx] = *rec;
         }
         state->population++;
-    } else if (spec.show == SHOW_FIRST || spec.show == SHOW_LAST) {
+    } else if (spec->show == SHOW_FIRST || spec->show == SHOW_LAST) {
         state->population++;
 
         struct bt_node *last = NULL;
@@ -878,14 +900,14 @@ state_add(struct state *state, const struct log_record *rec)
             *pos = *rec;
             bt_insert(&state->bt, &pos->bt_node);
         }
-    } else if (spec.show == SHOW_TOPK) {
+    } else if (spec->show == SHOW_TOPK) {
         for (int i = 0; i < TK_L; i++) {
-            uint32_t hash = hash_log_record(rec, i);
+            uint32_t hash = hash_log_record(rec, i, spec->columns);
             struct topkapi *tk = &state->tk[i][hash % TK_B];
             if (!tk->rec) {
                 tk->rec = xmemdup(rec, sizeof *rec);
                 tk->count = 1;
-            } else if (!compare_log_records(rec, tk->rec)) {
+            } else if (!compare_log_records(rec, tk->rec, spec)) {
                 tk->count++;
             } else if (--tk->count < 0) {
                 *tk->rec = *rec;
@@ -901,19 +923,29 @@ state_uninit(struct state *state)
     free(state->reservoir);
 }
 
+#define WITH_MUTEX(MUTEX, ...)                  \
+    do {                                        \
+        ovs_mutex_lock(MUTEX);                  \
+        __VA_ARGS__;                            \
+        ovs_mutex_unlock(MUTEX);                \
+    } while (0)
+
 static void
-parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
+parse_file(const char *fn, const char *buffer, off_t size,
+           struct task *task)
 {
+    struct job *job = task->job;
+    const struct spec *spec = &job->spec;
     const char *end = buffer + size;
 
     if (size < 2 || buffer[0] != '<' || !c_isdigit(buffer[1])) {
         VLOG_DBG("%s: not an RFC 5424 log file", fn);
         return;
     }
-    total_bytes += size;
+    WITH_MUTEX(&job->stats_lock, job->total_bytes += size);
 
     struct state *state = &task->state;
-    state_init(state);
+    state_init(state, spec);
 
     struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
     for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
@@ -923,7 +955,10 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
             break;
         }
         ctx.p = ctx.line_start;
-        total_recs++;
+
+        ovs_mutex_lock(&job->stats_lock);
+        unsigned long long int total_recs = job->total_recs++;
+        ovs_mutex_unlock(&job->stats_lock);
         if (!(total_recs % 1024)) {
             fatal_signal_run();
         }
@@ -934,33 +969,33 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
-        if (rec.when < spec.date_since || rec.when > spec.date_until) {
+        if (rec.when < spec->date_since || rec.when > spec->date_until) {
             continue;
         }
-        if (!(spec.priorities & (1u << rec.priority))) {
+        if (!(spec->priorities & (1u << rec.priority))) {
             continue;
         }
-        if (!(spec.facilities & (1u << rec.facility))) {
+        if (!(spec->facilities & (1u << rec.facility))) {
             continue;
         }
-        if (!sset_is_empty(&spec.components)
-            && !sset_contains_len(&spec.components, rec.comp.s,
+        if (!sset_is_empty(&spec->components)
+            && !sset_contains_len(&spec->components, rec.comp.s,
                                   rec.comp.length)) {
             continue;
         }
-        if (!sset_is_empty(&spec.subcomponents)
-            && !sset_contains_len(&spec.subcomponents,
+        if (!sset_is_empty(&spec->subcomponents)
+            && !sset_contains_len(&spec->subcomponents,
                                   rec.subcomp.s, rec.subcomp.length)) {
             continue;
         }
-        if (spec.grep && !ss_contains(rec.msg, ss_cstr(spec.grep))) {
+        if (spec->grep && !ss_contains(rec.msg, ss_cstr(spec->grep))) {
             continue;
         }
 
-        state_add(state, &rec);
+        state_add(state, &rec, spec);
     }
 
-    if (spec.show != SHOW_TOPK) {
+    if (spec->show != SHOW_TOPK) {
         for (size_t i = 0; i < state->n; i++) {
             ds_put_format(&task->output, "*%lld ", state->reservoir[i].count);
             ds_put_buffer(&task->output, state->reservoir[i].line.s,
@@ -1036,7 +1071,8 @@ read_gzipped(const char *name, const char *in, size_t in_size,
     parse_file(name, out, z.total_out, task);
     free(out);
 
-    total_decompressed += z.total_out;
+    WITH_MUTEX(&task->job->stats_lock,
+               task->job->total_decompressed += z.total_out);
     inflateEnd(&z);
 }
 
@@ -1079,7 +1115,7 @@ task_execute(struct task *task)
 }
 
 static void
-open_target(const char *name)
+open_target(const char *name, struct job *job)
 {
     struct stat s;
     if (stat(name, &s) < 0) {
@@ -1090,16 +1126,12 @@ open_target(const char *name)
     if (S_ISREG(s.st_mode)) {
         if (s.st_size > 0 && !strstr(name, "metrics")) {
             struct task *task = xzalloc(sizeof *task);
+            task->job = job;
             task->filename = xstrdup(name);
             task->size = s.st_size;
             ds_init(&task->output);
-
-            if (n_queued_tasks >= allocated_queued_tasks) {
-                queued_tasks = x2nrealloc(queued_tasks,
-                                          &allocated_queued_tasks,
-                                          sizeof *queued_tasks);
-            }
-            queued_tasks[n_queued_tasks++] = task;
+            rculist_push_back(&job->queued_tasks, &task->list_node);
+            fprintf(stderr, "queuing %s\n", name);
         }
         return;
     } else if (!S_ISDIR(s.st_mode)) {
@@ -1128,7 +1160,7 @@ open_target(const char *name)
         }
 
         char *name2 = xasprintf("%s/%s", name, de->d_name);
-        open_target(name2);
+        open_target(name2, job);
         free(name2);
     }
     closedir(dir);
@@ -1148,7 +1180,7 @@ count_cores(void)
 
 static void
 parse_lines(const char *name, const char *buffer, size_t length,
-            struct state *state)
+            const struct spec *spec, struct state *state)
 {
     const char *end = buffer + length;
     struct parse_ctx ctx = { .fn = name, .ln = 1, .line_start = buffer };
@@ -1166,11 +1198,11 @@ parse_lines(const char *name, const char *buffer, size_t length,
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
-        if (spec.grep && !ss_contains(rec.msg, ss_cstr(spec.grep))) {
+        if (spec->grep && !ss_contains(rec.msg, ss_cstr(spec->grep))) {
             continue;
         }
 
-        state_add(state, &rec);
+        state_add(state, &rec, spec);
     }
 }
 
@@ -1239,17 +1271,19 @@ put_substring(struct ds *dst, const struct substring src)
 }
 
 static void
-format_record(const struct log_record *r, int i, int n, struct ds *s)
+format_record(const struct log_record *r, int i, int n,
+              const struct spec *spec, struct ds *s)
 {
     ds_put_format(s, "%7lld", r->count);
 
-    if (spec.show == SHOW_SAMPLE && n) {
+    if (spec->show == SHOW_SAMPLE && n) {
         ds_put_format(s, "%5.2f%% ", 100.0 * i / n);
     }
 
-    for (size_t j = 0; j < spec.n_columns; j++) {
+    for (enum column columns = spec->columns; columns;
+         columns = zero_rightmost_1bit(columns)) {
         ds_put_char(s, ' ');
-        switch (spec.columns[j]) {
+        switch (rightmost_1bit(columns)) {
         case COL_WHEN:
             format_timestamp(r->when, s);
             break;
@@ -1313,30 +1347,30 @@ add_record(struct log_record *record,
 }
 
 static struct results *
-merge_results(void)
+merge_results(struct job *job)
 {
     struct log_record **results = NULL;
     size_t n_results = 0;
     size_t allocated_results = 0;
 
-    if (spec.show != SHOW_TOPK) {
+    if (job->spec.show != SHOW_TOPK) {
         struct state state;
-        state_init(&state);
+        state_init(&state, &job->spec);
 
         random_set_seed(1);
 
         struct task *task;
-        LIST_FOR_EACH (task, list_node, &complete_tasks) {
+        RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
             parse_lines("<child process>", task->output.string,
-                        task->output.length, &state);
+                        task->output.length, &job->spec, &state);
         }
 
-        qsort(state.reservoir, state.n, sizeof *state.reservoir,
-              compare_log_records_for_qsort);
+        qsort_aux(state.reservoir, state.n, sizeof *state.reservoir,
+                  compare_log_records_for_sort, &job->spec);
         if (!state.n) {
             printf("no data\n");
-        } else if (spec.at >= 0 && spec.at <= 100) {
-            size_t pos = MIN(spec.at / 100.0 * state.n, state.n - 1);
+        } else if (job->spec.at >= 0 && job->spec.at <= 100) {
+            size_t pos = MIN(job->spec.at / 100.0 * state.n, state.n - 1);
             add_record(&state.reservoir[pos],
                        &results, &n_results, &allocated_results);
         } else {
@@ -1352,7 +1386,7 @@ merge_results(void)
         }
 
         struct task *task;
-        LIST_FOR_EACH (task, list_node, &complete_tasks) {
+        RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
             if (!task->state.tk[0]) {
                 continue;
             }
@@ -1365,7 +1399,8 @@ merge_results(void)
                         /* Nothing to do. */
                     } else if (!dst->rec) {
                         *dst = *src;
-                    } else if (!compare_log_records(dst->rec, src->rec)) {
+                    } else if (!compare_log_records(dst->rec, src->rec,
+                                                    &job->spec)) {
                         dst->count += src->count;
                     } else if (dst->count >= src->count) {
                         dst->count -= src->count;
@@ -1397,9 +1432,11 @@ merge_results(void)
             }
             long long int count = tk[0][j].count;
             for (int i = 1; i < TK_L; i++) {
-                int idx = hash_log_record(tk[0][j].rec, i) % TK_B;
+                int idx = hash_log_record(tk[0][j].rec, i, job->spec.columns)
+                    % TK_B;
                 if (!tk[i][idx].rec
-                    || compare_log_records(tk[0][j].rec, tk[i][idx].rec)) {
+                    || compare_log_records(tk[0][j].rec, tk[i][idx].rec,
+                                           &job->spec)) {
                     continue;
                 }
                 count = MAX(count, tk[i][idx].count);
@@ -1435,24 +1472,18 @@ compare_tasks(const void *a_, const void *b_)
     return a->size < b->size ? -1 : a->size > b->size;
 }
 
-typedef OVSRCU_TYPE(struct results *) ovsrcu_results_p;
-struct merge_ctx {
-    int argc;
-    char **argv;
-    ovsrcu_results_p *resultsp;
-};
-
-static struct seq *results_seq;
-
 static void *
-task_thread(void *unused OVS_UNUSED)
+task_thread(void *job_ OVS_UNUSED)
 {
+    struct job *job = job_;
     for (;;) {
-        ovs_mutex_lock(&task_lock);
-        struct task *task = (n_queued_tasks
-                             ? queued_tasks[--n_queued_tasks]
-                             : NULL);
-        ovs_mutex_unlock(&task_lock);
+        ovs_mutex_lock(&job->task_lock);
+        struct task *task = NULL;
+        if (!rculist_is_empty(&job->queued_tasks)) {
+            task = CONTAINER_OF(rculist_pop_back(&job->queued_tasks),
+                                struct task, list_node);
+        }
+        ovs_mutex_unlock(&job->task_lock);
 
         if (!task) {
             return NULL;
@@ -1461,54 +1492,116 @@ task_thread(void *unused OVS_UNUSED)
         task_execute(task);
         fatal_signal_run();
 
-        unsigned int orig;
-        atomic_add(&progress, 1, &orig);
-        seq_change(results_seq);
+        WITH_MUTEX(&job->stats_lock, job->progress++);
+        seq_change(job->seq);
 
-        ovs_mutex_lock(&task_lock);
-        ovs_list_push_back(&complete_tasks, &task->list_node);
-        ovs_mutex_unlock(&task_lock);
+        WITH_MUTEX(&job->task_lock,
+                   rculist_push_back(&job->completed_tasks, &task->list_node));
     }
 }
 
 static void *
-merge_thread(void *ctx_)
+job_thread(void *job_)
 {
-    struct merge_ctx *ctx = ctx_;
-    if (optind >= ctx->argc) {
-        open_target(".");
-    } else {
-        for (int i = optind; i < ctx->argc; i++) {
-            open_target(ctx->argv[i]);
-        }
+    struct job *job = job_;
+    for (size_t i = 0; i < job->spec.targets.n; i++) {
+        open_target(job->spec.targets.names[i], job);
     }
-    qsort(queued_tasks, n_queued_tasks, sizeof *queued_tasks, compare_tasks);
-    atomic_store(&progress, 0);
-    atomic_store(&goal, n_queued_tasks);
+    fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
+
+    /* Sort tasks by size.
+     *
+     * We can only do this to an rculist because we know that it's not been
+     * accessed concurrently yet. */
+    fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
+    struct task **tasks = xmalloc(rculist_size(&job->queued_tasks)
+                                  * sizeof *tasks);
+    size_t n_tasks = 0;
+    struct task *task;
+    RCULIST_FOR_EACH_PROTECTED (task, list_node, &job->queued_tasks) {
+        tasks[n_tasks++] = task;
+    }
+    qsort(tasks, n_tasks, sizeof *tasks, compare_tasks);
+    rculist_init(&job->queued_tasks);
+    for (size_t i = 0; i < n_tasks; i++) {
+        rculist_push_back(&job->queued_tasks, &tasks[i]->list_node);
+    }
+    free(tasks);
+
+    WITH_MUTEX(&job->stats_lock, job->goal = n_tasks);
 
     int cores = count_cores();
-    int n_threads = MIN(4 * cores, n_queued_tasks);
+    int n_threads = MIN(4 * cores, n_tasks);
     pthread_t *threads = xmalloc(n_threads * sizeof *threads);
     for (int i = 0; i < n_threads; i++) {
-        threads[i] = ovs_thread_create("read", task_thread, NULL);
+        fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
+        threads[i] = ovs_thread_create("read", task_thread, job);
     }
     for (int i = 0; i < n_threads; i++) {
+        fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
         xpthread_join(threads[i], NULL);
     }
     free(threads);
-    free(queued_tasks);
-    queued_tasks = NULL;
-    n_queued_tasks = 0;
-    allocated_queued_tasks = 0;
 
-    struct results *results = merge_results();
-    ovsrcu_set(ctx->resultsp, results);
+    fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
+    ovsrcu_set(&job->results, merge_results(job));
 
-    atomic_store(&goal, 0);
+    WITH_MUTEX(&job->stats_lock, job->goal = 0);
 
-    seq_change(results_seq);
+    seq_change(job->seq);
 
     return NULL;
+}
+
+static void
+spec_init(struct spec *spec)
+{
+    *spec = (struct spec) {
+        .show = SHOW_SAMPLE,
+        .priorities = 0xff,
+        .facilities = (1u << 24) - 1,
+        .components = SSET_INITIALIZER(&spec->components),
+        .subcomponents = SSET_INITIALIZER(&spec->subcomponents),
+        .date_since = -DBL_MAX,
+        .date_until = DBL_MAX,
+        .at = -DBL_MAX,
+        .columns = (COL_WHEN | COL_FACILITY | COL_PRIORITY
+                    | COL_COMP | COL_SUBCOMP | COL_MSG),
+    };
+}
+
+static void
+spec_copy(struct spec *dst, const struct spec *src)
+{
+    *dst = *src;
+    sset_clone(&dst->components, &src->components);
+    sset_clone(&dst->subcomponents, &src->subcomponents);
+    svec_clone(&dst->targets, &src->targets);
+}
+
+static struct job *
+job_create(const struct spec *spec)
+{
+    struct job *job = xzalloc(sizeof *job);
+
+    spec_copy(&job->spec, spec);
+
+    job->seq = seq_create();
+    atomic_init(&job->cancel, false);
+    atomic_init(&job->status, JOB_INIT);
+
+    struct results *results = xzalloc(sizeof *results);
+    ovsrcu_init(&job->results, results);
+
+    ovs_mutex_init(&job->stats_lock);
+
+    ovs_mutex_init(&job->task_lock);
+    rculist_init(&job->queued_tasks);
+    rculist_init(&job->completed_tasks);
+
+    ovs_thread_create("job", job_thread, job);
+
+    return job;
 }
 
 int
@@ -1516,7 +1609,9 @@ main(int argc, char *argv[])
 {
     set_program_name(argv[0]);
     vlog_init();
-    parse_command_line (argc, argv);
+
+    struct spec spec;
+    parse_command_line (argc, argv, &spec);
 
     initscr();
     cbreak();
@@ -1529,17 +1624,12 @@ main(int argc, char *argv[])
 
     fatal_signal_init();
 
-    results_seq = seq_create();
-
-    ovsrcu_results_p results
-        = OVSRCU_INITIALIZER(xzalloc(sizeof(struct results)));
-    struct merge_ctx ctx = { argc, argv, &results };
-    ovs_thread_create("merge", merge_thread, &ctx);
+    struct job *job = job_create(&spec);
 
     int y_ofs = 0, x_ofs = 0;
     for (;;) {
-        uint64_t display_seqno = seq_read(results_seq);
-        struct results *r = ovsrcu_get(struct results *, &results);
+        uint64_t display_seqno = seq_read(job->seq);
+        struct results *r = ovsrcu_get(struct results *, &job->results);
 
         int y_max = getmaxy(stdscr);
         int x_max = getmaxx(stdscr);
@@ -1563,10 +1653,10 @@ main(int argc, char *argv[])
         case KEY_RIGHT: case 'l':
             x_ofs += 10;
             break;
-        case KEY_NPAGE: case ' ':
+        case KEY_NPAGE: case ' ': case 'F' - 64:
             y_ofs = MIN(y_ofs + (y_max - 2), r->n);
             break;
-        case KEY_PPAGE: case KEY_BACKSPACE:
+        case KEY_PPAGE: case KEY_BACKSPACE: case 'B' - 64:
             y_ofs = MAX(y_ofs - (y_max - 2), 0);
             break;
         case KEY_HOME: case '<':
@@ -1593,18 +1683,20 @@ main(int argc, char *argv[])
         case 'L' - 64:
             redrawwin(stdscr);
             break;
+#if 0
         case 'R' - 64:
-            spec.columns[0] = COL_PRIORITY;
-            spec.show = SHOW_FIRST;
+            spec->columns[0] = COL_PRIORITY;
+            spec->show = SHOW_FIRST;
             ovs_thread_create("merge", merge_thread, &ctx);
             break;
+#endif
         }
 
         for (size_t i = 0; i < y_max - 1; i++) {
             struct ds s = DS_EMPTY_INITIALIZER;
             if (i + y_ofs < r->n) {
                 format_record(r->recs[i + y_ofs],
-                              i + y_ofs, r->n, &s);
+                              i + y_ofs, r->n, &job->spec, &s);
             } else {
                 ds_put_char(&s, '~');
             }
@@ -1613,9 +1705,11 @@ main(int argc, char *argv[])
             clrtoeol();
             ds_destroy(&s);
         }
-        unsigned int p, g;
-        atomic_read(&progress, &p);
-        atomic_read(&goal, &g);
+        ovs_mutex_lock(&job->stats_lock);
+        unsigned int p = job->progress;
+        unsigned int g = job->goal;
+        ovs_mutex_unlock(&job->stats_lock);
+
         move(y_max - 1, 0);
         if (g) {
             int n_ = x_max * p / g;
@@ -1627,7 +1721,7 @@ main(int argc, char *argv[])
         clrtoeol();
         refresh();
 
-        seq_wait(results_seq, display_seqno);
+        seq_wait(job->seq, display_seqno);
         poll_fd_wait(STDIN_FILENO, POLLIN);
         poll_block();
     }
@@ -1683,20 +1777,20 @@ level_from_string(const char *s)
 }
 
 static void
-parse_priorities(char *s)
+parse_priorities(char *s, struct spec *spec)
 {
-    spec.priorities = 0;
+    spec->priorities = 0;
 
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
         int level = level_from_string(s);
         if (strchr(s, '+')) {
-            spec.priorities |= (1u << (level + 1)) - 1;
+            spec->priorities |= (1u << (level + 1)) - 1;
         } else if (strchr(s, '-')) {
-            spec.priorities |= ((1u << level) - 1) ^ 0xff;
+            spec->priorities |= ((1u << level) - 1) ^ 0xff;
         } else {
-            spec.priorities |= 1u << level;
+            spec->priorities |= 1u << level;
         }
     }
 }
@@ -1714,7 +1808,7 @@ facility_from_string(const char *s)
 }
 
 static void
-parse_facilities(char *s)
+parse_facilities(char *s, struct spec *spec)
 {
     unsigned int xor = 0;
     if (*s == '^' || *s == '!') {
@@ -1722,14 +1816,14 @@ parse_facilities(char *s)
         xor = (1u << 24) - 1;
     }
 
-    spec.facilities = 0;
+    spec->facilities = 0;
 
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
-        spec.facilities |= 1u << facility_from_string(s);
+        spec->facilities |= 1u << facility_from_string(s);
     }
-    spec.facilities ^= xor;
+    spec->facilities ^= xor;
 }
 
 static double
@@ -1791,28 +1885,26 @@ column_from_string(const char *s)
     ovs_fatal(0, "%s: unknown column", s);
 }
 
-static void
+static enum column
 parse_columns(const char *s_)
 {
     char *s = xstrdup(s_);
-    size_t allocated_columns = spec.n_columns;
     char *save_ptr = NULL;
+    enum column columns = 0;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
-        if (spec.n_columns >= allocated_columns) {
-            spec.columns = x2nrealloc(spec.columns, &allocated_columns,
-                                      sizeof *spec.columns);
-        }
-        spec.columns[spec.n_columns++] = column_from_string(token);
+        columns |= column_from_string(token);
     }
     free(s);
+    return columns;
 }
 
 static void
-parse_command_line(int argc, char *argv[])
+parse_command_line(int argc, char *argv[], struct spec *spec)
 {
     enum {
         OPT_SINCE = UCHAR_MAX + 1,
+        VLOG_OPTION_ENUMS,
         OPT_UNTIL,
     };
     static const struct option long_options[] = {
@@ -1830,10 +1922,12 @@ parse_command_line(int argc, char *argv[])
         {"before", required_argument, NULL, OPT_UNTIL},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
+        VLOG_LONG_OPTIONS,
         {NULL, 0, NULL, 0},
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
 
+    spec_init(spec);
     for (;;) {
         int option;
 
@@ -1843,53 +1937,53 @@ parse_command_line(int argc, char *argv[])
         }
         switch (option) {
         case 'c':
-            parse_columns(optarg);
+            spec->columns = parse_columns(optarg);
             break;
 
         case 'a':
-            spec.at = strtod(optarg, NULL);
+            spec->at = strtod(optarg, NULL);
             break;
 
         case 's':
             if (!strcmp(optarg, "first")) {
-                spec.show = SHOW_FIRST;
+                spec->show = SHOW_FIRST;
             } else if (!strcmp(optarg, "last")) {
-                spec.show = SHOW_LAST;
+                spec->show = SHOW_LAST;
             } else if (!strcmp(optarg, "sample")) {
-                spec.show = SHOW_SAMPLE;
+                spec->show = SHOW_SAMPLE;
             } else if (!strcmp(optarg, "top")) {
-                spec.show = SHOW_TOPK;
+                spec->show = SHOW_TOPK;
             } else {
                 ovs_fatal(0, "%s: unknown \"show\"", optarg);
             }
             break;
 
         case 'g':
-            spec.grep = optarg;
+            spec->grep = optarg;
             break;
 
         case 'p':
-            parse_priorities(optarg);
+            parse_priorities(optarg, spec);
             break;
 
         case 'f':
-            parse_facilities(optarg);
+            parse_facilities(optarg, spec);
             break;
 
         case OPT_SINCE:
-            spec.date_since = parse_date(optarg);
+            spec->date_since = parse_date(optarg);
             break;
 
         case OPT_UNTIL:
-            spec.date_until = parse_date(optarg);
+            spec->date_until = parse_date(optarg);
             break;
 
         case 'C':
-            sset_add_delimited(&spec.components, optarg, " ,");
+            sset_add_delimited(&spec->components, optarg, " ,");
             break;
 
         case 'S':
-            sset_add_delimited(&spec.subcomponents, optarg, " ,");
+            sset_add_delimited(&spec->subcomponents, optarg, " ,");
             break;
 
         case 'h':
@@ -1900,6 +1994,8 @@ parse_command_line(int argc, char *argv[])
             ovs_print_version(0, 0);
             exit(EXIT_SUCCESS);
 
+        VLOG_OPTION_HANDLERS
+
         case '?':
             exit(EXIT_FAILURE);
 
@@ -1909,12 +2005,17 @@ parse_command_line(int argc, char *argv[])
     }
     free(short_options);
 
-    if (optind >= argc) {
+    if (optind < argc) {
+        for (size_t i = optind; i < argc; i++) {
+            svec_add(&spec->targets, argv[i]);
+        }
+    } else {
         ovs_fatal(0, "at least one non-option argument is required "
                   "(use --help for help)");
     }
 
-    if (!spec.n_columns) {
-        parse_columns("when facility priority comp subcomp msg");
+    if (!spec->columns) {
+        spec->columns = parse_columns(
+            "when facility priority comp subcomp msg");
     }
 }

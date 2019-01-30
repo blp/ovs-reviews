@@ -23,4 +23,8 @@ void sort(size_t count,
           void (*swap)(size_t a, size_t b, void *aux),
           void *aux);
 
+void qsort_aux(void *array, size_t count, size_t size,
+               int (*compare)(const void *a, const void *b, const void *aux),
+               const void *aux);
+
 #endif /* sort.h */
