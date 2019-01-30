@@ -142,12 +142,12 @@ relation &Switch(
             Some{subnet_str} -> {
                 match (ip_parse_masked(subnet_str)) {
                     Left{err} -> {
-                        warn($"bad 'subnet' ${subnet_str}");
+                        warn("bad 'subnet' ${subnet_str}");
                         None
                     },
                     Right{(subnet, mask)} -> {
                         if (mask == oVS_BE32_MAX() or not ip_is_cidr(mask)) {
-                            warn($"bad 'subnet' ${subnet_str}");
+                            warn("bad 'subnet' ${subnet_str}");
                             None
                         } else {
                             Some{(subnet, mask, ntohl(subnet) + 1, ~ntohl(mask))}

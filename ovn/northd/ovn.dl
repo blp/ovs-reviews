@@ -16,7 +16,7 @@ extern function eth_addr_zero(): eth_addr
 extern function eth_addr2string(addr: eth_addr): string
 
 function ip_fmt(ip: ovs_be32): string = {
-    $"${ntohl(ip) >> 32'd24}.${(ntohl(ip) >> 32'd16) & 32'hff}.${(ntohl(ip) >> 32'd8) & 32'hff}.${ntohl(ip) & 32'hff}"
+    "${ntohl(ip) >> 32'd24}.${(ntohl(ip) >> 32'd16) & 32'hff}.${(ntohl(ip) >> 32'd8) & 32'hff}.${ntohl(ip) & 32'hff}"
 }
 
 function ip_is_cidr(netmask: ovs_be32): bool = {
