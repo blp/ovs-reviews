@@ -276,7 +276,7 @@ rculist_remove(struct rculist *elem)
 /* Removes the front element from 'list' and returns it.  Undefined behavior if
  * 'list' is empty before removal.
  *
- * Afterward, teh returned former first node is not linked to from the list any
+ * Afterward, the returned former first node is not linked to from the list any
  * more, but still links to the nodes in the list, and may still be referenced
  * by other threads until all other threads quiesce.  The returned node may not
  * be re-inserted, re-initialized, or deleted until after all other threads
@@ -293,7 +293,7 @@ rculist_pop_front(struct rculist *list)
 /* Removes the back element from 'list' and returns it.
  * Undefined behavior if 'list' is empty before removal.
  *
- * Afterward, teh returned former last node is not linked to from the list any
+ * Afterward, the returned former last node is not linked to from the list any
  * more, but still links to the nodes in the list, and may still be referenced
  * by other threads until all other threads quiesce.  The returned node may not
  * be re-inserted, re-initialized, or deleted until after all other threads
