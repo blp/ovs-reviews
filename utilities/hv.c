@@ -1936,9 +1936,9 @@ main(int argc, char *argv[])
                     break;
                 }
                 if (event.bstate == BUTTON4_PRESSED) {
-                    y += page / 10;
-                } else if (event.bstate == BUTTON5_PRESSED) {
                     y -= page / 10;
+                } else if (event.bstate == BUTTON5_PRESSED) {
+                    y += page / 10;
                 }
             }
             break;
@@ -1946,6 +1946,14 @@ main(int argc, char *argv[])
             goto exit;
         case CTRL('L'):
             redrawwin(stdscr);
+            break;
+        case '\n': case '\r':
+            if (spec.show == SHOW_SAMPLE
+                && y < r->n
+                && spec.columns & COL_WHEN) {
+                new_spec.show = SHOW_FIRST;
+                new_spec.date_since = r->recs[y]->when;
+            }
             break;
         case 'm':
             {
