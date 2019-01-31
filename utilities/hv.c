@@ -18,13 +18,15 @@
  *
  * - mode for selecting records in error.
  * - avoid degzipping whole file at a time.
- * - responsive interface via threading
  * - support tgz or at least tar
  * - bt is slow, use heap+hmap?
+ * - tab completion
+ * - full query view (show as command-line options?)
  */
 
 #include <config.h>
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -88,7 +90,12 @@ struct task {
     struct state state;
 };
 
-enum show { SHOW_FIRST, SHOW_LAST, SHOW_SAMPLE, SHOW_TOPK };
+enum show {
+    SHOW_FIRST,
+    SHOW_LAST,
+    SHOW_SAMPLE,
+    SHOW_TOPK
+};
 
 #define COLUMNS                                 \
     COLUMN(WHEN, "when")                        \
@@ -120,10 +127,13 @@ enum column {
 enum { N_COLUMNS = 0 COLUMNS };
 #undef COLUMN
 
+static char *parse_columns(const char *, enum column *columnsp)
+    OVS_WARN_UNUSED_RESULT;
+
 struct spec {
     enum show show;
 
-    char *grep;
+    char *match;
     unsigned int priorities;
     unsigned int facilities;
     struct sset components;
@@ -988,7 +998,7 @@ parse_file(const char *fn, const char *buffer, off_t size,
                                   rec.subcomp.s, rec.subcomp.length)) {
             continue;
         }
-        if (spec->grep && !ss_contains(rec.msg, ss_cstr(spec->grep))) {
+        if (spec->match && !ss_contains(rec.msg, ss_cstr(spec->match))) {
             continue;
         }
 
@@ -1131,7 +1141,6 @@ open_target(const char *name, struct job *job)
             task->size = s.st_size;
             ds_init(&task->output);
             rculist_push_back(&job->queued_tasks, &task->list_node);
-            fprintf(stderr, "queuing %s\n", name);
         }
         return;
     } else if (!S_ISDIR(s.st_mode)) {
@@ -1198,7 +1207,7 @@ parse_lines(const char *name, const char *buffer, size_t length,
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
-        if (spec->grep && !ss_contains(rec.msg, ss_cstr(spec->grep))) {
+        if (spec->match && !ss_contains(rec.msg, ss_cstr(spec->match))) {
             continue;
         }
 
@@ -1367,16 +1376,16 @@ merge_results(struct job *job)
 
         qsort_aux(state.reservoir, state.n, sizeof *state.reservoir,
                   compare_log_records_for_sort, &job->spec);
-        if (!state.n) {
-            printf("no data\n");
-        } else if (job->spec.at >= 0 && job->spec.at <= 100) {
-            size_t pos = MIN(job->spec.at / 100.0 * state.n, state.n - 1);
-            add_record(&state.reservoir[pos],
-                       &results, &n_results, &allocated_results);
-        } else {
-            for (size_t i = 0; i < state.n; i++) {
-                add_record(&state.reservoir[i],
+        if (state.n) {
+            if (job->spec.at >= 0 && job->spec.at <= 100) {
+                size_t pos = MIN(job->spec.at / 100.0 * state.n, state.n - 1);
+                add_record(&state.reservoir[pos],
                            &results, &n_results, &allocated_results);
+            } else {
+                for (size_t i = 0; i < state.n; i++) {
+                    add_record(&state.reservoir[i],
+                               &results, &n_results, &allocated_results);
+                }
             }
         }
     } else {
@@ -1507,13 +1516,11 @@ job_thread(void *job_)
     for (size_t i = 0; i < job->spec.targets.n; i++) {
         open_target(job->spec.targets.names[i], job);
     }
-    fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
 
     /* Sort tasks by size.
      *
      * We can only do this to an rculist because we know that it's not been
      * accessed concurrently yet. */
-    fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
     struct task **tasks = xmalloc(rculist_size(&job->queued_tasks)
                                   * sizeof *tasks);
     size_t n_tasks = 0;
@@ -1534,7 +1541,6 @@ job_thread(void *job_)
     int n_threads = MIN(4 * cores, n_tasks);
     pthread_t *threads = xmalloc(n_threads * sizeof *threads);
     for (int i = 0; i < n_threads; i++) {
-        fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
         threads[i] = ovs_thread_create("read", task_thread, job);
     }
     for (;;) {
@@ -1550,12 +1556,9 @@ job_thread(void *job_)
         poll_block();
     }
     for (int i = 0; i < n_threads; i++) {
-        fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
         xpthread_join(threads[i], NULL);
     }
     free(threads);
-
-    fprintf(stderr, "%s:%d\n", __FILE__, __LINE__);
 
     WITH_MUTEX(&job->stats_lock, job->goal = 0);
 
@@ -1582,12 +1585,40 @@ spec_init(struct spec *spec)
 }
 
 static void
+spec_uninit(struct spec *spec)
+{
+    if (spec) {
+        free(spec->match);
+        sset_destroy(&spec->components);
+        sset_destroy(&spec->subcomponents);
+        svec_destroy(&spec->targets);
+    }
+}
+
+static void
 spec_copy(struct spec *dst, const struct spec *src)
 {
     *dst = *src;
+    dst->match = nullable_xstrdup(src->match);
     sset_clone(&dst->components, &src->components);
     sset_clone(&dst->subcomponents, &src->subcomponents);
     svec_clone(&dst->targets, &src->targets);
+}
+
+static bool
+spec_equals(const struct spec *a, const struct spec *b)
+{
+    return (a->show == b->show
+            && nullable_string_is_equal(a->match, b->match)
+            && a->priorities == b->priorities
+            && a->facilities == b->facilities
+            && sset_equals(&a->components, &b->components)
+            && sset_equals(&a->subcomponents, &b->subcomponents)
+            && a->date_since == b->date_since
+            && a->date_until == b->date_until
+            && a->at == b->at
+            && a->columns == b->columns
+            && svec_equal(&a->targets, &b->targets));
 }
 
 static struct job *
@@ -1615,6 +1646,215 @@ job_create(const struct spec *spec)
     return job;
 }
 
+/* CTRL('A') or CTRL('a') yields the keycode for Control+A. */
+#define CTRL(KEY) ((KEY) & 0x1f)
+
+/* META('a') yields the keycode for Meta+A. */
+#define META(KEY) ((KEY) | 0x80)
+
+static int
+range(int x, int min, int max)
+{
+    return x < min ? min : x > max ? max : x;
+}
+
+static bool
+is_word(unsigned char c)
+{
+    return isalnum(c);
+}
+
+static size_t
+count_word_forward(const char *s)
+{
+    size_t n = 0;
+    while (s[n] && !is_word(s[n])) {
+        n++;
+    }
+    while (s[n] && is_word(s[n])) {
+        n++;
+    }
+    return n;
+}
+
+static size_t
+count_word_backward(const char *s, size_t pos)
+{
+    size_t n = 0;
+    while (pos - n > 0 && !is_word(s[pos - n - 1])) {
+        n++;
+    }
+    while (pos - n > 0 && is_word(s[pos - n - 1])) {
+        n++;
+    }
+    return n;
+}
+
+static char *
+readstr(const char *prompt, const char *initial, struct svec *history,
+        char *(*validate)(const char *))
+{
+    int cur_hist = -1;
+    struct ds s = DS_EMPTY_INITIALIZER;
+    if (initial) {
+        ds_put_cstr(&s, initial);
+    }
+    if (history && history->n) {
+        svec_add(history, "");
+        cur_hist = history->n - 1;
+    }
+
+    char *error = NULL;
+
+    int ofs = 0, pos = s.length;
+    for (;;) {
+        int ch = getch();
+        bool ignore = false;
+        switch (ch) {
+        case KEY_UP:
+            if (cur_hist > 0) {
+                free(history->names[cur_hist]);
+                history->names[cur_hist] = ds_steal_cstr(&s);
+
+                cur_hist--;
+                ds_put_cstr(&s, history->names[cur_hist]);
+                pos = s.length;
+            }
+            break;
+        case KEY_DOWN:
+            if (history && cur_hist + 1 < history->n) {
+                free(history->names[cur_hist]);
+                history->names[cur_hist] = ds_steal_cstr(&s);
+
+                cur_hist++;
+                ds_put_cstr(&s, history->names[cur_hist]);
+                pos = s.length;
+            }
+            break;
+        case KEY_LEFT:
+            pos--;
+            break;
+        case KEY_RIGHT:
+            pos++;
+            break;
+        case CTRL('G'):
+            if (history && initial) {
+                svec_pop_back(history);
+            }
+            return NULL;
+        case CTRL('L'):
+            redrawwin(stdscr);
+            break;
+        case '\b': case KEY_BACKSPACE:
+            if (pos > 0) {
+                ds_remove(&s, pos - 1, 1);
+                pos--;
+            }
+            break;
+        case KEY_DC: case CTRL('D'):
+            ds_remove(&s, pos, 1);
+            break;
+        case CTRL('U'):
+            ds_remove(&s, 0, pos);
+            pos = 0;
+            break;
+        case KEY_HOME: case CTRL('A'):
+            pos = 0;
+            break;
+        case KEY_END: case CTRL('E'):
+            pos = s.length;
+            break;
+        case META('f'):
+            pos += count_word_forward(ds_cstr(&s) + pos);
+            break;
+        case META('b'):
+            pos -= count_word_backward(ds_cstr(&s), pos);
+            break;
+        case META('d'):
+            ds_remove(&s, pos, count_word_forward(ds_cstr(&s) + pos));
+            break;
+        case META(127):
+            {
+                size_t n = count_word_backward(ds_cstr(&s), pos);
+                ds_remove(&s, pos - n, n);
+                pos -= n;
+            }
+            break;
+        case '\n': case '\r':
+            if (validate) {
+                free(error);
+                error = validate(ds_cstr(&s));
+                if (error) {
+                    ignore = true;
+                    break;
+                }
+            }
+            if (history) {
+                if (history->n > 1
+                    && !strcmp(ds_cstr(&s),
+                               history->names[history->n - 1])) {
+                    svec_pop_back(history);
+                } else if (cur_hist >= 0) {
+                    free(history->names[cur_hist]);
+                    history->names[cur_hist] = xstrdup(ds_cstr(&s));
+                } else {
+                    svec_add(history, ds_cstr(&s));
+                }
+            }
+            return ds_steal_cstr(&s);
+        default:
+            if (ch >= ' ' && ch <= '~') {
+                *ds_insert_uninit(&s, pos++, 1) = ch;
+            } else {
+                ignore = true;
+            }
+            break;
+        }
+        if (!ignore) {
+            free(error);
+            error = NULL;
+        }
+
+        int y_max = getmaxy(stdscr);
+        int x_max = MAX(getmaxx(stdscr), 10);
+
+        int prompt_len = strlen(prompt);
+        if (prompt_len > x_max - 6) {
+            prompt_len = x_max - 6;
+        }
+        mvprintw(y_max - 1, 0, "%.*s: ", prompt_len, prompt);
+
+        int avail = x_max - (prompt_len + 2);
+        pos = range(pos, 0, s.length);
+        ofs = range(ofs, 0, s.length);
+        if (ofs > pos) {
+            ofs = pos;
+        }
+        addnstr(ds_cstr(&s) + ofs, avail);
+        if (error) {
+            printw(" [%s]", error);
+        }
+        clrtoeol();
+        move(y_max - 1, prompt_len + 2 + (pos - ofs));
+        refresh();
+
+        poll_fd_wait(STDIN_FILENO, POLLIN);
+        poll_block();
+    }
+    return NULL;
+}
+
+static struct svec columns_history = SVEC_EMPTY_INITIALIZER;
+static struct svec components_history = SVEC_EMPTY_INITIALIZER;
+static struct svec match_history = SVEC_EMPTY_INITIALIZER;
+
+static char *
+validate_columns(const char *s)
+{
+    enum column columns;
+    return parse_columns(s, &columns);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1632,10 +1872,20 @@ main(int argc, char *argv[])
     keypad(stdscr, true);
     mousemask(ALL_MOUSE_EVENTS, NULL);
     nodelay(stdscr, true);
+    meta(stdscr, true);
+
+    for (int c = 'a'; c <= 'z'; c++) {
+        char s[3] = { 27, c, '\0' };
+        define_key(s, META(c));
+    }
+    define_key("\033\177", META(127));
 
     fatal_signal_init();
 
     struct job *job = job_create(&spec);
+
+    struct spec new_spec;
+    spec_copy(&new_spec, &spec);
 
     int y_ofs = 0, x_ofs = 0;
     for (;;) {
@@ -1664,10 +1914,10 @@ main(int argc, char *argv[])
         case KEY_RIGHT: case 'l':
             x_ofs += 10;
             break;
-        case KEY_NPAGE: case ' ': case 'F' - 64:
+        case KEY_NPAGE: case ' ': case CTRL('F'):
             y_ofs = MIN(y_ofs + (y_max - 2), r->n);
             break;
-        case KEY_PPAGE: case KEY_BACKSPACE: case 'B' - 64:
+        case KEY_PPAGE: case KEY_BACKSPACE: case CTRL('B'):
             y_ofs = MAX(y_ofs - (y_max - 2), 0);
             break;
         case KEY_HOME: case '<':
@@ -1691,16 +1941,52 @@ main(int argc, char *argv[])
             break;
         case 'q': case 'Q':
             goto exit;
-        case 'L' - 64:
+        case CTRL('L'):
             redrawwin(stdscr);
             break;
-#if 0
-        case 'R' - 64:
-            spec->columns[0] = COL_PRIORITY;
-            spec->show = SHOW_FIRST;
-            ovs_thread_create("merge", merge_thread, &ctx);
+        case 'm':
+            {
+                char *match = readstr("message substring match", NULL,
+                                      &match_history, NULL);
+                if (match) {
+                    free(new_spec.match);
+                    if (match[0]) {
+                        new_spec.match = match;
+                    } else {
+                        free(match);
+                        new_spec.match = NULL;
+                    }
+                }
+            }
             break;
-#endif
+        case 'c':
+            {
+                char *columns_s = readstr("columns", NULL, &columns_history,
+                                          validate_columns);
+                if (columns_s) {
+                    char *error = parse_columns(columns_s, &new_spec.columns);
+                    ovs_assert(!error);
+                }
+                free(columns_s);
+            }
+            break;
+        case 'C':
+            {
+                char *components_s = readstr("components", NULL, &components_history, NULL);
+                if (components_s) {
+                    sset_clear(&new_spec.components);
+                    sset_add_delimited(&new_spec.components,
+                                       components_s, " ,");
+                    free(components_s);
+                }
+            }
+            break;
+        }
+
+        if (!spec_equals(&spec, &new_spec)) {
+            spec_uninit(&spec);
+            spec_copy(&spec, &new_spec);
+            job = job_create(&spec);
         }
 
         for (size_t i = 0; i < y_max - 1; i++) {
@@ -1893,21 +2179,28 @@ column_from_string(const char *s)
 #define COLUMN(ENUM, NAME) if (!strcmp(s, NAME)) return COL_##ENUM;
     COLUMNS
 #undef COLUMNS
-    ovs_fatal(0, "%s: unknown column", s);
+    return 0;
 }
 
-static enum column
-parse_columns(const char *s_)
+static char * OVS_WARN_UNUSED_RESULT
+parse_columns(const char *s_, enum column *columnsp)
 {
     char *s = xstrdup(s_);
     char *save_ptr = NULL;
     enum column columns = 0;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
-        columns |= column_from_string(token);
+        enum column c = column_from_string(token);
+        if (!c) {
+            char *error = xasprintf("%s: unknown column", token);
+            free(s);
+            return error;
+        }
+        columns |= c;
     }
     free(s);
-    return columns;
+    *columnsp = columns;
+    return NULL;
 }
 
 static void
@@ -1922,7 +2215,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         {"columns", required_argument, NULL, 'c'},
         {"at", required_argument, NULL, 'a'},
         {"show", required_argument, NULL, 's'},
-        {"grep", required_argument, NULL, 'g'},
+        {"match", required_argument, NULL, 'm'},
         {"priorities", required_argument, NULL, 'p'},
         {"facilities", required_argument, NULL, 'f'},
         {"component", required_argument, NULL, 'C'},
@@ -1946,9 +2239,15 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         if (option == -1) {
             break;
         }
+
+        char *error_s;
         switch (option) {
         case 'c':
-            spec->columns = parse_columns(optarg);
+            svec_add(&columns_history, optarg);
+            error_s = parse_columns(optarg, &spec->columns);
+            if (error_s) {
+                ovs_fatal(0, "%s", error_s);
+            }
             break;
 
         case 'a':
@@ -1969,8 +2268,9 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             }
             break;
 
-        case 'g':
-            spec->grep = optarg;
+        case 'm':
+            svec_add(&match_history, optarg);
+            spec->match = optarg;
             break;
 
         case 'p':
@@ -1990,6 +2290,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             break;
 
         case 'C':
+            svec_add(&components_history, optarg);
             sset_add_delimited(&spec->components, optarg, " ,");
             break;
 
@@ -2026,7 +2327,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
     }
 
     if (!spec->columns) {
-        spec->columns = parse_columns(
-            "when facility priority comp subcomp msg");
+        spec->columns = (COL_WHEN | COL_FACILITY | COL_PRIORITY | COL_COMP
+                         | COL_SUBCOMP | COL_MSG);
     }
 }

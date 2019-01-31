@@ -78,6 +78,9 @@ void ds_swap(struct ds *, struct ds *);
 int ds_last(const struct ds *);
 bool ds_chomp(struct ds *, int c);
 void ds_clone(struct ds *, struct ds *);
+
+char *ds_insert_uninit(struct ds *, size_t start, size_t n);
+void ds_remove(struct ds *, size_t start, size_t n);
 
 /* Inline functions. */
 

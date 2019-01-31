@@ -465,3 +465,30 @@ ds_clone(struct ds *dst, struct ds *source)
     dst->string = xmalloc(dst->allocated + 1);
     memcpy(dst->string, source->string, dst->allocated + 1);
 }
+
+char *
+ds_insert_uninit(struct ds *dst, size_t start, size_t n)
+{
+    if (start >= dst->length) {
+        return ds_put_uninit(dst, n);
+    }
+
+    ds_reserve(dst, dst->length + n);
+    memmove(&dst->string[start + n], &dst->string[start],
+            dst->length - start);
+    dst->length += n;
+    return &dst->string[start];
+}
+
+void
+ds_remove(struct ds *dst, size_t start, size_t n)
+{
+    if (start >= dst->length) {
+        return;
+    }
+
+    n = MIN(n, dst->length - start);
+    memmove(&dst->string[start], &dst->string[start + n],
+            dst->length - (start + n));
+    dst->length -= n;
+}
