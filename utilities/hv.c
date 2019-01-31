@@ -847,7 +847,7 @@ compare_log_records_for_sort(const void *a_, const void *b_,
 static int
 compare_log_records_for_bt(const struct bt_node *a_,
                            const struct bt_node *b_,
-                             const void *spec_)
+                           const void *spec_)
 {
     const struct spec *spec = spec_;
     const struct log_record *a = CONTAINER_OF(a_, struct log_record, bt_node);
@@ -863,7 +863,7 @@ state_init(struct state *state, const struct spec *spec)
     state->n = 0;
     state->population = 0;
     if (spec->show == SHOW_FIRST || spec->show == SHOW_LAST) {
-        bt_init(&state->bt, compare_log_records_for_bt, &spec->columns);
+        bt_init(&state->bt, compare_log_records_for_bt, spec);
     } else {
         for (int i = 0; i < TK_L; i++) {
             state->tk[i] = xcalloc(TK_B, sizeof *state->tk[i]);
@@ -889,7 +889,7 @@ state_add(struct state *state, const struct log_record *rec,
         struct bt_node *last = NULL;
         if (state->n >= state->allocated) {
             last = bt_last(&state->bt);
-            if (compare_log_records_for_bt(&rec->bt_node, last, NULL) > 0) {
+            if (compare_log_records_for_bt(&rec->bt_node, last, spec) > 0) {
                 return;
             }
         }
