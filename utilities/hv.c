@@ -1846,6 +1846,7 @@ readstr(const char *prompt, const char *initial, struct svec *history,
 
 static struct svec columns_history = SVEC_EMPTY_INITIALIZER;
 static struct svec components_history = SVEC_EMPTY_INITIALIZER;
+static struct svec subcomponents_history = SVEC_EMPTY_INITIALIZER;
 static struct svec match_history = SVEC_EMPTY_INITIALIZER;
 
 static char *
@@ -1888,6 +1889,7 @@ main(int argc, char *argv[])
     spec_copy(&new_spec, &spec);
 
     int y_ofs = 0, x_ofs = 0;
+    int y = 0;
     for (;;) {
         uint64_t display_seqno = seq_read(job->seq);
         struct results *r = ovsrcu_get(struct results *, &job->results);
@@ -1895,16 +1897,14 @@ main(int argc, char *argv[])
         int y_max = getmaxy(stdscr);
         int x_max = getmaxx(stdscr);
 
+        int page = y_max - 1;
+
         switch (getch()) {
         case KEY_UP: case 'k':
-            if (y_ofs > 0) {
-                y_ofs--;
-            }
+            y--;
             break;
         case KEY_DOWN: case 'j':
-            if (y_ofs < r->n) {
-                y_ofs++;
-            }
+            y++;
             break;
         case KEY_LEFT: case 'h':
             if (x_ofs > 0) {
@@ -1915,16 +1915,19 @@ main(int argc, char *argv[])
             x_ofs += 10;
             break;
         case KEY_NPAGE: case ' ': case CTRL('F'):
-            y_ofs = MIN(y_ofs + (y_max - 2), r->n);
+            y_ofs += page;
+            y = y_ofs;
             break;
         case KEY_PPAGE: case KEY_BACKSPACE: case CTRL('B'):
-            y_ofs = MAX(y_ofs - (y_max - 2), 0);
+            y_ofs -= page;
+            y = y_ofs + page - 1;
             break;
         case KEY_HOME: case '<':
-            y_ofs = 0;
+            y_ofs = y = 0;
             break;
         case KEY_END: case '>':
-            y_ofs = MAX(r->n - (y_max - 2), 0);
+            y_ofs = r->n - page;
+            y = r->n - 1;
             break;
         case KEY_MOUSE:
             for (;;) {
@@ -1933,9 +1936,9 @@ main(int argc, char *argv[])
                     break;
                 }
                 if (event.bstate == BUTTON4_PRESSED) {
-                    y_ofs = MAX(y_ofs - y_max / 10, 0);
+                    y += page / 10;
                 } else if (event.bstate == BUTTON5_PRESSED) {
-                    y_ofs = MIN(y_ofs + y_max / 10, r->n - (y_max - 2));
+                    y -= page / 10;
                 }
             }
             break;
@@ -1981,6 +1984,17 @@ main(int argc, char *argv[])
                 }
             }
             break;
+        case 'S':
+            {
+                char *subcomponents_s = readstr("subcomponents", NULL, &subcomponents_history, NULL);
+                if (subcomponents_s) {
+                    sset_clear(&new_spec.subcomponents);
+                    sset_add_delimited(&new_spec.subcomponents,
+                                       subcomponents_s, " ,");
+                    free(subcomponents_s);
+                }
+            }
+            break;
         }
 
         if (!spec_equals(&spec, &new_spec)) {
@@ -1988,6 +2002,9 @@ main(int argc, char *argv[])
             spec_copy(&spec, &new_spec);
             job = job_create(&spec);
         }
+
+        y = range(y, 0, r->n ? r->n - 1 : 0);
+        y_ofs = range(y_ofs, MAX(y - page + 1, 0), y);
 
         for (size_t i = 0; i < y_max - 1; i++) {
             struct ds s = DS_EMPTY_INITIALIZER;
@@ -2000,6 +2017,9 @@ main(int argc, char *argv[])
             ds_truncate(&s, x_ofs + x_max - 1);
             mvprintw(i, 0, "%s", ds_cstr(&s) + MIN(x_ofs, s.length));
             clrtoeol();
+            if (r->n && i + y_ofs == y) {
+                mvchgat(i, 0, x_max, A_REVERSE, 0, NULL);
+            }
             ds_destroy(&s);
         }
         ovs_mutex_lock(&job->stats_lock);
@@ -2295,6 +2315,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             break;
 
         case 'S':
+            svec_add(&subcomponents_history, optarg);
             sset_add_delimited(&spec->subcomponents, optarg, " ,");
             break;
 
