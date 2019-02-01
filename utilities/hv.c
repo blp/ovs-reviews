@@ -133,6 +133,7 @@ static char *parse_columns(const char *, enum column *columnsp)
 struct spec {
     enum show show;
 
+    struct log_record *start;
     char *match;
     unsigned int priorities;
     unsigned int facilities;
@@ -186,7 +187,7 @@ struct job {
 };
 
 struct substring {
-    const char *s;
+    char *s;
     size_t length;
 };
 
@@ -208,7 +209,8 @@ ss_compare(struct substring a, struct substring b)
 static struct substring
 ss_cstr(const char *s)
 {
-    return (struct substring) { .s = s, .length = strlen(s) };
+    return (struct substring) { .s = CONST_CAST(char *, s),
+                                .length = strlen(s) };
 }
 
 static bool OVS_UNUSED
@@ -360,7 +362,7 @@ get_header_token(struct parse_ctx *ctx, struct substring *token)
         return false;
     }
 
-    token->s = ctx->p;
+    token->s = CONST_CAST(char *, ctx->p);
     token->length = 0;
     while (token->s[token->length] != ' ') {
         if (token->s[token->length] == '\n') {
@@ -377,7 +379,7 @@ get_header_token(struct parse_ctx *ctx, struct substring *token)
 static bool
 get_sd_name(struct parse_ctx *ctx, struct substring *dst)
 {
-    dst->s = ctx->p;
+    dst->s = CONST_CAST(char *, ctx->p);
     dst->length = strcspn (dst->s, " =]\"\n");
     if (dst->length == 0) {
         warn(ctx, "parse error expecting SDNAME");
@@ -400,7 +402,7 @@ get_sd_param(struct parse_ctx *ctx, struct log_record *rec)
     }
 
     struct substring value;
-    value.s = ctx->p;
+    value.s = CONST_CAST(char *, ctx->p);
     for (;;) {
         if (*ctx->p == '\\' && ctx->p[1] != '\n') {
             ctx->p++;
@@ -625,7 +627,7 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
 
     match_spaces(ctx);
 
-    rec->msg.s = ctx->p;
+    rec->msg.s = CONST_CAST(char *, ctx->p);
     rec->msg.length = ctx->line_end - ctx->p;
 
     rec->valid = true;
@@ -705,15 +707,39 @@ copy_log_record(struct log_record *dst, const struct log_record *src)
     dst->msg = ss_clone(src->msg);
 }
 
-#if 0
+static void
+log_record_uninit(struct log_record *r)
+{
+    if (r) {
+        free(r->line.s);
+        free(r->timestamp.s);
+        free(r->hostname.s);
+        free(r->app_name.s);
+        free(r->procid.s);
+        free(r->msgid.s);
+        free(r->sdid.s);
+        free(r->comp.s);
+        free(r->subcomp.s);
+        free(r->msg.s);
+    }
+}
+
+static void
+log_record_destroy(struct log_record *r)
+{
+    if (r) {
+        log_record_uninit(r);
+        free(r);
+    }
+}
+
 static struct log_record *
-clone_log_record(const struct log_record *src)
+log_record_clone(const struct log_record *src)
 {
     struct log_record *dst = xmalloc(sizeof *dst);
     copy_log_record(dst, src);
     return dst;
 }
-#endif
 
 static uint32_t
 hash_log_record(const struct log_record *r, uint32_t basis,
@@ -975,7 +1001,7 @@ parse_file(const char *fn, const char *buffer, off_t size,
 
         struct log_record rec;
         memset(&rec, 0, sizeof rec);
-        rec.line.s = ctx.line_start;
+        rec.line.s = CONST_CAST(char *, ctx.line_start);
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
@@ -999,6 +1025,9 @@ parse_file(const char *fn, const char *buffer, off_t size,
             continue;
         }
         if (spec->match && !ss_contains(rec.msg, ss_cstr(spec->match))) {
+            continue;
+        }
+        if (spec->start && compare_log_records(&rec, spec->start, spec) < 0) {
             continue;
         }
 
@@ -1203,7 +1232,7 @@ parse_lines(const char *name, const char *buffer, size_t length,
 
         struct log_record rec;
         memset(&rec, 0, sizeof rec);
-        rec.line.s = ctx.line_start;
+        rec.line.s = CONST_CAST(char *, ctx.line_start);
         rec.line.length = ctx.line_end - ctx.line_start;
 
         parse_record(&ctx, &rec);
@@ -1589,6 +1618,7 @@ spec_uninit(struct spec *spec)
 {
     if (spec) {
         free(spec->match);
+        log_record_destroy(spec->start);
         sset_destroy(&spec->components);
         sset_destroy(&spec->subcomponents);
         svec_destroy(&spec->targets);
@@ -1599,6 +1629,7 @@ static void
 spec_copy(struct spec *dst, const struct spec *src)
 {
     *dst = *src;
+    dst->start = src->start ? log_record_clone(src->start) : NULL;
     dst->match = nullable_xstrdup(src->match);
     sset_clone(&dst->components, &src->components);
     sset_clone(&dst->subcomponents, &src->subcomponents);
@@ -1618,7 +1649,10 @@ spec_equals(const struct spec *a, const struct spec *b)
             && a->date_until == b->date_until
             && a->at == b->at
             && a->columns == b->columns
-            && svec_equal(&a->targets, &b->targets));
+            && svec_equal(&a->targets, &b->targets)
+            && (!a->start
+                ? !b->start
+                : b->start && !compare_log_records(a->start, b->start, a)));
 }
 
 static struct job *
@@ -1901,10 +1935,22 @@ main(int argc, char *argv[])
 
         switch (getch()) {
         case KEY_UP: case 'k':
-            y--;
+            if (y == 0) {
+                new_spec.show = SHOW_LAST;
+                log_record_destroy(new_spec.start);
+                new_spec.start = log_record_clone(r->recs[0]);
+            } else {
+                y--;
+            }
             break;
         case KEY_DOWN: case 'j':
-            y++;
+            if (r->n && y == r->n - 1) {
+                new_spec.show = SHOW_FIRST;
+                log_record_destroy(new_spec.start);
+                new_spec.start = log_record_clone(r->recs[y]);
+            } else {
+                y++;
+            }
             break;
         case KEY_LEFT: case 'h':
             if (x_ofs > 0) {
@@ -1939,6 +1985,21 @@ main(int argc, char *argv[])
                     y -= page / 10;
                 } else if (event.bstate == BUTTON5_PRESSED) {
                     y += page / 10;
+                } else if (event.bstate == BUTTON1_CLICKED) {
+                    int new_y = event.y + y_ofs;
+                    if (new_y < r->n) {
+                        y = new_y;
+                    }
+                } else if (event.bstate == BUTTON1_DOUBLE_CLICKED) {
+                    int new_y = event.y + y_ofs;
+                    if (new_y < r->n) {
+                        y = new_y;
+                    }
+                    if (spec.show == SHOW_SAMPLE && new_y < r->n) {
+                        new_spec.show = SHOW_FIRST;
+                        log_record_destroy(new_spec.start);
+                        new_spec.start = log_record_clone(r->recs[y]);
+                    }
                 }
             }
             break;
@@ -1948,11 +2009,10 @@ main(int argc, char *argv[])
             redrawwin(stdscr);
             break;
         case '\n': case '\r':
-            if (spec.show == SHOW_SAMPLE
-                && y < r->n
-                && spec.columns & COL_WHEN) {
+            if (spec.show == SHOW_SAMPLE && y < r->n) {
                 new_spec.show = SHOW_FIRST;
-                new_spec.date_since = r->recs[y]->when;
+                log_record_destroy(new_spec.start);
+                new_spec.start = log_record_clone(r->recs[y]);
             }
             break;
         case 'm':
