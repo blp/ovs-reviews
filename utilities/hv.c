@@ -75,6 +75,7 @@ struct state {
     int allocated;
     int n;
     int population;
+    unsigned long long int skipped;
 
 #define TK_L 4                  /* Number of hashes */
 #define TK_B 1024               /* Number of buckets */
@@ -86,7 +87,6 @@ struct task {
     struct rculist list_node;
     char *filename;
     off_t size;
-    struct ds output;
     struct state state;
 };
 
@@ -157,6 +157,8 @@ enum job_status {
 struct results {
     struct log_record **recs;
     size_t n;
+    unsigned long long int skipped;
+    unsigned long long int total;
 };
 
 struct job {
@@ -888,6 +890,7 @@ state_init(struct state *state, const struct spec *spec)
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
+    state->skipped = 0;
     if (spec->show == SHOW_FIRST || spec->show == SHOW_LAST) {
         bt_init(&state->bt, compare_log_records_for_bt, spec);
     } else {
@@ -954,9 +957,8 @@ state_add(struct state *state, const struct log_record *rec,
 }
 
 static void
-state_uninit(struct state *state)
+state_uninit(struct state *state OVS_UNUSED)
 {
-    free(state->reservoir);
 }
 
 #define WITH_MUTEX(MUTEX, ...)                  \
@@ -1028,6 +1030,7 @@ parse_file(const char *fn, const char *buffer, off_t size,
             continue;
         }
         if (spec->start && compare_log_records(&rec, spec->start, spec) < 0) {
+            state->skipped++;
             continue;
         }
 
@@ -1036,10 +1039,7 @@ parse_file(const char *fn, const char *buffer, off_t size,
 
     if (spec->show != SHOW_TOPK) {
         for (size_t i = 0; i < state->n; i++) {
-            ds_put_format(&task->output, "*%lld ", state->reservoir[i].count);
-            ds_put_buffer(&task->output, state->reservoir[i].line.s,
-                          state->reservoir[i].line.length);
-            ds_put_char(&task->output, '\n');
+            copy_log_record(&state->reservoir[i], &state->reservoir[i]);
         }
     } else {
         for (int i = 0; i < TK_L; i++) {
@@ -1168,7 +1168,6 @@ open_target(const char *name, struct job *job)
             task->job = job;
             task->filename = xstrdup(name);
             task->size = s.st_size;
-            ds_init(&task->output);
             rculist_push_back(&job->queued_tasks, &task->list_node);
         }
         return;
@@ -1213,34 +1212,6 @@ count_cores(void)
         return 1;
     } else {
         return CPU_COUNT(&cpus);
-    }
-}
-
-static void
-parse_lines(const char *name, const char *buffer, size_t length,
-            const struct spec *spec, struct state *state)
-{
-    const char *end = buffer + length;
-    struct parse_ctx ctx = { .fn = name, .ln = 1, .line_start = buffer };
-    for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
-        ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
-        if (!ctx.line_end) {
-            /* Don't bother with lines that lack a new-line. */
-            break;
-        }
-        ctx.p = ctx.line_start;
-
-        struct log_record rec;
-        memset(&rec, 0, sizeof rec);
-        rec.line.s = CONST_CAST(char *, ctx.line_start);
-        rec.line.length = ctx.line_end - ctx.line_start;
-
-        parse_record(&ctx, &rec);
-        if (spec->match && !ss_contains(rec.msg, ss_cstr(spec->match))) {
-            continue;
-        }
-
-        state_add(state, &rec, spec);
     }
 }
 
@@ -1390,6 +1361,8 @@ merge_results(struct job *job)
     struct log_record **results = NULL;
     size_t n_results = 0;
     size_t allocated_results = 0;
+    unsigned long long int total = 0;
+    unsigned long long int skipped = 0;
 
     if (job->spec.show != SHOW_TOPK) {
         struct state state;
@@ -1399,8 +1372,11 @@ merge_results(struct job *job)
 
         struct task *task;
         RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
-            parse_lines("<child process>", task->output.string,
-                        task->output.length, &job->spec, &state);
+            for (size_t i = 0; i < task->state.n; i++) {
+                state_add(&state, &task->state.reservoir[i], &job->spec);
+            }
+            total += task->state.population + task->state.skipped;
+            skipped += task->state.skipped;
         }
 
         qsort_aux(state.reservoir, state.n, sizeof *state.reservoir,
@@ -1497,6 +1473,8 @@ merge_results(struct job *job)
     struct results *r = xmalloc(sizeof *r);
     r->recs = results;
     r->n = n_results;
+    r->total = total;
+    r->skipped = skipped;
     return r;
 }
 
@@ -2082,14 +2060,25 @@ main(int argc, char *argv[])
             } else {
                 ds_put_char(&s, '~');
             }
-            ds_truncate(&s, x_ofs + x_max - 1);
-            mvprintw(i, 0, "%s", ds_cstr(&s) + MIN(x_ofs, s.length));
+            mvaddnstr(i, 0, ds_cstr(&s) + MIN(x_ofs, s.length),
+                      x_ofs + x_max - 3);
             clrtoeol();
             if (r->n && i + y_ofs == y) {
-                mvchgat(i, 0, x_max, A_REVERSE, 0, NULL);
+                mvchgat(i, 0, x_max - 2, A_REVERSE, 0, NULL);
             }
             ds_destroy(&s);
         }
+
+        if (r->total) {
+            int y0 = y_ofs + r->skipped;
+            int y1 = MIN(y_ofs + page, r->n) + r->skipped - 1;
+            int y0s = y0 * page / r->total;
+            int y1s = y1 * page / r->total;
+            for (int i = y0s; i <= y1s; i++) {
+                mvchgat(i, x_max - 1, 1, A_REVERSE, 0, NULL);
+            }
+        }
+
         ovs_mutex_lock(&job->stats_lock);
         unsigned int p = job->progress;
         unsigned int g = job->goal;
@@ -2102,6 +2091,11 @@ main(int argc, char *argv[])
             for (int x = 0; x < n; x++) {
                 addch(ACS_BLOCK);
             }
+        } else if (r->total) {
+            int y0 = y_ofs;
+            int y1 = MIN(y_ofs + page, r->n) - 1;
+            mvprintw(y_max - 1, 0, "rows %d...%d out of %llu",
+                     y0 + r->skipped, y1 + r->skipped, r->total);
         }
         clrtoeol();
         refresh();
