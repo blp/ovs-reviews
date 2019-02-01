@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include <float.h>
 #include <getopt.h>
+#include <locale.h>
 #include <math.h>
 #include <ncurses.h>
 #include <sched.h>
@@ -1386,11 +1387,17 @@ merge_results(struct job *job)
                 size_t pos = MIN(job->spec.at / 100.0 * state.n, state.n - 1);
                 add_record(&state.reservoir[pos],
                            &results, &n_results, &allocated_results);
-            } else {
+            } else if (job->spec.show != SHOW_LAST) {
                 for (size_t i = 0; i < state.n; i++) {
                     add_record(&state.reservoir[i],
                                &results, &n_results, &allocated_results);
                 }
+            } else {
+                for (size_t i = state.n; i-- > 0; ) {
+                    add_record(&state.reservoir[i],
+                               &results, &n_results, &allocated_results);
+                }
+                skipped = total - (skipped + state.n);
             }
         }
     } else {
@@ -1468,6 +1475,7 @@ merge_results(struct job *job)
                 break;
             }
         }
+        total = n_results;
     }
 
     struct results *r = xmalloc(sizeof *r);
@@ -1871,6 +1879,7 @@ validate_columns(const char *s)
 int
 main(int argc, char *argv[])
 {
+    setlocale(LC_ALL, "");
     set_program_name(argv[0]);
     vlog_init();
 
@@ -2041,6 +2050,10 @@ main(int argc, char *argv[])
                 }
             }
             break;
+
+        case 'T':
+            new_spec.show = new_spec.show == SHOW_TOPK ? SHOW_FIRST : SHOW_TOPK;
+            break;
         }
 
         if (!spec_equals(&spec, &new_spec)) {
@@ -2072,10 +2085,15 @@ main(int argc, char *argv[])
         if (r->total) {
             int y0 = y_ofs + r->skipped;
             int y1 = MIN(y_ofs + page, r->n) + r->skipped - 1;
-            int y0s = y0 * page / r->total;
-            int y1s = y1 * page / r->total;
+            int y0s = y0 * (page - 2) / r->total + 1;
+            int y1s = y1 * (page - 2) / r->total + 1;
+            mvaddch(0, x_max - 1, ACS_TTEE);
+            for (int i = 1; i < y_max - 2; i++) {
+                mvaddch(i, x_max - 1, ACS_VLINE);
+            }
+            mvaddch(y_max - 2, x_max - 1, ACS_BTEE);
             for (int i = y0s; i <= y1s; i++) {
-                mvchgat(i, x_max - 1, 1, A_REVERSE, 0, NULL);
+                mvaddch(i, x_max - 1, ACS_CKBOARD);
             }
         }
 
@@ -2089,7 +2107,7 @@ main(int argc, char *argv[])
             int n_ = x_max * p / g;
             int n = n_ < 0 ? 0 : n_ > x_max ? x_max : n_;
             for (int x = 0; x < n; x++) {
-                addch(ACS_BLOCK);
+                addch(ACS_CKBOARD);
             }
         } else if (r->total) {
             int y0 = y_ofs;
