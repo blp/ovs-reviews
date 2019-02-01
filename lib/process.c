@@ -209,7 +209,7 @@ rlim_is_finite(rlim_t limit)
 }
 
 /* Returns the maximum valid FD value, plus 1. */
-static int
+int
 get_max_fds(void)
 {
     static int max_fds;

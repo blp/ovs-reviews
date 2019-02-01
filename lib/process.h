@@ -59,4 +59,6 @@ char *process_status_msg(int);
 char *process_escape_args(char **argv);
 char *process_search_path(const char *);
 
+int get_max_fds(void);
+
 #endif /* process.h */

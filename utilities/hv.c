@@ -48,7 +48,9 @@
 #include "fatal-signal.h"
 #include "hash.h"
 #include "heap.h"
+#include "jsonrpc.h"
 #include "openvswitch/dynamic-string.h"
+#include "openvswitch/json.h"
 #include "openvswitch/poll-loop.h"
 #include "ovs-rcu.h"
 #include "ovs-thread.h"
@@ -59,11 +61,65 @@
 #include "socket-util.h"
 #include "sort.h"
 #include "sset.h"
+#include "stream-fd.h"
 #include "svec.h"
 #include "util.h"
 
 #include "openvswitch/vlog.h"
 VLOG_DEFINE_THIS_MODULE(hv);
+
+/* --remote: If true, this process is to be controlled via JSON-RPC on
+ * stdin. */
+static bool remote;
+
+/* These are the values defined in RFC 5424. */
+enum priority {
+    PRI_EMERG = 0,
+    PRI_ALERT = 1,
+    PRI_CRIT = 2,
+    PRI_ERR = 3,
+    PRI_WARNING = 4,
+    PRI_NOTICE = 5,
+    PRI_INFO = 6,
+    PRI_DEBUG = 7,
+};
+#define ALL_PRIORITIES 0xff
+
+static const char *priority_to_string(enum priority);
+static bool priority_from_string(const char *, enum priority *);
+
+/* Facilities. */
+enum facility {
+    LOG_KERN = 0,
+    LOG_USER = 1,
+    LOG_MAIL = 2,
+    LOG_DAEMON = 3,
+    LOG_AUTH = 4,
+    LOG_SYSLOG = 5,
+    LOG_LPR = 6,
+    LOG_NEWS = 7,
+    LOG_UUCP = 8,
+    LOG_CRON = 9,
+    LOG_AUTHPRIV = 10,
+    LOG_FTP = 11,
+    LOG_NTP = 12,
+    LOG_AUDIT = 13,
+    LOG_ALERT = 14,
+    LOG_CLOCK = 15,
+    LOG_LOCAL0 = 16,
+    LOG_LOCAL1 = 17,
+    LOG_LOCAL2 = 18,
+    LOG_LOCAL3 = 19,
+    LOG_LOCAL4 = 20,
+    LOG_LOCAL5 = 21,
+    LOG_LOCAL6 = 22,
+    LOG_LOCAL7 = 23,
+};
+
+#define ALL_FACILITIES ((1u << 24) - 1)
+
+static const char *facility_to_string(int);
+static bool facility_from_string(const char *, enum facility *facility);
 
 struct topkapi {
     struct log_record *rec;
@@ -128,7 +184,8 @@ enum column {
 enum { N_COLUMNS = 0 COLUMNS };
 #undef COLUMN
 
-static char *parse_columns(const char *, enum column *columnsp)
+static char *columns_to_string(enum column);
+static char *columns_from_string(const char *, enum column *columnsp)
     OVS_WARN_UNUSED_RESULT;
 
 struct spec {
@@ -241,6 +298,12 @@ ss_clone(struct substring substring)
 {
     return (struct substring) { .s = xmemdup(substring.s, substring.length),
                                 .length = substring.length };
+}
+
+static char *
+ss_xstrdup(struct substring substring)
+{
+    return xmemdup0(substring.s, substring.length);
 }
 
 struct log_record {
@@ -711,6 +774,61 @@ copy_log_record(struct log_record *dst, const struct log_record *src)
 }
 
 static void
+json_put_substring(struct json *obj, const char *name, struct substring value)
+{
+    json_object_put(obj, name, json_string_create_nocopy(ss_xstrdup(value)));
+
+}
+
+static struct json *
+log_record_to_json(const struct log_record *r, enum column columns)
+{
+    struct json *obj = json_object_create();
+    if (r->count != 1) {
+        json_object_put(obj, "count", json_integer_create(r->count));
+    }
+    if (columns & COL_VALID && !r->valid) {
+        json_object_put(obj, "valid", json_boolean_create(r->valid));
+    }
+    if (columns & COL_FACILITY) {
+        json_object_put_string(obj, "facility",
+                               facility_to_string(r->facility));
+    }
+    if (columns & COL_PRIORITY) {
+        json_object_put_string(obj, "priority",
+                               priority_to_string(r->priority));
+    }
+    if (columns & COL_WHEN) {
+        json_object_put(obj, "when", json_real_create(r->when));
+    }
+    if (columns & COL_HOSTNAME) {
+        json_put_substring(obj, "hostname", r->hostname);
+    }
+    if (columns & COL_APP_NAME) {
+        json_put_substring(obj, "app_name", r->app_name);
+    }
+    if (columns & COL_PROCID) {
+        json_put_substring(obj, "procid", r->procid);
+    }
+    if (columns & COL_MSGID) {
+        json_put_substring(obj, "msgid", r->msgid);
+    }
+    if (columns & COL_SDID) {
+        json_put_substring(obj, "sdid", r->sdid);
+    }
+    if (columns & COL_COMP) {
+        json_put_substring(obj, "component", r->comp);
+    }
+    if (columns & COL_SUBCOMP) {
+        json_put_substring(obj, "subcomponent", r->subcomp);
+    }
+    if (columns & COL_MSG) {
+        json_put_substring(obj, "msg", r->msg);
+    }
+    return obj;
+}
+
+static void
 log_record_uninit(struct log_record *r)
 {
     if (r) {
@@ -1155,8 +1273,66 @@ task_execute(struct task *task)
 }
 
 static void
+open_remote_target(const char *name, struct job *job)
+{
+    char *s = xstrdup(name);
+    char *save_ptr = NULL;
+    char *host = strtok_r(s, ":", &save_ptr);
+    char *dir = strtok_r(NULL, "", &save_ptr);
+    if (!host || !dir) {
+        ovs_error(0, "%s: bad remote target format", name);
+        free(s);
+        return;
+    }
+
+    /* XXX should this be a new "ssh:" stream type? */
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) {
+        ovs_error(errno, "socketpair failed");
+        free(s);
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        ovs_error(errno, "fork failed");
+        close(fds[0]);
+        close(fds[1]);
+        free(s);
+        return;
+    } else if (pid) {
+        /* Parent process. */
+        close(fds[1]);
+
+        struct stream *stream;
+        new_fd_stream(xasprintf("ssh %s", name), fds[0], 0, AF_UNIX, &stream);
+        struct jsonrpc *jsonrpc = jsonrpc_open(stream);
+        free(s);
+    } else {
+        /* Child process. */
+        close(fds[0]);
+        dup2(fds[1], STDIN_FILENO);
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[1]);
+
+        int max_fds = get_max_fds();
+        for (int i = 3; i < max_fds; i++) {
+            close(i);
+        }
+
+        execlp("ssh", "ssh", "--", host, "hv", "--remote", dir, (void *) NULL);
+        exit(1);
+    }
+}
+
+static void
 open_target(const char *name, struct job *job)
 {
+    if (strchr(name, ':')) {
+        open_remote_target(name, job);
+        return;
+    }
+
     struct stat s;
     if (stat(name, &s) < 0) {
         ovs_error(errno, "%s; stat failed", name);
@@ -1217,57 +1393,105 @@ count_cores(void)
 }
 
 static const char *
-priority_to_string(int priority)
+priority_to_string(enum priority priority)
 {
     const char *priorities[] = {
-        [0] = "EMER",
-        [1] = "ALER",
-        [2] = "CRIT",
-        [3] = "ERR ",
-        [4] = "WARN",
-        [5] = "NOTI",
-        [6] = "INFO",
-        [7] = "DBG ",
+        [PRI_EMERG] = "emer",
+        [PRI_ALERT] = "alert",
+        [PRI_CRIT] = "crit",
+        [PRI_ERR] = "err",
+        [PRI_WARNING] = "warn",
+        [PRI_NOTICE] = "notice",
+        [PRI_INFO] = "info",
+        [PRI_DEBUG] = "debug",
     };
 
     return (priority >= 0 && priority < ARRAY_SIZE(priorities)
             ? priorities[priority]
-            : "****");
+            : "-");
+}
+
+static bool
+priority_from_string(const char *s, enum priority *priority)
+{
+    const char *levels[] = {
+        [0] = "emergency",
+        [1] = "alert",
+        [2] = "critical",
+        [3] = "error",
+        [4] = "warning",
+        [5] = "notice",
+        [6] = "informational",
+        [7] = "debug"
+    };
+
+    int s_len = strcspn(s, "-+");
+    for (size_t i = 0; i < ARRAY_SIZE(levels); i++) {
+        if (!strncmp(s, levels[i], s_len)) {
+            *priority = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+priorities_from_string(char *s, unsigned int *priorities)
+{
+    *priorities = 0;
+
+    char *save_ptr = NULL;
+    for (char *token = strtok_r(s, ", ", &save_ptr); token;
+         token = strtok_r(NULL, ", ", &save_ptr)) {
+        enum priority p;
+        if (!priority_from_string(s, &p)) {
+            return xasprintf("%s: unknown priority", token);
+        }
+
+        if (strchr(s, '+')) {
+            *priorities |= (1u << (p + 1)) - 1;
+        } else if (strchr(s, '-')) {
+            *priorities |= ((1u << p) - 1) ^ 0xff;
+        } else {
+            *priorities |= 1u << p;
+        }
+    }
+    return NULL;
 }
 
 static const char *
 facility_to_string(int facility)
 {
     const char *facility_strings[] = {
-        [0] = "kern",
+        [0] = "kernel",
         [1] = "user",
         [2] = "mail",
-        [3] = "sys ",
+        [3] = "system",
         [4] = "auth",
-        [5] = "log ",
-        [6] = "lpd ",
+        [5] = "log",
+        [6] = "lpd",
         [7] = "news",
         [8] = "uucp",
-        [9] = "clck",
+        [9] = "clock",
         [10] = "auth",
-        [11] = "ftp ",
-        [12] = "ntp ",
-        [13] = "audt",
-        [14] = "alrt",
-        [15] = "clck",
-        [16] = "lcl0",
-        [17] = "lcl1",
-        [18] = "lcl2",
-        [19] = "lcl3",
-        [20] = "lcl4",
-        [21] = "lcl5",
-        [22] = "lcl6",
-        [23] = "lcl7",
+        [11] = "ftp",
+        [12] = "ntp",
+        [13] = "log_audit",
+        [14] = "log_alert",
+        [15] = "clock",
+        [16] = "local0",
+        [17] = "local1",
+        [18] = "local2",
+        [19] = "local3",
+        [20] = "local4",
+        [21] = "local5",
+        [22] = "local6",
+        [23] = "local7",
     };
 
     return (facility >= 0 && facility < ARRAY_SIZE(facility_strings)
             ? facility_strings[facility]
-            : "****");
+            : "-");
 }
 
 static void
@@ -1587,8 +1811,8 @@ spec_init(struct spec *spec)
 {
     *spec = (struct spec) {
         .show = SHOW_SAMPLE,
-        .priorities = 0xff,
-        .facilities = (1u << 24) - 1,
+        .priorities = ALL_PRIORITIES,
+        .facilities = ALL_FACILITIES,
         .components = SSET_INITIALIZER(&spec->components),
         .subcomponents = SSET_INITIALIZER(&spec->subcomponents),
         .date_since = -DBL_MAX,
@@ -1639,6 +1863,94 @@ spec_equals(const struct spec *a, const struct spec *b)
             && (!a->start
                 ? !b->start
                 : b->start && !compare_log_records(a->start, b->start, a)));
+}
+
+static const char *
+show_to_string(enum show show)
+{
+    switch (show) {
+    case SHOW_FIRST:
+        return "first";
+    case SHOW_LAST:
+        return "last";
+    case SHOW_SAMPLE:
+        return "sample";
+    case SHOW_TOPK:
+        return "top";
+    }
+    OVS_NOT_REACHED();
+}
+
+static bool
+show_from_string(const char *s, enum show *show)
+{
+    if (!strcmp(optarg, "first")) {
+        *show = SHOW_FIRST;
+    } else if (!strcmp(optarg, "last")) {
+        *show = SHOW_LAST;
+    } else if (!strcmp(optarg, "sample")) {
+        *show = SHOW_SAMPLE;
+    } else if (!strcmp(optarg, "top")) {
+        *show = SHOW_TOPK;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static struct json *
+sset_to_json(const struct sset *sset)
+{
+    struct json *array;
+    const char *s;
+
+    array = json_array_create_empty();
+    SSET_FOR_EACH (s, sset) {
+        json_array_add(array, json_string_create(s));
+    }
+    return array;
+}
+
+static struct json *
+spec_to_json(struct spec *spec)
+{
+    struct json *obj = json_object_create();
+    json_object_put_string(obj, "show", show_to_string(spec->show));
+    if (spec->start) {
+        json_object_put(obj, "start", log_record_to_json(spec->start,
+                                                         spec->columns));
+    }
+    if (spec->match) {
+        json_object_put_string(obj, "match", spec->match);
+    }
+    if (spec->priorities != ALL_PRIORITIES) {
+        json_object_put(obj, "priorities",
+                        json_integer_create(spec->priorities));
+    }
+    if (spec->facilities != ALL_FACILITIES) {
+        json_object_put(obj, "facilities",
+                        json_integer_create(spec->facilities));
+    }
+    if (!sset_is_empty(&spec->components)) {
+        json_object_put(obj, "components", sset_to_json(&spec->components));
+    }
+    if (!sset_is_empty(&spec->subcomponents)) {
+        json_object_put(obj, "subcomponents",
+                        sset_to_json(&spec->subcomponents));
+    }
+    if (spec->date_since != -DBL_MAX) {
+        json_object_put(obj, "date_since", json_real_create(spec->date_since));
+    }
+    if (spec->date_until != DBL_MAX) {
+        json_object_put(obj, "date_until", json_real_create(spec->date_until));
+    }
+    if (spec->at != -DBL_MAX) {
+        json_object_put(obj, "at", json_real_create(spec->at));
+    }
+    json_object_put(obj, "columns", json_string_create_nocopy(
+                        columns_to_string(spec->columns)));
+    /* XXX targets not included */
+    return obj;
 }
 
 static struct job *
@@ -1873,7 +2185,31 @@ static char *
 validate_columns(const char *s)
 {
     enum column columns;
-    return parse_columns(s, &columns);
+    return columns_from_string(s, &columns);
+}
+
+static void
+remote_loop(void)
+{
+    struct stream *stream;
+    new_fd_stream(xstrdup("remote"), STDOUT_FILENO, 0, AF_UNIX, &stream);
+    struct jsonrpc *jsonrpc = jsonrpc_open(stream);
+
+    for (;;) {
+        jsonrpc_run(jsonrpc);
+
+        struct jsonrpc_msg *msg;
+        int error = jsonrpc_recv(jsonrpc, &msg);
+        if (error && error != EAGAIN) {
+            if (error == EOF) {
+                return;
+            }
+            ovs_fatal(errno, "error receiving JSON-RPC message");
+        }
+
+        jsonrpc_wait(jsonrpc);
+        poll_block();
+    }
 }
 
 int
@@ -1886,6 +2222,11 @@ main(int argc, char *argv[])
     struct spec spec;
     parse_command_line (argc, argv, &spec);
 
+    if (remote) {
+        remote_loop();
+        return 0;
+    }
+
     initscr();
     cbreak();
     noecho();
@@ -1895,6 +2236,7 @@ main(int argc, char *argv[])
     mousemask(ALL_MOUSE_EVENTS, NULL);
     nodelay(stdscr, true);
     meta(stdscr, true);
+    curs_set(0);
 
     for (int c = 'a'; c <= 'z'; c++) {
         char s[3] = { 27, c, '\0' };
@@ -2022,7 +2364,7 @@ main(int argc, char *argv[])
                 char *columns_s = readstr("columns", NULL, &columns_history,
                                           validate_columns);
                 if (columns_s) {
-                    char *error = parse_columns(columns_s, &new_spec.columns);
+                    char *error = columns_from_string(columns_s, &new_spec.columns);
                     ovs_assert(!error);
                 }
                 free(columns_s);
@@ -2150,62 +2492,20 @@ Other options:\n\
     exit(EXIT_SUCCESS);
 }
 
-static int
-level_from_string(const char *s)
-{
-    const char *levels[] = {
-        [0] = "emergency",
-        [1] = "alert",
-        [2] = "critical",
-        [3] = "error",
-        [4] = "warning",
-        [5] = "notice",
-        [6] = "informational",
-        [7] = "debug"
-    };
-
-    int s_len = strcspn(s, "-+");
-    for (size_t i = 0; i < ARRAY_SIZE(levels); i++) {
-        if (!strncmp(s, levels[i], s_len)) {
-            return i;
-        }
-    }
-    ovs_fatal(0, "%.*s: unknown priority", s_len, s);
-}
-
-static void
-parse_priorities(char *s, struct spec *spec)
-{
-    spec->priorities = 0;
-
-    char *save_ptr = NULL;
-    for (char *token = strtok_r(s, ", ", &save_ptr); token;
-         token = strtok_r(NULL, ", ", &save_ptr)) {
-        int level = level_from_string(s);
-        if (strchr(s, '+')) {
-            spec->priorities |= (1u << (level + 1)) - 1;
-        } else if (strchr(s, '-')) {
-            spec->priorities |= ((1u << level) - 1) ^ 0xff;
-        } else {
-            spec->priorities |= 1u << level;
-        }
-    }
-}
-
-static int
-facility_from_string(const char *s)
+static bool
+facility_from_string(const char *s, enum facility *facility)
 {
     for (int i = 0; i < 24; i++) {
         if (!strcmp(s, facility_to_string(i))) {
-            return i;
+            *facility = i;
+            return true;
         }
     }
-    ovs_fatal(0, "%s: unknown facility", s);
-
+    return false;
 }
 
-static void
-parse_facilities(char *s, struct spec *spec)
+static char * OVS_WARN_UNUSED_RESULT
+facilities_from_string(char *s, unsigned int *facilities)
 {
     unsigned int xor = 0;
     if (*s == '^' || *s == '!') {
@@ -2213,14 +2513,19 @@ parse_facilities(char *s, struct spec *spec)
         xor = (1u << 24) - 1;
     }
 
-    spec->facilities = 0;
+    *facilities = 0;
 
     char *save_ptr = NULL;
     for (char *token = strtok_r(s, ", ", &save_ptr); token;
          token = strtok_r(NULL, ", ", &save_ptr)) {
-        spec->facilities |= 1u << facility_from_string(s);
+        enum facility f;
+        if (!facility_from_string(s, &f)) {
+            return xasprintf("%s: unknown facility", s);
+        }
+        *facilities |= 1u << f;
     }
-    spec->facilities ^= xor;
+    *facilities ^= xor;
+    return NULL;
 }
 
 static double
@@ -2260,7 +2565,6 @@ parse_date(const char *s)
               command, process_status_msg(status));
 }
 
-#if 0
 static const char *
 column_to_string(enum column c)
 {
@@ -2271,7 +2575,17 @@ column_to_string(enum column c)
     default: return NULL;
     }
 }
-#endif
+
+static char *
+columns_to_string(enum column columns)
+{
+    struct ds s = DS_EMPTY_INITIALIZER;
+    for (enum column c = columns; c; c = zero_rightmost_1bit(c)) {
+        ds_put_format(&s, "%s ", column_to_string(rightmost_1bit(c)));
+    }
+    ds_chomp(&s, ' ');
+    return ds_steal_cstr(&s);
+}
 
 static enum column
 column_from_string(const char *s)
@@ -2283,7 +2597,7 @@ column_from_string(const char *s)
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-parse_columns(const char *s_, enum column *columnsp)
+columns_from_string(const char *s_, enum column *columnsp)
 {
     char *s = xstrdup(s_);
     char *save_ptr = NULL;
@@ -2308,10 +2622,12 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
 {
     enum {
         OPT_SINCE = UCHAR_MAX + 1,
-        VLOG_OPTION_ENUMS,
         OPT_UNTIL,
+        OPT_REMOTE,
+        VLOG_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
+        {"remote", no_argument, NULL, OPT_REMOTE},
         {"columns", required_argument, NULL, 'c'},
         {"at", required_argument, NULL, 'a'},
         {"show", required_argument, NULL, 's'},
@@ -2342,9 +2658,13 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
 
         char *error_s;
         switch (option) {
+        case OPT_REMOTE:
+            remote = true;
+            break;
+
         case 'c':
             svec_add(&columns_history, optarg);
-            error_s = parse_columns(optarg, &spec->columns);
+            error_s = columns_from_string(optarg, &spec->columns);
             if (error_s) {
                 ovs_fatal(0, "%s", error_s);
             }
@@ -2355,15 +2675,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             break;
 
         case 's':
-            if (!strcmp(optarg, "first")) {
-                spec->show = SHOW_FIRST;
-            } else if (!strcmp(optarg, "last")) {
-                spec->show = SHOW_LAST;
-            } else if (!strcmp(optarg, "sample")) {
-                spec->show = SHOW_SAMPLE;
-            } else if (!strcmp(optarg, "top")) {
-                spec->show = SHOW_TOPK;
-            } else {
+            if (!show_from_string(optarg, &spec->show)) {
                 ovs_fatal(0, "%s: unknown \"show\"", optarg);
             }
             break;
@@ -2374,11 +2686,17 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             break;
 
         case 'p':
-            parse_priorities(optarg, spec);
+            error_s = priorities_from_string(optarg, &spec->priorities);
+            if (error_s) {
+                ovs_fatal(0, "%s", error_s);
+            }
             break;
 
         case 'f':
-            parse_facilities(optarg, spec);
+            error_s = facilities_from_string(optarg, &spec->facilities);
+            if (error_s) {
+                ovs_fatal(0, "%s", error_s);
+            }
             break;
 
         case OPT_SINCE:
