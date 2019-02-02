@@ -123,6 +123,8 @@ enum facility {
 
 static const char *facility_to_string(int);
 static bool facility_from_string(const char *, enum facility *facility);
+static char *facilities_from_string(const char *, unsigned int *facilities)
+    OVS_WARN_UNUSED_RESULT;
 
 struct topkapi {
     struct log_record *rec;
@@ -1520,8 +1522,9 @@ priority_from_string(const char *s, enum priority *priority)
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-priorities_from_string(char *s, unsigned int *priorities)
+priorities_from_string(const char *s_, unsigned int *priorities)
 {
+    char *s = xstrdup(s_);
     *priorities = 0;
 
     char *save_ptr = NULL;
@@ -1529,7 +1532,9 @@ priorities_from_string(char *s, unsigned int *priorities)
          token = strtok_r(NULL, ", ", &save_ptr)) {
         enum priority p;
         if (!priority_from_string(s, &p)) {
-            return xasprintf("%s: unknown priority", token);
+            char *error = xasprintf("%s: unknown priority", token);
+            free(s);
+            return error;
         }
 
         if (strchr(s, '+')) {
@@ -1540,6 +1545,7 @@ priorities_from_string(char *s, unsigned int *priorities)
             *priorities |= 1u << p;
         }
     }
+    free(s);
     return NULL;
 }
 
@@ -2490,6 +2496,8 @@ readstr(const char *prompt, const char *initial, struct svec *history,
 static struct svec columns_history = SVEC_EMPTY_INITIALIZER;
 static struct svec components_history = SVEC_EMPTY_INITIALIZER;
 static struct svec subcomponents_history = SVEC_EMPTY_INITIALIZER;
+static struct svec priorities_history = SVEC_EMPTY_INITIALIZER;
+static struct svec facilities_history = SVEC_EMPTY_INITIALIZER;
 static struct svec match_history = SVEC_EMPTY_INITIALIZER;
 
 static char *
@@ -2497,6 +2505,20 @@ validate_columns(const char *s)
 {
     enum column columns;
     return columns_from_string(s, &columns);
+}
+
+static char *
+validate_priorities(const char *s)
+{
+    unsigned int priorities;
+    return priorities_from_string(s, &priorities);
+}
+
+static char *
+validate_facilities(const char *s)
+{
+    unsigned int facilities;
+    return facilities_from_string(s, &facilities);
 }
 
 static struct json *
@@ -2791,6 +2813,24 @@ main(int argc, char *argv[])
                 }
             }
             break;
+        case 'p':
+            {
+                char *priorities_s = readstr("priorities", NULL, &priorities_history, validate_priorities);
+                if (priorities_s) {
+                    char *error = priorities_from_string(optarg, &new_spec.priorities);
+                    ovs_assert(!error);
+                }
+            }
+            break;
+        case 'f':
+            {
+                char *facilities_s = readstr("facilities", NULL, &facilities_history, validate_facilities);
+                if (facilities_s) {
+                    char *error = facilities_from_string(optarg, &new_spec.facilities);
+                    ovs_assert(!error);
+                }
+            }
+            break;
 
         case 'T':
             new_spec.show = new_spec.show == SHOW_TOPK ? SHOW_FIRST : SHOW_TOPK;
@@ -2904,8 +2944,9 @@ facility_from_string(const char *s, enum facility *facility)
 }
 
 static char * OVS_WARN_UNUSED_RESULT
-facilities_from_string(char *s, unsigned int *facilities)
+facilities_from_string(const char *s_, unsigned int *facilities)
 {
+    char *s = xstrdup(s_);
     unsigned int xor = 0;
     if (*s == '^' || *s == '!') {
         s++;
@@ -2919,11 +2960,14 @@ facilities_from_string(char *s, unsigned int *facilities)
          token = strtok_r(NULL, ", ", &save_ptr)) {
         enum facility f;
         if (!facility_from_string(s, &f)) {
-            return xasprintf("%s: unknown facility", s);
+            char *error = xasprintf("%s: unknown facility", token);
+            free(s);
+            return error;
         }
         *facilities |= 1u << f;
     }
     *facilities ^= xor;
+    free(s);
     return NULL;
 }
 
@@ -3117,6 +3161,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             break;
 
         case 'p':
+            svec_add(&priorities_history, optarg);
             error_s = priorities_from_string(optarg, &spec->priorities);
             if (error_s) {
                 ovs_fatal(0, "%s", error_s);
@@ -3124,6 +3169,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             break;
 
         case 'f':
+            svec_add(&facilities_history, optarg);
             error_s = facilities_from_string(optarg, &spec->facilities);
             if (error_s) {
                 ovs_fatal(0, "%s", error_s);
@@ -3177,6 +3223,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
     }
 
     if (!spec->columns) {
+        svec_add(&columns_history, "when facility priority comp subcomp msg");
         spec->columns = (COL_WHEN | COL_FACILITY | COL_PRIORITY | COL_COMP
                          | COL_SUBCOMP | COL_MSG);
     }
