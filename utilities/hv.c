@@ -1057,13 +1057,13 @@ log_record_from_json(const struct json *json, struct log_record **rp)
     }
 
     parse_substring(&p, "hostname", &r->hostname);
-    parse_substring(&p, "app_name", &r->hostname);
-    parse_substring(&p, "porcid", &r->hostname);
-    parse_substring(&p, "msgid", &r->hostname);
-    parse_substring(&p, "sdid", &r->hostname);
-    parse_substring(&p, "component", &r->hostname);
-    parse_substring(&p, "subcomponent", &r->hostname);
-    parse_substring(&p, "msg", &r->hostname);
+    parse_substring(&p, "app_name", &r->app_name);
+    parse_substring(&p, "procid", &r->procid);
+    parse_substring(&p, "msgid", &r->msgid);
+    parse_substring(&p, "sdid", &r->sdid);
+    parse_substring(&p, "component", &r->comp);
+    parse_substring(&p, "subcomponent", &r->subcomp);
+    parse_substring(&p, "msg", &r->msg);
 
     struct ovsdb_error *error = ovsdb_parser_finish(&p);
     if (error) {
@@ -1079,7 +1079,7 @@ log_record_from_json(const struct json *json, struct log_record **rp)
 static void
 state_init(struct state *state, const struct spec *spec)
 {
-    state->allocated = 10000;
+    state->allocated = 100;
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
@@ -2347,6 +2347,7 @@ readstr(const char *prompt, const char *initial, struct svec *history,
 
     char *error = NULL;
 
+    curs_set(1);
     int ofs = 0, pos = s.length;
     for (;;) {
         int ch = getch();
@@ -2382,6 +2383,7 @@ readstr(const char *prompt, const char *initial, struct svec *history,
             if (history && initial) {
                 svec_pop_back(history);
             }
+            curs_set(0);
             return NULL;
         case CTRL('L'):
             redrawwin(stdscr);
@@ -2442,6 +2444,7 @@ readstr(const char *prompt, const char *initial, struct svec *history,
                     svec_add(history, ds_cstr(&s));
                 }
             }
+            curs_set(0);
             return ds_steal_cstr(&s);
         default:
             if (ch >= ' ' && ch <= '~') {
@@ -2482,7 +2485,6 @@ readstr(const char *prompt, const char *initial, struct svec *history,
         poll_fd_wait(STDIN_FILENO, POLLIN);
         poll_block();
     }
-    return NULL;
 }
 
 static struct svec columns_history = SVEC_EMPTY_INITIALIZER;
