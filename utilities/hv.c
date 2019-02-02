@@ -24,6 +24,10 @@
  * - full query view (show as command-line options?)
  * - checksumming to figure out whether anything has changed behind our back
  * - hitting Enter when there's a single column should limit to matches?
+ * - saving results
+ * - backup to previous query
+ * - adjust page size
+ * - pull-down menu interface
  */
 
 #include <config.h>
