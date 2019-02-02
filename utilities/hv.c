@@ -137,13 +137,17 @@ struct topkapi {
 };
 
 struct state {
-    struct log_record *reservoir;
-    struct bt bt;
-    int allocated;
-    int n;
-    int population;
-    unsigned long long int skipped;
+    unsigned long long int population; /* Number of records passed through. */
 
+    struct log_record *reservoir;
+    int allocated;              /* Allocated elements of reservoir. */
+    int n;                      /* Number of used elements of reservor. */
+
+    /* SHOW_FIRST, SHOW_LAST. */
+    struct bt bt;
+    unsigned long long int skipped; /* Number of records < spec->start. */
+
+    /* SHOW_TOP. */
 #define TK_L 4                  /* Number of hashes */
 #define TK_B 1024               /* Number of buckets */
     struct topkapi *tk[TK_L];
@@ -163,7 +167,7 @@ enum show {
     SHOW_FIRST,
     SHOW_LAST,
     SHOW_SAMPLE,
-    SHOW_TOPK
+    SHOW_TOP
 };
 
 #define COLUMNS                                 \
@@ -1038,16 +1042,6 @@ log_record_compare(const struct log_record *a, const struct log_record *b,
 }
 
 static int
-compare_log_records_for_sort(const void *a_, const void *b_,
-                             const void *spec_)
-{
-    const struct spec *spec = spec_;
-    const struct log_record *a = a_;
-    const struct log_record *b = b_;
-    return log_record_compare(a, b, spec);
-}
-
-static int
 compare_log_records_for_bt(const struct bt_node *a_,
                            const struct bt_node *b_,
                            const void *spec_)
@@ -1140,17 +1134,15 @@ static void
 state_add(struct state *state, const struct log_record *rec,
           const struct spec *spec)
 {
+    state->population++;
     if (spec->show == SHOW_SAMPLE) {
         size_t idx = (state->n < state->allocated
                       ? state->n++
-                      : random_range(state->population + 1));
+                      : random_uint64() % state->population);
         if (idx < state->allocated) {
             state->reservoir[idx] = *rec;
         }
-        state->population++;
     } else if (spec->show == SHOW_FIRST || spec->show == SHOW_LAST) {
-        state->population++;
-
         struct bt_node *last = NULL;
         if (state->n >= state->allocated) {
             last = bt_last(&state->bt);
@@ -1175,7 +1167,7 @@ state_add(struct state *state, const struct log_record *rec,
             *pos = *rec;
             bt_insert(&state->bt, &pos->bt_node);
         }
-    } else if (spec->show == SHOW_TOPK) {
+    } else if (spec->show == SHOW_TOP) {
         for (int i = 0; i < TK_L; i++) {
             uint32_t hash = log_record_hash(rec, i, spec->columns);
             struct topkapi *tk = &state->tk[i][hash % TK_B];
@@ -1273,7 +1265,7 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         state_add(state, &rec, spec);
     }
 
-    if (spec->show != SHOW_TOPK) {
+    if (spec->show != SHOW_TOP) {
         for (size_t i = 0; i < state->n; i++) {
             log_record_copy(&state->reservoir[i], &state->reservoir[i]);
         }
@@ -1726,8 +1718,58 @@ add_record(struct log_record *record,
     (*resultsp)[(*n_resultsp)++] = record;
 }
 
+static void
+state_merge(const struct state *src, const struct spec *spec,
+            struct state *dst)
+{
+    switch (spec->show) {
+    case SHOW_FIRST:
+    case SHOW_LAST:
+    case SHOW_SAMPLE:
+        for (size_t i = 0; i < src->n; i++) {
+            state_add(dst, &src->reservoir[i], spec);
+        }
+        dst->population += src->population;
+        dst->skipped += src->skipped;
+        break;
+
+    case SHOW_TOP:
+        for (int i = 0; i < TK_L; i++) {
+            for (int j = 0; j < TK_B; j++) {
+                struct topkapi *d = &dst->tk[i][j];
+                struct topkapi *s = &src->tk[i][j];
+
+                if (!s->rec) {
+                    /* Nothing to do. */
+                } else if (!d->rec) {
+                    *d = *s;
+                } else if (!log_record_compare(d->rec, s->rec, spec)) {
+                    d->count += s->count;
+                } else if (d->count >= s->count) {
+                    d->count -= s->count;
+                } else {
+                    d->rec = s->rec;
+                    d->count = s->count - d->count;
+                }
+            }
+        }
+    }
+}
+
+static int
+compare_log_records_for_sort(const void *a_, const void *b_,
+                             const void *spec_)
+{
+    const struct spec *spec = spec_;
+    const struct log_record *const *ap = a_;
+    const struct log_record *const *bp = b_;
+    const struct log_record *a = *ap;
+    const struct log_record *b = *bp;
+    return log_record_compare(a, b, spec);
+}
+
 static struct results *
-merge_results(struct job *job)
+state_to_results(const struct state *state, const struct spec *spec)
 {
     struct log_record **results = NULL;
     size_t n_results = 0;
@@ -1735,39 +1777,34 @@ merge_results(struct job *job)
     unsigned long long int total = 0;
     unsigned long long int skipped = 0;
 
-    if (job->spec.show != SHOW_TOPK) {
-        struct state state;
-        state_init(&state, &job->spec);
-
-        random_set_seed(1);
-
-        struct task *task;
-        RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
-            for (size_t i = 0; i < task->state.n; i++) {
-                state_add(&state, &task->state.reservoir[i], &job->spec);
-            }
-            total += task->state.population + task->state.skipped;
-            skipped += task->state.skipped;
+    if (spec->show != SHOW_TOP) {
+        results = xmalloc(state->n * sizeof *results);
+        n_results = state->n;
+        for (size_t i = 0; i < n_results; i++) {
+            results[i] = &state->reservoir[i];
         }
 
-        qsort_aux(state.reservoir, state.n, sizeof *state.reservoir,
-                  compare_log_records_for_sort, &job->spec);
-        if (state.n) {
-            if (job->spec.at >= 0 && job->spec.at <= 100) {
-                size_t pos = MIN(job->spec.at / 100.0 * state.n, state.n - 1);
-                add_record(&state.reservoir[pos],
-                           &results, &n_results, &allocated_results);
-            } else if (job->spec.show != SHOW_LAST) {
-                for (size_t i = 0; i < state.n; i++) {
-                    add_record(&state.reservoir[i],
-                               &results, &n_results, &allocated_results);
-                }
+        qsort_aux(results, n_results, sizeof *results,
+                  compare_log_records_for_sort, spec);
+        if (n_results) {
+            if (spec->at >= 0 && spec->at <= 100) {
+                size_t pos = MIN(spec->at / 100.0 * state->n, state->n - 1);
+                results[0] = results[pos];
+                n_results = 1;
+            } else if (spec->show == SHOW_FIRST) {
+                /* Nothing to do. */
+                skipped = state->skipped;
+                total = state->population;
             } else {
-                for (size_t i = state.n; i-- > 0; ) {
-                    add_record(&state.reservoir[i],
-                               &results, &n_results, &allocated_results);
+                for (size_t i = 0; i < n_results / 2; i++) {
+                    struct log_record **a = &results[i];
+                    struct log_record **b = &results[n_results - i - 1];
+                    struct log_record *tmp = *a;
+                    *a = *b;
+                    *b = tmp;
                 }
-                skipped = total - (skipped + state.n);
+                skipped = total - (skipped + state->n);
+                total = state->population;
             }
         }
     } else {
@@ -1775,43 +1812,6 @@ merge_results(struct job *job)
         for (int i = 0; i < TK_L; i++) {
             tk[i] = xcalloc(TK_B, sizeof *tk[i]);
         }
-
-        struct task *task;
-        RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
-            if (!task->state.tk[0]) {
-                continue;
-            }
-            for (int i = 0; i < TK_L; i++) {
-                for (int j = 0; j < TK_B; j++) {
-                    struct topkapi *dst = &tk[i][j];
-                    struct topkapi *src = &task->state.tk[i][j];
-
-                    if (!src->rec) {
-                        /* Nothing to do. */
-                    } else if (!dst->rec) {
-                        *dst = *src;
-                    } else if (!log_record_compare(dst->rec, src->rec,
-                                                    &job->spec)) {
-                        dst->count += src->count;
-                    } else if (dst->count >= src->count) {
-                        dst->count -= src->count;
-                    } else {
-                        dst->rec = src->rec;
-                        dst->count = src->count - dst->count;
-                    }
-                }
-            }
-        }
-
-#if 0
-        for (int i = 0; i < TK_L; i++) {
-            printf("%d:", i);
-            for (int j = 0; j < TK_B; j++) {
-                printf(" %lld", tk[i][j].count);
-            }
-            printf("\n");
-        }
-#endif
 
         int K = 100;
         int frac_epsilon = 10 * K;
@@ -1823,11 +1823,11 @@ merge_results(struct job *job)
             }
             long long int count = tk[0][j].count;
             for (int i = 1; i < TK_L; i++) {
-                int idx = log_record_hash(tk[0][j].rec, i, job->spec.columns)
+                int idx = log_record_hash(tk[0][j].rec, i, spec->columns)
                     % TK_B;
                 if (!tk[i][idx].rec
                     || log_record_compare(tk[0][j].rec, tk[i][idx].rec,
-                                           &job->spec)) {
+                                           spec)) {
                     continue;
                 }
                 count = MAX(count, tk[i][idx].count);
@@ -1854,6 +1854,19 @@ merge_results(struct job *job)
     r->total = total;
     r->skipped = skipped;
     return r;
+}
+
+static struct results *
+merge_results(struct job *job)
+{
+    struct state state;
+    state_init(&state, &job->spec);
+
+    struct task *task;
+    RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
+        state_merge(&task->state, &job->spec, &state);
+    }
+    return state_to_results(&state, &job->spec);
 }
 
 static int
@@ -2151,7 +2164,7 @@ show_to_string(enum show show)
         return "last";
     case SHOW_SAMPLE:
         return "sample";
-    case SHOW_TOPK:
+    case SHOW_TOP:
         return "top";
     }
     OVS_NOT_REACHED();
@@ -2167,7 +2180,7 @@ show_from_string(const char *s, enum show *show)
     } else if (!strcmp(s, "sample")) {
         *show = SHOW_SAMPLE;
     } else if (!strcmp(s, "top")) {
-        *show = SHOW_TOPK;
+        *show = SHOW_TOP;
     } else {
         return false;
     }
@@ -2898,7 +2911,7 @@ main(int argc, char *argv[])
             break;
 
         case 'T':
-            new_spec.show = new_spec.show == SHOW_TOPK ? SHOW_FIRST : SHOW_TOPK;
+            new_spec.show = new_spec.show == SHOW_TOP ? SHOW_FIRST : SHOW_TOP;
             break;
         }
 
