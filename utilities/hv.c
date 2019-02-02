@@ -147,7 +147,7 @@ struct task {
     struct job *job;
     char *filename;
     struct jsonrpc *rpc;
-    struct json *reply_id;
+    struct json *request_id;
     off_t size;
     struct state state;
 };
@@ -231,6 +231,7 @@ struct job {
     pthread_t thread;
     struct seq *seq;
     atomic_bool cancel;
+    atomic_bool done;
 
     OVSRCU_TYPE(struct results *) results;
 
@@ -1389,7 +1390,7 @@ open_remote_target(const char *name, struct job *job)
         task->job = job;
         task->filename = xstrdup(name);
         task->rpc = rpc;
-        task->reply_id = id;
+        task->request_id = id;
         rculist_push_back(&job->remote_tasks, &task->list_node);
     } else {
         /* Child process. */
@@ -1823,12 +1824,120 @@ task_thread(void *job_ OVS_UNUSED)
         task_execute(task);
         fatal_signal_run();
 
-        WITH_MUTEX(&job->stats_lock, job->progress++);
-        seq_change(job->seq);
-
         WITH_MUTEX(&job->task_lock,
                    rculist_push_back(&job->completed_tasks, &task->list_node));
+
+        WITH_MUTEX(&job->stats_lock, job->progress++);
+        seq_change(job->seq);
     }
+}
+
+static struct ovsdb_error *
+results_from_json(const struct json *json, struct results **rp)
+{
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
+    struct results *r = xzalloc(sizeof *r);
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "results");
+
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
+    const struct json *records = ovsdb_parser_member(&p, "records", OP_ARRAY);
+    if (records) {
+        size_t n = json_array(records)->n;
+        r->recs = xmalloc(n * sizeof *r->recs);
+        for (size_t i = 0; i < n; i++) {
+            struct ovsdb_error *error = log_record_from_json(
+                json_array(records)->elems[i], &r->recs[i]);
+            if (error) {
+                ovsdb_parser_put_error(&p, error);
+                break;
+            }
+            r->n++;
+        }
+    }
+
+    const struct json *skipped = ovsdb_parser_member(
+        &p, "skipped", OP_INTEGER);
+    if (skipped) {
+        r->skipped = json_integer(skipped);
+    }
+
+    const struct json *total = ovsdb_parser_member(&p, "total", OP_INTEGER);
+    if (total) {
+        r->total = json_integer(total);
+    }
+
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+#if 0                           /* XXX */
+        results_destroy(r);
+        free(r);
+#endif
+        *rp = NULL;
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
+        return error;
+    }
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
+    *rp = r;
+    return NULL;
+}
+
+static void
+remote_task_handle_reply(struct task *task, struct jsonrpc_msg *reply)
+{
+    struct results *r;
+    struct ovsdb_error *error = results_from_json(reply->result, &r);
+    if (error) {
+        VLOG_ERR("%s", ovsdb_error_to_string_free(error)); /* XXX */
+        return;
+    }
+
+    struct job *job = task->job;
+    state_init(&task->state, &job->spec);
+
+    for (size_t i = 0; i < r->n; i++) {
+        state_add(&task->state, r->recs[i], &job->spec);
+    }
+    task->state.skipped = r->skipped;
+    task->state.population = r->total;
+
+    rculist_remove(&task->list_node);
+    WITH_MUTEX(&job->task_lock,
+               rculist_push_back(&job->completed_tasks, &task->list_node));
+
+    WITH_MUTEX(&job->stats_lock, job->progress++);
+}
+
+static void
+remote_task_run(struct task *task)
+{
+    jsonrpc_run(task->rpc);
+
+    struct jsonrpc_msg *msg;
+    int error = jsonrpc_recv(task->rpc, &msg);
+    if (!error) {
+        if (msg->type == JSONRPC_REPLY
+            && json_equal(msg->id, task->request_id)) {
+            remote_task_handle_reply(task, msg);
+        } else {
+            VLOG_ERR("%s: received unexpected %s message",
+                     jsonrpc_get_name(task->rpc),
+                     jsonrpc_msg_type_to_string(msg->type));
+            jsonrpc_msg_destroy(msg);
+            return;
+        }
+        jsonrpc_msg_destroy(msg);
+    } else if (error != EAGAIN) {
+        ovs_fatal(errno, "error receiving JSON-RPC message"); /* XXX */
+    }
+}
+
+static void
+remote_task_wait(struct task *task)
+{
+    jsonrpc_recv_wait(task->rpc);
+    jsonrpc_wait(task->rpc);
 }
 
 static void *
@@ -1857,7 +1966,8 @@ job_thread(void *job_)
     }
     free(tasks);
 
-    unsigned int goal = n_tasks + rculist_size(&job->remote_tasks);
+    size_t n_remote_tasks = rculist_size(&job->remote_tasks);
+    unsigned int goal = n_tasks + n_remote_tasks;
 
     WITH_MUTEX(&job->stats_lock, job->goal = goal);
 
@@ -1869,18 +1979,31 @@ job_thread(void *job_)
     }
     unsigned int progress = 0;
     for (;;) {
+        struct task *next;
+        RCULIST_FOR_EACH_SAFE_PROTECTED (task, next,
+                                         list_node, &job->remote_tasks) {
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
+            remote_task_run(task);
+        }
+
         uint64_t seq = seq_read(job->seq);
         WITH_MUTEX(&job->stats_lock, unsigned int p = job->progress);
         if (p > progress) {
             progress = p;
             ovsrcu_set(&job->results, merge_results(job));
         }
+        VLOG_WARN("progress=%u goal=%u", progress, goal);
         if (progress >= goal) {
             break;
+        }
+        RCULIST_FOR_EACH_PROTECTED (task, list_node, &job->remote_tasks) {
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
+            remote_task_wait(task);
         }
         seq_wait(job->seq, seq);
         poll_block();
     }
+    VLOG_WARN("%s:%d", __FILE__, __LINE__);
     for (int i = 0; i < n_threads; i++) {
         xpthread_join(threads[i], NULL);
     }
@@ -1888,6 +2011,7 @@ job_thread(void *job_)
 
     WITH_MUTEX(&job->stats_lock, job->goal = 0);
 
+    atomic_store(&job->done, true);
     seq_change(job->seq);
 
     return NULL;
@@ -2146,6 +2270,7 @@ job_create(const struct spec *spec)
 
     job->seq = seq_create();
     atomic_init(&job->cancel, false);
+    atomic_init(&job->done, false);
 
     struct results *results = xzalloc(sizeof *results);
     ovsrcu_init(&job->results, results);
@@ -2372,22 +2497,67 @@ validate_columns(const char *s)
     return columns_from_string(s, &columns);
 }
 
+static struct json *
+results_to_json(struct results *r, enum column columns)
+{
+    struct json *obj = json_object_create();
+
+    struct json *array = json_array_create_empty();
+    for (size_t i = 0; i < r->n; i++) {
+        json_array_add(array, log_record_to_json(r->recs[i], columns));
+    }
+    json_object_put(obj, "records", array);
+
+    json_object_put(obj, "skipped", json_integer_create(r->skipped));
+    json_object_put(obj, "total", json_integer_create(r->total));
+    return obj;
+}
+
+static struct jsonrpc_msg *
+hv_handle_analyze_request(const struct jsonrpc_msg *request,
+                          const struct svec *targets)
+{
+    struct spec *spec;
+    struct ovsdb_error *error = spec_from_json(
+        json_array(request->params)->elems[0], &spec);
+    if (error) {
+        return jsonrpc_create_error(ovsdb_error_to_json_free(error),
+                                    request->id);
+
+    }
+
+    svec_clone(&spec->targets, targets);
+
+    struct job *job = job_create(spec);
+    for (;;) {
+        uint64_t seq = seq_read(job->seq);
+
+        bool done;
+        atomic_read(&job->done, &done);
+        if (done) {
+            break;
+        }
+
+        seq_wait(job->seq, seq);
+        poll_block();
+    }
+
+    struct results *r = ovsrcu_get(struct results *, &job->results);
+    struct jsonrpc_msg *reply = jsonrpc_create_reply(
+        results_to_json(r, spec->columns), request->id);
+    spec_uninit(spec);
+    free(spec);
+    return reply;
+}
+
 static void
-hv_handle_request(struct jsonrpc *rpc, const struct jsonrpc_msg *request)
+hv_handle_request(struct jsonrpc *rpc, const struct jsonrpc_msg *request,
+                  const struct svec *targets)
 {
     struct jsonrpc_msg *reply;
     if (!strcmp(request->method, "analyze")
         && json_array(request->params)->n == 1) {
-        struct spec *spec;
-        struct ovsdb_error *error = spec_from_json(json_array(request->params)->elems[0], &spec);
-        reply = jsonrpc_create_error((error
-                                      ? ovsdb_error_to_json_free(error)
-                                      : json_string_create("success")),
-                                     request->id);
-        if (spec) {
-            spec_uninit(spec);
-            free(spec);
-        }
+        reply = hv_handle_analyze_request(request, targets);
     } else if (request->type == JSONRPC_REQUEST
            && !strcmp(request->method, "echo")) {
         reply = jsonrpc_create_reply(json_clone(request->params), request->id);
@@ -2400,7 +2570,7 @@ hv_handle_request(struct jsonrpc *rpc, const struct jsonrpc_msg *request)
 }
 
 static void
-remote_loop(void)
+remote_loop(const struct svec *targets)
 {
     struct stream *stream;
     new_fd_stream(xstrdup("remote"), STDOUT_FILENO, 0, AF_UNIX, &stream);
@@ -2414,11 +2584,12 @@ remote_loop(void)
             int error = jsonrpc_recv(rpc, &msg);
             if (!error) {
                 if (msg->type == JSONRPC_REQUEST) {
-                    hv_handle_request(rpc, msg);
+                    hv_handle_request(rpc, msg, targets);
                 } else {
                     VLOG_ERR("%s: received unexpected %s message",
                              jsonrpc_get_name(rpc),
                              jsonrpc_msg_type_to_string(msg->type));
+                    jsonrpc_msg_destroy(msg);
                     break;
                 }
                 jsonrpc_msg_destroy(msg);
@@ -2431,6 +2602,9 @@ remote_loop(void)
         }
 
         jsonrpc_wait(rpc);
+        if (!jsonrpc_get_backlog(rpc)) {
+            jsonrpc_recv_wait(rpc);
+        }
         poll_block();
     }
 }
@@ -2443,10 +2617,10 @@ main(int argc, char *argv[])
     vlog_init();
 
     struct spec spec;
-    parse_command_line (argc, argv, &spec);
+    parse_command_line(argc, argv, &spec);
 
     if (remote) {
-        remote_loop();
+        remote_loop(&spec.targets);
         return 0;
     }
 
@@ -2487,7 +2661,7 @@ main(int argc, char *argv[])
 
         switch (getch()) {
         case KEY_UP: case 'k':
-            if (y == 0) {
+            if (y == 0 && r->n > 0) {
                 new_spec.show = SHOW_LAST;
                 log_record_destroy(new_spec.start);
                 new_spec.start = log_record_clone(r->recs[0]);
