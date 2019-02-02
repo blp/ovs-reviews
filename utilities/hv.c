@@ -23,6 +23,7 @@
  * - tab completion
  * - full query view (show as command-line options?)
  * - checksumming to figure out whether anything has changed behind our back
+ * - hitting Enter when there's a single column should limit to matches?
  */
 
 #include <config.h>
@@ -162,6 +163,8 @@ enum show {
 };
 
 #define COLUMNS                                 \
+    COLUMN(SRC_HOST, "src_host")                \
+    COLUMN(SRC_FILE, "src_file")                \
     COLUMN(WHEN, "when")                        \
     COLUMN(FACILITY, "facility")                \
     COLUMN(PRIORITY, "priority")                \
@@ -201,6 +204,7 @@ static struct ovsdb_error *columns_from_json(const struct json *array,
 
 struct spec {
     enum show show;
+    char *host;
 
     struct log_record *start;
     char *match;
@@ -216,7 +220,9 @@ struct spec {
     struct svec targets;
 };
 
-static struct json *spec_to_json(struct spec *spec);
+static void spec_uninit(struct spec *);
+static void spec_copy(struct spec *, const struct spec *);
+static struct json *spec_to_json(struct spec *);
 
 struct results {
     struct log_record **recs;
@@ -316,6 +322,8 @@ ss_xstrdup(struct substring substring)
 struct log_record {
     struct bt_node bt_node;
     long long int count;
+    struct substring src_host;
+    struct substring src_file;
     bool valid;                 /* Fully parsed record? */
     struct substring line;      /* Full log line. */
     enum facility facility;     /* 0...23. */
@@ -336,6 +344,7 @@ static void usage(void);
 static void parse_command_line(int argc, char *argv[], struct spec *);
 
 struct parse_ctx {
+    const char *host;
     const char *fn;
     int ln;
 
@@ -644,6 +653,9 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
         rec->count = 1;
     }
 
+    rec->src_host = ss_cstr(ctx->host);
+    rec->src_file = ss_cstr(ctx->fn);
+
     /* PRI. */
     if (!must_match(ctx, '<')) {
         return false;
@@ -761,10 +773,12 @@ split(const struct substring *msg)
 }
 
 static void
-copy_log_record(struct log_record *dst, const struct log_record *src)
+log_record_copy(struct log_record *dst, const struct log_record *src)
 {
     dst->count = src->count;
     dst->valid = src->valid;
+    dst->src_host = ss_clone(src->src_host);
+    dst->src_file = ss_clone(src->src_file);
     dst->line = ss_clone(src->line);
     dst->facility = src->facility;
     dst->priority = src->priority;
@@ -796,6 +810,12 @@ log_record_to_json(const struct log_record *r, enum column columns)
     }
     if (columns & COL_VALID && !r->valid) {
         json_object_put(obj, "valid", json_boolean_create(r->valid));
+    }
+    if (columns & COL_SRC_HOST) {
+        json_put_substring(obj, "src_host", r->src_host);
+    }
+    if (columns & COL_SRC_FILE) {
+        json_put_substring(obj, "src_file", r->src_file);
     }
     if (columns & COL_FACILITY) {
         json_object_put_string(obj, "facility",
@@ -850,6 +870,8 @@ static void
 log_record_uninit(struct log_record *r)
 {
     if (r) {
+        free(r->src_host.s);
+        free(r->src_file.s);
         free(r->line.s);
         free(r->timestamp.s);
         free(r->hostname.s);
@@ -876,17 +898,23 @@ static struct log_record *
 log_record_clone(const struct log_record *src)
 {
     struct log_record *dst = xmalloc(sizeof *dst);
-    copy_log_record(dst, src);
+    log_record_copy(dst, src);
     return dst;
 }
 
 static uint32_t
-hash_log_record(const struct log_record *r, uint32_t basis,
+log_record_hash(const struct log_record *r, uint32_t basis,
                 enum column columns)
 {
     uint32_t hash = basis;
     for (; columns; columns = zero_rightmost_1bit(columns)) {
         switch (rightmost_1bit(columns)) {
+        case COL_SRC_HOST:
+            hash = ss_hash(r->src_host, basis);
+            break;
+        case COL_SRC_FILE:
+            hash = ss_hash(r->src_file, basis);
+            break;
         case COL_WHEN:
             hash = hash_double(r->when, basis);
             break;
@@ -943,14 +971,20 @@ compare_int(int a, int b)
 }
 
 static int
-compare_log_records(const struct log_record *a, const struct log_record *b,
-                    const struct spec *spec)
+log_record_compare(const struct log_record *a, const struct log_record *b,
+                   const struct spec *spec)
 {
     for (enum column columns = spec->columns; columns;
          columns = zero_rightmost_1bit(columns)) {
         int cmp;
 
         switch (rightmost_1bit(columns)) {
+        case COL_SRC_HOST:
+            cmp = ss_compare(a->src_host, b->src_host);
+            break;
+        case COL_SRC_FILE:
+            cmp = ss_compare(a->src_file, b->src_file);
+            break;
         case COL_WHEN:
             cmp = compare_double(a->when, b->when);
             break;
@@ -1006,7 +1040,7 @@ compare_log_records_for_sort(const void *a_, const void *b_,
     const struct spec *spec = spec_;
     const struct log_record *a = a_;
     const struct log_record *b = b_;
-    return compare_log_records(a, b, spec);
+    return log_record_compare(a, b, spec);
 }
 
 static int
@@ -1017,7 +1051,7 @@ compare_log_records_for_bt(const struct bt_node *a_,
     const struct spec *spec = spec_;
     const struct log_record *a = CONTAINER_OF(a_, struct log_record, bt_node);
     const struct log_record *b = CONTAINER_OF(b_, struct log_record, bt_node);
-    return compare_log_records(a, b, spec);
+    return log_record_compare(a, b, spec);
 }
 
 static struct ovsdb_error *
@@ -1031,6 +1065,9 @@ log_record_from_json(const struct json *json, struct log_record **rp)
     const struct json *count = ovsdb_parser_member(
         &p, "count", OP_INTEGER | OP_OPTIONAL);
     r->count = count ? json_integer(count) : 1;
+
+    parse_substring(&p, "src_host", &r->src_host);
+    parse_substring(&p, "src_file", &r->src_file);
 
     const struct json *valid = ovsdb_parser_member(
         &p, "valid", OP_BOOLEAN | OP_OPTIONAL);
@@ -1136,12 +1173,12 @@ state_add(struct state *state, const struct log_record *rec,
         }
     } else if (spec->show == SHOW_TOPK) {
         for (int i = 0; i < TK_L; i++) {
-            uint32_t hash = hash_log_record(rec, i, spec->columns);
+            uint32_t hash = log_record_hash(rec, i, spec->columns);
             struct topkapi *tk = &state->tk[i][hash % TK_B];
             if (!tk->rec) {
                 tk->rec = xmemdup(rec, sizeof *rec);
                 tk->count = 1;
-            } else if (!compare_log_records(rec, tk->rec, spec)) {
+            } else if (!log_record_compare(rec, tk->rec, spec)) {
                 tk->count++;
             } else if (--tk->count < 0) {
                 *tk->rec = *rec;
@@ -1162,8 +1199,7 @@ state_uninit(struct state *state OVS_UNUSED)
     ovs_mutex_unlock(MUTEX);
 
 static void
-parse_file(const char *fn, const char *buffer, off_t size,
-           struct task *task)
+parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
 {
     struct job *job = task->job;
     const struct spec *spec = &job->spec;
@@ -1178,7 +1214,10 @@ parse_file(const char *fn, const char *buffer, off_t size,
     struct state *state = &task->state;
     state_init(state, spec);
 
-    struct parse_ctx ctx = { .fn = fn, .ln = 1, .line_start = buffer };
+    struct parse_ctx ctx = { .host = job->spec.host,
+                             .fn = fn,
+                             .ln = 1,
+                             .line_start = buffer };
     for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
         ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
         if (!ctx.line_end) {
@@ -1222,7 +1261,7 @@ parse_file(const char *fn, const char *buffer, off_t size,
         if (spec->match && !ss_contains(rec.msg, ss_cstr(spec->match))) {
             continue;
         }
-        if (spec->start && compare_log_records(&rec, spec->start, spec) < 0) {
+        if (spec->start && log_record_compare(&rec, spec->start, spec) < 0) {
             state->skipped++;
             continue;
         }
@@ -1232,14 +1271,14 @@ parse_file(const char *fn, const char *buffer, off_t size,
 
     if (spec->show != SHOW_TOPK) {
         for (size_t i = 0; i < state->n; i++) {
-            copy_log_record(&state->reservoir[i], &state->reservoir[i]);
+            log_record_copy(&state->reservoir[i], &state->reservoir[i]);
         }
     } else {
         for (int i = 0; i < TK_L; i++) {
             for (int j = 0; j < TK_B; j++) {
                 struct log_record *rec = state->tk[i][j].rec;
                 if (rec) {
-                    copy_log_record(rec, rec);
+                    log_record_copy(rec, rec);
                 }
             }
         }
@@ -1248,8 +1287,8 @@ parse_file(const char *fn, const char *buffer, off_t size,
 }
 
 static void
-read_gzipped(const char *name, const char *in, size_t in_size,
-             struct task *task)
+read_gzipped(const char *name,
+             const char *in, size_t in_size, struct task *task)
 {
     z_stream z = {
         .next_in = (unsigned char *) in,
@@ -1382,11 +1421,18 @@ open_remote_target(const char *name, struct job *job)
         new_fd_stream(xasprintf("ssh %s", name), fds[0], 0, AF_UNIX, &stream);
         struct jsonrpc *rpc = jsonrpc_open(stream);
 
+        struct spec spec;
+        spec_copy(&spec, &job->spec);
+        free(spec.host);
+        spec.host = xstrdup(host);
+
         struct json *id;
         jsonrpc_send(rpc, jsonrpc_create_request(
                          "analyze",
-                         json_array_create_1(spec_to_json(&job->spec)), &id));
+                         json_array_create_1(spec_to_json(&spec)), &id));
         free(s);
+
+        spec_uninit(&spec);
 
         struct task *task = xzalloc(sizeof *task);
         task->job = job;
@@ -1595,8 +1641,8 @@ put_substring(struct ds *dst, const struct substring src)
 }
 
 static void
-format_record(const struct log_record *r, int i, int n,
-              const struct spec *spec, struct ds *s)
+log_record_format(const struct log_record *r, int i, int n,
+                  const struct spec *spec, struct ds *s)
 {
     ds_put_format(s, "%7lld", r->count);
 
@@ -1608,6 +1654,12 @@ format_record(const struct log_record *r, int i, int n,
          columns = zero_rightmost_1bit(columns)) {
         ds_put_char(s, ' ');
         switch (rightmost_1bit(columns)) {
+        case COL_SRC_HOST:
+            put_substring(s, r->src_host);
+            break;
+        case COL_SRC_FILE:
+            put_substring(s, r->src_file);
+            break;
         case COL_WHEN:
             format_timestamp(r->when, s);
             break;
@@ -1734,7 +1786,7 @@ merge_results(struct job *job)
                         /* Nothing to do. */
                     } else if (!dst->rec) {
                         *dst = *src;
-                    } else if (!compare_log_records(dst->rec, src->rec,
+                    } else if (!log_record_compare(dst->rec, src->rec,
                                                     &job->spec)) {
                         dst->count += src->count;
                     } else if (dst->count >= src->count) {
@@ -1767,10 +1819,10 @@ merge_results(struct job *job)
             }
             long long int count = tk[0][j].count;
             for (int i = 1; i < TK_L; i++) {
-                int idx = hash_log_record(tk[0][j].rec, i, job->spec.columns)
+                int idx = log_record_hash(tk[0][j].rec, i, job->spec.columns)
                     % TK_B;
                 if (!tk[i][idx].rec
-                    || compare_log_records(tk[0][j].rec, tk[i][idx].rec,
+                    || log_record_compare(tk[0][j].rec, tk[i][idx].rec,
                                            &job->spec)) {
                     continue;
                 }
@@ -1811,7 +1863,7 @@ compare_tasks(const void *a_, const void *b_)
 }
 
 static void *
-task_thread(void *job_ OVS_UNUSED)
+task_thread(void *job_)
 {
     struct job *job = job_;
     for (;;) {
@@ -2027,6 +2079,7 @@ static void
 spec_init(struct spec *spec)
 {
     *spec = (struct spec) {
+        .host = xstrdup("-"),
         .show = SHOW_SAMPLE,
         .priorities = ALL_PRIORITIES,
         .facilities = ALL_FACILITIES,
@@ -2044,6 +2097,7 @@ static void
 spec_uninit(struct spec *spec)
 {
     if (spec) {
+        free(spec->host);
         free(spec->match);
         log_record_destroy(spec->start);
         sset_destroy(&spec->components);
@@ -2056,6 +2110,7 @@ static void
 spec_copy(struct spec *dst, const struct spec *src)
 {
     *dst = *src;
+    dst->host = xstrdup(src->host);
     dst->start = src->start ? log_record_clone(src->start) : NULL;
     dst->match = nullable_xstrdup(src->match);
     sset_clone(&dst->components, &src->components);
@@ -2079,7 +2134,7 @@ spec_equals(const struct spec *a, const struct spec *b)
             && svec_equal(&a->targets, &b->targets)
             && (!a->start
                 ? !b->start
-                : b->start && !compare_log_records(a->start, b->start, a)));
+                : b->start && !log_record_compare(a->start, b->start, a)));
 }
 
 static const char *
@@ -2133,6 +2188,7 @@ spec_to_json(struct spec *spec)
 {
     struct json *obj = json_object_create();
     json_object_put_string(obj, "show", show_to_string(spec->show));
+    json_object_put_string(obj, "host", spec->host);
     if (spec->start) {
         json_object_put(obj, "start", log_record_to_json(spec->start,
                                                          spec->columns));
@@ -2195,6 +2251,11 @@ spec_from_json(const struct json *json, struct spec **specp)
     const struct json *show = ovsdb_parser_member(&p, "show", OP_STRING);
     if (show && !show_from_string(json_string(show), &spec->show)) {
         ovsdb_parser_raise_error(&p, "%s: unknown 'show'", json_string(show));
+    }
+
+    const struct json *host = ovsdb_parser_member(&p, "host", OP_STRING);
+    if (host) {
+        spec->host = xstrdup(json_string(host));
     }
 
     const struct json *start = ovsdb_parser_member(
@@ -2849,8 +2910,8 @@ main(int argc, char *argv[])
         for (size_t i = 0; i < y_max - 1; i++) {
             struct ds s = DS_EMPTY_INITIALIZER;
             if (i + y_ofs < r->n) {
-                format_record(r->recs[i + y_ofs],
-                              i + y_ofs, r->n, &job->spec, &s);
+                log_record_format(r->recs[i + y_ofs],
+                                  i + y_ofs, r->n, &job->spec, &s);
             } else {
                 ds_put_char(&s, '~');
             }
@@ -3123,6 +3184,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
 
     spec_init(spec);
+    svec_add(&columns_history, "when facility priority comp subcomp msg");
     for (;;) {
         int option;
 
@@ -3223,7 +3285,6 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
     }
 
     if (!spec->columns) {
-        svec_add(&columns_history, "when facility priority comp subcomp msg");
         spec->columns = (COL_WHEN | COL_FACILITY | COL_PRIORITY | COL_COMP
                          | COL_SUBCOMP | COL_MSG);
     }
