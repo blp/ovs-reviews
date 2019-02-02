@@ -22,6 +22,7 @@
  * - bt is slow, use heap+hmap?
  * - tab completion
  * - full query view (show as command-line options?)
+ * - checksumming to figure out whether anything has changed behind our back
  */
 
 #include <config.h>
@@ -54,6 +55,8 @@
 #include "openvswitch/poll-loop.h"
 #include "ovs-rcu.h"
 #include "ovs-thread.h"
+#include "ovsdb-error.h"
+#include "ovsdb-parser.h"
 #include "process.h"
 #include "random.h"
 #include "rculist.h"
@@ -140,9 +143,11 @@ struct state {
 };
 
 struct task {
-    struct job *job;
     struct rculist list_node;
+    struct job *job;
     char *filename;
+    struct jsonrpc *rpc;
+    struct json *reply_id;
     off_t size;
     struct state state;
 };
@@ -184,8 +189,12 @@ enum column {
 enum { N_COLUMNS = 0 COLUMNS };
 #undef COLUMN
 
-static char *columns_to_string(enum column);
+//static char *columns_to_string(enum column);
+static struct json *columns_to_json(enum column);
 static char *columns_from_string(const char *, enum column *columnsp)
+    OVS_WARN_UNUSED_RESULT;
+static struct ovsdb_error *columns_from_json(const struct json *array,
+                                             enum column *columns)
     OVS_WARN_UNUSED_RESULT;
 
 struct spec {
@@ -205,12 +214,7 @@ struct spec {
     struct svec targets;
 };
 
-enum job_status {
-    JOB_INIT,
-    JOB_RUNNING,
-    JOB_CANCELED,
-    JOB_FINISHED
-};
+static struct json *spec_to_json(struct spec *spec);
 
 struct results {
     struct log_record **recs;
@@ -227,7 +231,6 @@ struct job {
     pthread_t thread;
     struct seq *seq;
     atomic_bool cancel;
-    ATOMIC(enum job_status) status;
 
     OVSRCU_TYPE(struct results *) results;
 
@@ -243,6 +246,7 @@ struct job {
     /* Internals. */
     struct ovs_mutex task_lock;
     struct rculist queued_tasks;
+    struct rculist remote_tasks;
     struct rculist completed_tasks;
 };
 
@@ -311,8 +315,8 @@ struct log_record {
     long long int count;
     bool valid;                 /* Fully parsed record? */
     struct substring line;      /* Full log line. */
-    int facility;               /* 0...23. */
-    int priority;               /* 0...7. */
+    enum facility facility;     /* 0...23. */
+    enum priority priority;     /* 0...7. */
     struct substring timestamp; /* Date and time. */
     double when;                /* Seconds since the epoch. */
     struct substring hostname;  /* Hostname. */
@@ -829,6 +833,17 @@ log_record_to_json(const struct log_record *r, enum column columns)
 }
 
 static void
+parse_substring(struct ovsdb_parser *p, const char *name,
+                struct substring *value)
+{
+    const struct json *string = ovsdb_parser_member(
+        p, name, OP_STRING | OP_OPTIONAL);
+    if (string) {
+        *value = ss_clone(ss_cstr(json_string(string)));
+    }
+}
+
+static void
 log_record_uninit(struct log_record *r)
 {
     if (r) {
@@ -1002,6 +1017,64 @@ compare_log_records_for_bt(const struct bt_node *a_,
     return compare_log_records(a, b, spec);
 }
 
+static struct ovsdb_error *
+log_record_from_json(const struct json *json, struct log_record **rp)
+{
+    struct log_record *r = xzalloc(sizeof *r);
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "log_record");
+
+    const struct json *count = ovsdb_parser_member(
+        &p, "count", OP_INTEGER | OP_OPTIONAL);
+    r->count = count ? json_integer(count) : 1;
+
+    const struct json *valid = ovsdb_parser_member(
+        &p, "valid", OP_BOOLEAN | OP_OPTIONAL);
+    r->valid = valid ? json_boolean(valid) : true;
+
+    const struct json *facility = ovsdb_parser_member(
+        &p, "facility", OP_STRING | OP_OPTIONAL);
+    if (facility
+        && !facility_from_string(json_string(facility), &r->facility)) {
+        ovsdb_parser_raise_error(&p, "%s: unknown facility",
+                                 json_string(facility));
+    }
+
+    const struct json *priority = ovsdb_parser_member(
+        &p, "priority", OP_STRING | OP_OPTIONAL);
+    if (priority
+        && !priority_from_string(json_string(priority), &r->priority)) {
+        ovsdb_parser_raise_error(&p, "%s: unknown priority",
+                                 json_string(priority));
+    }
+
+    const struct json *when = ovsdb_parser_member(
+        &p, "when", OP_NUMBER | OP_OPTIONAL);
+    if (when) {
+        r->when = json_real(when);
+    }
+
+    parse_substring(&p, "hostname", &r->hostname);
+    parse_substring(&p, "app_name", &r->hostname);
+    parse_substring(&p, "porcid", &r->hostname);
+    parse_substring(&p, "msgid", &r->hostname);
+    parse_substring(&p, "sdid", &r->hostname);
+    parse_substring(&p, "component", &r->hostname);
+    parse_substring(&p, "subcomponent", &r->hostname);
+    parse_substring(&p, "msg", &r->hostname);
+
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        log_record_destroy(r);
+        free(r);
+        *rp = NULL;
+        return error;
+    }
+    *rp = r;
+    return NULL;
+}
+
 static void
 state_init(struct state *state, const struct spec *spec)
 {
@@ -1081,11 +1154,9 @@ state_uninit(struct state *state OVS_UNUSED)
 }
 
 #define WITH_MUTEX(MUTEX, ...)                  \
-    do {                                        \
-        ovs_mutex_lock(MUTEX);                  \
-        __VA_ARGS__;                            \
-        ovs_mutex_unlock(MUTEX);                \
-    } while (0)
+    ovs_mutex_lock(MUTEX);                      \
+    __VA_ARGS__;                                \
+    ovs_mutex_unlock(MUTEX);
 
 static void
 parse_file(const char *fn, const char *buffer, off_t size,
@@ -1306,8 +1377,20 @@ open_remote_target(const char *name, struct job *job)
 
         struct stream *stream;
         new_fd_stream(xasprintf("ssh %s", name), fds[0], 0, AF_UNIX, &stream);
-        struct jsonrpc *jsonrpc = jsonrpc_open(stream);
+        struct jsonrpc *rpc = jsonrpc_open(stream);
+
+        struct json *id;
+        jsonrpc_send(rpc, jsonrpc_create_request(
+                         "analyze",
+                         json_array_create_1(spec_to_json(&job->spec)), &id));
         free(s);
+
+        struct task *task = xzalloc(sizeof *task);
+        task->job = job;
+        task->filename = xstrdup(name);
+        task->rpc = rpc;
+        task->reply_id = id;
+        rculist_push_back(&job->remote_tasks, &task->list_node);
     } else {
         /* Child process. */
         close(fds[0]);
@@ -1320,7 +1403,7 @@ open_remote_target(const char *name, struct job *job)
             close(i);
         }
 
-        execlp("ssh", "ssh", "--", host, "hv", "--remote", dir, (void *) NULL);
+        execlp("ssh", "ssh", "--", host, "bin/hv", "--log-file=log", "-vjsonrpc", "--remote", dir, (void *) NULL);
         exit(1);
     }
 }
@@ -1774,7 +1857,9 @@ job_thread(void *job_)
     }
     free(tasks);
 
-    WITH_MUTEX(&job->stats_lock, job->goal = n_tasks);
+    unsigned int goal = n_tasks + rculist_size(&job->remote_tasks);
+
+    WITH_MUTEX(&job->stats_lock, job->goal = goal);
 
     int cores = count_cores();
     int n_threads = MIN(4 * cores, n_tasks);
@@ -1782,13 +1867,15 @@ job_thread(void *job_)
     for (int i = 0; i < n_threads; i++) {
         threads[i] = ovs_thread_create("read", task_thread, job);
     }
+    unsigned int progress = 0;
     for (;;) {
         uint64_t seq = seq_read(job->seq);
-        ovs_mutex_lock(&job->stats_lock);
-        bool done = job->progress == job->goal;
-        ovs_mutex_unlock(&job->stats_lock);
-        ovsrcu_set(&job->results, merge_results(job));
-        if (done) {
+        WITH_MUTEX(&job->stats_lock, unsigned int p = job->progress);
+        if (p > progress) {
+            progress = p;
+            ovsrcu_set(&job->results, merge_results(job));
+        }
+        if (progress >= goal) {
             break;
         }
         seq_wait(job->seq, seq);
@@ -1884,13 +1971,13 @@ show_to_string(enum show show)
 static bool
 show_from_string(const char *s, enum show *show)
 {
-    if (!strcmp(optarg, "first")) {
+    if (!strcmp(s, "first")) {
         *show = SHOW_FIRST;
-    } else if (!strcmp(optarg, "last")) {
+    } else if (!strcmp(s, "last")) {
         *show = SHOW_LAST;
-    } else if (!strcmp(optarg, "sample")) {
+    } else if (!strcmp(s, "sample")) {
         *show = SHOW_SAMPLE;
-    } else if (!strcmp(optarg, "top")) {
+    } else if (!strcmp(s, "top")) {
         *show = SHOW_TOPK;
     } else {
         return false;
@@ -1947,10 +2034,107 @@ spec_to_json(struct spec *spec)
     if (spec->at != -DBL_MAX) {
         json_object_put(obj, "at", json_real_create(spec->at));
     }
-    json_object_put(obj, "columns", json_string_create_nocopy(
-                        columns_to_string(spec->columns)));
+    json_object_put(obj, "columns", columns_to_json(spec->columns));
     /* XXX targets not included */
     return obj;
+}
+
+static void
+sset_from_json(const struct json *array, struct sset *sset)
+{
+    sset_clear(sset);
+
+    ovs_assert(array->type == JSON_ARRAY);
+    for (size_t i = 0; i < array->array.n; i++) {
+        const struct json *elem = array->array.elems[i];
+        if (elem->type == JSON_STRING) {
+            sset_add(sset, json_string(elem));
+        }
+    }
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+spec_from_json(const struct json *json, struct spec **specp)
+{
+    struct spec *spec = xmalloc(sizeof *spec);
+    spec_init(spec);
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, json, "spec");
+
+    const struct json *show = ovsdb_parser_member(&p, "show", OP_STRING);
+    if (show && !show_from_string(json_string(show), &spec->show)) {
+        ovsdb_parser_raise_error(&p, "%s: unknown 'show'", json_string(show));
+    }
+
+    const struct json *start = ovsdb_parser_member(
+        &p, "start", OP_OBJECT | OP_OPTIONAL);
+    if (start) {
+        ovsdb_parser_put_error(&p, log_record_from_json(start, &spec->start));
+    }
+
+    const struct json *match = ovsdb_parser_member(
+        &p, "match", OP_STRING | OP_OPTIONAL);
+    if (match) {
+        spec->match = xstrdup(json_string(match));
+    }
+
+    const struct json *priorities = ovsdb_parser_member(
+        &p, "priorities", OP_INTEGER | OP_OPTIONAL);
+    if (priorities) {
+        spec->priorities = json_integer(priorities);
+    }
+
+    const struct json *facilities = ovsdb_parser_member(
+        &p, "facilities", OP_INTEGER | OP_OPTIONAL);
+    if (facilities) {
+        spec->facilities = json_integer(facilities);
+    }
+
+    const struct json *components = ovsdb_parser_member(
+        &p, "components", OP_ARRAY | OP_OPTIONAL);
+    if (components) {
+        sset_from_json(components, &spec->components);
+    }
+
+    const struct json *subcomponents = ovsdb_parser_member(
+        &p, "subcomponents", OP_ARRAY | OP_OPTIONAL);
+    if (subcomponents) {
+        sset_from_json(subcomponents, &spec->subcomponents);
+    }
+
+    const struct json *date_since = ovsdb_parser_member(
+        &p, "date_since", OP_NUMBER | OP_OPTIONAL);
+    if (date_since) {
+        spec->date_since = json_real(date_since);
+    }
+
+    const struct json *date_until = ovsdb_parser_member(
+        &p, "date_until", OP_NUMBER | OP_OPTIONAL);
+    if (date_until) {
+        spec->date_until = json_real(date_until);
+    }
+
+    const struct json *at = ovsdb_parser_member(
+        &p, "at", OP_NUMBER | OP_OPTIONAL);
+    if (at) {
+        spec->at = json_real(at);
+    }
+
+    const struct json *columns = ovsdb_parser_member(&p, "columns", OP_ARRAY);
+    if (columns) {
+        ovsdb_parser_put_error(&p, columns_from_json(columns, &spec->columns));
+    }
+
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        spec_uninit(spec);
+        free(spec);
+        *specp = NULL;
+        return error;
+    }
+    *specp = spec;
+    return NULL;
 }
 
 static struct job *
@@ -1962,7 +2146,6 @@ job_create(const struct spec *spec)
 
     job->seq = seq_create();
     atomic_init(&job->cancel, false);
-    atomic_init(&job->status, JOB_INIT);
 
     struct results *results = xzalloc(sizeof *results);
     ovsrcu_init(&job->results, results);
@@ -1971,6 +2154,7 @@ job_create(const struct spec *spec)
 
     ovs_mutex_init(&job->task_lock);
     rculist_init(&job->queued_tasks);
+    rculist_init(&job->remote_tasks);
     rculist_init(&job->completed_tasks);
 
     ovs_thread_create("job", job_thread, job);
@@ -2189,25 +2373,64 @@ validate_columns(const char *s)
 }
 
 static void
+hv_handle_request(struct jsonrpc *rpc, const struct jsonrpc_msg *request)
+{
+    struct jsonrpc_msg *reply;
+    if (!strcmp(request->method, "analyze")
+        && json_array(request->params)->n == 1) {
+        struct spec *spec;
+        struct ovsdb_error *error = spec_from_json(json_array(request->params)->elems[0], &spec);
+        reply = jsonrpc_create_error((error
+                                      ? ovsdb_error_to_json_free(error)
+                                      : json_string_create("success")),
+                                     request->id);
+        if (spec) {
+            spec_uninit(spec);
+            free(spec);
+        }
+    } else if (request->type == JSONRPC_REQUEST
+           && !strcmp(request->method, "echo")) {
+        reply = jsonrpc_create_reply(json_clone(request->params), request->id);
+    } else {
+        reply = jsonrpc_create_error(json_string_create("unknown method"),
+                                     request->id);
+    }
+
+    jsonrpc_send(rpc, reply);
+}
+
+static void
 remote_loop(void)
 {
     struct stream *stream;
     new_fd_stream(xstrdup("remote"), STDOUT_FILENO, 0, AF_UNIX, &stream);
-    struct jsonrpc *jsonrpc = jsonrpc_open(stream);
+    struct jsonrpc *rpc = jsonrpc_open(stream);
 
     for (;;) {
-        jsonrpc_run(jsonrpc);
+        jsonrpc_run(rpc);
 
-        struct jsonrpc_msg *msg;
-        int error = jsonrpc_recv(jsonrpc, &msg);
-        if (error && error != EAGAIN) {
-            if (error == EOF) {
-                return;
+        if (!jsonrpc_get_backlog(rpc)) {
+            struct jsonrpc_msg *msg;
+            int error = jsonrpc_recv(rpc, &msg);
+            if (!error) {
+                if (msg->type == JSONRPC_REQUEST) {
+                    hv_handle_request(rpc, msg);
+                } else {
+                    VLOG_ERR("%s: received unexpected %s message",
+                             jsonrpc_get_name(rpc),
+                             jsonrpc_msg_type_to_string(msg->type));
+                    break;
+                }
+                jsonrpc_msg_destroy(msg);
+            } else if (error != EAGAIN) {
+                if (error == EOF) {
+                    return;
+                }
+                ovs_fatal(errno, "error receiving JSON-RPC message");
             }
-            ovs_fatal(errno, "error receiving JSON-RPC message");
         }
 
-        jsonrpc_wait(jsonrpc);
+        jsonrpc_wait(rpc);
         poll_block();
     }
 }
@@ -2576,6 +2799,7 @@ column_to_string(enum column c)
     }
 }
 
+#if 0
 static char *
 columns_to_string(enum column columns)
 {
@@ -2585,6 +2809,18 @@ columns_to_string(enum column columns)
     }
     ds_chomp(&s, ' ');
     return ds_steal_cstr(&s);
+}
+#endif
+
+static struct json *
+columns_to_json(enum column columns)
+{
+    struct json *array = json_array_create_empty();
+    for (enum column c = columns; c; c = zero_rightmost_1bit(c)) {
+        json_array_add(
+            array, json_string_create(column_to_string(rightmost_1bit(c))));
+    }
+    return array;
 }
 
 static enum column
@@ -2614,6 +2850,25 @@ columns_from_string(const char *s_, enum column *columnsp)
     }
     free(s);
     *columnsp = columns;
+    return NULL;
+}
+
+static struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+columns_from_json(const struct json *array, enum column *columns)
+{
+    *columns = 0;
+
+    ovs_assert(array->type == JSON_ARRAY);
+    for (size_t i = 0; i < array->array.n; i++) {
+        const struct json *elem = array->array.elems[i];
+        enum column c = (elem->type == JSON_STRING
+                         ? column_from_string(json_string(elem))
+                         : 0);
+        if (!c) {
+            return ovsdb_syntax_error(elem, NULL, "column name expected");
+        }
+        *columns |= c;
+    }
     return NULL;
 }
 

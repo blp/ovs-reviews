@@ -104,7 +104,7 @@ fd_recv(struct stream *stream, void *buffer, size_t n)
     ssize_t retval;
     int error;
 
-    retval = recv(s->fd, buffer, n, 0);
+    retval = read(s->fd != 1 ? s->fd : 0, buffer, n);
     if (retval < 0) {
         error = sock_errno();
 #ifdef _WIN32
@@ -127,7 +127,7 @@ fd_send(struct stream *stream, const void *buffer, size_t n)
     ssize_t retval;
     int error;
 
-    retval = send(s->fd, buffer, n, 0);
+    retval = write(s->fd, buffer, n);
     if (retval < 0) {
         error = sock_errno();
 #ifdef _WIN32
