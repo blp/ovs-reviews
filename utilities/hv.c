@@ -249,7 +249,7 @@ struct job {
     atomic_bool cancel;
     atomic_bool done;
 
-    OVSRCU_TYPE(struct results *) results;
+    OVSRCU_TYPE(struct state *) state;
 
     /* Statistics. */
     struct ovs_mutex stats_lock; /* Protects all the members below. */
@@ -1116,6 +1116,7 @@ log_record_from_json(const struct json *json, struct log_record **rp)
 static void
 state_init(struct state *state, const struct spec *spec)
 {
+    memset(state, 0, sizeof *state);
     state->allocated = 100;
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
@@ -1734,6 +1735,10 @@ state_merge(const struct state *src, const struct spec *spec,
         break;
 
     case SHOW_TOP:
+        fprintf(stderr, "merge %p\n", src->tk[0]);
+        if (!src->tk[0]) {
+            break;
+        }
         for (int i = 0; i < TK_L; i++) {
             for (int j = 0; j < TK_B; j++) {
                 struct topkapi *d = &dst->tk[i][j];
@@ -1753,6 +1758,7 @@ state_merge(const struct state *src, const struct spec *spec,
                 }
             }
         }
+        break;
     }
 }
 
@@ -1808,38 +1814,38 @@ state_to_results(const struct state *state, const struct spec *spec)
             }
         }
     } else {
-        struct topkapi *tk[TK_L];
-        for (int i = 0; i < TK_L; i++) {
-            tk[i] = xcalloc(TK_B, sizeof *tk[i]);
-        }
+        struct topkapi *tk = xcalloc(TK_B, sizeof *tk);
 
         int K = 100;
         int frac_epsilon = 10 * K;
         int threshold = ((double) TK_B / K) - ((double) TK_B / frac_epsilon);
         for (int j = 0; j < TK_B; j++) {
-            if (!tk[0][j].rec) {
-                tk[0][j].count = 0;
+            struct log_record *rec = state->tk[0][j].rec;
+            if (!rec) {
+                tk[j].count = 0;
                 continue;
             }
-            long long int count = tk[0][j].count;
+
+            long long int count = state->tk[0][j].count;
             for (int i = 1; i < TK_L; i++) {
-                int idx = log_record_hash(tk[0][j].rec, i, spec->columns)
-                    % TK_B;
-                if (!tk[i][idx].rec
-                    || log_record_compare(tk[0][j].rec, tk[i][idx].rec,
-                                           spec)) {
+                int idx = (log_record_hash(state->tk[0][j].rec, i,
+                                           spec->columns) % TK_B);
+                if (!state->tk[i][idx].rec
+                    || log_record_compare(state->tk[0][j].rec,
+                                          state->tk[i][idx].rec, spec)) {
                     continue;
                 }
-                count = MAX(count, tk[i][idx].count);
+                count = MAX(count, state->tk[i][idx].count);
             }
-            tk[0][j].count = count;
+            tk[j].rec = rec;
+            tk[j].count = count;
         }
 
-        qsort(tk[0], TK_B, sizeof *tk[0], compare_tk_by_count_desc);
+        qsort(tk, TK_B, sizeof *tk, compare_tk_by_count_desc);
         for (int j = 0; j < TK_B; j++) {
-            if (tk[0][j].count >= threshold) {
-                tk[0][j].rec->count = tk[0][j].count;
-                add_record(tk[0][j].rec,
+            if (tk[j].count >= threshold) {
+                tk[j].rec->count = tk[j].count;
+                add_record(tk[j].rec,
                            &results, &n_results, &allocated_results);
             } else {
                 break;
@@ -1856,17 +1862,17 @@ state_to_results(const struct state *state, const struct spec *spec)
     return r;
 }
 
-static struct results *
-merge_results(struct job *job)
+static struct state *
+merge_state(struct job *job)
 {
-    struct state state;
-    state_init(&state, &job->spec);
+    struct state *state = xmalloc(sizeof *state);
+    state_init(state, &job->spec);
 
     struct task *task;
     RCULIST_FOR_EACH (task, list_node, &job->completed_tasks) {
-        state_merge(&task->state, &job->spec, &state);
+        state_merge(&task->state, &job->spec, state);
     }
-    return state_to_results(&state, &job->spec);
+    return state;
 }
 
 static int
@@ -1908,76 +1914,116 @@ task_thread(void *job_)
 }
 
 static struct ovsdb_error *
-results_from_json(const struct json *json, struct results **rp)
+state_from_json(const struct json *json, struct state *state)
 {
-    VLOG_WARN("%s:%d", __FILE__, __LINE__);
-    struct results *r = xzalloc(sizeof *r);
-
     struct ovsdb_parser p;
-    ovsdb_parser_init(&p, json, "results");
+    ovsdb_parser_init(&p, json, "state");
 
-    VLOG_WARN("%s:%d", __FILE__, __LINE__);
-    const struct json *records = ovsdb_parser_member(&p, "records", OP_ARRAY);
+    const struct json *population = ovsdb_parser_member(
+        &p, "population", OP_INTEGER);
+    if (population) {
+        state->population = json_integer(population);
+    }
+
+    const struct json *records = ovsdb_parser_member(
+        &p, "reservoir", OP_ARRAY | OP_OPTIONAL);
     if (records) {
         size_t n = json_array(records)->n;
-        r->recs = xmalloc(n * sizeof *r->recs);
+        state->reservoir = xmalloc(n * sizeof *state->reservoir);
+        state->allocated = n;
         for (size_t i = 0; i < n; i++) {
+            struct log_record *rec;
             struct ovsdb_error *error = log_record_from_json(
-                json_array(records)->elems[i], &r->recs[i]);
+                json_array(records)->elems[i], &rec);
             if (error) {
                 ovsdb_parser_put_error(&p, error);
                 break;
             }
-            r->n++;
+            state->reservoir[i] = *rec;
+            free(rec);
+            state->n++;
         }
     }
 
     const struct json *skipped = ovsdb_parser_member(
-        &p, "skipped", OP_INTEGER);
+        &p, "skipped", OP_INTEGER | OP_OPTIONAL);
     if (skipped) {
-        r->skipped = json_integer(skipped);
+        state->skipped = json_integer(skipped);
     }
 
-    const struct json *total = ovsdb_parser_member(&p, "total", OP_INTEGER);
-    if (total) {
-        r->total = json_integer(total);
+    const struct json *tk_json = ovsdb_parser_member(
+        &p, "tk", OP_ARRAY | OP_OPTIONAL);
+    if (tk_json) {
+        const struct json_array *tk = json_array(tk_json);
+        if (tk->n != TK_L) {
+            ovsdb_parser_raise_error(&p, "tk has wrong number of elements");
+        } else {
+            for (int i = 0; i < TK_L; i++) {
+                state->tk[i] = xcalloc(TK_B, sizeof *state->tk[i]);
+            }
+
+            int n_parsed = 0;
+            for (int i = 0; i < TK_L; i++) {
+                const struct json *tk_i_json = tk->elems[i];
+                if (tk_i_json->type != JSON_ARRAY ||
+                    json_array(tk_i_json)->n != TK_B) {
+                    ovsdb_parser_raise_error(&p, "tk[%d] has %"PRIuSIZE" "
+                                             "elements (expected %d)", i,
+                                             json_array(tk_i_json)->n, TK_B);
+                } else {
+                    for (int j = 0; j < TK_B; j++) {
+                        const struct json *tk_ij_json
+                            = json_array(tk_i_json)->elems[j];
+                        if (tk_ij_json->type == JSON_OBJECT) {
+                            n_parsed++;
+
+                            struct ovsdb_parser p2;
+                            ovsdb_parser_init(&p2, tk_ij_json, "tk");
+                            const struct json *count = ovsdb_parser_member(
+                                &p2, "count", OP_INTEGER | OP_OPTIONAL);
+                            if (count) {
+                                state->tk[i][j].count = json_integer(count);
+                            }
+
+                            const struct json *record = ovsdb_parser_member(
+                                &p2, "record", OP_OBJECT | OP_OPTIONAL);
+                            if (record) {
+                                ovsdb_parser_put_error(
+                                    &p2, log_record_from_json(
+                                        record, &state->tk[i][j].rec));
+                            }
+                            ovsdb_parser_put_error(&p,
+                                                   ovsdb_parser_finish(&p2));
+                        }
+                    }
+                }
+            }
+            fprintf(stderr, "got %d\n", n_parsed);
+        }
     }
 
     struct ovsdb_error *error = ovsdb_parser_finish(&p);
     if (error) {
 #if 0                           /* XXX */
-        results_destroy(r);
-        free(r);
+        state_destroy(state);
 #endif
-        *rp = NULL;
-    VLOG_WARN("%s:%d", __FILE__, __LINE__);
         return error;
     }
-    VLOG_WARN("%s:%d", __FILE__, __LINE__);
-    *rp = r;
     return NULL;
 }
 
 static void
 remote_task_handle_reply(struct task *task, struct jsonrpc_msg *reply)
 {
-    struct results *r;
-    struct ovsdb_error *error = results_from_json(reply->result, &r);
+    struct ovsdb_error *error = state_from_json(reply->result, &task->state);
     if (error) {
         VLOG_ERR("%s", ovsdb_error_to_string_free(error)); /* XXX */
         return;
     }
 
-    struct job *job = task->job;
-    state_init(&task->state, &job->spec);
-
-    for (size_t i = 0; i < r->n; i++) {
-        state_add(&task->state, r->recs[i], &job->spec);
-    }
-    task->state.skipped = r->skipped;
-    task->state.population = r->total;
-
     rculist_remove(&task->list_node);
+
+    struct job *job = task->job;
     WITH_MUTEX(&job->task_lock,
                rculist_push_back(&job->completed_tasks, &task->list_node));
 
@@ -2004,7 +2050,7 @@ remote_task_run(struct task *task)
         }
         jsonrpc_msg_destroy(msg);
     } else if (error != EAGAIN) {
-        ovs_fatal(errno, "error receiving JSON-RPC message"); /* XXX */
+        ovs_fatal(error, "error receiving JSON-RPC message"); /* XXX */
     }
 }
 
@@ -2065,7 +2111,7 @@ job_thread(void *job_)
         WITH_MUTEX(&job->stats_lock, unsigned int p = job->progress);
         if (p > progress) {
             progress = p;
-            ovsrcu_set(&job->results, merge_results(job));
+            ovsrcu_set(&job->state, merge_state(job));
         }
         VLOG_WARN("progress=%u goal=%u", progress, goal);
         if (progress >= goal) {
@@ -2356,8 +2402,9 @@ job_create(const struct spec *spec)
     atomic_init(&job->cancel, false);
     atomic_init(&job->done, false);
 
-    struct results *results = xzalloc(sizeof *results);
-    ovsrcu_init(&job->results, results);
+    struct state *state = xmalloc(sizeof *state);
+    state_init(state, spec);
+    ovsrcu_init(&job->state, state);
 
     ovs_mutex_init(&job->stats_lock);
 
@@ -2600,18 +2647,56 @@ validate_facilities(const char *s)
 }
 
 static struct json *
-results_to_json(struct results *r, enum column columns)
+state_to_json(struct state *state, enum column columns)
 {
     struct json *obj = json_object_create();
 
-    struct json *array = json_array_create_empty();
-    for (size_t i = 0; i < r->n; i++) {
-        json_array_add(array, log_record_to_json(r->recs[i], columns));
-    }
-    json_object_put(obj, "records", array);
+    json_object_put(obj, "population", json_integer_create(state->population));
 
-    json_object_put(obj, "skipped", json_integer_create(r->skipped));
-    json_object_put(obj, "total", json_integer_create(r->total));
+    if (state->n) {
+        struct json *array = json_array_create_empty();
+        for (size_t i = 0; i < state->n; i++) {
+            json_array_add(array,
+                           log_record_to_json(&state->reservoir[i], columns));
+        }
+        json_object_put(obj, "reservoir", array);
+    }
+
+    if (state->skipped) {
+        json_object_put(obj, "skipped", json_integer_create(state->skipped));
+    }
+
+    if (state->tk[0]) {
+        struct json *tk = json_array_create_empty();
+        int count = 0;
+        for (size_t i = 0; i < TK_L; i++) {
+            struct json *tk_i = json_array_create_empty();
+            for (size_t j = 0; j < TK_B; j++) {
+                const struct topkapi *tk_ij = &state->tk[i][j];
+                struct json *elem;
+                if (tk_ij->rec || tk_ij->count) {
+                    elem = json_object_create();
+                    if (tk_ij->count) {
+                        json_object_put(elem, "count",
+                                        json_integer_create(tk_ij->count));
+                    }
+                    if (tk_ij->rec) {
+                        json_object_put(elem, "record",
+                                        log_record_to_json(tk_ij->rec,
+                                                           columns));
+                    }
+                    count++;
+                } else {
+                    elem = json_null_create();
+                }
+                json_array_add(tk_i, elem);
+            }
+            json_array_add(tk, tk_i);
+        }
+        json_object_put(obj, "tk", tk);
+        fprintf(stderr, "added %d\n", count);
+    }
+
     return obj;
 }
 
@@ -2644,9 +2729,9 @@ hv_handle_analyze_request(const struct jsonrpc_msg *request,
         poll_block();
     }
 
-    struct results *r = ovsrcu_get(struct results *, &job->results);
+    struct state *state = ovsrcu_get(struct state *, &job->state);
     struct jsonrpc_msg *reply = jsonrpc_create_reply(
-        results_to_json(r, spec->columns), request->id);
+        state_to_json(state, spec->columns), request->id);
     spec_uninit(spec);
     free(spec);
     return reply;
@@ -2699,7 +2784,7 @@ remote_loop(const struct svec *targets)
                 if (error == EOF) {
                     return;
                 }
-                ovs_fatal(errno, "error receiving JSON-RPC message");
+                ovs_fatal(error, "error receiving JSON-RPC message");
             }
         }
 
@@ -2754,7 +2839,8 @@ main(int argc, char *argv[])
     int y = 0;
     for (;;) {
         uint64_t display_seqno = seq_read(job->seq);
-        struct results *r = ovsrcu_get(struct results *, &job->results);
+        struct state *state = ovsrcu_get(struct state *, &job->state);
+        struct results *r = state_to_results(state, &job->spec);
 
         int y_max = getmaxy(stdscr);
         int x_max = getmaxx(stdscr);
@@ -2762,7 +2848,7 @@ main(int argc, char *argv[])
         int page = y_max - 1;
 
         switch (getch()) {
-        case KEY_UP: case 'k':
+        case KEY_UP: case 'k': case CTRL('P'):
             if (y == 0 && r->n > 0) {
                 new_spec.show = SHOW_LAST;
                 log_record_destroy(new_spec.start);
@@ -2771,7 +2857,7 @@ main(int argc, char *argv[])
                 y--;
             }
             break;
-        case KEY_DOWN: case 'j':
+        case KEY_DOWN: case 'j': case CTRL('N'):
             if (r->n && y == r->n - 1) {
                 new_spec.show = SHOW_FIRST;
                 log_record_destroy(new_spec.start);
