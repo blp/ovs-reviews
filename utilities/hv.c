@@ -1215,6 +1215,20 @@ state_uninit(struct state *state OVS_UNUSED)
 {
 }
 
+static bool
+job_is_canceled(struct job *job)
+{
+    bool cancel;
+    atomic_read(&job->cancel, &cancel);
+    return cancel;
+}
+
+static void
+job_cancel(struct job *job)
+{
+    atomic_store(&job->cancel, true);
+}
+
 #define WITH_MUTEX(MUTEX, ...)                  \
     ovs_mutex_lock(MUTEX);                      \
     __VA_ARGS__;                                \
@@ -1253,6 +1267,9 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         ovs_mutex_unlock(&job->stats_lock);
         if (!(total_recs % 1024)) {
             fatal_signal_run();
+            if (job_is_canceled(job)) {
+                break;
+            }
         }
 
         struct log_record rec;
@@ -1351,6 +1368,11 @@ read_gzipped(const char *name,
         z.avail_out = allocated - z.total_out;
 
         fatal_signal_run();
+        if (job_is_canceled(task->job)) {
+            inflateEnd(&z);
+            free(out);
+            return;
+        }
         retval = inflate(&z, Z_SYNC_FLUSH);
         if (retval == Z_STREAM_END) {
             break;
@@ -3032,6 +3054,7 @@ main(int argc, char *argv[])
         }
 
         if (!spec_equals(&spec, &new_spec)) {
+            job_cancel(job);
             spec_uninit(&spec);
             spec_copy(&spec, &new_spec);
             job = job_create(&spec);
