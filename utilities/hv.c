@@ -235,8 +235,8 @@ static struct json *spec_to_json(struct spec *);
 struct results {
     struct log_record **recs;
     size_t n;
-    unsigned long long int skipped;
-    unsigned long long int total;
+    unsigned long long int before;
+    unsigned long long int after;
 };
 
 struct job {
@@ -306,6 +306,31 @@ ss_contains(struct substring haystack, struct substring needle)
 {
     return memmem(haystack.s, haystack.length,
                   needle.s, needle.length) != NULL;
+}
+
+static unsigned char
+c_tolower(unsigned char c)
+{
+    return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+}
+
+static int OVS_UNUSED
+ss_find_case(struct substring haystack, struct substring needle)
+{
+    if (haystack.length < needle.length) {
+        return -1;
+    }
+    for (size_t i = 0; i < haystack.length - needle.length; i++) {
+        for (size_t j = 0; j < needle.length; j++) {
+            if (c_tolower(haystack.s[i + j]) != c_tolower(needle.s[j])) {
+                goto mismatch;
+            }
+        }
+        return i;
+
+    mismatch: ;
+    }
+    return -1;
 }
 
 static uint32_t
@@ -1117,7 +1142,7 @@ static void
 state_init(struct state *state, const struct spec *spec)
 {
     memset(state, 0, sizeof *state);
-    state->allocated = 100;
+    state->allocated = 1000;
     state->reservoir = xmalloc(state->allocated * sizeof *state->reservoir);
     state->n = 0;
     state->population = 0;
@@ -1255,7 +1280,7 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
                                   rec.subcomp.s, rec.subcomp.length)) {
             continue;
         }
-        if (spec->match && !ss_contains(rec.msg, ss_cstr(spec->match))) {
+        if (spec->match && ss_find_case(rec.msg, ss_cstr(spec->match)) == -1) {
             continue;
         }
         if (spec->start && log_record_compare(&rec, spec->start, spec) < 0) {
@@ -1857,8 +1882,8 @@ state_to_results(const struct state *state, const struct spec *spec)
     struct results *r = xmalloc(sizeof *r);
     r->recs = results;
     r->n = n_results;
-    r->total = total;
-    r->skipped = skipped;
+    r->after = total - skipped - n_results;
+    r->before = skipped;
     return r;
 }
 
@@ -2837,6 +2862,7 @@ main(int argc, char *argv[])
 
     int y_ofs = 0, x_ofs = 0;
     int y = 0;
+    bool highlight_match = true;
     for (;;) {
         uint64_t display_seqno = seq_read(job->seq);
         struct state *state = ovsrcu_get(struct state *, &job->state);
@@ -2999,6 +3025,10 @@ main(int argc, char *argv[])
         case 'T':
             new_spec.show = new_spec.show == SHOW_TOP ? SHOW_FIRST : SHOW_TOP;
             break;
+
+        case META('u'):
+            highlight_match = !highlight_match;
+            break;
         }
 
         if (!spec_equals(&spec, &new_spec)) {
@@ -3018,20 +3048,31 @@ main(int argc, char *argv[])
             } else {
                 ds_put_char(&s, '~');
             }
-            mvaddnstr(i, 0, ds_cstr(&s) + MIN(x_ofs, s.length),
-                      x_ofs + x_max - 3);
+
+            struct substring line = ss_cstr(ds_cstr(&s) + MIN(x_ofs, s.length));
+            line.length = MIN(line.length, x_ofs + x_max - 3);
+            mvaddnstr(i, 0, line.s, line.length);
             clrtoeol();
+
+            if (highlight_match && job->spec.match) {
+                int ofs = ss_find_case(line, ss_cstr(job->spec.match));
+                if (ofs) {
+                    mvchgat(i, ofs, strlen(job->spec.match), A_BOLD, 0, NULL);
+                }
+            }
+
             if (r->n && i + y_ofs == y) {
                 mvchgat(i, 0, x_max - 2, A_REVERSE, 0, NULL);
             }
             ds_destroy(&s);
         }
 
-        if (r->total) {
-            int y0 = y_ofs + r->skipped;
-            int y1 = MIN(y_ofs + page, r->n) + r->skipped - 1;
-            int y0s = y0 * (page - 2) / r->total + 1;
-            int y1s = y1 * (page - 2) / r->total + 1;
+        unsigned int total = r->before + r->n + r->after;
+        if (total) {
+            int y0 = y_ofs + r->before;
+            int y1 = MIN(y_ofs + page, r->n) + r->before - 1;
+            int y0s = y0 * (page - 2) / total + 1;
+            int y1s = y1 * (page - 2) / total + 1;
             mvaddch(0, x_max - 1, ACS_TTEE);
             for (int i = 1; i < y_max - 2; i++) {
                 mvaddch(i, x_max - 1, ACS_VLINE);
@@ -3054,11 +3095,9 @@ main(int argc, char *argv[])
             for (int x = 0; x < n; x++) {
                 addch(ACS_CKBOARD);
             }
-        } else if (r->total) {
-            int y0 = y_ofs;
-            int y1 = MIN(y_ofs + page, r->n) - 1;
-            mvprintw(y_max - 1, 0, "rows %d...%d out of %llu",
-                     y0 + r->skipped, y1 + r->skipped, r->total);
+        } else {
+            mvprintw(y_max - 1, 0, "row %llu of %llu",
+                     r->before + y + 1, r->before + r->n + r->after);
         }
         clrtoeol();
         refresh();
@@ -3322,7 +3361,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
 
         case 'm':
             svec_add(&match_history, optarg);
-            spec->match = optarg;
+            spec->match = xstrdup(optarg);
             break;
 
         case 'p':
