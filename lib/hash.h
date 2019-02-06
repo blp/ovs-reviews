@@ -55,8 +55,8 @@ static inline uint32_t hash_string(const char *, uint32_t basis);
  *
  * The upstream license there says:
  *
- * // MurmurHash3 was written by Austin Appleby, and is placed in the public
- * // domain. The author hereby disclaims copyright to this source code.
+ *    MurmurHash3 was written by Austin Appleby, and is placed in the public
+ *    domain. The author hereby disclaims copyright to this source code.
  *
  * See hash_words() for sample usage. */
 
@@ -98,7 +98,10 @@ static inline uint32_t hash_add_words64(uint32_t, const uint64_t *, size_t);
 static inline uint32_t hash_add_bytes32(uint32_t, const uint32_t *, size_t);
 static inline uint32_t hash_add_bytes64(uint32_t, const uint64_t *, size_t);
 
-#if !(defined(__SSE4_2__) && defined(__x86_64__))
+#if (defined(__ARM_FEATURE_CRC32) && defined(__aarch64__))
+#include "hash-aarch64.h"
+
+#elif !(defined(__SSE4_2__) && defined(__x86_64__))
 /* Mhash-based implementation. */
 
 static inline uint32_t hash_add(uint32_t hash, uint32_t data)

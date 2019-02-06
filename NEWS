@@ -1,4 +1,16 @@
-Post-v2.10.0
+Post-v2.11.0
+---------------------
+   - DPDK:
+     * New option 'other_config:dpdk-socket-limit' to limit amount of
+       hugepage memory that can be used by DPDK.
+   - OpenFlow:
+     * Removed support for OpenFlow 1.6 (draft), which ONF abandoned.
+   - Userspace datapath:
+     * ICMPv6 ND enhancements: support for match and set ND options type
+       and reserved fields.
+
+
+v2.11.0 - xx xxx xxxx
 ---------------------
    - Linux datapath:
      * Support for the kernel versions 4.16.x and 4.17.x.
@@ -24,10 +36,14 @@ Post-v2.10.0
          allocated dynamically using the following syntax:
            ovn-nbctl lsp-set-addresses <port> "dynamic <IP>"
    - DPDK:
+     * Add support for DPDK 18.11
+     * Add support for port representors.
+   - Userspace datapath:
      * Add option for simple round-robin based Rxq to PMD assignment.
        It can be set with pmd-rxq-assign.
-     * Add support for DPDK 18.11
      * Add support for Auto load balancing of PMDs (experimental)
+     * Added new per-port configurable option to manage EMC:
+       'other_config:emc-enable'.
    - Add 'symmetric_l3' hash function.
    - OVS now honors 'updelay' and 'downdelay' for bonds with LACP configured.
    - ovs-vswitchd:
@@ -35,6 +51,11 @@ Post-v2.10.0
        rebalancing of offloaded flows.
    - The environment variable OVS_RESOLV_CONF, if set, is now used
      as the DNS server configuration file.
+   - RHEL packaging:
+     * OVN packages are split from OVS packages. A new spec
+       file - ovn-fedora.spec.in is added to generate OVN packages.
+   - Linux datapath:
+     * Support for the kernel versions 4.18.x
 
 v2.10.0 - 18 Aug 2018
 ---------------------

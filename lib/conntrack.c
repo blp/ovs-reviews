@@ -136,7 +136,7 @@ expectation_lookup(struct hmap *alg_expectations, const struct conn_key *key,
 static int
 repl_ftp_v4_addr(struct dp_packet *pkt, ovs_be32 v4_addr_rep,
                  char *ftp_data_v4_start,
-                 size_t addr_offset_from_ftp_data_start);
+                 size_t addr_offset_from_ftp_data_start, size_t addr_size);
 
 static enum ftp_ctl_pkt
 process_ftp_ctl_v4(struct conntrack *ct,
@@ -144,7 +144,8 @@ process_ftp_ctl_v4(struct conntrack *ct,
                    const struct conn *conn_for_expectation,
                    ovs_be32 *v4_addr_rep,
                    char **ftp_data_v4_start,
-                   size_t *addr_offset_from_ftp_data_start);
+                   size_t *addr_offset_from_ftp_data_start,
+                   size_t *addr_size);
 
 static enum ftp_ctl_pkt
 detect_ftp_ctl_type(const struct conn_lookup_ctx *ctx,
@@ -747,7 +748,7 @@ conn_lookup(struct conntrack *ct, const struct conn_key *key, long long now)
 {
     struct conn_lookup_ctx ctx;
     ctx.conn = NULL;
-    ctx.key = *key;
+    memcpy(&ctx.key, key, sizeof ctx.key);
     ctx.hash = conn_key_hash(key, ct->hash_basis);
     unsigned bucket = hash_to_bucket(ctx.hash);
     conn_key_lookup(&ct->buckets[bucket], &ctx, now);
@@ -904,7 +905,7 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                     nc->rev_key.src.addr = alg_exp->alg_nat_repl_addr;
                     nc->nat_info->nat_action = NAT_ACTION_DST;
                 }
-                *conn_for_un_nat_copy = *nc;
+                memcpy(conn_for_un_nat_copy, nc, sizeof *conn_for_un_nat_copy);
                 ct_rwlock_wrlock(&ct->resources_lock);
                 bool new_insert = nat_conn_keys_insert(&ct->nat_conn_keys,
                                                        conn_for_un_nat_copy,
@@ -918,7 +919,7 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                     free(log_msg);
                 }
             } else {
-                *conn_for_un_nat_copy = *nc;
+                memcpy(conn_for_un_nat_copy, nc, sizeof *conn_for_un_nat_copy);
                 ct_rwlock_wrlock(&ct->resources_lock);
                 bool nat_res = nat_select_range_tuple(ct, nc,
                                                       conn_for_un_nat_copy);
@@ -1261,7 +1262,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
                                      ct->hash_basis,
                                      alg_src_ip_wc(ct_alg_ctl));
         if (alg_exp) {
-            alg_exp_entry = *alg_exp;
+            memcpy(&alg_exp_entry, alg_exp, sizeof alg_exp_entry);
             alg_exp = &alg_exp_entry;
         }
         ct_rwlock_unlock(&ct->resources_lock);
@@ -2611,7 +2612,8 @@ static struct alg_exp_node *
 expectation_lookup(struct hmap *alg_expectations, const struct conn_key *key,
                    uint32_t basis, bool src_ip_wc)
 {
-    struct conn_key check_key = *key;
+    struct conn_key check_key;
+    memcpy(&check_key, key, sizeof check_key);
     check_key.src.port = ALG_WC_SRC_PORT;
 
     if (src_ip_wc) {
@@ -2713,21 +2715,29 @@ expectation_create(struct conntrack *ct, ovs_be16 dst_port,
     if (reply) {
         src_addr = master_conn->key.src.addr;
         dst_addr = master_conn->key.dst.addr;
+        alg_exp_node->nat_rpl_dst = true;
         if (skip_nat) {
             alg_nat_repl_addr = dst_addr;
+        } else if (master_conn->nat_info &&
+                   master_conn->nat_info->nat_action & NAT_ACTION_DST) {
+            alg_nat_repl_addr = master_conn->rev_key.src.addr;
+            alg_exp_node->nat_rpl_dst = false;
         } else {
             alg_nat_repl_addr = master_conn->rev_key.dst.addr;
         }
-        alg_exp_node->nat_rpl_dst = true;
     } else {
         src_addr = master_conn->rev_key.src.addr;
         dst_addr = master_conn->rev_key.dst.addr;
+        alg_exp_node->nat_rpl_dst = false;
         if (skip_nat) {
             alg_nat_repl_addr = src_addr;
+        } else if (master_conn->nat_info &&
+                   master_conn->nat_info->nat_action & NAT_ACTION_DST) {
+            alg_nat_repl_addr = master_conn->key.dst.addr;
+            alg_exp_node->nat_rpl_dst = true;
         } else {
             alg_nat_repl_addr = master_conn->key.src.addr;
         }
-        alg_exp_node->nat_rpl_dst = false;
     }
     if (src_ip_wc) {
         memset(&src_addr, 0, sizeof src_addr);
@@ -2763,13 +2773,6 @@ expectation_create(struct conntrack *ct, ovs_be16 dst_port,
     ct_rwlock_unlock(&ct->resources_lock);
 }
 
-static uint8_t
-get_v4_byte_be(ovs_be32 v4_addr, uint8_t index)
-{
-    uint8_t *byte_ptr = (OVS_FORCE uint8_t *) &v4_addr;
-    return byte_ptr[index];
-}
-
 static void
 replace_substring(char *substr, uint8_t substr_size,
                   uint8_t total_size, char *rep_str,
@@ -2780,51 +2783,56 @@ replace_substring(char *substr, uint8_t substr_size,
     memcpy(substr, rep_str, rep_str_size);
 }
 
+static void
+repl_bytes(char *str, char c1, char c2)
+{
+    while (*str) {
+        if (*str == c1) {
+            *str = c2;
+        }
+        str++;
+    }
+}
+
+static void
+modify_packet(struct dp_packet *pkt, char *pkt_str, size_t size,
+              char *repl_str, size_t repl_size,
+              uint32_t orig_used_size)
+{
+    replace_substring(pkt_str, size,
+                      (const char *) dp_packet_tail(pkt) - pkt_str,
+                      repl_str, repl_size);
+    dp_packet_set_size(pkt, orig_used_size + (int) repl_size - (int) size);
+}
+
 /* Replace IPV4 address in FTP message with NATed address. */
 static int
 repl_ftp_v4_addr(struct dp_packet *pkt, ovs_be32 v4_addr_rep,
                  char *ftp_data_start,
-                 size_t addr_offset_from_ftp_data_start)
+                 size_t addr_offset_from_ftp_data_start,
+                 size_t addr_size OVS_UNUSED)
 {
     enum { MAX_FTP_V4_NAT_DELTA = 8 };
 
     /* Do conservative check for pathological MTU usage. */
     uint32_t orig_used_size = dp_packet_size(pkt);
-    uint16_t allocated_size = dp_packet_get_allocated(pkt);
-    if (orig_used_size + MAX_FTP_V4_NAT_DELTA > allocated_size) {
+    if (orig_used_size + MAX_FTP_V4_NAT_DELTA >
+        dp_packet_get_allocated(pkt)) {
+
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
-        VLOG_WARN_RL(&rl, "Unsupported effective MTU %u used with FTP",
-                     allocated_size);
+        VLOG_WARN_RL(&rl, "Unsupported effective MTU %u used with FTP V4",
+                     dp_packet_get_allocated(pkt));
         return 0;
     }
 
-    size_t remain_size = tcp_payload_length(pkt) -
-                             addr_offset_from_ftp_data_start;
-    int overall_delta = 0;
-    char *byte_str = ftp_data_start + addr_offset_from_ftp_data_start;
-
-    /* Replace the existing IPv4 address by the new one. */
-    for (uint8_t i = 0; i < 4; i++) {
-        /* Find the end of the string for this octet. */
-        char *next_delim = memchr(byte_str, ',', 4);
-        ovs_assert(next_delim);
-        int substr_size = next_delim - byte_str;
-        remain_size -= substr_size;
-
-        /* Compose the new string for this octet, and replace it. */
-        char rep_str[4];
-        uint8_t rep_byte = get_v4_byte_be(v4_addr_rep, i);
-        int replace_size = sprintf(rep_str, "%d", rep_byte);
-        replace_substring(byte_str, substr_size, remain_size,
-                          rep_str, replace_size);
-        overall_delta += replace_size - substr_size;
-
-        /* Advance past the octet and the following comma. */
-        byte_str += replace_size + 1;
-    }
-
-    dp_packet_set_size(pkt, orig_used_size + overall_delta);
-    return overall_delta;
+    char v4_addr_str[INET_ADDRSTRLEN] = {0};
+    ovs_assert(inet_ntop(AF_INET, &v4_addr_rep, v4_addr_str,
+                         sizeof v4_addr_str));
+    repl_bytes(v4_addr_str, '.', ',');
+    modify_packet(pkt, ftp_data_start + addr_offset_from_ftp_data_start,
+                  addr_size, v4_addr_str, strlen(v4_addr_str),
+                  orig_used_size);
+    return (int) strlen(v4_addr_str) - (int) addr_size;
 }
 
 static char *
@@ -2893,7 +2901,8 @@ process_ftp_ctl_v4(struct conntrack *ct,
                    const struct conn *conn_for_expectation,
                    ovs_be32 *v4_addr_rep,
                    char **ftp_data_v4_start,
-                   size_t *addr_offset_from_ftp_data_start)
+                   size_t *addr_offset_from_ftp_data_start,
+                   size_t *addr_size)
 {
     struct tcp_header *th = dp_packet_l4(pkt);
     size_t tcp_hdr_len = TCP_OFFSET(th->tcp_ctl) * 4;
@@ -2949,6 +2958,7 @@ process_ftp_ctl_v4(struct conntrack *ct,
         return CT_FTP_CTL_INVALID;
     }
 
+    *addr_size = ftp - ip_addr_start - 1;
     char *save_ftp = ftp;
     ftp = terminate_number_str(ftp, MAX_FTP_PORT_DGTS);
     if (!ftp) {
@@ -3141,38 +3151,35 @@ repl_ftp_v6_addr(struct dp_packet *pkt, struct ct_addr v6_addr_rep,
 
     /* Do conservative check for pathological MTU usage. */
     uint32_t orig_used_size = dp_packet_size(pkt);
-    uint16_t allocated_size = dp_packet_get_allocated(pkt);
-    if (orig_used_size + MAX_FTP_V6_NAT_DELTA > allocated_size) {
+    if (orig_used_size + MAX_FTP_V6_NAT_DELTA >
+        dp_packet_get_allocated(pkt)) {
+
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
-        VLOG_WARN_RL(&rl, "Unsupported effective MTU %u used with FTP",
-                     allocated_size);
+        VLOG_WARN_RL(&rl, "Unsupported effective MTU %u used with FTP V6",
+                     dp_packet_get_allocated(pkt));
         return 0;
     }
 
-    char v6_addr_str[IPV6_SCAN_LEN] = {0};
+    char v6_addr_str[INET6_ADDRSTRLEN] = {0};
     ovs_assert(inet_ntop(AF_INET6, &v6_addr_rep.ipv6_aligned, v6_addr_str,
-                         IPV6_SCAN_LEN - 1));
+                         sizeof v6_addr_str));
+    modify_packet(pkt, ftp_data_start + addr_offset_from_ftp_data_start,
+                  addr_size, v6_addr_str, strlen(v6_addr_str),
+                  orig_used_size);
+    return (int) strlen(v6_addr_str) - (int) addr_size;
+}
 
-    size_t replace_addr_size = strlen(v6_addr_str);
-
-    size_t remain_size = tcp_payload_length(pkt) -
-                             addr_offset_from_ftp_data_start;
-
-    char *pkt_addr_str = ftp_data_start + addr_offset_from_ftp_data_start;
-    replace_substring(pkt_addr_str, addr_size, remain_size,
-                      v6_addr_str, replace_addr_size);
-
-    int overall_delta = (int) replace_addr_size - (int) addr_size;
-
-    dp_packet_set_size(pkt, orig_used_size + overall_delta);
-    return overall_delta;
+/* Increment/decrement a TCP sequence number. */
+static void
+adj_seqnum(ovs_16aligned_be32 *val, int32_t inc)
+{
+    put_16aligned_be32(val, htonl(ntohl(get_16aligned_be32(val)) + inc));
 }
 
 static void
 handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
-               struct dp_packet *pkt,
-               const struct conn *conn_for_expectation,
-               long long now, enum ftp_ctl_pkt ftp_ctl, bool nat)
+               struct dp_packet *pkt, const struct conn *ec, long long now,
+               enum ftp_ctl_pkt ftp_ctl, bool nat)
 {
     struct ip_header *l3_hdr = dp_packet_l3(pkt);
     ovs_be32 v4_addr_rep = 0;
@@ -3180,33 +3187,27 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     size_t addr_offset_from_ftp_data_start = 0;
     size_t addr_size = 0;
     char *ftp_data_start;
-    bool do_seq_skew_adj = true;
     enum ct_alg_mode mode = CT_FTP_MODE_ACTIVE;
 
     if (detect_ftp_ctl_type(ctx, pkt) != ftp_ctl) {
         return;
     }
 
-    if (!nat || !conn_for_expectation->seq_skew) {
-        do_seq_skew_adj = false;
-    }
-
     struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
     int64_t seq_skew = 0;
 
-    if (ftp_ctl == CT_FTP_CTL_OTHER) {
-        seq_skew = conn_for_expectation->seq_skew;
-    } else if (ftp_ctl == CT_FTP_CTL_INTEREST) {
+    if (ftp_ctl == CT_FTP_CTL_INTEREST) {
         enum ftp_ctl_pkt rc;
         if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-            rc = process_ftp_ctl_v6(ct, pkt, conn_for_expectation,
+            rc = process_ftp_ctl_v6(ct, pkt, ec,
                                     &v6_addr_rep, &ftp_data_start,
                                     &addr_offset_from_ftp_data_start,
                                     &addr_size, &mode);
         } else {
-            rc = process_ftp_ctl_v4(ct, pkt, conn_for_expectation,
+            rc = process_ftp_ctl_v4(ct, pkt, ec,
                                     &v4_addr_rep, &ftp_data_start,
-                                    &addr_offset_from_ftp_data_start);
+                                    &addr_offset_from_ftp_data_start,
+                                    &addr_size);
         }
         if (rc == CT_FTP_CTL_INVALID) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
@@ -3217,66 +3218,43 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
             uint16_t ip_len;
 
             if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-                seq_skew = repl_ftp_v6_addr(pkt, v6_addr_rep, ftp_data_start,
-                                            addr_offset_from_ftp_data_start,
-                                            addr_size, mode);
+                if (nat) {
+                    seq_skew = repl_ftp_v6_addr(pkt, v6_addr_rep,
+                                   ftp_data_start,
+                                   addr_offset_from_ftp_data_start,
+                                   addr_size, mode);
+                }
+
                 if (seq_skew) {
-                    ip_len = ntohs(nh6->ip6_ctlun.ip6_un1.ip6_un1_plen);
-                    ip_len += seq_skew;
+                    ip_len = ntohs(nh6->ip6_ctlun.ip6_un1.ip6_un1_plen) +
+                        seq_skew;
                     nh6->ip6_ctlun.ip6_un1.ip6_un1_plen = htons(ip_len);
-                    conn_seq_skew_set(ct, &conn_for_expectation->key, now,
-                                      seq_skew, ctx->reply);
                 }
             } else {
-                seq_skew = repl_ftp_v4_addr(pkt, v4_addr_rep, ftp_data_start,
-                                            addr_offset_from_ftp_data_start);
-                ip_len = ntohs(l3_hdr->ip_tot_len);
+                if (nat) {
+                    seq_skew = repl_ftp_v4_addr(pkt, v4_addr_rep,
+                                   ftp_data_start,
+                                   addr_offset_from_ftp_data_start,
+                                   addr_size);
+                }
                 if (seq_skew) {
-                    ip_len += seq_skew;
+                    ip_len = ntohs(l3_hdr->ip_tot_len) + seq_skew;
                     l3_hdr->ip_csum = recalc_csum16(l3_hdr->ip_csum,
                                           l3_hdr->ip_tot_len, htons(ip_len));
                     l3_hdr->ip_tot_len = htons(ip_len);
-                    conn_seq_skew_set(ct, &conn_for_expectation->key, now,
-                                      seq_skew, ctx->reply);
                 }
             }
         } else {
             OVS_NOT_REACHED();
         }
-    } else {
-        OVS_NOT_REACHED();
     }
 
     struct tcp_header *th = dp_packet_l4(pkt);
 
-    if (do_seq_skew_adj && seq_skew != 0) {
-        if (ctx->reply != conn_for_expectation->seq_skew_dir) {
-
-            uint32_t tcp_ack = ntohl(get_16aligned_be32(&th->tcp_ack));
-
-            if ((seq_skew > 0) && (tcp_ack < seq_skew)) {
-                /* Should not be possible; will be marked invalid. */
-                tcp_ack = 0;
-            } else if ((seq_skew < 0) && (UINT32_MAX - tcp_ack < -seq_skew)) {
-                tcp_ack = (-seq_skew) - (UINT32_MAX - tcp_ack);
-            } else {
-                tcp_ack -= seq_skew;
-            }
-            ovs_be32 new_tcp_ack = htonl(tcp_ack);
-            put_16aligned_be32(&th->tcp_ack, new_tcp_ack);
-        } else {
-            uint32_t tcp_seq = ntohl(get_16aligned_be32(&th->tcp_seq));
-            if ((seq_skew > 0) && (UINT32_MAX - tcp_seq < seq_skew)) {
-                tcp_seq = seq_skew - (UINT32_MAX - tcp_seq);
-            } else if ((seq_skew < 0) && (tcp_seq < -seq_skew)) {
-                /* Should not be possible; will be marked invalid. */
-                tcp_seq = 0;
-            } else {
-                tcp_seq += seq_skew;
-            }
-            ovs_be32 new_tcp_seq = htonl(tcp_seq);
-            put_16aligned_be32(&th->tcp_seq, new_tcp_seq);
-        }
+    if (nat && ec->seq_skew != 0) {
+        ctx->reply != ec->seq_skew_dir ?
+            adj_seqnum(&th->tcp_ack, -ec->seq_skew) :
+            adj_seqnum(&th->tcp_seq, ec->seq_skew);
     }
 
     th->tcp_csum = 0;
@@ -3290,6 +3268,11 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     uint8_t pad = dp_packet_l2_pad_size(pkt);
     th->tcp_csum = csum_finish(
         csum_continue(tcp_csum, th, tail - (char *) th - pad));
+
+    if (seq_skew) {
+        conn_seq_skew_set(ct, &ec->key, now, seq_skew + ec->seq_skew,
+                          ctx->reply);
+    }
 }
 
 static void

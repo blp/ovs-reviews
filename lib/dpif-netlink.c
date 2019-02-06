@@ -900,7 +900,7 @@ dpif_netlink_rtnl_port_create_and_add(struct dpif_netlink *dpif,
     name = netdev_vport_get_dpif_port(netdev, namebuf, sizeof namebuf);
     error = dpif_netlink_port_add__(dpif, name, OVS_VPORT_TYPE_NETDEV, NULL,
                                     port_nop);
-    if (error && error != EEXIST) {
+    if (error) {
         dpif_netlink_rtnl_port_destroy(name, netdev_get_type(netdev));
     }
     return error;
@@ -917,7 +917,7 @@ dpif_netlink_port_add(struct dpif *dpif_, struct netdev *netdev,
     if (!ovs_tunnels_out_of_tree) {
         error = dpif_netlink_rtnl_port_create_and_add(dpif, netdev, port_nop);
     }
-    if (error && error != EEXIST) {
+    if (error) {
         error = dpif_netlink_port_add_compat(dpif, netdev, port_nop);
     }
     fat_rwlock_unlock(&dpif->upcall_lock);
@@ -3925,7 +3925,7 @@ put_exclude_packet_type(struct ofpbuf *buf, uint16_t type,
             ovs_be16 pt = pt_ns_type_be(nl_attr_get_be32(packet_type));
             const struct nlattr *nla;
 
-            nla = nl_attr_find(buf, NLA_HDRLEN, OVS_KEY_ATTR_ETHERTYPE);
+            nla = nl_attr_find(buf, ofs + NLA_HDRLEN, OVS_KEY_ATTR_ETHERTYPE);
             if (nla) {
                 ovs_be16 *ethertype;
 

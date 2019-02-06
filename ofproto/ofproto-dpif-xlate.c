@@ -2058,21 +2058,10 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
         return;
     }
 
-    if (ctx->xin->resubmit_stats) {
-        mirror_update_stats(xbridge->mbridge, mirrors,
-                            ctx->xin->resubmit_stats->n_packets,
-                            ctx->xin->resubmit_stats->n_bytes);
-    }
-    if (ctx->xin->xcache) {
-        struct xc_entry *entry;
-
-        entry = xlate_cache_add_entry(ctx->xin->xcache, XC_MIRROR);
-        entry->mirror.mbridge = mbridge_ref(xbridge->mbridge);
-        entry->mirror.mirrors = mirrors;
-    }
-
-    /* 'mirrors' is a bit-mask of candidates for mirroring.  Iterate as long as
-     * some candidates remain.  */
+    /* 'mirrors' is a bit-mask of candidates for mirroring.  Iterate through
+     * the candidates, adding the ones that really should be mirrored to
+     * 'used_mirrors', as long as some candidates remain.  */
+    mirror_mask_t used_mirrors = 0;
     while (mirrors) {
         const unsigned long *vlans;
         mirror_mask_t dup_mirrors;
@@ -2095,6 +2084,9 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
             mirrors = zero_rightmost_1bit(mirrors);
             continue;
         }
+
+        /* We sent a packet to this mirror. */
+        used_mirrors |= rightmost_1bit(mirrors);
 
         /* Record the mirror, and the mirrors that output to the same
          * destination, so that we don't mirror to them again.  This must be
@@ -2128,6 +2120,21 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
          * mirrors), so make sure that we don't send duplicates. */
         mirrors &= ~ctx->mirrors;
         ctx->mirror_snaplen = 0;
+    }
+
+    if (used_mirrors) {
+        if (ctx->xin->resubmit_stats) {
+            mirror_update_stats(xbridge->mbridge, used_mirrors,
+                                ctx->xin->resubmit_stats->n_packets,
+                                ctx->xin->resubmit_stats->n_bytes);
+        }
+        if (ctx->xin->xcache) {
+            struct xc_entry *entry;
+
+            entry = xlate_cache_add_entry(ctx->xin->xcache, XC_MIRROR);
+            entry->mirror.mbridge = mbridge_ref(xbridge->mbridge);
+            entry->mirror.mirrors = used_mirrors;
+        }
     }
 }
 
@@ -3646,13 +3653,6 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
             nl_msg_end_non_empty_nested(ctx->odp_actions, clone_ofs);
         } else {
             nl_msg_cancel_nested(ctx->odp_actions, clone_ofs);
-            /* XXX : There is no real use-case for a tunnel push without
-             * any post actions. However keeping it now
-             * as is to make the 'make check' happy. Should remove when all the
-             * make check tunnel test case does something meaningful on a
-             * tunnel encap packets.
-             */
-            odp_put_tnl_push_action(ctx->odp_actions, &tnl_push_data);
         }
 
         /* Restore context status. */
@@ -5146,7 +5146,7 @@ xlate_output_trunc_action(struct xlate_ctx *ctx,
 {
     bool support_trunc = ctx->xbridge->support.trunc;
     struct ovs_action_trunc *trunc;
-    char name[OFP10_MAX_PORT_NAME_LEN];
+    char name[OFP_MAX_PORT_NAME_LEN];
 
     switch (port) {
     case OFPP_TABLE:
@@ -7039,9 +7039,7 @@ xlate_wc_init(struct xlate_ctx *ctx)
     /* Some fields we consider to always be examined. */
     WC_MASK_FIELD(ctx->wc, packet_type);
     WC_MASK_FIELD(ctx->wc, in_port);
-    if (is_ethernet(&ctx->xin->flow, NULL)) {
-        WC_MASK_FIELD(ctx->wc, dl_type);
-    }
+    WC_MASK_FIELD(ctx->wc, dl_type);
     if (is_ip_any(&ctx->xin->flow)) {
         WC_MASK_FIELD_MASK(ctx->wc, nw_frag, FLOW_NW_FRAG_MASK);
     }
@@ -7068,12 +7066,14 @@ xlate_wc_finish(struct xlate_ctx *ctx)
      * use non-header fields as part of the cache. */
     flow_wildcards_clear_non_packet_fields(ctx->wc);
 
-    /* Wildcard ethernet fields if the original packet type was not
-     * Ethernet. */
+    /* Wildcard Ethernet address fields if the original packet type was not
+     * Ethernet.
+     *
+     * (The Ethertype field is used even when the original packet type is not
+     * Ethernet.) */
     if (ctx->xin->upcall_flow->packet_type != htonl(PT_ETH)) {
         ctx->wc->masks.dl_dst = eth_addr_zero;
         ctx->wc->masks.dl_src = eth_addr_zero;
-        ctx->wc->masks.dl_type = 0;
     }
 
     /* ICMPv4 and ICMPv6 have 8-bit "type" and "code" fields.  struct flow

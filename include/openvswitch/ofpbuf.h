@@ -72,7 +72,7 @@ struct ofpbuf {
  *
  * Usage example:
  *
- *     uint64_t stub[1024 / 8]; // 1 kB stub properly aligned for 64-bit data.
+ *     uint64_t stub[1024 / 8];         <-- 1 kB stub aligned for 64-bit data.
  *     struct ofpbuf ofpbuf = OFPBUF_STUB_INITIALIZER(stub);
  */
 #define OFPBUF_STUB_INITIALIZER(STUB) {         \
@@ -246,6 +246,7 @@ static inline void ofpbuf_clear(struct ofpbuf *b)
  * 'size' bytes of data.  Returns the first byte of data removed. */
 static inline void *ofpbuf_pull(struct ofpbuf *b, size_t size)
 {
+    ovs_assert(b->size >= size);
     void *data = b->data;
     b->data = (char*)b->data + size;
     b->size = b->size - size;

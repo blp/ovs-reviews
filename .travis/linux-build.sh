@@ -18,8 +18,8 @@ function install_kernel()
         PREFIX="v2.6/longterm/v2.6.32"
     fi
 
-    wget https://www.kernel.org/pub/linux/kernel/${PREFIX}/linux-${1}.tar.gz
-    tar xzvf linux-${1}.tar.gz > /dev/null
+    wget https://cdn.kernel.org/pub/linux/kernel/${PREFIX}/linux-${1}.tar.xz
+    tar xvf linux-${1}.tar.xz > /dev/null
     cd linux-${1}
     make allmodconfig
 
@@ -119,7 +119,7 @@ else
     make -j2 CFLAGS="$CFLAGS $BUILD_ENV $SPARSE_FLAGS" C=1
 fi
 
-if [ "$TESTSUITE" ] && [ "$CC" != "clang" ]; then
+if [ "$TESTSUITE" ]; then
     if ! make distcheck TESTSUITEFLAGS=-j4 RECHECK=yes; then
         # testsuite.log is necessary for debugging.
         cat */_build/tests/testsuite.log

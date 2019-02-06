@@ -799,7 +799,7 @@ struct ofpact_learn_spec {
                                     * NX_LEARN_DST_LOAD only. */
         uint16_t src_type;         /* One of NX_LEARN_SRC_*. */
         uint16_t dst_type;         /* One of NX_LEARN_DST_*. */
-        uint8_t n_bits;            /* Number of bits in source and dest. */
+        uint32_t n_bits;           /* Number of bits in source and dest. */
     );
     /* Followed by 'DIV_ROUND_UP(n_bits, 8)' bytes of immediate data for
      * match 'dst_type's NX_LEARN_DST_MATCH and NX_LEARN_DST_LOAD when
@@ -1175,7 +1175,11 @@ struct ofpact_parse_params {
     /* Output. */
     struct ofpbuf *ofpacts;
     enum ofputil_protocol *usable_protocols;
+
+    /* Parse context. */
+    unsigned int depth;
 };
+#define MAX_OFPACT_PARSE_DEPTH 100
 char *ofpacts_parse_actions(const char *, const struct ofpact_parse_params *)
     OVS_WARN_UNUSED_RESULT;
 char *ofpacts_parse_instructions(const char *,

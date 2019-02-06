@@ -173,6 +173,7 @@ ovs_key_attr_to_string(enum ovs_key_attr attr, char *namebuf, size_t bufsize)
     case OVS_KEY_ATTR_ICMPV6: return "icmpv6";
     case OVS_KEY_ATTR_ARP: return "arp";
     case OVS_KEY_ATTR_ND: return "nd";
+    case OVS_KEY_ATTR_ND_EXTENSIONS: return "nd_ext";
     case OVS_KEY_ATTR_MPLS: return "mpls";
     case OVS_KEY_ATTR_DP_HASH: return "dp_hash";
     case OVS_KEY_ATTR_RECIRC_ID: return "recirc_id";
@@ -2118,7 +2119,7 @@ parse_odp_push_nsh_action(const char *s, struct ofpbuf *actions)
                 /* Pad metadata to 4 bytes. */
                 padding = PAD_SIZE(mdlen, 4);
                 if (padding > 0) {
-                    ofpbuf_push_zeros(&b, padding);
+                    ofpbuf_put_zeros(&b, padding);
                 }
                 md_size = mdlen + padding;
                 ofpbuf_uninit(&b);
@@ -2500,6 +2501,7 @@ const struct attr_len_tbl ovs_flow_key_attr_lens[OVS_KEY_ATTR_MAX + 1] = {
     [OVS_KEY_ATTR_ICMPV6]    = { .len = sizeof(struct ovs_key_icmpv6) },
     [OVS_KEY_ATTR_ARP]       = { .len = sizeof(struct ovs_key_arp) },
     [OVS_KEY_ATTR_ND]        = { .len = sizeof(struct ovs_key_nd) },
+    [OVS_KEY_ATTR_ND_EXTENSIONS] = { .len = sizeof(struct ovs_key_nd_extensions) },
     [OVS_KEY_ATTR_CT_STATE]  = { .len = 4 },
     [OVS_KEY_ATTR_CT_ZONE]   = { .len = 2 },
     [OVS_KEY_ATTR_CT_MARK]   = { .len = 4 },
@@ -2712,7 +2714,7 @@ odp_nsh_key_from_attr(const struct nlattr *attr, struct ovs_key_nsh *nsh,
         return ODP_FIT_TOO_MUCH;
     }
 
-    if (has_md1 && nsh->mdtype != NSH_M_TYPE1) {
+    if (has_md1 && nsh->mdtype != NSH_M_TYPE1 && !nsh_mask) {
         return ODP_FIT_ERROR;
     }
 
@@ -2950,6 +2952,7 @@ odp_mask_is_constant__(enum ovs_key_attr attr, const void *mask, size_t size,
     case OVS_KEY_ATTR_ICMP:
     case OVS_KEY_ATTR_ICMPV6:
     case OVS_KEY_ATTR_ND:
+    case OVS_KEY_ATTR_ND_EXTENSIONS:
     case OVS_KEY_ATTR_SKB_MARK:
     case OVS_KEY_ATTR_TUNNEL:
     case OVS_KEY_ATTR_SCTP:
@@ -4040,6 +4043,21 @@ format_odp_key_attr__(const struct nlattr *a, const struct nlattr *ma,
                         verbose);
         format_eth(ds, "sll", key->nd_sll, MASK(mask, nd_sll), verbose);
         format_eth(ds, "tll", key->nd_tll, MASK(mask, nd_tll), verbose);
+
+        ds_chomp(ds, ',');
+        break;
+    }
+    case OVS_KEY_ATTR_ND_EXTENSIONS: {
+        const struct ovs_key_nd_extensions *mask = ma ? nl_attr_get(ma) : NULL;
+        const struct ovs_key_nd_extensions *key = nl_attr_get(a);
+
+        bool first = true;
+        format_be32_masked(ds, &first, "nd_reserved", key->nd_reserved,
+                           OVS_BE32_MAX);
+        ds_put_char(ds, ',');
+
+        format_u8u(ds, "nd_options_type", key->nd_options_type,
+                   MASK(mask, nd_options_type), verbose);
 
         ds_chomp(ds, ',');
         break;
@@ -5550,6 +5568,11 @@ parse_odp_key_mask_attr(struct parse_odp_context *context, const char *s,
         SCAN_FIELD("tll=", eth, nd_tll);
     } SCAN_END(OVS_KEY_ATTR_ND);
 
+    SCAN_BEGIN("nd_ext(", struct ovs_key_nd_extensions) {
+        SCAN_FIELD("nd_reserved=", be32, nd_reserved);
+        SCAN_FIELD("nd_options_type=", u8, nd_options_type);
+    } SCAN_END(OVS_KEY_ATTR_ND_EXTENSIONS);
+
     struct packet_type {
         ovs_be16 ns;
         ovs_be16 id;
@@ -5598,6 +5621,10 @@ parse_odp_key_mask_attr(struct parse_odp_context *context, const char *s,
             if (retval < 0) {
                 context->depth--;
                 return retval;
+            }
+
+            if (nl_attr_oversized(key->size - encap - NLA_HDRLEN)) {
+                return -E2BIG;
             }
             s += retval;
         }
@@ -5927,14 +5954,25 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
                  * xlate_wc_finish() for details. */
                 && (!export_mask || (data->tp_src == htons(0xff)
                                      && data->tp_dst == htons(0xff)))) {
-
                 struct ovs_key_nd *nd_key;
-
+                struct ovs_key_nd_extensions *nd_ext_key;
                 nd_key = nl_msg_put_unspec_uninit(buf, OVS_KEY_ATTR_ND,
                                                     sizeof *nd_key);
                 nd_key->nd_target = data->nd_target;
                 nd_key->nd_sll = data->arp_sha;
                 nd_key->nd_tll = data->arp_tha;
+
+                /* Add ND Extensions Attr only if reserved field
+                 * or options type is set. */
+                if (data->igmp_group_ip4 != 0 ||
+                    data->tcp_flags != 0) {
+                    nd_ext_key =
+                         nl_msg_put_unspec_uninit(buf,
+                                            OVS_KEY_ATTR_ND_EXTENSIONS,
+                                            sizeof *nd_ext_key);
+                    nd_ext_key->nd_reserved = data->igmp_group_ip4;
+                    nd_ext_key->nd_options_type = ntohs(data->tcp_flags);
+                }
             }
         }
     }
@@ -6118,6 +6156,7 @@ odp_key_to_dp_packet(const struct nlattr *key, size_t key_len,
         case OVS_KEY_ATTR_ICMPV6:
         case OVS_KEY_ATTR_ARP:
         case OVS_KEY_ATTR_ND:
+        case OVS_KEY_ATTR_ND_EXTENSIONS:
         case OVS_KEY_ATTR_SCTP:
         case OVS_KEY_ATTR_TCP_FLAGS:
         case OVS_KEY_ATTR_MPLS:
@@ -6325,9 +6364,9 @@ parse_ethertype(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
 static enum odp_key_fitness
 parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                   uint64_t present_attrs, int out_of_range_attr,
-                  uint64_t expected_attrs, struct flow *flow,
+                  uint64_t *expected_attrs, struct flow *flow,
                   const struct nlattr *key, size_t key_len,
-                  const struct flow *src_flow)
+                  const struct flow *src_flow, bool need_check)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     bool is_mask = src_flow != flow;
@@ -6337,7 +6376,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
 
     if (eth_type_mpls(src_flow->dl_type)) {
         if (!is_mask || present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_MPLS)) {
-            expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_MPLS);
+            *expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_MPLS);
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_MPLS)) {
             size_t size = nl_attr_get_size(attrs[OVS_KEY_ATTR_MPLS]);
@@ -6378,7 +6417,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
         goto done;
     } else if (src_flow->dl_type == htons(ETH_TYPE_IP)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_IPV4;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_IPV4;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_IPV4)) {
             const struct ovs_key_ipv4 *ipv4_key;
@@ -6396,7 +6435,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
         }
     } else if (src_flow->dl_type == htons(ETH_TYPE_IPV6)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_IPV6;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_IPV6;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_IPV6)) {
             const struct ovs_key_ipv6 *ipv6_key;
@@ -6415,7 +6454,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
     } else if (src_flow->dl_type == htons(ETH_TYPE_ARP) ||
                src_flow->dl_type == htons(ETH_TYPE_RARP)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ARP;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ARP;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ARP)) {
             const struct ovs_key_arp *arp_key;
@@ -6435,7 +6474,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
         }
     } else if (src_flow->dl_type == htons(ETH_TYPE_NSH)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_NSH;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_NSH;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_NSH)) {
             odp_nsh_key_from_attr(attrs[OVS_KEY_ATTR_NSH], &flow->nsh, NULL);
@@ -6453,7 +6492,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             flow->dl_type != htons(0xffff)) {
             return ODP_FIT_ERROR;
         } else {
-            expected_attrs |= UINT64_C(1) << expected_bit;
+            *expected_attrs |= UINT64_C(1) << expected_bit;
         }
     }
 
@@ -6463,7 +6502,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             src_flow->dl_type == htons(ETH_TYPE_IPV6))
         && !(src_flow->nw_frag & FLOW_NW_FRAG_LATER)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TCP;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TCP;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TCP)) {
             const union ovs_key_tp *tcp_key;
@@ -6473,7 +6512,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             expected_bit = OVS_KEY_ATTR_TCP;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TCP_FLAGS)) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TCP_FLAGS;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_TCP_FLAGS;
             flow->tcp_flags = nl_attr_get_be16(attrs[OVS_KEY_ATTR_TCP_FLAGS]);
         }
     } else if (src_flow->nw_proto == IPPROTO_UDP
@@ -6481,7 +6520,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                    src_flow->dl_type == htons(ETH_TYPE_IPV6))
                && !(src_flow->nw_frag & FLOW_NW_FRAG_LATER)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_UDP;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_UDP;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_UDP)) {
             const union ovs_key_tp *udp_key;
@@ -6495,7 +6534,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                    src_flow->dl_type == htons(ETH_TYPE_IPV6))
                && !(src_flow->nw_frag & FLOW_NW_FRAG_LATER)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_SCTP;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_SCTP;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_SCTP)) {
             const union ovs_key_tp *sctp_key;
@@ -6508,7 +6547,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                && src_flow->dl_type == htons(ETH_TYPE_IP)
                && !(src_flow->nw_frag & FLOW_NW_FRAG_LATER)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ICMP;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ICMP;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ICMP)) {
             const struct ovs_key_icmp *icmp_key;
@@ -6522,7 +6561,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                && src_flow->dl_type == htons(ETH_TYPE_IPV6)
                && !(src_flow->nw_frag & FLOW_NW_FRAG_LATER)) {
         if (!is_mask) {
-            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ICMPV6;
+            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ICMPV6;
         }
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ICMPV6)) {
             const struct ovs_key_icmpv6 *icmpv6_key;
@@ -6533,7 +6572,7 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
             expected_bit = OVS_KEY_ATTR_ICMPV6;
             if (is_nd(src_flow, NULL)) {
                 if (!is_mask) {
-                    expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ND;
+                    *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ND;
                 }
                 if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ND)) {
                     const struct ovs_key_nd *nd_key;
@@ -6553,7 +6592,36 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                              flow->tp_dst != htons(0xff))) {
                             return ODP_FIT_ERROR;
                         } else {
-                            expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ND;
+                            *expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_ND;
+                        }
+                    }
+                }
+                if (present_attrs &
+                    (UINT64_C(1) << OVS_KEY_ATTR_ND_EXTENSIONS)) {
+                    const struct ovs_key_nd_extensions *nd_ext_key;
+                    if (!is_mask) {
+                        *expected_attrs |=
+                                UINT64_C(1) << OVS_KEY_ATTR_ND_EXTENSIONS;
+                    }
+
+                    nd_ext_key =
+                        nl_attr_get(attrs[OVS_KEY_ATTR_ND_EXTENSIONS]);
+                    flow->igmp_group_ip4 = nd_ext_key->nd_reserved;
+                    flow->tcp_flags = htons(nd_ext_key->nd_options_type);
+
+                    if (is_mask) {
+                        /* Even though 'tp_src' and 'tp_dst' are 16 bits wide,
+                         * ICMP type and code are 8 bits wide.  Therefore, an
+                         * exact match looks like htons(0xff), not
+                         * htons(0xffff).  See xlate_wc_finish() for details.
+                         * */
+                        if (!is_all_zeros(nd_ext_key, sizeof *nd_ext_key) &&
+                            (flow->tp_src != htons(0xff) ||
+                             flow->tp_dst != htons(0xff))) {
+                            return ODP_FIT_ERROR;
+                        } else {
+                            *expected_attrs |=
+                                UINT64_C(1) << OVS_KEY_ATTR_ND_EXTENSIONS;
                         }
                     }
                 }
@@ -6569,13 +6637,13 @@ parse_l2_5_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
         if ((flow->tp_src || flow->tp_dst) && flow->nw_proto != 0xff) {
             return ODP_FIT_ERROR;
         } else {
-            expected_attrs |= UINT64_C(1) << expected_bit;
+            *expected_attrs |= UINT64_C(1) << expected_bit;
         }
     }
 
 done:
-    return check_expectations(present_attrs, out_of_range_attr, expected_attrs,
-                              key, key_len);
+    return need_check ? check_expectations(present_attrs, out_of_range_attr,
+                            *expected_attrs, key, key_len) : ODP_FIT_PERFECT;
 }
 
 /* Parse 802.1Q header then encapsulated L3 attributes. */
@@ -6658,16 +6726,19 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                              flow, src_flow)) {
             return ODP_FIT_ERROR;
         }
-
+        encap_fitness = parse_l2_5_onward(attrs, present_attrs,
+                                          out_of_range_attr,
+                                          &expected_attrs,
+                                          flow, key, key_len,
+                                          src_flow, false);
+        if (encap_fitness != ODP_FIT_PERFECT) {
+            return encap_fitness;
+        }
         encaps++;
     }
 
-    encap_fitness = parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
-                                      expected_attrs, flow, key, key_len,
-                                      src_flow);
-
-    /* The overall fitness is the worse of the outer and inner attributes. */
-    return MAX(fitness, encap_fitness);
+    return check_expectations(present_attrs, out_of_range_attr,
+                              expected_attrs, key, key_len);
 }
 
 static enum odp_key_fitness
@@ -6774,6 +6845,9 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         flow->packet_type
             = nl_attr_get_be32(attrs[OVS_KEY_ATTR_PACKET_TYPE]);
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_PACKET_TYPE;
+        if (pt_ns(src_flow->packet_type) == OFPHTN_ETHERTYPE) {
+            flow->dl_type = pt_ns_type_be(flow->packet_type);
+        }
     } else if (!is_mask) {
         flow->packet_type = htonl(PT_ETH);
     }
@@ -6820,7 +6894,8 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         }
     }
     return parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
-                             expected_attrs, flow, key, key_len, src_flow);
+                             &expected_attrs, flow, key, key_len,
+                             src_flow, true);
 }
 
 /* Converts the 'key_len' bytes of OVS_KEY_ATTR_* attributes in 'key' to a flow
@@ -7453,6 +7528,24 @@ put_nd_key(const struct ovs_key_nd *nd, struct flow *flow)
     flow->arp_tha = nd->nd_tll;
 }
 
+static void
+get_nd_extensions_key(const struct flow *flow,
+                      struct ovs_key_nd_extensions *nd_ext)
+{
+    /* ND Extensions key has padding, clear it. */
+    memset(nd_ext, 0, sizeof *nd_ext);
+    nd_ext->nd_reserved = flow->igmp_group_ip4;
+    nd_ext->nd_options_type = ntohs(flow->tcp_flags);
+}
+
+static void
+put_nd_extensions_key(const struct ovs_key_nd_extensions *nd_ext,
+                      struct flow *flow)
+{
+    flow->igmp_group_ip4 = nd_ext->nd_reserved;
+    flow->tcp_flags = htons(nd_ext->nd_options_type);
+}
+
 static enum slow_path_reason
 commit_set_nd_action(const struct flow *flow, struct flow *base_flow,
                      struct ofpbuf *odp_actions,
@@ -7475,10 +7568,33 @@ commit_set_nd_action(const struct flow *flow, struct flow *base_flow,
 }
 
 static enum slow_path_reason
+commit_set_nd_extensions_action(const struct flow *flow,
+                                struct flow *base_flow,
+                                struct ofpbuf *odp_actions,
+                                struct flow_wildcards *wc, bool use_masked)
+{
+    struct ovs_key_nd_extensions key, mask, base;
+
+    get_nd_extensions_key(flow, &key);
+    get_nd_extensions_key(base_flow, &base);
+    get_nd_extensions_key(&wc->masks, &mask);
+
+    if (commit(OVS_KEY_ATTR_ND_EXTENSIONS, use_masked, &key,
+               &base, &mask, sizeof key, odp_actions)) {
+        put_nd_extensions_key(&base, base_flow);
+        put_nd_extensions_key(&mask, &wc->masks);
+        return SLOW_ACTION;
+    }
+    return 0;
+}
+
+static enum slow_path_reason
 commit_set_nw_action(const struct flow *flow, struct flow *base,
                      struct ofpbuf *odp_actions, struct flow_wildcards *wc,
                      bool use_masked)
 {
+    uint32_t reason;
+
     /* Check if 'flow' really has an L3 header. */
     if (!flow->nw_proto) {
         return 0;
@@ -7491,7 +7607,16 @@ commit_set_nw_action(const struct flow *flow, struct flow *base,
 
     case ETH_TYPE_IPV6:
         commit_set_ipv6_action(flow, base, odp_actions, wc, use_masked);
-        return commit_set_nd_action(flow, base, odp_actions, wc, use_masked);
+        if (base->nw_proto == IPPROTO_ICMPV6) {
+            /* Commit extended attrs first to make sure
+               correct options are added.*/
+            reason = commit_set_nd_extensions_action(flow, base,
+                                         odp_actions, wc, use_masked);
+            reason |= commit_set_nd_action(flow, base, odp_actions,
+                                         wc, use_masked);
+            return reason;
+        }
+        break;
 
     case ETH_TYPE_ARP:
         return commit_set_arp_action(flow, base, odp_actions, wc);

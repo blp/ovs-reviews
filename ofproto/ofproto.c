@@ -1894,6 +1894,12 @@ ofproto_free_ofproto_controller_info(struct shash *info)
     connmgr_free_controller_info(info);
 }
 
+const char *
+ofconn_type_to_string(enum ofconn_type type)
+{
+    return type == OFCONN_PRIMARY ? "primary" : "service";
+}
+
 /* Makes a deep copy of 'old' into 'port'. */
 void
 ofproto_port_clone(struct ofproto_port *port, const struct ofproto_port *old)
@@ -2357,7 +2363,6 @@ ofport_open(struct ofproto *ofproto,
     }
     pp->port_no = ofproto_port->ofp_port;
     netdev_get_etheraddr(netdev, &pp->hw_addr);
-    pp->hw_addr64 = eth_addr64_zero;
     ovs_strlcpy(pp->name, ofproto_port->name, sizeof pp->name);
     netdev_get_flags(netdev, &flags);
     pp->config = flags & NETDEV_UP ? 0 : OFPUTIL_PC_PORT_DOWN;
@@ -2378,7 +2383,6 @@ ofport_equal(const struct ofputil_phy_port *a,
              const struct ofputil_phy_port *b)
 {
     return (eth_addr_equals(a->hw_addr, b->hw_addr)
-            && eth_addr64_equals(a->hw_addr64, b->hw_addr64)
             && a->state == b->state
             && a->config == b->config
             && a->curr == b->curr
@@ -3421,8 +3425,7 @@ handle_set_config(struct ofconn *ofconn, const struct ofp_header *oh)
 static enum ofperr
 reject_slave_controller(struct ofconn *ofconn)
 {
-    if (ofconn_get_type(ofconn) == OFCONN_PRIMARY
-        && ofconn_get_role(ofconn) == OFPCR12_ROLE_SLAVE) {
+    if (ofconn_get_role(ofconn) == OFPCR12_ROLE_SLAVE) {
         return OFPERR_OFPBRC_IS_SLAVE;
     } else {
         return 0;
@@ -3689,8 +3692,7 @@ port_mod_start(struct ofconn *ofconn, struct ofputil_port_mod *pm,
     if (!*port) {
         return OFPERR_OFPPMFC_BAD_PORT;
     }
-    if (!eth_addr_equals((*port)->pp.hw_addr, pm->hw_addr) ||
-        !eth_addr64_equals((*port)->pp.hw_addr64, pm->hw_addr64)) {
+    if (!eth_addr_equals((*port)->pp.hw_addr, pm->hw_addr)) {
         return OFPERR_OFPPMFC_BAD_HW_ADDR;
     }
     return 0;

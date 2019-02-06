@@ -1104,9 +1104,9 @@ put_arp(inport, arp.spa, arp.sha);
 # put_dhcp_opts
 reg1[0] = put_dhcp_opts(offerip = 1.2.3.4, router = 10.0.0.1);
     encodes as controller(userdata=00.00.00.02.00.00.00.00.00.01.de.10.00.00.00.40.01.02.03.04.03.04.0a.00.00.01,pause)
-reg2[5] = put_dhcp_opts(offerip=10.0.0.4,router=10.0.0.1,netmask=255.255.254.0,mtu=1400,domain="ovn.org",wpad="https://example.org");
-    formats as reg2[5] = put_dhcp_opts(offerip = 10.0.0.4, router = 10.0.0.1, netmask = 255.255.254.0, mtu = 1400, domain = "ovn.org", wpad = "https://example.org");
-    encodes as controller(userdata=00.00.00.02.00.00.00.00.00.01.de.10.00.00.00.25.0a.00.00.04.03.04.0a.00.00.01.01.04.ff.ff.fe.00.1a.02.05.78.0f.07.6f.76.6e.2e.6f.72.67.fc.13.68.74.74.70.73.3a.2f.2f.65.78.61.6d.70.6c.65.2e.6f.72.67,pause)
+reg2[5] = put_dhcp_opts(offerip=10.0.0.4,router=10.0.0.1,netmask=255.255.254.0,mtu=1400,domain="ovn.org",wpad="https://example.org",bootfile_name="https://127.0.0.1/boot.ipxe");
+    formats as reg2[5] = put_dhcp_opts(offerip = 10.0.0.4, router = 10.0.0.1, netmask = 255.255.254.0, mtu = 1400, domain = "ovn.org", wpad = "https://example.org", bootfile_name = "https://127.0.0.1/boot.ipxe");
+    encodes as controller(userdata=00.00.00.02.00.00.00.00.00.01.de.10.00.00.00.25.0a.00.00.04.03.04.0a.00.00.01.01.04.ff.ff.fe.00.1a.02.05.78.0f.07.6f.76.6e.2e.6f.72.67.fc.13.68.74.74.70.73.3a.2f.2f.65.78.61.6d.70.6c.65.2e.6f.72.67.43.1b.68.74.74.70.73.3a.2f.2f.31.32.37.2e.30.2e.30.2e.31.2f.62.6f.6f.74.2e.69.70.78.65,pause)
 reg0[15] = put_dhcp_opts(offerip=10.0.0.4,router=10.0.0.1,netmask=255.255.255.0,mtu=1400,ip_forward_enable=1,default_ttl=121,dns_server={8.8.8.8,7.7.7.7},classless_static_route={30.0.0.0/24,10.0.0.4,40.0.0.0/16,10.0.0.6,0.0.0.0/0,10.0.0.1},ethernet_encap=1,router_discovery=0);
     formats as reg0[15] = put_dhcp_opts(offerip = 10.0.0.4, router = 10.0.0.1, netmask = 255.255.255.0, mtu = 1400, ip_forward_enable = 1, default_ttl = 121, dns_server = {8.8.8.8, 7.7.7.7}, classless_static_route = {30.0.0.0/24, 10.0.0.4, 40.0.0.0/16, 10.0.0.6, 0.0.0.0/0, 10.0.0.1}, ethernet_encap = 1, router_discovery = 0);
     encodes as controller(userdata=00.00.00.02.00.00.00.00.00.01.de.10.00.00.00.6f.0a.00.00.04.03.04.0a.00.00.01.01.04.ff.ff.ff.00.1a.02.05.78.13.01.01.17.01.79.06.08.08.08.08.08.07.07.07.07.79.14.18.1e.00.00.0a.00.00.04.10.28.00.0a.00.00.06.00.0a.00.00.01.24.01.01.1f.01.00,pause)
@@ -7989,6 +7989,7 @@ test_ip_packet()
 {
     local active_gw=$1
     local backup_gw=$2
+    local backup_vswitchd_dead=$3
 
     # Send ip packet between foo1 and outside1
     src_mac="f00000010203" # foo1 mac
@@ -8027,7 +8028,11 @@ grep actions=mod_dl_dst:f0:00:00:01:02:04 | wc -l` -eq 1
     echo $expected > ext1-vif1.expected
 
     as $active_gw reset_pcap_file br-phys_n1 $active_gw/br-phys_n1
-    as $backup_gw reset_pcap_file br-phys_n1 $backup_gw/br-phys_n1
+
+    if test $backup_vswitchd_dead != 1; then
+        # Reset the file only if vswitchd in backup gw is alive
+        as $backup_gw reset_pcap_file br-phys_n1 $backup_gw/br-phys_n1
+    fi
     as ext1 reset_pcap_file ext1-vif1 ext1/vif1
 
     # Resend packet from foo1 to outside1
@@ -8038,11 +8043,14 @@ grep actions=mod_dl_dst:f0:00:00:01:02:04 | wc -l` -eq 1
     OVN_CHECK_PACKETS([ext1/vif1-tx.pcap], [ext1-vif1.expected])
     $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $active_gw/br-phys_n1-tx.pcap  > packets
     AT_CHECK([grep $expected packets | sort], [0], [expout])
-    $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $backup_gw/br-phys_n1-tx.pcap  > packets
-    AT_CHECK([grep $expected packets | sort], [0], [])
+    if test $backup_vswitchd_dead != 1; then
+        # Check for backup gw only if vswitchd is alive
+        $PYTHON "$top_srcdir/utilities/ovs-pcap.in" $backup_gw/br-phys_n1-tx.pcap  > packets
+        AT_CHECK([grep $expected packets | sort], [0], [])
+    fi
 }
 
-test_ip_packet gw1 gw2
+test_ip_packet gw1 gw2 0
 
 ovn-nbctl --timeout=3 --wait=hv \
     --id=@gc0 create Gateway_Chassis name=alice_gw1 \
@@ -8053,9 +8061,34 @@ ovn-nbctl --timeout=3 --wait=hv \
                                      priority=20 -- \
     set Logical_Router_Port alice 'gateway_chassis=[@gc0,@gc1]'
 
-test_ip_packet gw2 gw1
+test_ip_packet gw2 gw1 0
 
-OVN_CLEANUP([hv1],[gw1],[gw2],[ext1])
+# Get the claim count of both gw1 and gw2.
+gw1_claim_ct=`grep "cr-alice: Claiming" gw1/ovn-controller.log | wc -l`
+gw2_claim_ct=`grep "cr-alice: Claiming" gw2/ovn-controller.log | wc -l`
+
+# Stop ovs-vswitchd in gw2. gw1 should claim the gateway port.
+as gw2
+OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
+
+# gw1 should claim the cr-alice and the claim count of gw1 should be
+# incremented by 1.
+gw1_claim_ct=$((gw1_claim_ct+1))
+
+OVS_WAIT_UNTIL([test $gw1_claim_ct = `cat gw1/ovn-controller.log \
+| grep -c "cr-alice: Claiming"`])
+
+AT_CHECK([test $gw2_claim_ct = `cat gw2/ovn-controller.log | \
+grep -c "cr-alice: Claiming"`])
+
+test_ip_packet gw1 gw2 1
+
+as gw2
+OVS_APP_EXIT_AND_WAIT([ovn-controller])
+OVS_APP_EXIT_AND_WAIT([ovsdb-server])
+
+OVN_CLEANUP([hv1],[gw1],[ext1])
+
 AT_CLEANUP
 
 AT_SETUP([ovn -- 4 HV, 3 LS, 2 LR, packet test with HA distributed router gateway port])
@@ -11858,12 +11891,12 @@ ovn-nbctl create Logical_Router name=lr0 options:chassis=hv1
 ovn-nbctl ls-add sw0
 ovn-nbctl ls-add sw1
 
-ovn-nbctl lrp-add lr0 sw0 00:00:01:01:02:03 192.168.1.1/24 2001::1/64
+ovn-nbctl lrp-add lr0 sw0 00:00:01:01:02:03 192.168.1.1/24 2001:0:0:0:0:0:0:1/64
 ovn-nbctl lsp-add sw0 rp-sw0 -- set Logical_Switch_Port rp-sw0 \
     type=router options:router-port=sw0 \
     -- lsp-set-addresses rp-sw0 router
 
-ovn-nbctl lrp-add lr0 sw1 00:00:02:01:02:03 172.16.1.1/24 2002::1/64
+ovn-nbctl lrp-add lr0 sw1 00:00:02:01:02:03 172.16.1.1/24 2002:0:0:0:0:0:0:1/64
 ovn-nbctl lsp-add sw1 rp-sw1 -- set Logical_Switch_Port rp-sw1 \
     type=router options:router-port=sw1 \
     -- lsp-set-addresses rp-sw1 router
