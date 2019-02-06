@@ -46,7 +46,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
             None -> set_empty(): Set<bit<32>>,
             Some{exclude_ip_list} -> match (parse_ip_list(exclude_ip_list)) {
                 Left{err} -> {
-                    warn($"logical switch ${uuid2str(ls._uuid)}: bad exclude_ips (${err})");
+                    warn("logical switch ${uuid2str(ls._uuid)}: bad exclude_ips (${err})");
                     exclude_ips
                 },
                 Right{ranges} -> {
@@ -64,7 +64,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
                                 set_insert(exclude_ips, addr)
                             }
                         } else {
-                            warn($"logical switch ${uuid2str(ls._uuid)}: excluded addresses not in subnet")
+                            warn("logical switch ${uuid2str(ls._uuid)}: excluded addresses not in subnet")
                         }
                     };
                     exclude_ips
@@ -147,7 +147,7 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
             Some{port0} -> {
                 match (deref(deref(port0).sw).subnet) {
                     None -> {
-                        abort($"needs_dynamic_ipv4address is true, but subnet is undefined in port ${uuid2str(deref(port0).lsp._uuid)}");
+                        abort("needs_dynamic_ipv4address is true, but subnet is undefined in port ${uuid2str(deref(port0).lsp._uuid)}");
                         (32'd0, 32'd0)
                     },
                     Some{(_, _, start_ipv4, total_ipv4s)} -> (start_ipv4, total_ipv4s)
@@ -155,29 +155,29 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
             }
         };
         for (port in ports) {
-            //warn($"port(${deref(port).lsp._uuid})");
+            //warn("port(${deref(port).lsp._uuid})");
             match (deref(port).dynamic_address) {
                 None -> {
                     /* no dynamic address yet -- allocate one now */
-                    //warn($"need_addr(${deref(port).lsp._uuid})");
+                    //warn("need_addr(${deref(port).lsp._uuid})");
                     vec_push(need_addr, deref(port).lsp._uuid)
                 },
                 Some{dynaddr} -> {
                      match (vec_nth(dynaddr.ipv4_addrs, 0)) {
                         None -> {
                             /* dynamic address does not have IPv4 component -- allocate one now */
-                            //warn($"need_addr(${deref(port).lsp._uuid})");
+                            //warn("need_addr(${deref(port).lsp._uuid})");
                             vec_push(need_addr, deref(port).lsp._uuid)
                         },
                         Some{addr} -> {
                             var haddr = ntohl(addr.addr);
                             if (haddr < start_ipv4 or haddr >= start_ipv4 + total_ipv4s) {
                                 /* existing dynamic address is no longer valid */
-                                //warn($"need_addr(${deref(port).lsp._uuid})");
+                                //warn("need_addr(${deref(port).lsp._uuid})");
                                 vec_push(need_addr, deref(port).lsp._uuid)
                             } else if (set_contains(used_addrs, haddr)) {
                                 vec_push(need_addr, deref(port).lsp._uuid);
-                                warn($"Duplicate IP set on switch ${deref(port).lsp.name}: ${ip_fmt(addr.addr)}")
+                                warn("Duplicate IP set on switch ${deref(port).lsp.name}: ${ip_fmt(addr.addr)}")
                             } else {
                                 /* has valid dynamic address -- record it in used_addrs */
                                 set_insert(used_addrs, haddr)
@@ -300,7 +300,7 @@ SwitchPortAllocatedMACDynAddress(lsport, dyn_addr) :-
                         vec_push(need_addr, deref(port).lsp._uuid)
                     } else if (set_contains(used_addrs, haddr)) {
                         vec_push(need_addr, deref(port).lsp._uuid);
-                        warn($"Duplicate MAC set: ${dynaddr.ea}")
+                        warn("Duplicate MAC set: ${dynaddr.ea}")
                     } else {
                         /* has valid dynamic address -- record it in used_addrs */
                         set_insert(used_addrs, haddr)
@@ -366,17 +366,17 @@ SwitchPortNewDynamicAddress(port, lport_address) :-
         if needs_dynamic_ipv6address {
             match (sw.ipv6_prefix) {
                 None -> {
-                    abort($"needs_dynamic_ipv6address is true, but IPv6 prefix is undefined in port ${uuid2str(lsp._uuid)}");
+                    abort("needs_dynamic_ipv6address is true, but IPv6 prefix is undefined in port ${uuid2str(lsp._uuid)}");
                     ""
                 },
-                Some{prefix} -> $" ${inet6_ntop(in6_generate_eui64(mac_addr, prefix))}"
+                Some{prefix} -> " ${inet6_ntop(in6_generate_eui64(mac_addr, prefix))}"
             }
         } else { "" },
     var ip4_addr = match (opt_ip4_addr) {
                         None -> "",
-                        Some{ip4} -> $" ${ip_fmt(ip4)}"
+                        Some{ip4} -> " ${ip_fmt(ip4)}"
                     },
-    var addr_string = $"${mac_addr}${ip6_addr}${ip4_addr}",
+    var addr_string = "${mac_addr}${ip6_addr}${ip4_addr}",
     var lport_address = extract_addresses(addr_string).
 
 

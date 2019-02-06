@@ -26,8 +26,8 @@ ChassisRedirectPort(lrp1, lr._uuid) :-
     // ignore options:redirect-chassis.
     // (here we just log the warning; subsequent rules will ignore options:redirect-chassis)
     if ((not set_is_empty(lrp.gateway_chassis)) and map_contains_key(lrp.options, "redirect-chassis")) {
-        warn($"logical router port ${lrp.name} has both options:" ++
-              "redirect-chassis and gateway_chassis populated "   ++
+        warn("logical router port ${lrp.name} has both options:"
+              "redirect-chassis and gateway_chassis populated "
               "redirect-chassis will be ignored in favour of gateway chassis");
         true
     } else { true },
@@ -46,7 +46,7 @@ ChassisRedirectPort(lrp1, lr._uuid) :-
         0 -> None,
         1 -> set_nth(lrps,0),
         _ -> {
-            warn($"Bad configuration: multiple ports with redirect-chassis on same logical router ${lr.name}");
+            warn("Bad configuration: multiple ports with redirect-chassis on same logical router ${lr.name}");
             set_nth(lrps,0)
         }
     }.
@@ -100,7 +100,7 @@ LogicalRouterSNATExternalIPs(lr, set_empty()) :-
  * `snat_external_ips` - possibly empty set of SNAT external IPs for the router
  */
 
-function chassis_redirect_name(port_name: string): string = $"cr-${port_name}"
+function chassis_redirect_name(port_name: string): string = "cr-${port_name}"
 
 relation &Router(
     lr:                 nb.Logical_Router,
@@ -221,12 +221,12 @@ relation &StaticRoute(lrsr: nb.Logical_Router_Static_Route,
             Left{/*error*/} -> {
                 match (ipv6_parse_cidr(lrsr.nexthop)) {
                     Left{/*error*/} -> {
-                        warn($"bad next hop ip address ${lrsr.nexthop}");
+                        warn("bad next hop ip address ${lrsr.nexthop}");
                         None
                     },
                     Right{(ip6, plen)} -> {
                         if (plen != 128) {
-                            warn($"bad next hop mask ${lrsr.nexthop}");
+                            warn("bad next hop mask ${lrsr.nexthop}");
                             None
                         } else { Some{false} }
                     }
@@ -234,7 +234,7 @@ relation &StaticRoute(lrsr: nb.Logical_Router_Static_Route,
             },
             Right{(var nexthop, var plen)} -> {
                 if (plen != 32) {
-                    warn($"bad next hop mask ${lrsr.nexthop}");
+                    warn("bad next hop mask ${lrsr.nexthop}");
                     None
                 } else { Some{true} }
             }
@@ -244,18 +244,18 @@ relation &StaticRoute(lrsr: nb.Logical_Router_Static_Route,
             /* Verify that ip prefix is a valid IPv4 address. */
             match (ip_parse_cidr(lrsr.ip_prefix)) {
                 Left{/*error*/} -> {
-                    warn($"bad 'ip_prefix' in static routes ${lrsr.ip_prefix}");
+                    warn("bad 'ip_prefix' in static routes ${lrsr.ip_prefix}");
                     None
                 },
                 Right{(prefix, plen)} -> {
-                    Some{($"${ip_fmt(prefix & be32_prefix_mask(plen))}", plen)}
+                    Some{("${ip_fmt(prefix & be32_prefix_mask(plen))}", plen)}
                 }
             }
         } else {
             /* Verify that ip prefix is a valid IPv6 address. */
             match (ipv6_parse_cidr(lrsr.ip_prefix)) {
                 Left{/*error*/} -> {
-                    warn($"bad 'ip_prefix' in static routes ${lrsr.ip_prefix}");
+                    warn("bad 'ip_prefix' in static routes ${lrsr.ip_prefix}");
                     None
                 },
                 Right{(prefix, plen)} -> {
@@ -274,7 +274,7 @@ function find_lrp_member_ip(networks: lport_addresses, ip_s: string): Option<str
     if (is_ipv4) {
         match (ip_parse(ip_s)) {
             None -> {
-                warn($"bad ip address ${ip_s}");
+                warn("bad ip address ${ip_s}");
                 None
             },
             Some{ip} -> {
@@ -295,7 +295,7 @@ function find_lrp_member_ip(networks: lport_addresses, ip_s: string): Option<str
     } else {
         match (ipv6_parse(ip_s)) {
             None -> {
-                warn($"bad ipv6 address ${ip_s}");
+                warn("bad ipv6 address ${ip_s}");
                 None
             },
             Some{ip6} -> {
@@ -375,7 +375,7 @@ RouterStaticRoute(ref_router, ref_route, port, lrp_addr_s) :-
                     match (vec_nth(networks.ipv4_addrs, 0)) {
                         Some{addr} -> Some{addr.addr_s},
                         None       -> {
-                            warn($"No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
+                            warn("No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
                             None
                         }
                     }
@@ -383,7 +383,7 @@ RouterStaticRoute(ref_router, ref_route, port, lrp_addr_s) :-
                     match (vec_nth(networks.ipv6_addrs, 0)) {
                         Some{addr} -> Some{addr.addr_s},
                         None       -> {
-                            warn($"No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
+                            warn("No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
                             None
                         }
                     }
@@ -399,6 +399,6 @@ DevNull() :-
     not RouterStaticRoute(.router = &Router{.lr = nb.Logical_Router{._uuid = router.lr._uuid}},
                           .route = &StaticRoute{.lrsr = nb.Logical_Router_Static_Route{._uuid = route.lrsr._uuid}}),
     {
-        warn($"No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
+        warn("No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
         false
     }.
