@@ -1,20 +1,28 @@
 # ovn-northd
-bin_PROGRAMS += ovn/northd/ovn-northd
-ovn_northd_ovn_northd_SOURCES = ovn/northd/ovn-northd.c
-ovn_northd_ovn_northd_LDADD = \
+bin_PROGRAMS += ovn/northd/ovn-northd-c
+ovn_northd_ovn_northd_c_SOURCES = ovn/northd/ovn-northd-c.c
+ovn_northd_ovn_northd_c_LDADD = \
 	ovn/lib/libovn.la \
 	ovsdb/libovsdb.la \
 	lib/libopenvswitch.la
 man_MANS += ovn/northd/ovn-northd.8
-EXTRA_DIST += ovn/northd/ovn-northd.8.xml
-
-EXTRA_DIST += ovn/northd/ovn_northd.dl ovn/northd/ovn.dl ovn/northd/ovn.rs ovn/northd/ovn.toml \
-			  ovn/northd/lswitch.dl ovn/northd/lrouter.dl ovn/northd/helpers.dl ovn/northd/ipam.dl
+EXTRA_DIST += \
+	ovn/northd/ovn-northd ovn/northd/ovn-northd.8.xml \
+	ovn/northd/ovn_northd.dl ovn/northd/ovn.dl ovn/northd/ovn.rs \
+	ovn/northd/ovn.toml ovn/northd/lswitch.dl ovn/northd/lrouter.dl \
+	ovn/northd/helpers.dl ovn/northd/ipam.dl
 CLEANFILES += ovn/northd/ovn-northd.8
 
 if DDLOG
-
-ovn/northd/ovn-northd.c: ovn/northd/ovn_northd_ddlog/ddlog.h
+bin_PROGRAMS += ovn/northd/ovn-northd-ddlog
+ovn_northd_ovn_northd_ddlog_SOURCES = \
+	ovn/northd/ovn-northd-ddlog.c \
+	ovn/northd/ovn_northd_ddlog/ddlog.h
+ovn_northd_ovn_northd_ddlog_LDADD = \
+	ovn/lib/libovn.la \
+	ovsdb/libovsdb.la \
+	lib/libopenvswitch.la \
+	ovn/northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la
 
 ovn/northd/OVN_Northbound.dl: ovn/ovn-nb.ovsschema
 	ovsdb2ddlog -f ovn/ovn-nb.ovsschema  	\
@@ -79,12 +87,6 @@ ovn/northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la: \
 
 ovn/northd/ovn_northd_ddlog/ddlog.h: \
 	ovn/northd/ovn_northd_ddlog/target/release/ovn_northd_cli
-
-ovn_northd_ovn_northd_SOURCES += \
-	ovn/northd/ovn_northd_ddlog/ddlog.h
-
-ovn_northd_ovn_northd_LDADD += \
-	ovn/northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la
 
 CLEANFILES += \
 	ovn/northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \

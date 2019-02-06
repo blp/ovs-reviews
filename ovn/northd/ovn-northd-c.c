@@ -47,10 +47,6 @@
 #include "uuid.h"
 #include "openvswitch/vlog.h"
 
-#ifdef DDLOG
-#include "ovn/northd/ovn_northd_ddlog/ddlog.h"
-#endif
-
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
@@ -7726,107 +7722,6 @@ add_column_noalert(struct ovsdb_idl *idl,
     ovsdb_idl_omit_alert(idl, column);
 }
 
-#ifdef DDLOG
-static void
-ddlog_table_update(ddlog_prog ddlog, const char *table)
-{
-    int error;
-    char *json;
-    char *ddlog_table;
-
-    ddlog_table = xasprintf("OVN_Southbound.DeltaPlus_%s", table);
-    error = ddlog_dump_ovsdb_deltaplus_table(ddlog,
-                                             ddlog_get_table_id(ddlog_table),
-                                             &json);
-    if (error) {
-        VLOG_WARN("xxx delta-plus (%s) error: %d", ddlog_table, error);
-        return;
-    }
-    VLOG_WARN("xxx delta-plus (%s): %s", ddlog_table, json);
-    ddlog_free_json(json);
-    free(ddlog_table);
-
-    ddlog_table = xasprintf("OVN_Southbound.DeltaMinus_%s", table);
-    error = ddlog_dump_ovsdb_deltaminus_table(ddlog,
-                                              ddlog_get_table_id(ddlog_table),
-                                              &json);
-    if (error) {
-        VLOG_WARN("xxx delta-minus (%s) error: %d", ddlog_table, error);
-        return;
-    }
-    VLOG_WARN("xxx delta-minus (%s): %s", ddlog_table, json);
-    ddlog_free_json(json);
-    free(ddlog_table);
-
-#if 0
-    ddlog_table = xasprintf("OVN_Southbound.DeltaUpdate_%s", table);
-    error = ddlog_dump_ovsdb_deltaupdate_table(ddlog, ddlog_table, &json);
-    if (error) {
-        VLOG_WARN("xxx delta-update (%s) error: %d", ddlog_table, error);
-        return;
-    }
-    VLOG_WARN("xxx delta-update (%s): %s", ddlog_table, json);
-    ddlog_free_json(json);
-    free(ddlog_table);
-#endif
-}
-
-static void
-ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
-{
-    struct svec updates = SVEC_EMPTY_INITIALIZER;
-    ovsdb_idl_get_updates(ctx->ovnnb_idl, &updates);
-
-    if (svec_is_empty(&updates)) {
-        return;
-    }
-
-    if (ddlog_transaction_start(ddlog)) {
-        VLOG_ERR("xxx Couldn't start transaction");
-        return;
-    }
-
-    size_t i;
-    const char *update;
-    SVEC_FOR_EACH (i, update, &updates) {
-        VLOG_WARN("xxx update: %s", update);
-        if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound.", update)) {
-            VLOG_ERR("xxx Couldn't add update");
-            goto error;
-        }
-    }
-    svec_destroy(&updates);
-
-    if (ddlog_transaction_commit(ddlog)) {
-        VLOG_ERR("xxx Couldn't commit transaction");
-        goto error;
-    }
-
-    ddlog_table_update(ddlog, "SB_Global");
-    ddlog_table_update(ddlog, "Logical_Flow");
-    ddlog_table_update(ddlog, "Meter");
-    ddlog_table_update(ddlog, "Meter_Band");
-    ddlog_table_update(ddlog, "Datapath_Binding");
-    ddlog_table_update(ddlog, "Port_Binding");
-
-    return;
-
-error:
-    ddlog_transaction_rollback(ddlog);
-}
-
-/* Callback used by the ddlog engine to print error messages.  Note that this is
- * only used by the ddlog runtime, as opposed to the application code in
- * ovn_northd.dl, which uses the vlog facility directly.  */
-static void
-ddlog_print_error(const char *msg)
-{
-    VLOG_ERR("%s", msg);
-}
-
-#endif
-
-
 int
 main(int argc, char *argv[])
 {
@@ -7979,15 +7874,6 @@ main(int argc, char *argv[])
     ovsdb_idl_set_lock(ovnsb_idl_loop.idl, "ovn_northd");
     bool had_lock = false;
 
-#ifdef DDLOG
-    /* xxx Check compiling/linking. */
-    ddlog_prog ddlog;
-    ddlog = ddlog_run(1, true, NULL, 0, ddlog_print_error);
-    if (!ddlog) {
-        VLOG_EMER("xxx Couldn't create ddlog instance");
-    }
-#endif
-
     /* Main loop. */
     exiting = false;
     while (!exiting) {
@@ -8009,9 +7895,6 @@ main(int argc, char *argv[])
         }
 
         if (ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
-#ifdef DDLOG
-            ovn_northd_ddlog_run(&ctx, ddlog);
-#endif
             ovnnb_db_run(&ctx, sbrec_chassis_by_name, &ovnsb_idl_loop);
             ovnsb_db_run(&ctx, &ovnsb_idl_loop);
             if (ctx.ovnsb_txn) {
@@ -8034,10 +7917,6 @@ main(int argc, char *argv[])
             exiting = true;
         }
     }
-
-#ifdef DDLOG
-    ddlog_stop(ddlog);
-#endif
 
     unixctl_server_destroy(unixctl);
     ovsdb_idl_loop_destroy(&ovnnb_idl_loop);
