@@ -112,7 +112,7 @@ relation &Router(
 )
 
 &Router(.lr = lr,
-        .dpname = uuid2str(lr._uuid),
+        .dpname = uuid2name(lr._uuid),
         .l3dgw_port = l3dgw_port,
         .redirect_port_name =
             match (l3dgw_port) {
