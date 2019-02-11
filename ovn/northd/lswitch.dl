@@ -126,7 +126,7 @@ relation &Switch(
 )
 
 &Switch(.ls                = ls,
-        .dpname            = uuid2str(ls._uuid),
+        .dpname            = uuid2name(ls._uuid),
         .has_stateful_acl  = has_stateful_acl,
         .has_dns_records   = has_dns_records,
         .has_localnet_port = has_localnet_port,

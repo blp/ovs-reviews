@@ -70,43 +70,14 @@ ddlog_table_update(ddlog_prog ddlog, const char *table)
 {
     int error;
     char *json;
-    char *ddlog_table;
 
-    ddlog_table = xasprintf("OVN_Southbound.DeltaPlus_%s", table);
-    error = ddlog_dump_ovsdb_deltaplus_table(ddlog,
-                                             ddlog_get_table_id(ddlog_table),
-                                             &json);
+    error = ddlog_dump_ovsdb_delta(ddlog, "OVN_Southbound", table, &json);
     if (error) {
-        VLOG_WARN("xxx delta-plus (%s) error: %d", ddlog_table, error);
+        VLOG_WARN("xxx delta (%s) error: %d", table, error);
         return;
     }
-    VLOG_WARN("xxx delta-plus (%s): %s", ddlog_table, json);
+    VLOG_WARN("xxx delta (%s): %s", table, json);
     ddlog_free_json(json);
-    free(ddlog_table);
-
-    ddlog_table = xasprintf("OVN_Southbound.DeltaMinus_%s", table);
-    error = ddlog_dump_ovsdb_deltaminus_table(ddlog,
-                                              ddlog_get_table_id(ddlog_table),
-                                              &json);
-    if (error) {
-        VLOG_WARN("xxx delta-minus (%s) error: %d", ddlog_table, error);
-        return;
-    }
-    VLOG_WARN("xxx delta-minus (%s): %s", ddlog_table, json);
-    ddlog_free_json(json);
-    free(ddlog_table);
-
-#if 0
-    ddlog_table = xasprintf("OVN_Southbound.DeltaUpdate_%s", table);
-    error = ddlog_dump_ovsdb_deltaupdate_table(ddlog, ddlog_table, &json);
-    if (error) {
-        VLOG_WARN("xxx delta-update (%s) error: %d", ddlog_table, error);
-        return;
-    }
-    VLOG_WARN("xxx delta-update (%s): %s", ddlog_table, json);
-    ddlog_free_json(json);
-    free(ddlog_table);
-#endif
 }
 
 static void
