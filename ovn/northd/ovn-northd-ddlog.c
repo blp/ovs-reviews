@@ -24,21 +24,19 @@
 #include "dirs.h"
 #include "fatal-signal.h"
 #include "hash.h"
+#include "jsonrpc.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
 #include "ovn/lex.h"
 #include "ovn/lib/chassis-index.h"
 #include "ovn/lib/logical-fields.h"
 #include "ovn/lib/ovn-l7.h"
-#include "ovn/lib/ovn-nb-idl.h"
-#include "ovn/lib/ovn-sb-idl.h"
 #include "ovn/lib/ovn-util.h"
 #include "ovn/actions.h"
-#include "packets.h"
 #include "openvswitch/poll-loop.h"
-#include "smap.h"
-#include "sset.h"
-#include "svec.h"
+#include "ovsdb-error.h"
+#include "ovsdb/ovsdb.h"
+#include "ovsdb/table.h"
 #include "stream.h"
 #include "stream-ssl.h"
 #include "unixctl.h"
@@ -54,9 +52,7 @@ VLOG_DEFINE_THIS_MODULE(ovn_northd);
 static unixctl_cb_func ovn_northd_exit;
 
 struct northd_context {
-    struct ovsdb_idl *ovnnb_idl;
     struct ovsdb_idl *ovnsb_idl;
-    struct ovsdb_idl_txn *ovnnb_txn;
     struct ovsdb_idl_txn *ovnsb_txn;
 };
 
@@ -66,62 +62,78 @@ static const char *unixctl_path;
 
 
 static void
-ddlog_table_update(ddlog_prog ddlog, const char *table)
+ddlog_table_update(struct ds *ds, ddlog_prog ddlog, const char *table)
 {
     int error;
-    char *json;
+    char *updates;
 
-    error = ddlog_dump_ovsdb_delta(ddlog, "OVN_Southbound", table, &json);
+    error = ddlog_dump_ovsdb_delta(ddlog, "OVN_Southbound", table, &updates);
     if (error) {
         VLOG_WARN("xxx delta (%s) error: %d", table, error);
         return;
     }
-    VLOG_WARN("xxx delta (%s): %s", table, json);
-    ddlog_free_json(json);
+
+    if (!strlen(updates)) {
+        ddlog_free_json(updates);
+        return;
+    }
+
+    ds_put_cstr(ds, updates);
+    ds_put_char(ds, ',');
+    ddlog_free_json(updates);
 }
 
-static void
-ovn_northd_ddlog_run(struct northd_context *ctx, ddlog_prog ddlog)
-{
-    struct svec updates = SVEC_EMPTY_INITIALIZER;
-    ovsdb_idl_get_updates(ctx->ovnnb_idl, &updates);
 
-    if (svec_is_empty(&updates)) {
-        return;
+static struct json *
+nb_ddlog_run(ddlog_prog ddlog, struct json *updates)
+{
+    if (!updates) {
+        return NULL;
     }
 
     if (ddlog_transaction_start(ddlog)) {
         VLOG_ERR("xxx Couldn't start transaction");
-        return;
+        return NULL;
     }
 
-    size_t i;
-    const char *update;
-    SVEC_FOR_EACH (i, update, &updates) {
-        VLOG_WARN("xxx update: %s", update);
-        if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound.", update)) {
-            VLOG_ERR("xxx Couldn't add update");
-            goto error;
-        }
+    char *updates_s = json_to_string(updates, 0);
+    VLOG_WARN("xxx update: %s", updates_s);
+    if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound.", updates_s)) {
+        VLOG_ERR("xxx Couldn't add update");
+        free(updates_s);
+        goto error;
     }
-    svec_destroy(&updates);
+    free(updates_s);
 
     if (ddlog_transaction_commit(ddlog)) {
         VLOG_ERR("xxx Couldn't commit transaction");
         goto error;
     }
 
-    ddlog_table_update(ddlog, "SB_Global");
-    ddlog_table_update(ddlog, "Datapath_Binding");
-    ddlog_table_update(ddlog, "Port_Binding");
-    ddlog_table_update(ddlog, "Logical_Flow");
-    ddlog_table_update(ddlog, "Meter");
-    ddlog_table_update(ddlog, "Meter_Band");
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&ds, "[\"OVN_Southbound\",");
 
-    return;
+    //ddlog_table_update(&ds, ddlog, "SB_Global");
+    ddlog_table_update(&ds, ddlog, "Datapath_Binding");
+    ddlog_table_update(&ds, ddlog, "Port_Binding");
+    ddlog_table_update(&ds, ddlog, "Logical_Flow");
+    ddlog_table_update(&ds, ddlog, "Meter");
+    ddlog_table_update(&ds, ddlog, "Meter_Band");
+
+    ds_chomp(&ds, ',');
+    ds_put_cstr(&ds, "]");
+
+    /* xxx Return null if there were no updates. */
+
+    VLOG_WARN("xxx pre-ops: %s", ds_cstr(&ds));
+    struct json *ops = json_from_string(ds_steal_cstr(&ds));
+    VLOG_WARN("xxx postops: %s", json_to_string(ops, 0));
+
+    return ops;
 
 error:
     ddlog_transaction_rollback(ddlog);
+    return NULL;
 }
 
 /* Callback used by the ddlog engine to print error messages.  Note that this is
@@ -230,12 +242,174 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     free(short_options);
 }
 
-static void
-add_column_noalert(struct ovsdb_idl *idl,
-                   const struct ovsdb_idl_column *column)
+static struct jsonrpc *
+open_jsonrpc(const char *server)
 {
-    ovsdb_idl_add_column(idl, column);
-    ovsdb_idl_omit_alert(idl, column);
+    struct stream *stream;
+    int error;
+
+    error = stream_open_block(jsonrpc_stream_open(server, &stream,
+                              DSCP_DEFAULT), -1, &stream);
+    if (error == EAFNOSUPPORT) {
+        struct pstream *pstream;
+
+        error = jsonrpc_pstream_open(server, &pstream, DSCP_DEFAULT);
+        if (error) {
+            ovs_fatal(error, "failed to connect or listen to \"%s\"", server);
+        }
+
+        VLOG_INFO("%s: waiting for connection...", server);
+        error = pstream_accept_block(pstream, &stream);
+        if (error) {
+            ovs_fatal(error, "failed to accept connection on \"%s\"", server);
+        }
+
+        pstream_close(pstream);
+    } else if (error) {
+        ovs_fatal(error, "failed to connect to \"%s\"", server);
+    }
+
+    return jsonrpc_open(stream);
+}
+
+static void
+check_txn(int error, struct jsonrpc_msg **reply_)
+{
+    struct jsonrpc_msg *reply = *reply_;
+
+    if (error) {
+        VLOG_WARN("xxx transaction failed");
+    }
+
+    if (reply->error) {
+        VLOG_WARN("xxx transaction returned error: %s",
+                  json_to_string(reply->error, 0));
+    }
+}
+
+/* xxx Stolen from ovsdb-client.  See if it should be refactored. */
+static void
+check_ovsdb_error(struct ovsdb_error *error)
+{
+    if (error) {
+        ovs_fatal(0, "%s", ovsdb_error_to_string(error));
+    }
+}
+
+static struct ovsdb_schema *
+fetch_schema(struct jsonrpc *rpc, const char *database)
+{
+    struct jsonrpc_msg *request, *reply;
+    struct ovsdb_schema *schema;
+
+    request = jsonrpc_create_request("get_schema",
+                                     json_array_create_1(
+                                         json_string_create(database)),
+                                     NULL);
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    check_ovsdb_error(ovsdb_schema_from_json(reply->result, &schema));
+    jsonrpc_msg_destroy(reply);
+
+    return schema;
+}
+
+static struct jsonrpc *
+open_rpc(const char *db_name, const char *database, struct json **request_id) {
+    struct jsonrpc *rpc = open_jsonrpc(db_name);
+
+    struct ovsdb_schema *schema = fetch_schema(rpc, database);
+    struct json *monitor_requests = json_object_create();
+
+    /* xxx This should be smarter about ignoring not needed ones */
+    size_t n = shash_count(&schema->tables);
+    const struct shash_node **nodes = shash_sort(&schema->tables);
+
+    for (int i = 0; i < n; i++) {
+        struct json *monitor_request_array = json_array_create_empty();
+        json_array_add(monitor_request_array, json_object_create());
+
+        struct ovsdb_table_schema *table = nodes[i]->data;
+        json_object_put(monitor_requests, table->name, monitor_request_array);
+    }
+    free(nodes);
+
+    /* xxx Should ovs_fatal be used? */
+    /* xxx Should set "db_change_aware" and handle the implications. */
+
+    struct json *monitor = json_array_create_3(json_string_create(database),
+                                               json_string_create(database),
+                                               monitor_requests);
+
+    struct jsonrpc_msg *request;
+    request = jsonrpc_create_request("monitor", monitor, NULL);
+    *request_id = json_clone(request->id);
+    jsonrpc_send(rpc, request);
+
+    return rpc;
+}
+
+static struct json *
+do_transact(struct jsonrpc *rpc, struct json *transaction)
+{
+    struct jsonrpc_msg *request, *reply;
+
+    /* xxx Make db_change aware */
+#if 0
+    if (db_change_aware == 1) {
+        send_db_change_aware(rpc);
+    }
+#endif
+
+    request = jsonrpc_create_request("transact", transaction, NULL);
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    struct json *result = json_clone(reply->result);
+    jsonrpc_msg_destroy(reply);
+    VLOG_WARN("xxx transact: %s", json_to_string(result, 0));
+
+    return result;
+}
+
+static struct json *
+handle_monitor(struct jsonrpc *rpc, struct json *request_id)
+{
+    struct jsonrpc_msg *msg;
+    int error;
+    struct json *updates = NULL;
+
+    error = jsonrpc_recv(rpc, &msg);
+    if (error == EAGAIN) {
+        return NULL;
+    } else if (error) {
+        /* xxx Shouldn't be fatal */
+        ovs_fatal(error, "receive failed");
+    }
+
+    if (msg->type == JSONRPC_REQUEST && !strcmp(msg->method, "echo")) {
+        jsonrpc_send(rpc, jsonrpc_create_reply(json_clone(msg->params),
+                                               msg->id));
+    } else if (msg->type == JSONRPC_REPLY
+               && json_equal(msg->id, request_id)) {
+        updates = json_clone(msg->result);
+    } else if (msg->type == JSONRPC_NOTIFY
+               && !strcmp(msg->method, "update")) {
+        struct json *params = msg->params;
+        if (params->type == JSON_ARRAY
+            && params->array.n == 2
+            && params->array.elems[0]->type == JSON_STRING) {
+            updates = json_clone(params->array.elems[1]);
+        }
+    } else if (msg->type == JSONRPC_NOTIFY
+               && !strcmp(msg->method, "monitor_canceled")) {
+        /* xxx Not the correct behavior. */
+        VLOG_WARN("xxx database was removed");
+    } else {
+        /* xxx Not the correct behavior. */
+        VLOG_WARN("bad response: type:%d, error:%s", msg->type,
+                  json_to_string(msg->error,0));
+    }
+
+    jsonrpc_msg_destroy(msg);
+    return updates;
 }
 
 int
@@ -262,130 +436,23 @@ main(int argc, char *argv[])
 
     daemonize_complete();
 
-    /* We want to detect (almost) all changes to the ovn-nb db. */
-    struct ovsdb_idl_loop ovnnb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
-        ovsdb_idl_create(ovnnb_db, &nbrec_idl_class, true, true));
-    ovsdb_idl_omit_alert(ovnnb_idl_loop.idl, &nbrec_nb_global_col_sb_cfg);
-    ovsdb_idl_omit_alert(ovnnb_idl_loop.idl, &nbrec_nb_global_col_hv_cfg);
+    struct json *nb_id;
+    struct jsonrpc *nb_rpc = open_rpc(ovnnb_db, "OVN_Northbound", &nb_id);
 
+    struct json *sb_id;
+    struct jsonrpc *sb_rpc = open_rpc(ovnsb_db, "OVN_Southbound", &sb_id);
+
+#if 0
     /* We want to detect only selected changes to the ovn-sb db. */
     struct ovsdb_idl_loop ovnsb_idl_loop = OVSDB_IDL_LOOP_INITIALIZER(
         ovsdb_idl_create(ovnsb_db, &sbrec_idl_class, false, true));
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_sb_global);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_sb_global_col_nb_cfg);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_sb_global_col_options);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_sb_global_col_ipsec);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_logical_flow);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_logical_flow_col_logical_datapath);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_logical_flow_col_pipeline);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_logical_flow_col_table_id);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_logical_flow_col_priority);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_logical_flow_col_match);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_logical_flow_col_actions);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_multicast_group);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_multicast_group_col_datapath);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_multicast_group_col_tunnel_key);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_multicast_group_col_name);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_multicast_group_col_ports);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_datapath_binding);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_datapath_binding_col_tunnel_key);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_datapath_binding_col_external_ids);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_port_binding);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_datapath);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_port_binding_col_logical_port);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_port_binding_col_tunnel_key);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_port_binding_col_parent_port);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_tag);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_type);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_options);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_mac);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_port_binding_col_nat_addresses);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_chassis);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
-                         &sbrec_port_binding_col_gateway_chassis);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
-                         &sbrec_gateway_chassis_col_chassis);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_gateway_chassis_col_name);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
-                         &sbrec_gateway_chassis_col_priority);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
-                         &sbrec_gateway_chassis_col_external_ids);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl,
-                         &sbrec_gateway_chassis_col_options);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_port_binding_col_external_ids);
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_mac_binding);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_datapath);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_ip);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_mac);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_mac_binding_col_logical_port);
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_dhcp_options);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcp_options_col_code);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcp_options_col_type);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcp_options_col_name);
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_dhcpv6_options);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcpv6_options_col_code);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcpv6_options_col_type);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dhcpv6_options_col_name);
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_address_set);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_address_set_col_name);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_address_set_col_addresses);
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_port_group);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_group_col_name);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_group_col_ports);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_dns);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dns_col_datapaths);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dns_col_records);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_dns_col_external_ids);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_rbac_role);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_rbac_role_col_name);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_rbac_role_col_permissions);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_rbac_permission);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_rbac_permission_col_table);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_rbac_permission_col_authorization);
-    add_column_noalert(ovnsb_idl_loop.idl,
-                       &sbrec_rbac_permission_col_insert_delete);
-    add_column_noalert(ovnsb_idl_loop.idl, &sbrec_rbac_permission_col_update);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_meter);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_col_name);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_col_unit);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_col_bands);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_meter_band);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_band_col_action);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_band_col_rate);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_meter_band_col_burst_size);
-
-    ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_chassis);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_nb_cfg);
-    ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_chassis_col_name);
 
     /* Ensure that only a single ovn-northd is active in the deployment by
      * acquiring a lock called "ovn_northd" on the southbound database
      * and then only performing DB transactions if the lock is held. */
     ovsdb_idl_set_lock(ovnsb_idl_loop.idl, "ovn_northd");
     bool had_lock = false;
+#endif
 
     ddlog_prog ddlog;
     ddlog = ddlog_run(1, true, NULL, 0, ddlog_print_error);
@@ -396,9 +463,8 @@ main(int argc, char *argv[])
     /* Main loop. */
     exiting = false;
     while (!exiting) {
+#if 0
         struct northd_context ctx = {
-            .ovnnb_idl = ovnnb_idl_loop.idl,
-            .ovnnb_txn = ovsdb_idl_loop_run(&ovnnb_idl_loop),
             .ovnsb_idl = ovnsb_idl_loop.idl,
             .ovnsb_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
         };
@@ -416,14 +482,41 @@ main(int argc, char *argv[])
         if (ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
             ovn_northd_ddlog_run(&ctx, ddlog);
         }
+#endif
+
+        struct json *updates, *ops;
+
+        updates = handle_monitor(nb_rpc, nb_id);
+        ops = nb_ddlog_run(ddlog, updates);
+        json_destroy(updates);
+
+        /* Apply updates to the Southbound. */
+        if (ops) {
+            do_transact(sb_rpc, ops);
+            json_destroy(ops);
+        }
+
+#if 0
+        updates = handle_monitor(sb_rpc, sb_id);
+        ops = sb_ddlog_run(ddlog, updates);
+        json_destroy(updates);
+
+        /* Apply updates to the Northbound. */
+        if (ops) {
+            do_transact(nb_rpc, ops);
+            json_destroy(ops);
+        }
+#endif
 
         unixctl_server_run(unixctl);
         unixctl_server_wait(unixctl);
         if (exiting) {
             poll_immediate_wake();
         }
-        ovsdb_idl_loop_commit_and_wait(&ovnnb_idl_loop);
-        ovsdb_idl_loop_commit_and_wait(&ovnsb_idl_loop);
+
+        jsonrpc_run(nb_rpc);
+        jsonrpc_wait(nb_rpc);
+        jsonrpc_recv_wait(nb_rpc);
 
         poll_block();
         if (should_service_stop()) {
@@ -431,11 +524,14 @@ main(int argc, char *argv[])
         }
     }
 
+    jsonrpc_close(nb_rpc);
+
     ddlog_stop(ddlog);
 
     unixctl_server_destroy(unixctl);
-    ovsdb_idl_loop_destroy(&ovnnb_idl_loop);
+#if 0
     ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
+#endif
     service_stop();
 
     exit(res);
