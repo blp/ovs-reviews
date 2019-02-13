@@ -54,7 +54,6 @@ struct ovsdb_idl_class;
 struct ovsdb_idl_row;
 struct ovsdb_idl_column;
 struct ovsdb_idl_table_class;
-struct svec;
 struct uuid;
 
 struct ovsdb_idl *ovsdb_idl_create(const char *remote,
@@ -77,7 +76,6 @@ bool ovsdb_idl_is_lock_contended(const struct ovsdb_idl *);
 
 const struct uuid  * ovsdb_idl_get_monitor_id(const struct ovsdb_idl *);
 unsigned int ovsdb_idl_get_seqno(const struct ovsdb_idl *);
-void ovsdb_idl_get_updates(struct ovsdb_idl *, struct svec *updates);
 bool ovsdb_idl_has_ever_connected(const struct ovsdb_idl *);
 void ovsdb_idl_enable_reconnect(struct ovsdb_idl *);
 void ovsdb_idl_force_reconnect(struct ovsdb_idl *);
