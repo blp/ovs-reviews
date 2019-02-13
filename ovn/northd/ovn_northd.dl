@@ -597,7 +597,7 @@ sb.Out_DNS(.records      = nbdns.records,
  */
 
 sb.Out_RBAC_Permission (
-    .uuid_name      = "7df3749a-1754-4a78-afa4-3abf526fe510",
+    .uuid_name      = "u7df3749a_1754_4a78_afa4_3abf526fe510",
     .table          = "Chassis",
     .authorization  = set_singleton("name"),
     .insert_delete  = true,
@@ -612,7 +612,7 @@ sb.Out_RBAC_Permission (
 ).
 
 sb.Out_RBAC_Permission (
-    .uuid_name      = "94bec860-431e-4d95-82e7-3b75d8997241",
+    .uuid_name      = "u94bec860_431e_4d95_82e7_3b75d8997241",
     .table          = "Encap",
     .authorization  = set_singleton("chassis_name"),
     .insert_delete  = true,
@@ -626,7 +626,7 @@ sb.Out_RBAC_Permission (
 ).
 
 sb.Out_RBAC_Permission (
-    .uuid_name      = "d8ceff1a-2b11-48bd-802f-4a991aa4e908",
+    .uuid_name      = "ud8ceff1a_2b11_48bd_802f_4a991aa4e908",
     .table          = "Port_Binding",
     .authorization  = set_singleton(""),
     .insert_delete  = false,
@@ -634,7 +634,7 @@ sb.Out_RBAC_Permission (
 ).
 
 sb.Out_RBAC_Permission (
-    .uuid_name      = "6ffdc696-8bfb-4d82-b620-a00d39270b2f",
+    .uuid_name      = "u6ffdc696_8bfb_4d82_b620_a00d39270b2f",
     .table          = "MAC_Binding",
     .authorization  = set_singleton(""),
     .insert_delete  = true,
@@ -655,10 +655,10 @@ sb.Out_RBAC_Role (
     .name        = "ovn-controller",
     .permissions = {
             var m: Map<string, string> = map_empty();
-            map_insert(m, "Chassis"     , "7df3749a-1754-4a78-afa4-3abf526fe510");
-            map_insert(m, "Encap"       , "94bec860-431e-4d95-82e7-3b75d8997241");
-            map_insert(m, "Port_Binding", "d8ceff1a-2b11-48bd-802f-4a991aa4e908");
-            map_insert(m, "MAC_Binding" , "6ffdc696-8bfb-4d82-b620-a00d39270b2f");
+            map_insert(m, "Chassis"     , "u7df3749a_1754_4a78_afa4_3abf526fe510");
+            map_insert(m, "Encap"       , "u94bec860_431e_4d95_82e7_3b75d8997241");
+            map_insert(m, "Port_Binding", "ud8ceff1a_2b11_48bd_802f_4a991aa4e908");
+            map_insert(m, "MAC_Binding" , "u6ffdc696_8bfb_4d82_b620_a00d39270b2f");
             m
         }
 ).
