@@ -1,4 +1,5 @@
 noinst_HEADERS += \
+        include/sparse/curses.h \
         include/sparse/rte_byteorder.h \
         include/sparse/rte_esp.h \
         include/sparse/rte_flow.h \
