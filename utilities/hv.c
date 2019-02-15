@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Nicira, Inc.
+ * Copyright (c) 2018, 2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,14 +20,21 @@
  * - avoid degzipping whole file at a time.
  * - support tgz or at least tar
  * - bt is slow, use heap+hmap?
- * - tab completion
+ * - tab completion for e.g. component, based on statistics
  * - full query view (show as command-line options?)
  * - checksumming to figure out whether anything has changed behind our back
  * - hitting Enter when there's a single column should limit to matches?
+ *   (or bring up a menu of options?)
  * - saving results
- * - backup to previous query
+ * - backup to previous query (tabs?) - automatically saving the session
  * - adjust page size
  * - pull-down menu interface
+ * - obtain context around messages
+ * - negated matches
+ * - coarser-grained time (day, hour, etc.)
+ * - '/' to search within display
+ * - right-click on field value to limit display to that value
+ * - when a query has no results, explain the query and the results
  */
 
 #include <config.h>
@@ -183,7 +190,9 @@ enum show {
     COLUMN(SDID, "sdid")                        \
     COLUMN(COMP, "comp")                        \
     COLUMN(SUBCOMP, "subcomp")                  \
+    COLUMN(ERROR_CODE, "error_code")            \
     COLUMN(MSG, "msg")                          \
+    COLUMN(LINE, "line")                        \
     COLUMN(VALID, "valid")
 
 enum {
@@ -218,8 +227,10 @@ struct spec {
     char *match;
     unsigned int priorities;
     unsigned int facilities;
+    struct sset sdids;
     struct sset components;
     struct sset subcomponents;
+    struct sset error_codes;
     double date_since;
     double date_until;
     double at;
@@ -370,6 +381,7 @@ struct log_record {
     struct substring sdid;      /* Structured data ID. */
     struct substring comp;      /* From structured data. */
     struct substring subcomp;   /* From structured data. */
+    struct substring error_code; /* From structured data. */
     struct substring msg;       /* Message content. */
 };
 
@@ -536,6 +548,8 @@ get_sd_param(struct parse_ctx *ctx, struct log_record *rec)
         rec->comp = value;
     } else if (ss_equals(name, ss_cstr("subcomp"))) {
         rec->subcomp = value;
+    } else if (ss_equals(name, ss_cstr("errorCode"))) {
+        rec->error_code = value;
     }
     return true;
 }
@@ -824,6 +838,7 @@ log_record_copy(struct log_record *dst, const struct log_record *src)
     dst->sdid = ss_clone(src->sdid);
     dst->comp = ss_clone(src->comp);
     dst->subcomp = ss_clone(src->subcomp);
+    dst->error_code = ss_clone(src->error_code);
     dst->msg = ss_clone(src->msg);
 }
 
@@ -849,6 +864,9 @@ log_record_to_json(const struct log_record *r, enum column columns)
     }
     if (columns & COL_SRC_FILE) {
         json_put_substring(obj, "src_file", r->src_file);
+    }
+    if (columns & COL_LINE) {
+        json_put_substring(obj, "line", r->line);
     }
     if (columns & COL_FACILITY) {
         json_object_put_string(obj, "facility",
@@ -882,6 +900,9 @@ log_record_to_json(const struct log_record *r, enum column columns)
     if (columns & COL_SUBCOMP) {
         json_put_substring(obj, "subcomponent", r->subcomp);
     }
+    if (columns & COL_ERROR_CODE) {
+        json_put_substring(obj, "error_code", r->error_code);
+    }
     if (columns & COL_MSG) {
         json_put_substring(obj, "msg", r->msg);
     }
@@ -914,6 +935,7 @@ log_record_uninit(struct log_record *r)
         free(r->sdid.s);
         free(r->comp.s);
         free(r->subcomp.s);
+        free(r->error_code.s);
         free(r->msg.s);
     }
 }
@@ -978,8 +1000,14 @@ log_record_hash(const struct log_record *r, uint32_t basis,
         case COL_SUBCOMP:
             hash = ss_hash(r->subcomp, basis);
             break;
+        case COL_ERROR_CODE:
+            hash = ss_hash(r->error_code, basis);
+            break;
         case COL_MSG:
             hash = ss_hash(r->msg, basis);
+            break;
+        case COL_LINE:
+            hash = ss_hash(r->line, basis);
             break;
         case COL_VALID:
             hash = hash_boolean(r->valid, basis);
@@ -1050,8 +1078,14 @@ log_record_compare(const struct log_record *a, const struct log_record *b,
         case COL_SUBCOMP:
             cmp = ss_compare(a->subcomp, b->subcomp);
             break;
+        case COL_ERROR_CODE:
+            cmp = ss_compare(a->error_code, b->error_code);
+            break;
         case COL_MSG:
             cmp = ss_compare(a->msg, b->msg);
+            break;
+        case COL_LINE:
+            cmp = ss_compare(a->line, b->line);
             break;
         case COL_VALID:
             cmp = compare_int(a->valid, b->valid);
@@ -1125,7 +1159,9 @@ log_record_from_json(const struct json *json, struct log_record **rp)
     parse_substring(&p, "sdid", &r->sdid);
     parse_substring(&p, "component", &r->comp);
     parse_substring(&p, "subcomponent", &r->subcomp);
+    parse_substring(&p, "error_code", &r->error_code);
     parse_substring(&p, "msg", &r->msg);
+    parse_substring(&p, "line", &r->line);
 
     struct ovsdb_error *error = ovsdb_parser_finish(&p);
     if (error) {
@@ -1287,6 +1323,10 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         if (!(spec->facilities & (1u << rec.facility))) {
             continue;
         }
+        if (!sset_is_empty(&spec->sdids)
+            && !sset_contains_len(&spec->sdids, rec.sdid.s, rec.sdid.length)) {
+            continue;
+        }
         if (!sset_is_empty(&spec->components)
             && !sset_contains_len(&spec->components, rec.comp.s,
                                   rec.comp.length)) {
@@ -1295,6 +1335,11 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         if (!sset_is_empty(&spec->subcomponents)
             && !sset_contains_len(&spec->subcomponents,
                                   rec.subcomp.s, rec.subcomp.length)) {
+            continue;
+        }
+        if (!sset_is_empty(&spec->error_codes)
+            && !sset_contains_len(&spec->error_codes,
+                                  rec.error_code.s, rec.error_code.length)) {
             continue;
         }
         if (spec->match && ss_find_case(rec.msg, ss_cstr(spec->match)) == -1) {
@@ -1734,8 +1779,14 @@ log_record_format(const struct log_record *r, int i, int n,
         case COL_SUBCOMP:
             put_substring(s, r->subcomp);
             break;
+        case COL_ERROR_CODE:
+            put_substring(s, r->error_code);
+            break;
         case COL_MSG:
             put_substring(s, r->msg);
+            break;
+        case COL_LINE:
+            put_substring(s, r->line);
             break;
         case COL_VALID:
             ds_put_cstr(s, r->valid ? "ok" : "invalid");
@@ -1782,7 +1833,7 @@ state_merge(const struct state *src, const struct spec *spec,
         break;
 
     case SHOW_TOP:
-        fprintf(stderr, "merge %p\n", src->tk[0]);
+        //fprintf(stderr, "merge %p\n", src->tk[0]);
         if (!src->tk[0]) {
             break;
         }
@@ -2193,8 +2244,10 @@ spec_init(struct spec *spec)
         .show = SHOW_SAMPLE,
         .priorities = ALL_PRIORITIES,
         .facilities = ALL_FACILITIES,
+        .sdids = SSET_INITIALIZER(&spec->sdids),
         .components = SSET_INITIALIZER(&spec->components),
         .subcomponents = SSET_INITIALIZER(&spec->subcomponents),
+        .error_codes = SSET_INITIALIZER(&spec->error_codes),
         .date_since = -DBL_MAX,
         .date_until = DBL_MAX,
         .at = -DBL_MAX,
@@ -2210,8 +2263,10 @@ spec_uninit(struct spec *spec)
         free(spec->host);
         free(spec->match);
         log_record_destroy(spec->start);
+        sset_destroy(&spec->sdids);
         sset_destroy(&spec->components);
         sset_destroy(&spec->subcomponents);
+        sset_destroy(&spec->error_codes);
         svec_destroy(&spec->targets);
     }
 }
@@ -2223,8 +2278,10 @@ spec_copy(struct spec *dst, const struct spec *src)
     dst->host = xstrdup(src->host);
     dst->start = src->start ? log_record_clone(src->start) : NULL;
     dst->match = nullable_xstrdup(src->match);
+    sset_clone(&dst->sdids, &src->sdids);
     sset_clone(&dst->components, &src->components);
     sset_clone(&dst->subcomponents, &src->subcomponents);
+    sset_clone(&dst->error_codes, &src->error_codes);
     svec_clone(&dst->targets, &src->targets);
 }
 
@@ -2235,8 +2292,10 @@ spec_equals(const struct spec *a, const struct spec *b)
             && nullable_string_is_equal(a->match, b->match)
             && a->priorities == b->priorities
             && a->facilities == b->facilities
+            && sset_equals(&a->sdids, &b->sdids)
             && sset_equals(&a->components, &b->components)
             && sset_equals(&a->subcomponents, &b->subcomponents)
+            && sset_equals(&a->error_codes, &b->error_codes)
             && a->date_since == b->date_since
             && a->date_until == b->date_until
             && a->at == b->at
@@ -2314,12 +2373,19 @@ spec_to_json(struct spec *spec)
         json_object_put(obj, "facilities",
                         json_integer_create(spec->facilities));
     }
+    if (!sset_is_empty(&spec->sdids)) {
+        json_object_put(obj, "sdids", sset_to_json(&spec->sdids));
+    }
     if (!sset_is_empty(&spec->components)) {
         json_object_put(obj, "components", sset_to_json(&spec->components));
     }
     if (!sset_is_empty(&spec->subcomponents)) {
         json_object_put(obj, "subcomponents",
                         sset_to_json(&spec->subcomponents));
+    }
+    if (!sset_is_empty(&spec->error_codes)) {
+        json_object_put(obj, "error_codes",
+                        sset_to_json(&spec->error_codes));
     }
     if (spec->date_since != -DBL_MAX) {
         json_object_put(obj, "date_since", json_real_create(spec->date_since));
@@ -2392,6 +2458,12 @@ spec_from_json(const struct json *json, struct spec **specp)
         spec->facilities = json_integer(facilities);
     }
 
+    const struct json *sdids = ovsdb_parser_member(
+        &p, "sdids", OP_ARRAY | OP_OPTIONAL);
+    if (sdids) {
+        sset_from_json(sdids, &spec->sdids);
+    }
+
     const struct json *components = ovsdb_parser_member(
         &p, "components", OP_ARRAY | OP_OPTIONAL);
     if (components) {
@@ -2402,6 +2474,12 @@ spec_from_json(const struct json *json, struct spec **specp)
         &p, "subcomponents", OP_ARRAY | OP_OPTIONAL);
     if (subcomponents) {
         sset_from_json(subcomponents, &spec->subcomponents);
+    }
+
+    const struct json *error_codes = ovsdb_parser_member(
+        &p, "error_codes", OP_ARRAY | OP_OPTIONAL);
+    if (error_codes) {
+        sset_from_json(error_codes, &spec->error_codes);
     }
 
     const struct json *date_since = ovsdb_parser_member(
@@ -2558,7 +2636,7 @@ readstr(const char *prompt, const char *initial, struct svec *history,
             pos++;
             break;
         case CTRL('G'):
-            if (history && initial) {
+            if (history && history->n) {
                 svec_pop_back(history);
             }
             curs_set(0);
@@ -2666,8 +2744,10 @@ readstr(const char *prompt, const char *initial, struct svec *history,
 }
 
 static struct svec columns_history = SVEC_EMPTY_INITIALIZER;
+static struct svec sdids_history = SVEC_EMPTY_INITIALIZER;
 static struct svec components_history = SVEC_EMPTY_INITIALIZER;
 static struct svec subcomponents_history = SVEC_EMPTY_INITIALIZER;
+static struct svec error_codes_history = SVEC_EMPTY_INITIALIZER;
 static struct svec priorities_history = SVEC_EMPTY_INITIALIZER;
 static struct svec facilities_history = SVEC_EMPTY_INITIALIZER;
 static struct svec match_history = SVEC_EMPTY_INITIALIZER;
@@ -2885,6 +2965,7 @@ main(int argc, char *argv[])
     int y_ofs = 0, x_ofs = 0;
     int y = 0;
     bool highlight_match = true;
+    bool scroll_bar = true;
     for (;;) {
         uint64_t display_seqno = seq_read(job->seq);
         struct state *state = ovsrcu_get(struct state *, &job->state);
@@ -3003,6 +3084,16 @@ main(int argc, char *argv[])
                 free(columns_s);
             }
             break;
+        case 's':
+            {
+                char *sdids_s = readstr("sdids", NULL, &sdids_history, NULL);
+                if (sdids_s) {
+                    sset_clear(&new_spec.sdids);
+                    sset_add_delimited(&new_spec.sdids, sdids_s, " ,");
+                    free(sdids_s);
+                }
+            }
+            break;
         case 'C':
             {
                 char *components_s = readstr("components", NULL, &components_history, NULL);
@@ -3025,11 +3116,22 @@ main(int argc, char *argv[])
                 }
             }
             break;
+        case 'E':
+            {
+                char *error_codes_s = readstr("error codes", NULL, &error_codes_history, NULL);
+                if (error_codes_s) {
+                    sset_clear(&new_spec.error_codes);
+                    sset_add_delimited(&new_spec.error_codes,
+                                       error_codes_s, " ,");
+                    free(error_codes_s);
+                }
+            }
+            break;
         case 'p':
             {
                 char *priorities_s = readstr("priorities", NULL, &priorities_history, validate_priorities);
                 if (priorities_s) {
-                    char *error = priorities_from_string(optarg, &new_spec.priorities);
+                    char *error = priorities_from_string(priorities_s, &new_spec.priorities);
                     ovs_assert(!error);
                 }
             }
@@ -3038,7 +3140,7 @@ main(int argc, char *argv[])
             {
                 char *facilities_s = readstr("facilities", NULL, &facilities_history, validate_facilities);
                 if (facilities_s) {
-                    char *error = facilities_from_string(optarg, &new_spec.facilities);
+                    char *error = facilities_from_string(facilities_s, &new_spec.facilities);
                     ovs_assert(!error);
                 }
             }
@@ -3049,7 +3151,11 @@ main(int argc, char *argv[])
             break;
 
         case META('u'):
-            highlight_match = !highlight_match;
+            highlight_match ^= 1;
+            break;
+
+        case '\\':
+            scroll_bar ^= 1;
             break;
         }
 
@@ -3091,7 +3197,7 @@ main(int argc, char *argv[])
         }
 
         unsigned int total = r->before + r->n + r->after;
-        if (total) {
+        if (scroll_bar && total) {
             int y0 = y_ofs + r->before;
             int y1 = MIN(y_ofs + page, r->n) + r->before - 1;
             int y0s = y0 * (page - 2) / total + 1;
@@ -3325,6 +3431,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         OPT_SINCE = UCHAR_MAX + 1,
         OPT_UNTIL,
         OPT_REMOTE,
+        OPT_SDIDS,
         VLOG_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
@@ -3335,6 +3442,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         {"match", required_argument, NULL, 'm'},
         {"priorities", required_argument, NULL, 'p'},
         {"facilities", required_argument, NULL, 'f'},
+        {"sdids", required_argument, NULL, OPT_SDIDS},
         {"component", required_argument, NULL, 'C'},
         {"subcomponent", required_argument, NULL, 'S'},
         {"since", required_argument, NULL, OPT_SINCE},
@@ -3350,6 +3458,8 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
 
     spec_init(spec);
     svec_add(&columns_history, "when facility priority comp subcomp msg");
+    spec->columns = (COL_WHEN | COL_FACILITY | COL_PRIORITY | COL_COMP
+                     | COL_SUBCOMP | COL_MSG);
     for (;;) {
         int option;
 
@@ -3411,6 +3521,11 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             spec->date_until = parse_date(optarg);
             break;
 
+        case OPT_SDIDS:
+            svec_add(&sdids_history, optarg);
+            sset_add_delimited(&spec->sdids, optarg, " ,");
+            break;
+
         case 'C':
             svec_add(&components_history, optarg);
             sset_add_delimited(&spec->components, optarg, " ,");
@@ -3419,6 +3534,11 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         case 'S':
             svec_add(&subcomponents_history, optarg);
             sset_add_delimited(&spec->subcomponents, optarg, " ,");
+            break;
+
+        case 'E':
+            svec_add(&error_codes_history, optarg);
+            sset_add_delimited(&spec->error_codes, optarg, " ,");
             break;
 
         case 'h':
@@ -3447,10 +3567,5 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
     } else {
         ovs_fatal(0, "at least one non-option argument is required "
                   "(use --help for help)");
-    }
-
-    if (!spec->columns) {
-        spec->columns = (COL_WHEN | COL_FACILITY | COL_PRIORITY | COL_COMP
-                         | COL_SUBCOMP | COL_MSG);
     }
 }
