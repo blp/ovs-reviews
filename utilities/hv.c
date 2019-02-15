@@ -283,6 +283,12 @@ struct substring {
     size_t length;
 };
 
+static struct substring
+ss_buffer(const char *s, size_t length)
+{
+    return (struct substring) { CONST_CAST(char *, s), length };
+}
+
 static bool
 ss_equals(struct substring a, struct substring b)
 {
@@ -303,6 +309,12 @@ ss_cstr(const char *s)
 {
     return (struct substring) { .s = CONST_CAST(char *, s),
                                 .length = strlen(s) };
+}
+
+static bool OVS_UNUSED
+ss_starts_with(struct substring s, struct substring prefix)
+{
+    return s.length >= prefix.length && !memcmp(s.s, prefix.s, prefix.length);
 }
 
 static bool OVS_UNUSED
@@ -401,15 +413,16 @@ struct parse_ctx {
 static void OVS_PRINTF_FORMAT(2, 3)
 warn(const struct parse_ctx *ctx, const char *format, ...)
 {
-    fprintf(stderr, "%s:%d.%"PRIdPTR": ",
-            ctx->fn, ctx->ln, ctx->p - ctx->line_start + 1);
+    if (VLOG_IS_WARN_ENABLED()) {
+        va_list args;
+        va_start(args, format);
+        char *msg = xvasprintf(format, args);
+        va_end(args);
 
-    va_list args;
-    va_start(args, format);
-    vfprintf(stderr, format, args);
-    va_end(args);
-
-    putc('\n', stderr);
+        VLOG_WARN("%s:%d.%"PRIdPTR": %s",
+                  ctx->fn, ctx->ln, ctx->p - ctx->line_start + 1, msg);
+        free(msg);
+    }
 }
 
 static void OVS_PRINTF_FORMAT(2, 3)
@@ -483,12 +496,8 @@ c_isalpha(int c)
 }
 
 static bool
-get_header_token(struct parse_ctx *ctx, struct substring *token)
+get_header_token__(struct parse_ctx *ctx, struct substring *token)
 {
-    if (!must_match_spaces(ctx)) {
-        return false;
-    }
-
     token->s = CONST_CAST(char *, ctx->p);
     token->length = 0;
     while (token->s[token->length] != ' ') {
@@ -501,6 +510,12 @@ get_header_token(struct parse_ctx *ctx, struct substring *token)
     ctx->p += token->length;
 
     return true;
+}
+
+static bool
+get_header_token(struct parse_ctx *ctx, struct substring *token)
+{
+    return must_match_spaces(ctx) && get_header_token__(ctx, token);
 }
 
 static bool
@@ -686,19 +701,31 @@ format_timestamp(double t, struct ds *s)
 }
 
 static bool
-parse_record(struct parse_ctx *ctx, struct log_record *rec)
+parse_structured_data(struct parse_ctx *ctx, struct log_record *rec)
 {
-    if (match(ctx, '*')) {
-        rec->count = 0;
-        while (c_isdigit(*ctx->p)) {
-            rec->count = rec->count * 10 + (*ctx->p++ - '0');
-        }
-        if (!must_match(ctx, ' ')) {
+    if (match(ctx, '[')) {
+        if (!get_sd_name(ctx, &rec->sdid)) {
             return false;
         }
-    } else {
-        rec->count = 1;
+        while (match_spaces(ctx)) {
+            if (!get_sd_param(ctx, rec)) {
+                return false;
+            }
+        }
+        if (!must_match(ctx, ']')) {
+            return false;
+        }
+    } else if (!match(ctx, '-')) {
+        /* Some NSX log files have this problem.  Keep going. */
+        debug(ctx, "expected '-' or '['");
     }
+    return true;
+}
+
+static bool
+parse_rfc5424_record(struct parse_ctx *ctx, struct log_record *rec)
+{
+    rec->count = 1;
 
     rec->src_host = ss_cstr(ctx->host);
     rec->src_file = ss_cstr(ctx->fn);
@@ -722,12 +749,8 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
         return false;
     }
 
-    /* Identifiers. */
-    if (!get_header_token(ctx, &rec->timestamp)
-        || !get_header_token(ctx, &rec->hostname)
-        || !get_header_token(ctx, &rec->app_name)
-        || !get_header_token(ctx, &rec->procid)
-        || !get_header_token(ctx, &rec->msgid)) {
+    /* Timestamp. */
+    if (!get_header_token(ctx, &rec->timestamp)) {
         return false;
     }
 
@@ -736,25 +759,26 @@ parse_record(struct parse_ctx *ctx, struct log_record *rec)
         return false;
     }
 
-    /* Structured data. */
-    if (!must_match_spaces(ctx)) {
+    if (!get_header_token(ctx, &rec->hostname)
+        || !get_header_token(ctx, &rec->app_name)
+        || !get_header_token(ctx, &rec->procid)) {
         return false;
     }
-    if (match(ctx, '[')) {
-        if (!get_sd_name(ctx, &rec->sdid)) {
-            return false;
-        }
-        while (match_spaces(ctx)) {
-            if (!get_sd_param(ctx, rec)) {
-                return false;
-            }
-        }
-        if (!must_match(ctx, ']')) {
-            return false;
-        }
-    } else if (!match(ctx, '-')) {
-        /* Some NSX log files have this problem.  Keep going. */
-        debug(ctx, "expected '-' or '['");
+
+    /* Workaround for log lines that have an empty string for the msgid rather
+     * than -, e.g.:
+     * <182>1 2018-12-13T00:39:00.669Z nsx-manager NSX 24302  - type=COUNTER, name=com.vmware.nsx.rpc.NsxRpcProvider.created, count=1
+    */
+    if (ctx->p[0] == ' ' && ctx->p[1] == ' '
+        && (ctx->p[2] == '-' || ctx->p[2] == '[')) {
+        ctx->p++;
+    } else if (!get_header_token(ctx, &rec->msgid)) {
+        return false;
+    }
+
+    /* Structured data. */
+    if (!must_match_spaces(ctx) || !parse_structured_data(ctx, rec)) {
+        return false;
     }
 
     match_spaces(ctx);
@@ -1265,22 +1289,60 @@ job_cancel(struct job *job)
     atomic_store(&job->cancel, true);
 }
 
+static bool
+include_record(const struct log_record *rec, const struct spec *spec,
+               struct state *state)
+{
+    if (rec->when < spec->date_since || rec->when > spec->date_until) {
+        return false;
+    }
+    if (!(spec->priorities & (1u << rec->priority))) {
+        return false;
+    }
+    if (!(spec->facilities & (1u << rec->facility))) {
+        return false;
+    }
+    if (!sset_is_empty(&spec->sdids)
+        && !sset_contains_len(&spec->sdids, rec->sdid.s, rec->sdid.length)) {
+        return false;
+    }
+    if (!sset_is_empty(&spec->components)
+        && !sset_contains_len(&spec->components, rec->comp.s,
+                              rec->comp.length)) {
+        return false;
+    }
+    if (!sset_is_empty(&spec->subcomponents)
+        && !sset_contains_len(&spec->subcomponents,
+                              rec->subcomp.s, rec->subcomp.length)) {
+        return false;
+    }
+    if (!sset_is_empty(&spec->error_codes)
+        && !sset_contains_len(&spec->error_codes,
+                              rec->error_code.s, rec->error_code.length)) {
+        return false;
+    }
+    if (spec->match && ss_find_case(rec->msg, ss_cstr(spec->match)) == -1) {
+        return false;
+    }
+    if (spec->start && log_record_compare(rec, spec->start, spec) < 0) {
+        state->skipped++;
+        return false;
+    }
+    return true;
+}
+
 #define WITH_MUTEX(MUTEX, ...)                  \
     ovs_mutex_lock(MUTEX);                      \
     __VA_ARGS__;                                \
     ovs_mutex_unlock(MUTEX);
 
 static void
-parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
+parse_rfc5424_file(const char *fn, const char *buffer, off_t size, struct task *task)
 {
     struct job *job = task->job;
     const struct spec *spec = &job->spec;
     const char *end = buffer + size;
 
-    if (size < 2 || buffer[0] != '<' || !c_isdigit(buffer[1])) {
-        VLOG_DBG("%s: not an RFC 5424 log file", fn);
-        return;
-    }
     WITH_MUTEX(&job->stats_lock, job->total_bytes += size);
 
     struct state *state = &task->state;
@@ -1313,44 +1375,11 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         rec.line.s = CONST_CAST(char *, ctx.line_start);
         rec.line.length = ctx.line_end - ctx.line_start;
 
-        parse_record(&ctx, &rec);
-        if (rec.when < spec->date_since || rec.when > spec->date_until) {
-            continue;
-        }
-        if (!(spec->priorities & (1u << rec.priority))) {
-            continue;
-        }
-        if (!(spec->facilities & (1u << rec.facility))) {
-            continue;
-        }
-        if (!sset_is_empty(&spec->sdids)
-            && !sset_contains_len(&spec->sdids, rec.sdid.s, rec.sdid.length)) {
-            continue;
-        }
-        if (!sset_is_empty(&spec->components)
-            && !sset_contains_len(&spec->components, rec.comp.s,
-                                  rec.comp.length)) {
-            continue;
-        }
-        if (!sset_is_empty(&spec->subcomponents)
-            && !sset_contains_len(&spec->subcomponents,
-                                  rec.subcomp.s, rec.subcomp.length)) {
-            continue;
-        }
-        if (!sset_is_empty(&spec->error_codes)
-            && !sset_contains_len(&spec->error_codes,
-                                  rec.error_code.s, rec.error_code.length)) {
-            continue;
-        }
-        if (spec->match && ss_find_case(rec.msg, ss_cstr(spec->match)) == -1) {
-            continue;
-        }
-        if (spec->start && log_record_compare(&rec, spec->start, spec) < 0) {
-            state->skipped++;
-            continue;
+        parse_rfc5424_record(&ctx, &rec);
+        if (include_record(&rec, spec, state)) {
+            state_add(state, &rec, spec);
         }
 
-        state_add(state, &rec, spec);
     }
 
     if (spec->show != SHOW_TOP) {
@@ -1368,6 +1397,197 @@ parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
         }
     }
     state_uninit(state);
+}
+
+/* Parses many log formats that start with an RFC 3339 timestamp, most notably
+ * ones like this:
+ *
+ * 2018-12-11T18:18:05.359Z  INFO http-nio-127.0.0.1-6440-exec-2 AuditingServiceImpl - - [nsx@6876 audit="true" comp="nsx-manager" reqId="63865aba-97de-4598-9099-be490c73be1f" subcomp="policy"] UserName="admin", ModuleName="AAA", Operation="GetUserFeaturePermissions", Operation status="success"
+ */
+static bool
+parse_date_first_record(struct parse_ctx *ctx, struct log_record *rec)
+{
+    rec->count = 1;
+
+    rec->src_host = ss_cstr(ctx->host);
+    rec->src_file = ss_cstr(ctx->fn);
+
+    struct substring priority;
+    if (!get_header_token__(ctx, &rec->timestamp)
+        || !get_header_token(ctx, &priority)) {
+        return false;
+    }
+
+    rec->when = parse_timestamp(rec->timestamp.s, rec->timestamp.length);
+    if (rec->when == -1) {
+        return false;
+    }
+
+    if (ss_equals(priority, ss_cstr("FATAL"))) {
+        rec->priority = PRI_EMERG;
+    } else if (ss_equals(priority, ss_cstr("SEVERE"))) {
+        rec->priority = PRI_ALERT;
+    } else if (ss_equals(priority, ss_cstr("CRIT"))) {
+        rec->priority = PRI_CRIT;
+    } else if (ss_equals(priority, ss_cstr("ERROR"))) {
+        rec->priority = PRI_ERR;
+    } else if (ss_equals(priority, ss_cstr("WARN"))) {
+        rec->priority = PRI_WARNING;
+    } else if (ss_equals(priority, ss_cstr("NOTICE"))) {
+        rec->priority = PRI_NOTICE;
+    } else if (ss_equals(priority, ss_cstr("INFO"))) {
+        rec->priority = PRI_INFO;
+    } else if (ss_equals(priority, ss_cstr("DEBUG"))) {
+        rec->priority = PRI_DEBUG;
+    } else {
+        debug(ctx, "%.*s: unknown severity",
+              (int) priority.length, priority.s);
+    }
+
+    /* Distinguish a couple of formats based on the third token, which might
+     * be:
+     *
+     *   - A thread name.  Hard to pick these out.
+     *
+     *   - The full name of a Java class.  In the cases I've noticed, these
+     *     start with "com.", so let's just use that as a heuristic.  Example:
+     *     2018-12-08T14:12:54.534Z INFO org.apache.coyote.http11.Http11Processor service Error parsing HTTP request header
+     */
+    struct substring token;
+    if (!get_header_token(ctx, &token)) {
+        return false;
+    }
+    if (ss_starts_with(token, ss_cstr("com."))) {
+        rec->app_name = token;  /* Class name. */
+        if (!get_header_token(ctx, &rec->comp)) {
+            return false;
+        }
+    } else {
+        rec->procid = token;                      /* Thread name. */
+        if (!get_header_token(ctx, &rec->app_name) /* Class name. */
+            || !get_header_token(ctx, &rec->msgid)
+            || !must_match_spaces(ctx)) {
+            return false;
+        }
+
+        if (ctx->p[0] == '-' && ctx->p[1] == ' ' && ctx->p[2] == '[') {
+            ctx->p += 2;
+            if (!parse_structured_data(ctx, rec)) {
+                return false;
+            }
+        }
+    }
+
+    match_spaces(ctx);
+
+    rec->msg.s = CONST_CAST(char *, ctx->p);
+    rec->msg.length = ctx->line_end - ctx->p;
+
+    rec->valid = true;
+
+    return true;
+}
+
+static bool
+starts_with_date(struct substring s)
+{
+    /* This code has a Y2100 problem ;-) */
+    return (s.length >= 20
+            && s.s[0] == '2'
+            && s.s[1] == '0'
+            && c_isdigit(s.s[2])
+            && c_isdigit(s.s[3])
+            && s.s[4] == '-'
+            && s.s[10] == 'T');
+}
+
+static void
+parse_date_first_file(const char *fn, const char *buffer, off_t size, struct task *task)
+{
+    struct job *job = task->job;
+    const struct spec *spec = &job->spec;
+    const char *end = buffer + size;
+
+    VLOG_INFO("date first: %s", fn);
+    WITH_MUTEX(&job->stats_lock, job->total_bytes += size);
+
+    struct state *state = &task->state;
+    state_init(state, spec);
+
+    struct parse_ctx ctx = { .host = job->spec.host,
+                             .fn = fn,
+                             .ln = 1,
+                             .line_start = buffer };
+    for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
+        ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
+        if (!ctx.line_end) {
+            /* Don't bother with lines that lack a new-line. */
+            break;
+        }
+        while (ctx.line_end + 1 < end) {
+            const char *next = ctx.line_end + 1;
+            if (starts_with_date(ss_buffer(next, end - next))) {
+                break;
+            }
+
+            ctx.line_end = memchr(next, '\n', end - next);
+            if (!ctx.line_end) {
+                break;
+            }
+        }
+
+        ctx.p = ctx.line_start;
+
+        ovs_mutex_lock(&job->stats_lock);
+        unsigned long long int total_recs = job->total_recs++;
+        ovs_mutex_unlock(&job->stats_lock);
+        if (!(total_recs % 1024)) {
+            fatal_signal_run();
+            if (job_is_canceled(job)) {
+                break;
+            }
+        }
+
+        struct log_record rec;
+        memset(&rec, 0, sizeof rec);
+        rec.line.s = CONST_CAST(char *, ctx.line_start);
+        rec.line.length = ctx.line_end - ctx.line_start;
+
+        parse_date_first_record(&ctx, &rec);
+
+        if (!include_record(&rec, spec, state)) {
+            state_add(state, &rec, spec);
+        }
+    }
+
+    if (spec->show != SHOW_TOP) {
+        for (size_t i = 0; i < state->n; i++) {
+            log_record_copy(&state->reservoir[i], &state->reservoir[i]);
+        }
+    } else {
+        for (int i = 0; i < TK_L; i++) {
+            for (int j = 0; j < TK_B; j++) {
+                struct log_record *rec = state->tk[i][j].rec;
+                if (rec) {
+                    log_record_copy(rec, rec);
+                }
+            }
+        }
+    }
+    state_uninit(state);
+}
+
+static void
+parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
+{
+    if (size >= 2 && buffer[0] == '<' && c_isdigit(buffer[1])) {
+        parse_rfc5424_file(fn, buffer, size, task);
+    } else if (starts_with_date(ss_buffer(buffer, size))) {
+        parse_date_first_file(fn, buffer, size, task);
+    } else {
+        VLOG_DBG("%s: unknown log file format", fn);
+        return;
+    }
 }
 
 static void
@@ -1394,8 +1614,9 @@ read_gzipped(const char *name,
         return;
     }
 
-    if (sample[0] != '<' || !c_isdigit(sample[1])) {
-        VLOG_DBG("%s: not a gzipped RFC 5424 log file", name);
+    if ((sample[0] != '<' || !c_isdigit(sample[1]))
+        && !starts_with_date(ss_buffer(sample, sizeof sample))) {
+        VLOG_DBG("%s: not a (gzipped) log file", name);
         inflateEnd(&z);
         return;
     }

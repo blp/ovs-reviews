@@ -1,0 +1,115 @@
+WORKING
+-------
+
+RFC 5424
+
+Java:
+2018-12-11T18:18:05.359Z  INFO http-nio-127.0.0.1-6440-exec-2 AuditingServiceImpl - - [nsx@6876 audit="true" comp="nsx-manager" reqId="63865aba-97de-4598-9099-be490c73be1f" subcomp="policy"] UserName="admin", ModuleName="AAA", Operation="GetUserFeaturePermissions", Operation status="success"
+
+syslog almost RFC-5424 (missing field replaced by " "):
+<182>1 2018-12-13T00:39:00.669Z nsx-manager NSX 24302  - type=COUNTER, name=com.vmware.nsx.rpc.NsxRpcProvider.created, count=1
+
+catalina:
+2018-12-08T00:03:03.794Z INFO com.vmware.nsx.management.rp.security.NsxTrustManager getAcceptedIssuers getAcceptedIssuers()
+
+
+
+TODO
+----
+
+corfu:
+2018-12-19T08:15:23.697Z | ESC[39mDEBUGESC[0;39m |          SharedServerThread-20 |            o.c.i.LogUnitServer | log write: global: 211639, streams: {6d260a60-08ea-3faf-a0b3-43f4fa45ae2a=211541, a2d97d18-0afc-3d77-bf7a-a06b568ed24a=211510}, backpointers: {}
+
+proton-tomcat-wrapper:
+INFO   | jvm 1    | 2018/12/13 00:38:26 | ESC[mESC[32m00:38:26.898 INFO  com.vmware.nsx.management.firewall.service.AbstractFirewallFilteringAndPaginationServiceImpl.() @ - FIREWALL [nsx@6876 comp="nsx-manager" subcomp="manager"] Number of Rules  with content that match filter before section AppliedTo and other business logic is applied0
+
+var/log/nsx-epct/nsx-epct-wrapper.log
+tanuki.log
+STATUS | wrapper  | 2018/11/24 10:51:50 | --> Wrapper Started as Daemon
+
+systemd journal
+
+metrics?
+
+webserver access_log, api_access.log
+2018-12-11T00:00:16.460Z 127.0.0.1 - - "GET /policy/api/v1/infra HTTP/1.1" 200 431
+2018-12-11T23:26:33.444Z api_access.80 INFO 127.0.0.1 - - [2018-12-11 23:26:33] 'POST /api/v1/node/services/http/virtual-ip?action=verify_owner' 200 215 "" "Java/1.8.0_181" 0.013698
+
+loginsight-agent/liagent_2018-12-11_01.log
+2018-12-11 18:28:30.462733 0x000003a93aa75740 <trace> AgentDaemon:113    | AgentDaemon start requested.
+2018-12-11 18:28:38.058996 0x000003a9382aa700 <warng> JournaldCollecto:60| Cannot find any section <journaldlog> in the configuration. The journaldlog collector will stay dormant.
+
+gc.log
+just ignore it
+
+/extra/home/blp/logs//nsx_manager_nsx_policy_manager_nsx_controller_d4d54d56-96a6-89da-8de7-e8fb9277718a_20181219_082127/desired_state_manager.json
+ignore
+
+var/log/nvpapi/api_server.log
+2018-11-24T10:51:02.818Z api_server INFO Descriptor factory instantiated
+
+sys.stats.2
+******************** Wed Dec 12 19:00:01 UTC 2018 ********************
+
+var/log/search/search-policy.log
+2018-12-19 03:32:59.809 UTC  INFO coordinationEventsProcessor-1 ExternalConfigurationManager - - [nsx@6876 comp="nsx-search" subcomp="search"] External configuration file path is /etc/search/conf/policy.properties
+
+var/log/support_bundle.log
+2018-12-05 20:58:02,318 4527 root INFO Processing new support bundle request
+
+kern.log has some lines like the below and others that are RFC 5424
+Dec  5 06:28:07 sc-a01-050-053 kernel: [   52.379146] grsec: mount of binfmt_misc to /proc/sys/fs/binfmt_misc by /bin/mount[mount:1232] uid/euid:0/0 gid/egid:0/0, parent /lib/systemd/systemd[systemd:1] uid/euid:0/0 gid/egid:0/0
+
+elasticsearch.log
+[2018-11-24T10:51:01,817][INFO ][o.e.n.Node               ] [nsx_node] initializing ...
+
+dmesg
+[1138068.670447] ll header: 00000000: ff ff ff ff ff ff 22 22 01 00 0a d3 08 00        ......""......
+
+
+dpkg.log.1
+2018-11-08 10:19:56 status config-files vmware-studio-provagent:all 3.0.0.4
+
+
+cloud-init.log
+2018-11-24 10:49:05,639 - util.py[DEBUG]: Cloud-init v. 18.3-9-g2e62cb8a-0ubuntu1~16.04.2 running 'init-local' at Sat, 24 Nov 2018 10:49:05 +0000. Up 3.44 seconds.
+
+audit.log
+type=CRED_DISP msg=audit(1544661972.832:3026561): pid=2837 uid=0 auid=4294967295 ses=4294967295 msg='op=PAM:setcred acct="root" exe="/usr/bin/sudo" hostname=? addr=? terminal=? res=success'
+
+elasticsearch_deprecation.log
+[2018-11-29T20:23:53,119][WARN ][o.e.d.i.m.MapperService  ] [_default_] mapping is deprecated since it is not useful anymore now that indexes cannot have more than one type
+
+scale_rpc_daemon.debug.log
+2018-11-29 20:28:51,858::INFO::MainThread::scale_rpc_daemon[ 234]::Starting RPC service
+
+elasticsearch_index_indexing_slowlog.log
+[2018-12-19T03:33:33,999][WARN ][index.indexing.slowlog.index] [nsx_node] [nsx_policy_clusternodeconfig/hZ1SMt6TTc2ogFN7CUnoJg] took[547.4ms], took_millis[547], type[ClusterNodeConfigModel], id[d4d54d56-96a6-89da-8de7-e8fb9277718a], routing[], source[{"external_id":"d4d54d56-96a6-89da-8de7-e8fb9277718a","manager_role":{"api_listen_addr":{"ip_address":"10.40.68.240","port":443,"certificate":"-----BEGIN CERTIFICATE-----\nMIIFATCCA2mgAwIBAgIEA10iszANBgkqhkiG9w0BAQsFADCBkDELMAkGA1UEBhMC\nVVMxCzAJBgNVBAgTAkNBMRIwEAYDVQQHEwlQYWxvIEFsdG8xFDASBgNVBAoTC1ZN\nd2FyZSBJbmMuMQwwCgYDVQQLEwNOU1gxPDA6BgNVBAMTM25zeG1hbmFnZXItMTEy\nNzQ5NDEtMS1hZ2dzdmMta3ZtLXBhLXByaXZhdGUtNjUtMjYtMzAeFw0xODEyMTkw\nMzI4MDlaFw0yODEwMjcwMzI4MDlaMIGQMQswCQYDVQQGEwJVUzELMAkGA1UECBMC\nQ0ExEjAQBgNVBAcTCVBhbG8gQWx0bzEUMBIGA1UEChMLVk13YXJlIEluYy4xDDAK\nBgNVBAsTA05TWDE8MDoGA1UEAxMzbnN4bWFuYWdlci0xMTI3NDk0MS0xLWFnZ3N2\nYy1rdm0tcGEtcHJpdmF0ZS02NS0yNi0zMIIBojANBgkqhkiG9w0BAQEFAAOCAY8A\nMIIBigKCAYEA34hXm/kZAxMaMDxuQmIMG6SkmE4S5NIq/Uw1kxx+eWxhT/fhlvje\nSDLY1qc1ri/sGDiHimTxFs0s5K0yfgBoGz4CDyw7ILBcRqiRU4bQPIQbUYww6JW5\nF2YBiyd7uXuOcPKFh40+IIvXT5EP99J/ZDZ2qN8Uwl8yAlYddrYAfiDi2qKrk/IK\nul5SiGbP2Ir9F+cR5mX812pJX+s2XMrLmI32j6C3WFW1VADOrCaC5K0o6Hn1PHe5\nkyYoPvvGJvVJJdQPF9Vgo9nGP9r+lFUkeksC]
+
+nsxcli.log
+2018-12-19T04:47:59.730Z 7344 cli INFO NSX CLI started (Manager, Policy, Controller) for user: admin
+
+boot.log
+[ESC[0;32m  OK  ESC[0m] Listening on Load/Save RF Kill Switch Status /dev/rfkill Watch.
+
+alternatives.log
+update-alternatives 2018-12-13 19:32:59: run with --install /usr/bin/write write /usr/bin/bsd-write 100 --slave /usr/share/man/man1/write.1.gz write.1.gz /usr/share/man/man1/bsd-write.1.gz
+
+aide.log
+AIDE 0.16a2-19-g16ed855 initialized AIDE database at /var/lib/aide/aide.db.new
+
+vmware-vmsvc.log
+[Dec 05 06:28:08.522] [ message] [vmtoolsd] Unloading plugin 'vmbackup'.
+
+var/log/scale/daemon.debug.log
+var/log/scale/daemon.info.log
+2018-11-29 20:29:45,141::INFO::MainThread::daemon[ 859]::starting beekeeper
+2018-11-29 20:29:45,141::INFO::MainThread::daemon[ 859]::starting beekeeper
+
+var/log/proton/nsx-common-dashboard.log
+2018-12-19 05:10:25,399 ERROR [coordinationEventsProcessor-1] Common Dashboard Library 186 - - Error while getting thumbprint of default DS:https://127.0.0.1/. IOException in getThumbPrint method of HTTPSClient, throwing InvalidArg exception
+
+/var/log/apt/term.log
+Log started: 2018-12-13  19:30:39
+Log ended: 2018-12-13  19:30:40
+

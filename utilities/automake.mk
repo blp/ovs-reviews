@@ -124,6 +124,7 @@ man_MANS += \
 
 utilities_hv_SOURCES = utilities/hv.c
 utilities_hv_LDADD = lib/libopenvswitch.la -lz -lncurses
+EXTRA_DIST += utilities/log-sample
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c
 utilities_ovs_appctl_LDADD = lib/libopenvswitch.la
