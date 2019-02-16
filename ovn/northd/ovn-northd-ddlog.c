@@ -49,25 +49,487 @@
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
-static unixctl_cb_func ovn_northd_exit;
+static unixctl_cb_func northd_exit;
 
-struct northd_context {
-    struct ovsdb_idl *ovnsb_idl;
-    struct ovsdb_idl_txn *ovnsb_txn;
-};
 
 static const char *ovnnb_db;
 static const char *ovnsb_db;
 static const char *unixctl_path;
 
 
+/* Connection state machine.
+ *
+ * When a JSON-RPC session connects, sends a "monitor" request for
+ * the Database table in the _Server database and transitions to the
+ * S_SERVER_MONITOR_COND_REQUESTED state.  If the session drops and
+ * reconnects, or if the IDL receives a "monitor_canceled" notification for a
+ * table it is monitoring, the IDL starts over again in the same way. */
+#define STATES                                                          \
+    /* Waits for "get_schema" reply, then sends "monitor"               \
+     * request whose details are informed by the schema, and            \
+     * transitions to S_DATA_MONITOR_REQUESTED. */                      \
+    STATE(S_DATA_SCHEMA_REQUESTED)                                      \
+                                                                        \
+    /* Waits for "monitor" reply.  If successful, replaces the IDL      \
+     * contents by the data carried in the reply and transitions to     \
+     * S_MONITORING.  On failure, transitions to S_ERROR. */            \
+    STATE(S_DATA_MONITOR_REQUESTED)                                     \
+                                                                        \
+    /* State that processes "update" notifications for the database. */ \
+    STATE(S_MONITORING)                                                 \
+                                                                        \
+    /* Terminal error state that indicates that nothing useful can be   \
+     * done, for example because the database server doesn't actually   \
+     * have the desired database.  We maintain the session with the     \
+     * database server anyway.  If it starts serving the database       \
+     * that we want, or if someone fixes and restarts the database,     \
+     * then it will kill the session and we will automatically          \
+     * reconnect and try again. */                                      \
+    STATE(S_ERROR)                                                      \
+                                                                        \
+    /* Terminal state that indicates we connected to a useless server   \
+     * in a cluster, e.g. one that is partitioned from the rest of      \
+     * the cluster. We're waiting to retry. */                          \
+    STATE(S_RETRY)
+
+enum northd_state {
+#define STATE(NAME) NAME,
+    STATES
+#undef STATE
+};
+
+static const char *
+northd_state_to_string(enum northd_state state)
+{
+    switch (state) {
+#define STATE(NAME) case NAME: return #NAME;
+        STATES
+#undef STATE
+    default: return "<unknown>";
+    }
+}
+
+enum northd_monitoring {
+    NORTHD_NOT_MONITORING,     /* Database is not being monitored. */
+    NORTHD_MONITORING,         /* Database has "monitor" outstanding. */
+    NORTHD_MONITORING_COND,    /* Database has "monitor_cond" outstanding. */
+};
+
+struct northd_db {
+    struct northd_ctx *ctx;
+
+    char *name;
+    struct json *monitor_id;
+    struct json *schema;
+    enum northd_monitoring monitoring;
+};
+
+struct northd_ctx {
+    //struct northd_db server;
+    struct northd_db data;
+
+    ddlog_prog ddlog;
+    struct json *ddlog_ops;          /* Outstanding ops for other side. */
+
+    /* Session state.
+     *
+     *'state_seqno' is a snapshot of the session's sequence number as returned
+     * jsonrpc_session_get_seqno(session), so if it differs from the value that
+     * function currently returns then the session has reconnected and the
+     * state machine must restart.  */
+    struct jsonrpc_session *session; /* Connection to the server. */
+    enum northd_state state;         /* Current session state. */
+    unsigned int state_seqno;        /* See above. */
+    struct json *request_id;         /* JSON ID for request awaiting reply. */
+};
+
+static struct northd_ctx *
+northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog)
+{
+    struct northd_ctx *ctx;
+
+    ctx = xzalloc(sizeof *ctx);
+    ctx->session = jsonrpc_session_open(server, true);
+    ctx->state_seqno = UINT_MAX;
+    ctx->request_id = NULL;
+
+    ctx->data.ctx = ctx;
+    ctx->data.name = xstrdup(database);
+    ctx->data.monitor_id = json_array_create_2(json_string_create("monid"),
+                                               json_string_create(database));
+
+    ctx->ddlog = ddlog;
+
+    return ctx;
+}
+
 static void
-ddlog_table_update(struct ds *ds, ddlog_prog ddlog, const char *table)
+northd_db_destroy(struct northd_db *db)
+{
+    json_destroy(db->monitor_id);
+    json_destroy(db->schema);
+}
+
+static void
+northd_ctx_destroy(struct northd_ctx *ctx)
+{
+    if (ctx) {
+        jsonrpc_session_close(ctx->session);
+
+        northd_db_destroy(&ctx->data);
+        json_destroy(ctx->request_id);
+        free(ctx);
+    }
+}
+
+/* Forces 'ctx' to drop its connection to the database and reconnect. */
+static void
+northd_force_reconnect(struct northd_ctx *ctx)
+{
+    if (ctx->session) {
+        jsonrpc_session_force_reconnect(ctx->session);
+    }
+}
+
+static void northd_transition_at(struct northd_ctx *, enum northd_state,
+                                 const char *where);
+#define northd_transition(CTX, STATE) \
+    northd_transition_at(CTX, STATE, OVS_SOURCE_LOCATOR)
+
+static void
+northd_transition_at(struct northd_ctx *ctx, enum northd_state new_state,
+                     const char *where)
+{
+    VLOG_DBG("%s: %s -> %s at %s",
+             ctx->session ? jsonrpc_session_get_name(ctx->session) : "void",
+             northd_state_to_string(ctx->state),
+             northd_state_to_string(new_state),
+             where);
+    ctx->state = new_state;
+}
+
+static void northd_retry_at(struct northd_ctx *, const char *where);
+#define northd_retry(CTX) northd_retry_at(CTX, OVS_SOURCE_LOCATOR)
+
+static void
+northd_retry_at(struct northd_ctx *ctx, const char *where)
+{
+    if (ctx->session && jsonrpc_session_get_n_remotes(ctx->session) > 1) {
+        northd_force_reconnect(ctx);
+        northd_transition_at(ctx, S_RETRY, where);
+    } else {
+        northd_transition_at(ctx, S_ERROR, where);
+    }
+}
+
+static void
+northd_send_request(struct northd_ctx *ctx, struct jsonrpc_msg *request)
+{
+    json_destroy(ctx->request_id);
+    ctx->request_id = json_clone(request->id);
+    if (ctx->session) {
+        jsonrpc_session_send(ctx->session, request);
+    }
+}
+
+static void
+northd_send_schema_request(struct northd_ctx *ctx, struct northd_db *db)
+{
+    northd_send_request(ctx, jsonrpc_create_request(
+                             "get_schema",
+                             json_array_create_1(json_string_create(
+                                                     db->name)),
+                             NULL));
+}
+
+static void
+northd_send_transact(struct northd_ctx *ctx, struct json *ddlog_ops)
+{
+    /* xxx Need to store txn id */
+    northd_send_request(ctx, jsonrpc_create_request(
+                             "transact", ddlog_ops,
+                             NULL));
+}
+
+static struct json *nb_ddlog_handle_update(struct northd_ctx *,
+                                           const struct json *);
+static struct json *sb_ddlog_handle_update(struct northd_ctx *,
+                                           const struct json *);
+
+static void
+northd_db_handle_update(struct northd_db *db,
+                        const struct json *table_updates)
+{
+    if (db->ctx->ddlog_ops) {
+        json_destroy(db->ctx->ddlog_ops);
+        db->ctx->ddlog_ops = NULL;
+    }
+
+    /* xxx This string comparison isn't very efficient. */
+    if (!strcmp(db->name, "OVN_Northbound")) {
+        db->ctx->ddlog_ops = nb_ddlog_handle_update(db->ctx, table_updates);
+    } else if (!strcmp(db->name, "OVN_Southbound")) {
+        db->ctx->ddlog_ops = sb_ddlog_handle_update(db->ctx, table_updates);
+    } else {
+        VLOG_WARN("xxx Unknown db");
+    }
+}
+
+static void
+northd_send_monitor_request(struct northd_ctx *ctx, struct northd_db *db)
+{
+    struct ovsdb_schema *schema;
+    struct ovsdb_error *error;
+
+    if (db->schema) {
+        VLOG_WARN("xxx schema: %s", json_to_string(db->schema, 0));
+    } else {
+        VLOG_WARN("xxx no schema");
+    }
+    error = ovsdb_schema_from_json(db->schema, &schema);
+    if (error) {
+        /* xxx Handle this error better.  Probably restart FSM.
+         * xxx Parsing should probably happen when schema fetched. */
+        VLOG_WARN("xxx couldn't parse schema: %s",
+                  ovsdb_error_to_string(error));
+        return;
+    }
+
+    struct json *monitor_requests = json_object_create();
+
+    /* xxx This should be smarter about ignoring not needed ones.
+     * xxx There's a lot more logic for this in
+     * xxx ovsdb_idl_send_monitor_request(). */
+    size_t n = shash_count(&schema->tables);
+    const struct shash_node **nodes = shash_sort(&schema->tables);
+
+    for (int i = 0; i < n; i++) {
+        struct json *monitor_request_array = json_array_create_empty();
+        json_array_add(monitor_request_array, json_object_create());
+
+        struct ovsdb_table_schema *table = nodes[i]->data;
+        json_object_put(monitor_requests, table->name, monitor_request_array);
+    }
+    free(nodes);
+
+    ovsdb_schema_destroy(schema);
+
+    // db->cond_changed = false;    xxx Needed?
+
+    northd_send_request(
+        ctx,
+        jsonrpc_create_request(
+            "monitor",
+            json_array_create_3(json_string_create(db->name),
+                                json_clone(db->monitor_id), monitor_requests),
+            NULL));
+}
+
+static void
+northd_restart_fsm(struct northd_ctx *ctx)
+{
+    northd_send_schema_request(ctx, &ctx->data);
+    ctx->state = S_DATA_SCHEMA_REQUESTED;
+}
+
+static void
+northd_process_response(struct northd_ctx *ctx, struct jsonrpc_msg *msg)
+{
+    bool ok = msg->type == JSONRPC_REPLY;
+    if (!ok) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+        char *s = jsonrpc_msg_to_string(msg);
+        VLOG_INFO_RL(&rl, "%s: received unexpected %s response in "
+                     "%s state: %s", jsonrpc_session_get_name(ctx->session),
+                     jsonrpc_msg_type_to_string(msg->type),
+                     northd_state_to_string(ctx->state),
+                     s);
+        free(s);
+        northd_retry(ctx);
+        return;
+    }
+
+    switch (ctx->state) {
+    case S_DATA_SCHEMA_REQUESTED:
+        json_destroy(ctx->data.schema);
+        ctx->data.schema = json_clone(msg->result);
+        northd_send_monitor_request(ctx, &ctx->data);
+        northd_transition(ctx, S_DATA_MONITOR_REQUESTED);
+        break;
+
+    case S_DATA_MONITOR_REQUESTED:
+        ctx->data.monitoring = NORTHD_MONITORING;
+        northd_transition(ctx, S_MONITORING);
+        northd_db_handle_update(&ctx->data, msg->result);
+        break;
+
+    case S_MONITORING:
+        /* We don't normally have a request outstanding in this state.  If we
+         * do, it's a "monitor_cond_change", which means that the conditional
+         * monitor clauses were updated.
+         *
+         * If further condition changes were pending, send them now. */
+#if 0
+        /* xxx Handle this. */
+        northd_send_cond_change(ctx);
+        ctx->data.cond_seqno++;
+#endif
+        break;
+
+    case S_ERROR:
+    case S_RETRY:
+        /* Nothing to do in this state. */
+        break;
+
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
+static bool
+northd_db_handle_update_rpc(struct northd_db *db,
+                            const struct jsonrpc_msg *msg)
+{
+    if (msg->type == JSONRPC_NOTIFY) {
+        if (!strcmp(msg->method, "update")
+            && msg->params->type == JSON_ARRAY
+            && msg->params->array.n == 2
+            && json_equal(msg->params->array.elems[0], db->monitor_id)) {
+            northd_db_handle_update(db, msg->params->array.elems[1]);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+northd_process_msg(struct northd_ctx *ctx, struct jsonrpc_msg *msg)
+{
+    bool is_response = (msg->type == JSONRPC_REPLY ||
+                        msg->type == JSONRPC_ERROR);
+
+    /* Process a reply to an outstanding request. */
+    if (is_response
+        && ctx->request_id && json_equal(ctx->request_id, msg->id)) {
+        json_destroy(ctx->request_id);
+        ctx->request_id = NULL;
+        northd_process_response(ctx, msg);
+        return;
+    }
+
+    /* Process database contents updates. */
+    if (northd_db_handle_update_rpc(&ctx->data, msg)) {
+        return;
+    }
+
+#if 0
+    /* xxx Locking. */
+    /* Process "lock" replies and related notifications. */
+    if (northd_db_process_lock_replies(&ctx->data, msg)) {
+        return;
+    }
+#endif
+
+#if 0
+    /* Process response to a database transaction we submitted. */
+    if (is_response && northd_db_txn_process_reply(&ctx->data, msg)) {
+        return;
+    }
+#endif
+
+    /* Unknown message.  Log at a low level because this can happen if
+     * northd_txn_destroy() is called to destroy a transaction before
+     * we receive the reply.
+     *
+     * (We could sort those out from other kinds of unknown messages by
+     * using distinctive IDs for transactions, if it seems valuable to
+     * do so, and then it would be possible to use different log
+     * levels. XXX?) */
+    char *s = jsonrpc_msg_to_string(msg);
+    VLOG_DBG("%s: received unexpected %s message: %s",
+             jsonrpc_session_get_name(ctx->session),
+             jsonrpc_msg_type_to_string(msg->type), s);
+    free(s);
+}
+
+/* Processes a batch of messages from the database server on 'ctx'. */
+static void
+northd_run(struct northd_ctx *ctx, struct json *ddlog_ops)
+{
+    /* xxx Ick, messy */
+    ctx->ddlog_ops = NULL;
+
+    if (!ctx->session) {
+#if 0
+        northd_txn_abort_all(ctx);
+#endif
+        VLOG_WARN("xxx no session");
+        return;
+    }
+
+#if 0
+    ovs_assert(!ctx->data.txn);
+#endif
+
+    if (ctx->state == S_MONITORING && ddlog_ops) {
+        northd_send_transact(ctx, ddlog_ops);
+    }
+
+    jsonrpc_session_run(ctx->session);
+    for (int i = 0; jsonrpc_session_is_connected(ctx->session) && i < 50; i++) {
+        struct jsonrpc_msg *msg;
+        unsigned int seqno;
+
+        seqno = jsonrpc_session_get_seqno(ctx->session);
+        if (ctx->state_seqno != seqno) {
+            ctx->state_seqno = seqno;
+#if 0
+            northd_txn_abort_all(ctx);
+#endif
+            northd_restart_fsm(ctx);
+
+#if 0
+            /* xxx Locking */
+            if (ctx->data.lock_name) {
+                jsonrpc_session_send(
+                    ctx->session,
+                    northd_db_compose_lock_request(&ctx->data));
+            }
+#endif
+        }
+
+        msg = jsonrpc_session_recv(ctx->session);
+        if (!msg) {
+            break;
+        }
+        northd_process_msg(ctx, msg);
+        jsonrpc_msg_destroy(msg);
+    }
+    /* xxx Post-processing? */
+}
+
+/* Arranges for poll_block() to wake up when northd_run() has something to
+ * do or when activity occurs on a transaction on 'ctx'. */
+static void
+northd_wait(struct northd_ctx *ctx)
+{
+    if (!ctx->session) {
+        return;
+    }
+    jsonrpc_session_wait(ctx->session);
+    jsonrpc_session_recv_wait(ctx->session);
+}
+
+/* ddlog-specific actions. */
+
+static void
+ddlog_table_update(struct ds *ds, ddlog_prog ddlog,
+                   const char *db, const char *table)
 {
     int error;
     char *updates;
 
-    error = ddlog_dump_ovsdb_delta(ddlog, "OVN_Southbound", table, &updates);
+    error = ddlog_dump_ovsdb_delta(ddlog, db, table, &updates);
     if (error) {
         VLOG_WARN("xxx delta (%s) error: %d", table, error);
         return;
@@ -83,29 +545,28 @@ ddlog_table_update(struct ds *ds, ddlog_prog ddlog, const char *table)
     ddlog_free_json(updates);
 }
 
-
 static struct json *
-nb_ddlog_run(ddlog_prog ddlog, struct json *updates)
+nb_ddlog_handle_update(struct northd_ctx *ctx,
+                       const struct json *table_updates)
 {
-    if (!updates) {
+    if (!table_updates) {
         return NULL;
     }
 
-    if (ddlog_transaction_start(ddlog)) {
+    if (ddlog_transaction_start(ctx->ddlog)) {
         VLOG_ERR("xxx Couldn't start transaction");
         return NULL;
     }
 
-    char *updates_s = json_to_string(updates, 0);
-    VLOG_WARN("xxx update: %s", updates_s);
-    if (ddlog_apply_ovsdb_updates(ddlog, "OVN_Northbound.", updates_s)) {
+    char *updates_s = json_to_string(table_updates, 0);
+    if (ddlog_apply_ovsdb_updates(ctx->ddlog, "OVN_Northbound.", updates_s)) {
         VLOG_ERR("xxx Couldn't add update");
         free(updates_s);
         goto error;
     }
     free(updates_s);
 
-    if (ddlog_transaction_commit(ddlog)) {
+    if (ddlog_transaction_commit(ctx->ddlog)) {
         VLOG_ERR("xxx Couldn't commit transaction");
         goto error;
     }
@@ -113,26 +574,84 @@ nb_ddlog_run(ddlog_prog ddlog, struct json *updates)
     struct ds ds = DS_EMPTY_INITIALIZER;
     ds_put_cstr(&ds, "[\"OVN_Southbound\",");
 
-    //ddlog_table_update(&ds, ddlog, "SB_Global");
-    ddlog_table_update(&ds, ddlog, "Datapath_Binding");
-    ddlog_table_update(&ds, ddlog, "Port_Binding");
-    ddlog_table_update(&ds, ddlog, "Logical_Flow");
-    ddlog_table_update(&ds, ddlog, "Meter");
-    ddlog_table_update(&ds, ddlog, "Meter_Band");
+    //ddlog_table_update(&ds, ctx->ddlog, "SB_Global");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Datapath_Binding");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Port_Binding");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Logical_Flow");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Meter");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Meter_Band");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Multicast_Group");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Gateway_Chassis");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Port_Group");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "MAC_Binding");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "DHCP_Options");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "DHCPv6_Options");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Address_Set");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "DNS");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Role");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Permission");
+
 
     ds_chomp(&ds, ',');
     ds_put_cstr(&ds, "]");
 
     /* xxx Return null if there were no updates. */
 
-    VLOG_WARN("xxx pre-ops: %s", ds_cstr(&ds));
     struct json *ops = json_from_string(ds_steal_cstr(&ds));
     VLOG_WARN("xxx postops: %s", json_to_string(ops, 0));
 
     return ops;
 
 error:
-    ddlog_transaction_rollback(ddlog);
+    ddlog_transaction_rollback(ctx->ddlog);
+    return NULL;
+}
+
+
+static struct json *
+sb_ddlog_handle_update(struct northd_ctx *ctx,
+                       const struct json *table_updates)
+{
+    if (!table_updates) {
+        return NULL;
+    }
+
+    if (ddlog_transaction_start(ctx->ddlog)) {
+        VLOG_ERR("xxx Couldn't start transaction");
+        return NULL;
+    }
+
+    char *updates_s = json_to_string(table_updates, 0);
+    if (ddlog_apply_ovsdb_updates(ctx->ddlog, "OVN_Southbound.", updates_s)) {
+        VLOG_ERR("xxx Couldn't add update");
+        free(updates_s);
+        goto error;
+    }
+    free(updates_s);
+
+    if (ddlog_transaction_commit(ctx->ddlog)) {
+        VLOG_ERR("xxx Couldn't commit transaction");
+        goto error;
+    }
+
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&ds, "[\"OVN_Northbound\",");
+
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Northbound",
+                       "Logical_Switch_Port");
+
+    ds_chomp(&ds, ',');
+    ds_put_cstr(&ds, "]");
+
+    /* xxx Return null if there were no updates. */
+
+    struct json *ops = json_from_string(ds_steal_cstr(&ds));
+    VLOG_WARN("xxx postops: %s", json_to_string(ops, JSSF_PRETTY));
+
+    return ops;
+
+error:
+    ddlog_transaction_rollback(ctx->ddlog);
     return NULL;
 }
 
@@ -242,176 +761,6 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
     free(short_options);
 }
 
-static struct jsonrpc *
-open_jsonrpc(const char *server)
-{
-    struct stream *stream;
-    int error;
-
-    error = stream_open_block(jsonrpc_stream_open(server, &stream,
-                              DSCP_DEFAULT), -1, &stream);
-    if (error == EAFNOSUPPORT) {
-        struct pstream *pstream;
-
-        error = jsonrpc_pstream_open(server, &pstream, DSCP_DEFAULT);
-        if (error) {
-            ovs_fatal(error, "failed to connect or listen to \"%s\"", server);
-        }
-
-        VLOG_INFO("%s: waiting for connection...", server);
-        error = pstream_accept_block(pstream, &stream);
-        if (error) {
-            ovs_fatal(error, "failed to accept connection on \"%s\"", server);
-        }
-
-        pstream_close(pstream);
-    } else if (error) {
-        ovs_fatal(error, "failed to connect to \"%s\"", server);
-    }
-
-    return jsonrpc_open(stream);
-}
-
-static void
-check_txn(int error, struct jsonrpc_msg **reply_)
-{
-    struct jsonrpc_msg *reply = *reply_;
-
-    if (error) {
-        VLOG_WARN("xxx transaction failed");
-    }
-
-    if (reply->error) {
-        VLOG_WARN("xxx transaction returned error: %s",
-                  json_to_string(reply->error, 0));
-    }
-}
-
-/* xxx Stolen from ovsdb-client.  See if it should be refactored. */
-static void
-check_ovsdb_error(struct ovsdb_error *error)
-{
-    if (error) {
-        ovs_fatal(0, "%s", ovsdb_error_to_string(error));
-    }
-}
-
-static struct ovsdb_schema *
-fetch_schema(struct jsonrpc *rpc, const char *database)
-{
-    struct jsonrpc_msg *request, *reply;
-    struct ovsdb_schema *schema;
-
-    request = jsonrpc_create_request("get_schema",
-                                     json_array_create_1(
-                                         json_string_create(database)),
-                                     NULL);
-    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
-    check_ovsdb_error(ovsdb_schema_from_json(reply->result, &schema));
-    jsonrpc_msg_destroy(reply);
-
-    return schema;
-}
-
-static struct jsonrpc *
-open_rpc(const char *db_name, const char *database, struct json **request_id) {
-    struct jsonrpc *rpc = open_jsonrpc(db_name);
-
-    struct ovsdb_schema *schema = fetch_schema(rpc, database);
-    struct json *monitor_requests = json_object_create();
-
-    /* xxx This should be smarter about ignoring not needed ones */
-    size_t n = shash_count(&schema->tables);
-    const struct shash_node **nodes = shash_sort(&schema->tables);
-
-    for (int i = 0; i < n; i++) {
-        struct json *monitor_request_array = json_array_create_empty();
-        json_array_add(monitor_request_array, json_object_create());
-
-        struct ovsdb_table_schema *table = nodes[i]->data;
-        json_object_put(monitor_requests, table->name, monitor_request_array);
-    }
-    free(nodes);
-
-    /* xxx Should ovs_fatal be used? */
-    /* xxx Should set "db_change_aware" and handle the implications. */
-
-    struct json *monitor = json_array_create_3(json_string_create(database),
-                                               json_string_create(database),
-                                               monitor_requests);
-
-    struct jsonrpc_msg *request;
-    request = jsonrpc_create_request("monitor", monitor, NULL);
-    *request_id = json_clone(request->id);
-    jsonrpc_send(rpc, request);
-
-    return rpc;
-}
-
-static struct json *
-do_transact(struct jsonrpc *rpc, struct json *transaction)
-{
-    struct jsonrpc_msg *request, *reply;
-
-    /* xxx Make db_change aware */
-#if 0
-    if (db_change_aware == 1) {
-        send_db_change_aware(rpc);
-    }
-#endif
-
-    request = jsonrpc_create_request("transact", transaction, NULL);
-    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
-    struct json *result = json_clone(reply->result);
-    jsonrpc_msg_destroy(reply);
-    VLOG_WARN("xxx transact: %s", json_to_string(result, 0));
-
-    return result;
-}
-
-static struct json *
-handle_monitor(struct jsonrpc *rpc, struct json *request_id)
-{
-    struct jsonrpc_msg *msg;
-    int error;
-    struct json *updates = NULL;
-
-    error = jsonrpc_recv(rpc, &msg);
-    if (error == EAGAIN) {
-        return NULL;
-    } else if (error) {
-        /* xxx Shouldn't be fatal */
-        ovs_fatal(error, "receive failed");
-    }
-
-    if (msg->type == JSONRPC_REQUEST && !strcmp(msg->method, "echo")) {
-        jsonrpc_send(rpc, jsonrpc_create_reply(json_clone(msg->params),
-                                               msg->id));
-    } else if (msg->type == JSONRPC_REPLY
-               && json_equal(msg->id, request_id)) {
-        updates = json_clone(msg->result);
-    } else if (msg->type == JSONRPC_NOTIFY
-               && !strcmp(msg->method, "update")) {
-        struct json *params = msg->params;
-        if (params->type == JSON_ARRAY
-            && params->array.n == 2
-            && params->array.elems[0]->type == JSON_STRING) {
-            updates = json_clone(params->array.elems[1]);
-        }
-    } else if (msg->type == JSONRPC_NOTIFY
-               && !strcmp(msg->method, "monitor_canceled")) {
-        /* xxx Not the correct behavior. */
-        VLOG_WARN("xxx database was removed");
-    } else {
-        /* xxx Not the correct behavior. */
-        VLOG_WARN("bad response: type:%d, error:%s", msg->type,
-                  json_to_string(msg->error,0));
-    }
-
-    jsonrpc_msg_destroy(msg);
-    return updates;
-}
-
 int
 main(int argc, char *argv[])
 {
@@ -432,15 +781,9 @@ main(int argc, char *argv[])
     if (retval) {
         exit(EXIT_FAILURE);
     }
-    unixctl_command_register("exit", "", 0, 0, ovn_northd_exit, &exiting);
+    unixctl_command_register("exit", "", 0, 0, northd_exit, &exiting);
 
     daemonize_complete();
-
-    struct json *nb_id;
-    struct jsonrpc *nb_rpc = open_rpc(ovnnb_db, "OVN_Northbound", &nb_id);
-
-    struct json *sb_id;
-    struct jsonrpc *sb_rpc = open_rpc(ovnsb_db, "OVN_Southbound", &sb_id);
 
 #if 0
     /* We want to detect only selected changes to the ovn-sb db. */
@@ -460,53 +803,22 @@ main(int argc, char *argv[])
         VLOG_EMER("xxx Couldn't create ddlog instance");
     }
 
+    struct northd_ctx *nb_ctx = northd_ctx_create(ovnnb_db, "OVN_Northbound",
+                                                  ddlog);
+    struct northd_ctx *sb_ctx = northd_ctx_create(ovnsb_db, "OVN_Southbound",
+                                                  ddlog);
+
     /* Main loop. */
     exiting = false;
     while (!exiting) {
-#if 0
-        struct northd_context ctx = {
-            .ovnsb_idl = ovnsb_idl_loop.idl,
-            .ovnsb_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
-        };
+        /* xxx Set up lock like in ovn-northd-c to ensure only a single
+         * xxx ovn-northd instance is running. */
 
-        if (!had_lock && ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
-            VLOG_INFO("ovn-northd lock acquired. "
-                      "This ovn-northd instance is now active.");
-            had_lock = true;
-        } else if (had_lock && !ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
-            VLOG_INFO("ovn-northd lock lost. "
-                      "This ovn-northd instance is now on standby.");
-            had_lock = false;
-        }
+        northd_run(nb_ctx, sb_ctx->ddlog_ops);
+        northd_wait(nb_ctx);
 
-        if (ovsdb_idl_has_lock(ovnsb_idl_loop.idl)) {
-            ovn_northd_ddlog_run(&ctx, ddlog);
-        }
-#endif
-
-        struct json *updates, *ops;
-
-        updates = handle_monitor(nb_rpc, nb_id);
-        ops = nb_ddlog_run(ddlog, updates);
-        json_destroy(updates);
-
-        /* Apply updates to the Southbound. */
-        if (ops) {
-            do_transact(sb_rpc, ops);
-            json_destroy(ops);
-        }
-
-#if 0
-        updates = handle_monitor(sb_rpc, sb_id);
-        ops = sb_ddlog_run(ddlog, updates);
-        json_destroy(updates);
-
-        /* Apply updates to the Northbound. */
-        if (ops) {
-            do_transact(nb_rpc, ops);
-            json_destroy(ops);
-        }
-#endif
+        northd_run(sb_ctx, nb_ctx->ddlog_ops);
+        northd_wait(sb_ctx);
 
         unixctl_server_run(unixctl);
         unixctl_server_wait(unixctl);
@@ -514,32 +826,26 @@ main(int argc, char *argv[])
             poll_immediate_wake();
         }
 
-        jsonrpc_run(nb_rpc);
-        jsonrpc_wait(nb_rpc);
-        jsonrpc_recv_wait(nb_rpc);
-
         poll_block();
         if (should_service_stop()) {
             exiting = true;
         }
     }
 
-    jsonrpc_close(nb_rpc);
+    northd_ctx_destroy(nb_ctx);
+    northd_ctx_destroy(sb_ctx);
 
     ddlog_stop(ddlog);
 
     unixctl_server_destroy(unixctl);
-#if 0
-    ovsdb_idl_loop_destroy(&ovnsb_idl_loop);
-#endif
     service_stop();
 
     exit(res);
 }
 
 static void
-ovn_northd_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                const char *argv[] OVS_UNUSED, void *exiting_)
+northd_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
+            const char *argv[] OVS_UNUSED, void *exiting_)
 {
     bool *exiting = exiting_;
     *exiting = true;
