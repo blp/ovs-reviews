@@ -12,13 +12,15 @@ syslog almost RFC-5424 (missing field replaced by " "):
 catalina:
 2018-12-08T00:03:03.794Z INFO com.vmware.nsx.management.rp.security.NsxTrustManager getAcceptedIssuers getAcceptedIssuers()
 
+corfu:
+2018-12-19T08:15:23.697Z | ESC[39mDEBUGESC[0;39m |          SharedServerThread-20 |            o.c.i.LogUnitServer | log write: global: 211639, streams: {6d260a60-08ea-3faf-a0b3-43f4fa45ae2a=211541, a2d97d18-0afc-3d77-bf7a-a06b568ed24a=211510}, backpointers: {}
+
+
+
 
 
 TODO
 ----
-
-corfu:
-2018-12-19T08:15:23.697Z | ESC[39mDEBUGESC[0;39m |          SharedServerThread-20 |            o.c.i.LogUnitServer | log write: global: 211639, streams: {6d260a60-08ea-3faf-a0b3-43f4fa45ae2a=211541, a2d97d18-0afc-3d77-bf7a-a06b568ed24a=211510}, backpointers: {}
 
 proton-tomcat-wrapper:
 INFO   | jvm 1    | 2018/12/13 00:38:26 | ESC[mESC[32m00:38:26.898 INFO  com.vmware.nsx.management.firewall.service.AbstractFirewallFilteringAndPaginationServiceImpl.() @ - FIREWALL [nsx@6876 comp="nsx-manager" subcomp="manager"] Number of Rules  with content that match filter before section AppliedTo and other business logic is applied0

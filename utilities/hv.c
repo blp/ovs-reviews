@@ -356,6 +356,20 @@ ss_find_case(struct substring haystack, struct substring needle)
     return -1;
 }
 
+static int OVS_UNUSED
+ss_rfind(struct substring haystack, struct substring needle)
+{
+    if (haystack.length < needle.length) {
+        return -1;
+    }
+    for (int i = haystack.length - needle.length + 1; i > 0; i--) {
+        if (!memcmp(&haystack.s[i], needle.s, needle.length)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static uint32_t
 ss_hash(struct substring substring, uint32_t basis)
 {
@@ -373,6 +387,15 @@ static char *
 ss_xstrdup(struct substring substring)
 {
     return xmemdup0(substring.s, substring.length);
+}
+
+static struct substring
+ss_rstrip(struct substring s)
+{
+    while (s.length > 0 && s.s[s.length - 1] == ' ') {
+        s.length--;
+    }
+    return s;
 }
 
 struct log_record {
@@ -496,11 +519,12 @@ c_isalpha(int c)
 }
 
 static bool
-get_header_token__(struct parse_ctx *ctx, struct substring *token)
+get_header_token__(struct parse_ctx *ctx, char delimiter,
+                   struct substring *token)
 {
     token->s = CONST_CAST(char *, ctx->p);
     token->length = 0;
-    while (token->s[token->length] != ' ') {
+    while (token->s[token->length] != delimiter) {
         if (token->s[token->length] == '\n') {
             warn(ctx, "unexpected end of message parsing header");
             return false;
@@ -515,7 +539,7 @@ get_header_token__(struct parse_ctx *ctx, struct substring *token)
 static bool
 get_header_token(struct parse_ctx *ctx, struct substring *token)
 {
-    return must_match_spaces(ctx) && get_header_token__(ctx, token);
+    return must_match_spaces(ctx) && get_header_token__(ctx, ' ', token);
 }
 
 static bool
@@ -1399,30 +1423,10 @@ parse_rfc5424_file(const char *fn, const char *buffer, off_t size, struct task *
     state_uninit(state);
 }
 
-/* Parses many log formats that start with an RFC 3339 timestamp, most notably
- * ones like this:
- *
- * 2018-12-11T18:18:05.359Z  INFO http-nio-127.0.0.1-6440-exec-2 AuditingServiceImpl - - [nsx@6876 audit="true" comp="nsx-manager" reqId="63865aba-97de-4598-9099-be490c73be1f" subcomp="policy"] UserName="admin", ModuleName="AAA", Operation="GetUserFeaturePermissions", Operation status="success"
- */
 static bool
-parse_date_first_record(struct parse_ctx *ctx, struct log_record *rec)
+parse_priority(struct parse_ctx *ctx, struct substring priority,
+               struct log_record *rec)
 {
-    rec->count = 1;
-
-    rec->src_host = ss_cstr(ctx->host);
-    rec->src_file = ss_cstr(ctx->fn);
-
-    struct substring priority;
-    if (!get_header_token__(ctx, &rec->timestamp)
-        || !get_header_token(ctx, &priority)) {
-        return false;
-    }
-
-    rec->when = parse_timestamp(rec->timestamp.s, rec->timestamp.length);
-    if (rec->when == -1) {
-        return false;
-    }
-
     if (ss_equals(priority, ss_cstr("FATAL"))) {
         rec->priority = PRI_EMERG;
     } else if (ss_equals(priority, ss_cstr("SEVERE"))) {
@@ -1440,40 +1444,152 @@ parse_date_first_record(struct parse_ctx *ctx, struct log_record *rec)
     } else if (ss_equals(priority, ss_cstr("DEBUG"))) {
         rec->priority = PRI_DEBUG;
     } else {
-        debug(ctx, "%.*s: unknown severity",
-              (int) priority.length, priority.s);
-    }
-
-    /* Distinguish a couple of formats based on the third token, which might
-     * be:
-     *
-     *   - A thread name.  Hard to pick these out.
-     *
-     *   - The full name of a Java class.  In the cases I've noticed, these
-     *     start with "com.", so let's just use that as a heuristic.  Example:
-     *     2018-12-08T14:12:54.534Z INFO org.apache.coyote.http11.Http11Processor service Error parsing HTTP request header
-     */
-    struct substring token;
-    if (!get_header_token(ctx, &token)) {
+        warn(ctx, "%.*s: unknown severity",
+             (int) priority.length, priority.s);
         return false;
     }
-    if (ss_starts_with(token, ss_cstr("com."))) {
-        rec->app_name = token;  /* Class name. */
-        if (!get_header_token(ctx, &rec->comp)) {
+
+    return true;
+}
+
+static int
+escape_length(struct substring s)
+{
+    if (s.length < 2 || s.s[0] != 27 || s.s[1] != '[') {
+        return 0;
+    }
+    size_t n = 2;
+    for (; n < s.length; n++) {
+        if (!c_isdigit(s.s[n]) && s.s[n] != ';') {
+            return n + 1;
+        }
+    }
+    return n;
+}
+
+/* Returns 's' stripped of ANSI escape sequences at its beginning and end. */
+static struct substring
+strip_escapes(struct substring s)
+{
+    /* Remove escapes from the beginning. */
+    for (;;) {
+        size_t n = escape_length(s);
+        if (!n) {
+            break;
+        }
+        s.s += n;
+        s.length -= n;
+    }
+
+    /* Remove escapes from the end. */
+    for (;;) {
+        int ofs = ss_rfind(s, ss_cstr("\033["));
+        if (ofs < 0) {
+            break;
+        }
+        struct substring rest = { s.s + ofs, s.length - ofs };
+        if (escape_length(rest) != rest.length) {
+            break;
+        }
+        s.length -= rest.length;
+    }
+
+    return s;
+}
+
+static bool
+get_pipe_token(struct parse_ctx *ctx, struct substring *token)
+{
+    match_spaces(ctx);
+    if (!must_match(ctx, '|')
+        || !must_match_spaces(ctx)
+        || !get_header_token__(ctx, '|', token)) {
+        return false;
+    }
+
+    *token = ss_rstrip(*token);
+    return true;
+}
+
+/* Parses many log formats that start with an RFC 3339 timestamp, most notably
+ * ones like this:
+ *
+ * 2018-12-11T18:18:05.359Z  INFO http-nio-127.0.0.1-6440-exec-2 AuditingServiceImpl - - [nsx@6876 audit="true" comp="nsx-manager" reqId="63865aba-97de-4598-9099-be490c73be1f" subcomp="policy"] UserName="admin", ModuleName="AAA", Operation="GetUserFeaturePermissions", Operation status="success"
+ */
+static bool
+parse_date_first_record(struct parse_ctx *ctx, struct log_record *rec)
+{
+    rec->count = 1;
+
+    rec->src_host = ss_cstr(ctx->host);
+    rec->src_file = ss_cstr(ctx->fn);
+
+    if (!get_header_token__(ctx, ' ', &rec->timestamp)) {
+        return false;
+    }
+    rec->when = parse_timestamp(rec->timestamp.s, rec->timestamp.length);
+    if (rec->when == -1) {
+        return false;
+    }
+
+    if (ctx->p[0] == ' ' && ctx->p[1] == '|') {
+        /* Parses log lines in the following format:
+         *
+         * 2018-12-19T08:15:23.697Z | ESC[39mDEBUGESC[0;39m |          SharedServerThread-20 |            o.c.i.LogUnitServer | log write: global: 211639, streams: {6d260a60-08ea-3faf-a0b3-43f4fa45ae2a=211541, a2d97d18-0afc-3d77-bf7a-a06b568ed24a=211510}, backpointers: {}
+         */
+        struct substring priority;
+        if (!get_pipe_token(ctx, &priority)
+            || !parse_priority(ctx, ss_rstrip(strip_escapes(priority)), rec)) {
+            return false;
+        }
+
+        if (!get_pipe_token(ctx, &rec->procid)         /* Thread name. */
+            || !get_pipe_token(ctx, &rec->app_name)) { /* Class name. */
+            return false;
+        }
+        match_spaces(ctx);
+        if (!must_match(ctx, '|')) {
             return false;
         }
     } else {
-        rec->procid = token;                      /* Thread name. */
-        if (!get_header_token(ctx, &rec->app_name) /* Class name. */
-            || !get_header_token(ctx, &rec->msgid)
-            || !must_match_spaces(ctx)) {
+        struct substring priority;
+        if (!get_header_token(ctx, &priority)) {
             return false;
         }
 
-        if (ctx->p[0] == '-' && ctx->p[1] == ' ' && ctx->p[2] == '[') {
-            ctx->p += 2;
-            if (!parse_structured_data(ctx, rec)) {
+        /* Distinguish a couple of formats based on the third token, which
+         * might be:
+         *
+         *   - A thread name.  Hard to pick these out.
+         *
+         *   - The full name of a Java class.  In the cases I've noticed, these
+         *     start with "com.", so let's just use that as a heuristic.
+         *
+         *     Example:
+         *     2018-12-08T14:12:54.534Z INFO org.apache.coyote.http11.Http11Processor service Error parsing HTTP request header
+         */
+        struct substring token;
+        if (!get_header_token(ctx, &token)) {
+            return false;
+        }
+        if (ss_starts_with(token, ss_cstr("com."))) {
+            rec->app_name = token;  /* Class name. */
+            if (!get_header_token(ctx, &rec->comp)) {
                 return false;
+            }
+        } else {
+            rec->procid = token;                      /* Thread name. */
+            if (!get_header_token(ctx, &rec->app_name) /* Class name. */
+                || !get_header_token(ctx, &rec->msgid)
+                || !must_match_spaces(ctx)) {
+                return false;
+            }
+
+            if (ctx->p[0] == '-' && ctx->p[1] == ' ' && ctx->p[2] == '[') {
+                ctx->p += 2;
+                if (!parse_structured_data(ctx, rec)) {
+                    return false;
+                }
             }
         }
     }
@@ -1508,7 +1624,6 @@ parse_date_first_file(const char *fn, const char *buffer, off_t size, struct tas
     const struct spec *spec = &job->spec;
     const char *end = buffer + size;
 
-    VLOG_INFO("date first: %s", fn);
     WITH_MUTEX(&job->stats_lock, job->total_bytes += size);
 
     struct state *state = &task->state;
@@ -1555,7 +1670,7 @@ parse_date_first_file(const char *fn, const char *buffer, off_t size, struct tas
 
         parse_date_first_record(&ctx, &rec);
 
-        if (!include_record(&rec, spec, state)) {
+        if (include_record(&rec, spec, state)) {
             state_add(state, &rec, spec);
         }
     }
@@ -2432,7 +2547,6 @@ job_thread(void *job_)
             progress = p;
             ovsrcu_set(&job->state, merge_state(job));
         }
-        VLOG_WARN("progress=%u goal=%u", progress, goal);
         if (progress >= goal) {
             break;
         }
