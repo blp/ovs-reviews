@@ -2142,7 +2142,7 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
                   "arp.tha = arp.sha; "
                   "arp.sha = ${ea_s}; "
                   "arp.tpa = arp.spa; "
-                  "arp.spa = addr.addr_s; "
+                  "arp.spa = ${addr.addr_s}; "
                   "outport = inport; "
                   "flags.loopback = 1; "
                   "output;" in
