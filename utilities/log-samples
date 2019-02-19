@@ -15,12 +15,18 @@ catalina:
 corfu:
 2018-12-19T08:15:23.697Z | ESC[39mDEBUGESC[0;39m |          SharedServerThread-20 |            o.c.i.LogUnitServer | log write: global: 211639, streams: {6d260a60-08ea-3faf-a0b3-43f4fa45ae2a=211541, a2d97d18-0afc-3d77-bf7a-a06b568ed24a=211510}, backpointers: {}
 
+nsxcli.log
+2018-12-19T04:47:59.730Z 7344 cli INFO NSX CLI started (Manager, Policy, Controller) for user: admin
+
 
 
 
 
 TODO
 ----
+
+nsxapi.log:
+2018-12-12T05:34:06.775Z  INFO Indexer-1 ServiceInstanceServiceImpl - SERVICE-INSERTION [nsx@6876 comp="nsx-manager" subcomp="manager"] Returning ServiceInstances List of size: 0
 
 proton-tomcat-wrapper:
 INFO   | jvm 1    | 2018/12/13 00:38:26 | ESC[mESC[32m00:38:26.898 INFO  com.vmware.nsx.management.firewall.service.AbstractFirewallFilteringAndPaginationServiceImpl.() @ - FIREWALL [nsx@6876 comp="nsx-manager" subcomp="manager"] Number of Rules  with content that match filter before section AppliedTo and other business logic is applied0
@@ -87,9 +93,6 @@ scale_rpc_daemon.debug.log
 
 elasticsearch_index_indexing_slowlog.log
 [2018-12-19T03:33:33,999][WARN ][index.indexing.slowlog.index] [nsx_node] [nsx_policy_clusternodeconfig/hZ1SMt6TTc2ogFN7CUnoJg] took[547.4ms], took_millis[547], type[ClusterNodeConfigModel], id[d4d54d56-96a6-89da-8de7-e8fb9277718a], routing[], source[{"external_id":"d4d54d56-96a6-89da-8de7-e8fb9277718a","manager_role":{"api_listen_addr":{"ip_address":"10.40.68.240","port":443,"certificate":"-----BEGIN CERTIFICATE-----\nMIIFATCCA2mgAwIBAgIEA10iszANBgkqhkiG9w0BAQsFADCBkDELMAkGA1UEBhMC\nVVMxCzAJBgNVBAgTAkNBMRIwEAYDVQQHEwlQYWxvIEFsdG8xFDASBgNVBAoTC1ZN\nd2FyZSBJbmMuMQwwCgYDVQQLEwNOU1gxPDA6BgNVBAMTM25zeG1hbmFnZXItMTEy\nNzQ5NDEtMS1hZ2dzdmMta3ZtLXBhLXByaXZhdGUtNjUtMjYtMzAeFw0xODEyMTkw\nMzI4MDlaFw0yODEwMjcwMzI4MDlaMIGQMQswCQYDVQQGEwJVUzELMAkGA1UECBMC\nQ0ExEjAQBgNVBAcTCVBhbG8gQWx0bzEUMBIGA1UEChMLVk13YXJlIEluYy4xDDAK\nBgNVBAsTA05TWDE8MDoGA1UEAxMzbnN4bWFuYWdlci0xMTI3NDk0MS0xLWFnZ3N2\nYy1rdm0tcGEtcHJpdmF0ZS02NS0yNi0zMIIBojANBgkqhkiG9w0BAQEFAAOCAY8A\nMIIBigKCAYEA34hXm/kZAxMaMDxuQmIMG6SkmE4S5NIq/Uw1kxx+eWxhT/fhlvje\nSDLY1qc1ri/sGDiHimTxFs0s5K0yfgBoGz4CDyw7ILBcRqiRU4bQPIQbUYww6JW5\nF2YBiyd7uXuOcPKFh40+IIvXT5EP99J/ZDZ2qN8Uwl8yAlYddrYAfiDi2qKrk/IK\nul5SiGbP2Ir9F+cR5mX812pJX+s2XMrLmI32j6C3WFW1VADOrCaC5K0o6Hn1PHe5\nkyYoPvvGJvVJJdQPF9Vgo9nGP9r+lFUkeksC]
-
-nsxcli.log
-2018-12-19T04:47:59.730Z 7344 cli INFO NSX CLI started (Manager, Policy, Controller) for user: admin
 
 boot.log
 [ESC[0;32m  OK  ESC[0m] Listening on Load/Save RF Kill Switch Status /dev/rfkill Watch.

@@ -35,6 +35,7 @@
  * - '/' to search within display
  * - right-click on field value to limit display to that value
  * - when a query has no results, explain the query and the results
+ * - histograms by time
  */
 
 #include <config.h>
@@ -398,6 +399,11 @@ ss_rstrip(struct substring s)
     return s;
 }
 
+enum log_record_type {
+    REC_TYPE_RFC5424,
+    REC_TYPE_OTHER
+};
+
 struct log_record {
     struct bt_node bt_node;
     long long int count;
@@ -747,6 +753,29 @@ parse_structured_data(struct parse_ctx *ctx, struct log_record *rec)
 }
 
 static bool
+starts_with_date(struct substring s)
+{
+    /* This code has a Y2100 problem ;-) */
+    return (s.length >= 20
+            && s.s[0] == '2'
+            && s.s[1] == '0'
+            && c_isdigit(s.s[2])
+            && c_isdigit(s.s[3])
+            && s.s[4] == '-'
+            && s.s[10] == 'T');
+}
+
+static enum log_record_type
+classify_log_record(const char *buffer, size_t size)
+{
+    return (size >= 2 && buffer[0] == '<' && c_isdigit(buffer[1])
+            ? REC_TYPE_RFC5424
+            : starts_with_date(ss_buffer(buffer, size))
+            ? REC_TYPE_OTHER
+            : 0);
+}
+
+static bool
 parse_rfc5424_record(struct parse_ctx *ctx, struct log_record *rec)
 {
     rec->count = 1;
@@ -894,7 +923,6 @@ static void
 json_put_substring(struct json *obj, const char *name, struct substring value)
 {
     json_object_put(obj, name, json_string_create_nocopy(ss_xstrdup(value)));
-
 }
 
 static struct json *
@@ -1360,69 +1388,6 @@ include_record(const struct log_record *rec, const struct spec *spec,
     __VA_ARGS__;                                \
     ovs_mutex_unlock(MUTEX);
 
-static void
-parse_rfc5424_file(const char *fn, const char *buffer, off_t size, struct task *task)
-{
-    struct job *job = task->job;
-    const struct spec *spec = &job->spec;
-    const char *end = buffer + size;
-
-    WITH_MUTEX(&job->stats_lock, job->total_bytes += size);
-
-    struct state *state = &task->state;
-    state_init(state, spec);
-
-    struct parse_ctx ctx = { .host = job->spec.host,
-                             .fn = fn,
-                             .ln = 1,
-                             .line_start = buffer };
-    for (; ctx.line_start < end; ctx.line_start = ctx.line_end + 1, ctx.ln++) {
-        ctx.line_end = memchr(ctx.line_start, '\n', end - ctx.line_start);
-        if (!ctx.line_end) {
-            /* Don't bother with lines that lack a new-line. */
-            break;
-        }
-        ctx.p = ctx.line_start;
-
-        ovs_mutex_lock(&job->stats_lock);
-        unsigned long long int total_recs = job->total_recs++;
-        ovs_mutex_unlock(&job->stats_lock);
-        if (!(total_recs % 1024)) {
-            fatal_signal_run();
-            if (job_is_canceled(job)) {
-                break;
-            }
-        }
-
-        struct log_record rec;
-        memset(&rec, 0, sizeof rec);
-        rec.line.s = CONST_CAST(char *, ctx.line_start);
-        rec.line.length = ctx.line_end - ctx.line_start;
-
-        parse_rfc5424_record(&ctx, &rec);
-        if (include_record(&rec, spec, state)) {
-            state_add(state, &rec, spec);
-        }
-
-    }
-
-    if (spec->show != SHOW_TOP) {
-        for (size_t i = 0; i < state->n; i++) {
-            log_record_copy(&state->reservoir[i], &state->reservoir[i]);
-        }
-    } else {
-        for (int i = 0; i < TK_L; i++) {
-            for (int j = 0; j < TK_B; j++) {
-                struct log_record *rec = state->tk[i][j].rec;
-                if (rec) {
-                    log_record_copy(rec, rec);
-                }
-            }
-        }
-    }
-    state_uninit(state);
-}
-
 static bool
 parse_priority(struct parse_ctx *ctx, struct substring priority,
                struct log_record *rec)
@@ -1511,6 +1476,17 @@ get_pipe_token(struct parse_ctx *ctx, struct substring *token)
     return true;
 }
 
+static bool
+is_digits(struct substring token)
+{
+    for (size_t i = 0; i < token.length; i++) {
+        if (!c_isdigit(token.s[i])) {
+            return false;
+        }
+    }
+    return token.length > 0;
+}
+
 /* Parses many log formats that start with an RFC 3339 timestamp, most notably
  * ones like this:
  *
@@ -1552,43 +1528,65 @@ parse_date_first_record(struct parse_ctx *ctx, struct log_record *rec)
             return false;
         }
     } else {
-        struct substring priority;
-        if (!get_header_token(ctx, &priority)) {
-            return false;
-        }
+        rec->facility = LOG_LOCAL6;
 
-        /* Distinguish a couple of formats based on the third token, which
-         * might be:
-         *
-         *   - A thread name.  Hard to pick these out.
-         *
-         *   - The full name of a Java class.  In the cases I've noticed, these
-         *     start with "com.", so let's just use that as a heuristic.
-         *
-         *     Example:
-         *     2018-12-08T14:12:54.534Z INFO org.apache.coyote.http11.Http11Processor service Error parsing HTTP request header
-         */
         struct substring token;
         if (!get_header_token(ctx, &token)) {
             return false;
         }
-        if (ss_starts_with(token, ss_cstr("com."))) {
-            rec->app_name = token;  /* Class name. */
-            if (!get_header_token(ctx, &rec->comp)) {
+
+        if (is_digits(token)) {
+            /* Parses log lines in the following format:
+             *
+             * 2018-12-19T04:47:59.730Z 7344 cli INFO NSX CLI started (Manager, Policy, Controller) for user: admin
+             */
+            rec->procid = token;
+
+            struct substring priority;
+            if (!get_header_token(ctx, &rec->comp)
+                || !get_header_token(ctx, &priority)
+                || !parse_priority(ctx, priority, rec)) {
                 return false;
             }
         } else {
-            rec->procid = token;                      /* Thread name. */
-            if (!get_header_token(ctx, &rec->app_name) /* Class name. */
-                || !get_header_token(ctx, &rec->msgid)
-                || !must_match_spaces(ctx)) {
+            if (!parse_priority(ctx, token, rec)) {
                 return false;
             }
 
-            if (ctx->p[0] == '-' && ctx->p[1] == ' ' && ctx->p[2] == '[') {
-                ctx->p += 2;
-                if (!parse_structured_data(ctx, rec)) {
+            /* Distinguish a couple of formats based on the third token, which
+             * might be:
+             *
+             *   - A thread name.  Hard to pick these out.
+             *
+             *     2018-12-11T18:18:05.359Z  INFO http-nio-127.0.0.1-6440-exec-2 AuditingServiceImpl - - [nsx@6876 audit="true" comp="nsx-manager" reqId="63865aba-97de-4598-9099-be490c73be1f" subcomp="policy"] UserName="admin", ModuleName="AAA", Operation="GetUserFeaturePermissions", Operation status="success"
+             *
+             *   - The full name of a Java class.  In the cases I've noticed, these
+             *     start with "com.", so let's just use that as a heuristic.
+             *
+             *     Example:
+             *     2018-12-08T14:12:54.534Z INFO org.apache.coyote.http11.Http11Processor service Error parsing HTTP request header
+             */
+            if (!get_header_token(ctx, &token)) {
+                return false;
+            }
+            if (ss_starts_with(token, ss_cstr("com."))) {
+                rec->app_name = token;  /* Class name. */
+                if (!get_header_token(ctx, &rec->comp)) {
                     return false;
+                }
+            } else {
+                rec->procid = token;                      /* Thread name. */
+                if (!get_header_token(ctx, &rec->app_name) /* Class name. */
+                    || !get_header_token(ctx, &rec->procid)
+                    || !get_header_token(ctx, &rec->msgid)
+                    || !must_match_spaces(ctx)) {
+                    return false;
+                }
+
+                if (*ctx->p == '[') {
+                    if (!parse_structured_data(ctx, rec)) {
+                        return false;
+                    }
                 }
             }
         }
@@ -1604,22 +1602,14 @@ parse_date_first_record(struct parse_ctx *ctx, struct log_record *rec)
     return true;
 }
 
-static bool
-starts_with_date(struct substring s)
-{
-    /* This code has a Y2100 problem ;-) */
-    return (s.length >= 20
-            && s.s[0] == '2'
-            && s.s[1] == '0'
-            && c_isdigit(s.s[2])
-            && c_isdigit(s.s[3])
-            && s.s[4] == '-'
-            && s.s[10] == 'T');
-}
-
 static void
-parse_date_first_file(const char *fn, const char *buffer, off_t size, struct task *task)
+parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
 {
+    if (!classify_log_record(buffer, size)) {
+        VLOG_DBG("%s: unknown log file format", fn);
+        return;
+    }
+
     struct job *job = task->job;
     const struct spec *spec = &job->spec;
     const char *end = buffer + size;
@@ -1668,7 +1658,12 @@ parse_date_first_file(const char *fn, const char *buffer, off_t size, struct tas
         rec.line.s = CONST_CAST(char *, ctx.line_start);
         rec.line.length = ctx.line_end - ctx.line_start;
 
-        parse_date_first_record(&ctx, &rec);
+        if (classify_log_record(rec.line.s, rec.line.length)
+            == REC_TYPE_RFC5424) {
+            parse_rfc5424_record(&ctx, &rec);
+        } else {
+            parse_date_first_record(&ctx, &rec);
+        }
 
         if (include_record(&rec, spec, state)) {
             state_add(state, &rec, spec);
@@ -1690,19 +1685,6 @@ parse_date_first_file(const char *fn, const char *buffer, off_t size, struct tas
         }
     }
     state_uninit(state);
-}
-
-static void
-parse_file(const char *fn, const char *buffer, off_t size, struct task *task)
-{
-    if (size >= 2 && buffer[0] == '<' && c_isdigit(buffer[1])) {
-        parse_rfc5424_file(fn, buffer, size, task);
-    } else if (starts_with_date(ss_buffer(buffer, size))) {
-        parse_date_first_file(fn, buffer, size, task);
-    } else {
-        VLOG_DBG("%s: unknown log file format", fn);
-        return;
-    }
 }
 
 static void
@@ -2066,17 +2048,10 @@ put_substring(struct ds *dst, const struct substring src)
 }
 
 static void
-log_record_format(const struct log_record *r, int i, int n,
-                  const struct spec *spec, struct ds *s)
+log_record_format__(const struct log_record *r, enum column columns,
+                    struct ds *s)
 {
-    ds_put_format(s, "%7lld", r->count);
-
-    if (spec->show == SHOW_SAMPLE && n) {
-        ds_put_format(s, " %5.2f%% ", 100.0 * i / n);
-    }
-
-    for (enum column columns = spec->columns; columns;
-         columns = zero_rightmost_1bit(columns)) {
+    for (; columns; columns = zero_rightmost_1bit(columns)) {
         ds_put_char(s, ' ');
         switch (rightmost_1bit(columns)) {
         case COL_SRC_HOST:
@@ -2131,6 +2106,19 @@ log_record_format(const struct log_record *r, int i, int n,
             OVS_NOT_REACHED();
         }
     }
+}
+
+static void
+log_record_format(const struct log_record *r, int i, int n,
+                  const struct spec *spec, struct ds *s)
+{
+    ds_put_format(s, "%7lld", r->count);
+
+    if (spec->show == SHOW_SAMPLE && n) {
+        ds_put_format(s, " %5.2f%% ", 100.0 * i / n);
+    }
+
+    log_record_format__(r, spec->columns, s);
 }
 
 static int
@@ -3760,6 +3748,36 @@ columns_from_json(const struct json *array, enum column *columns)
 }
 
 static void
+do_debug_parse(void)
+{
+    struct ds line = DS_EMPTY_INITIALIZER;
+    for (int ln = 1; !ds_get_line(&line, stdin); ln++) {
+        struct log_record rec;
+        memset(&rec, 0, sizeof rec);
+
+        struct parse_ctx ctx = {
+            .host = "localhost",
+            .fn = "stdin",
+            .ln = ln,
+            .line_start = ds_cstr(&line),
+            .line_end = strchr(ds_cstr(&line), '\n'),
+            .p = ds_cstr(&line),
+        };
+        parse_date_first_record(&ctx, &rec);
+
+        struct ds out = DS_EMPTY_INITIALIZER;
+        log_record_format__(&rec, (COL_WHEN | COL_FACILITY | COL_PRIORITY |
+                                   COL_HOSTNAME | COL_APP_NAME | COL_PROCID |
+                                   COL_MSGID | COL_SDID | COL_COMP |
+                                   COL_SUBCOMP | COL_ERROR_CODE | COL_MSG |
+                                   COL_VALID), &out);
+        puts(ds_cstr(&out));
+        ds_destroy(&out);
+    }
+
+}
+
+static void
 parse_command_line(int argc, char *argv[], struct spec *spec)
 {
     enum {
@@ -3767,6 +3785,7 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         OPT_UNTIL,
         OPT_REMOTE,
         OPT_SDIDS,
+        OPT_DEBUG_PARSE,
         VLOG_OPTION_ENUMS,
     };
     static const struct option long_options[] = {
@@ -3784,12 +3803,14 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         {"after", required_argument, NULL, OPT_SINCE},
         {"until", required_argument, NULL, OPT_UNTIL},
         {"before", required_argument, NULL, OPT_UNTIL},
+        {"debug-parse", no_argument, NULL, OPT_DEBUG_PARSE},
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         VLOG_LONG_OPTIONS,
         {NULL, 0, NULL, 0},
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
+    bool debug_parse = false;
 
     spec_init(spec);
     svec_add(&columns_history, "when facility priority comp subcomp msg");
@@ -3876,6 +3897,10 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
             sset_add_delimited(&spec->error_codes, optarg, " ,");
             break;
 
+        case OPT_DEBUG_PARSE:
+            debug_parse = true;
+            break;
+
         case 'h':
             usage();
             break;
@@ -3894,6 +3919,11 @@ parse_command_line(int argc, char *argv[], struct spec *spec)
         }
     }
     free(short_options);
+
+    if (debug_parse) {
+        do_debug_parse();
+        exit(0);
+    }
 
     if (optind < argc) {
         for (size_t i = optind; i < argc; i++) {
