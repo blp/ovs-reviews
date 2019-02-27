@@ -372,8 +372,8 @@ pub fn ovn_ip_address_and_port_from_lb_key(k: &String) ->
     }
 }
 
-pub fn ovn_count_1bits(x: u64) -> u8 {
-    unsafe { count_1bits(x as libc::uint64_t) as u8 }
+pub fn ovn_count_1bits(x: &u64) -> u8 {
+    unsafe { count_1bits(*x as libc::uint64_t) as u8 }
 }
 
 
