@@ -4549,6 +4549,7 @@ for (&RouterPort(.peer = PeerRouter{peer_port},
  * router port, add an ARP/ND entry in that router's pipeline. */
 for (SwitchPortIPv4Address(
         .port = &SwitchPort{.lsp = lsp, .sw = &sw},
+        .ea_s = ea_s,
         .addr = addr)
      if lsp.__type != "router")
 {
@@ -4562,7 +4563,7 @@ for (SwitchPortIPv4Address(
                 .table_id         = router_stage(IN, ARP_RESOLVE),
                 .priority         = 100,
                 .__match          = "outport == ${peer.json_name} && reg0 == ${addr.addr_s}",
-                .actions          = "eth.dst = ${addr.addr_s}; next;",
+                .actions          = "eth.dst = ${ea_s}; next;",
                 .external_ids     = map_empty())
     }
 }
@@ -4583,7 +4584,7 @@ for (SwitchPortIPv6Address(
                 .table_id         = router_stage(IN, ARP_RESOLVE),
                 .priority         = 100,
                 .__match          = "outport == ${peer.json_name} && xxreg0 == ${addr.addr_s}",
-                .actions          = "eth.dst = ${addr.addr_s}; next;",
+                .actions          = "eth.dst = ${ea_s}; next;",
                 .external_ids     = map_empty())
     }
 }
