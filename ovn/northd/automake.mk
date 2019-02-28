@@ -50,6 +50,7 @@ ovn/northd/OVN_Southbound.dl: ovn/ovn-sb.ovsschema
 				-p Datapath_Binding 	\
 				-p Port_Binding     	\
 				--ro Port_Binding.chassis       \
+				--ro Port_Binding.encap         \
 				-k Multicast_Group.datapath     \
 				-k Multicast_Group.name         \
 				-k Multicast_Group.tunnel_key   \
