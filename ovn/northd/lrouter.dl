@@ -141,33 +141,41 @@ RouterLBVIP(router, lb, vip) :-
     var vip = FlatMap(vips).
 
 /* Router-to-router logical port connections */
-relation RouterRouterPeer(rport1: uuid, rport2: uuid)
+relation RouterRouterPeer(rport1: uuid, rport2: uuid, rport2_name: string)
 
-RouterRouterPeer(rport1, rport2) :-
+RouterRouterPeer(rport1, rport2, rport2_name) :-
     nb.Logical_Router_Port(._uuid = rport1, .peer = peer),
     Some{var peer_name} = set_nth(peer, 0),
-    nb.Logical_Router_Port(._uuid = rport2, .name = peer_name).
+    nb.Logical_Router_Port(._uuid = rport2, .name = rport2_name).
 
 /* Router port can peer with anothe router port, a switch port or have
  * no peer.
  */
-typedef RouterPeer = PeerRouter{rport: uuid}
-                   | PeerSwitch{sport: uuid}
+typedef RouterPeer = PeerRouter{rport: uuid, name: string}
+                   | PeerSwitch{sport: uuid, name: string}
                    | PeerNone
+
+function router_peer_name(peer: RouterPeer): Option<string> = {
+    match (peer) {
+        PeerRouter{_, n} -> Some{n},
+        PeerSwitch{_, n} -> Some{n},
+        PeerNone         -> None
+    }
+}
 
 relation RouterPortPeer(rport: uuid, peer: RouterPeer)
 
 /* Router-to-router logical port connections */
-RouterPortPeer(rport, PeerSwitch{sport}) :-
-    SwitchRouterPeer(sport, rport).
+RouterPortPeer(rport, PeerSwitch{sport, sport_name}) :-
+    SwitchRouterPeer(sport, sport_name, rport).
 
-RouterPortPeer(rport1, PeerRouter{rport2}) :-
-    RouterRouterPeer(rport1, rport2).
+RouterPortPeer(rport1, PeerRouter{rport2, rport2_name}) :-
+    RouterRouterPeer(rport1, rport2, rport2_name).
 
 RouterPortPeer(rport, PeerNone) :-
     nb.Logical_Router_Port(._uuid = rport),
-    not SwitchRouterPeer(_, rport),
-    not RouterRouterPeer(rport, _).
+    not SwitchRouterPeer(_, _, rport),
+    not RouterRouterPeer(rport, _, _).
 
 /* FIXME: what should happen when extract_lrp_networks fails? */
 /* RouterPort relation collects all attributes of a logical router port */

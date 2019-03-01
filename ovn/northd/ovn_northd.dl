@@ -159,7 +159,7 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
                     .mac                = set_singleton(set_space_sep(set_insert_imm(lrp.networks, lrp.mac))),
                     .nat_addresses      = set_empty(),
                     .external_ids       = lrp.external_ids) :-
-    &RouterPort(.lrp = lrp, .router = &router),
+    &RouterPort(.lrp = lrp, .router = &router, .peer = peer),
     RouterPortRAOptionsComplete(lrp._uuid, extra_options),
     var uuid_name = uuid2name(lrp._uuid),
     (var __type, var options1) = match (map_get(router.lr.options, "chassis")) {
@@ -167,9 +167,9 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
         None -> ("patch", map_empty(): Map<string, string>),
         Some{lrchassis} -> ("l3gateway", map_singleton("l3gateway-chassis", lrchassis))
     },
-    var options2 = match (map_get(lrp.options, "peer")) {
+    var options2 = match (router_peer_name(peer)) {
         None -> map_empty(): Map<string, string>,
-        Some{peer} -> map_singleton("peer", peer)
+        Some{peer_name} -> map_singleton("peer", peer_name)
     },
     var eids = {
         var eids = lrp.external_ids;
@@ -4145,7 +4145,7 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_e
                                  .router = &router,
                                  .json_name = json_name,
                                  .networks = networks,
-                                 .peer = PeerSwitch{_}}]
+                                 .peer = PeerSwitch{}}]
      if (not vec_is_empty(networks.ipv6_addrs)))
 {
     Some{var address_mode} = map_get(lrp.ipv6_ra_configs, "address_mode") in
@@ -4373,7 +4373,7 @@ for (RouterStaticRoute(.router      = &router,
  * resolves the IP address in reg0 into an output port in outport and an
  * Ethernet address in eth.dst. */
 // FIXME: does this apply to redirect ports?
-for (&RouterPort(.peer = PeerRouter{peer_port},
+for (&RouterPort(.peer = PeerRouter{peer_port, _},
                  .router = &router,
                  .networks = networks))
 {

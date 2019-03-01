@@ -23,8 +23,8 @@ relation &NATRef[nb.NAT]
 &NATRef[nat] :- nb.NAT[nat].
 
 /* Switch-to-router logical port connections */
-relation SwitchRouterPeer(lsp: uuid, lrp: uuid)
-SwitchRouterPeer(lsp, lrp) :-
-    nb.Logical_Switch_Port(._uuid = lsp, .__type = "router", .options = options),
+relation SwitchRouterPeer(lsp: uuid, lsp_name: string, lrp: uuid)
+SwitchRouterPeer(lsp, lsp_name, lrp) :-
+    nb.Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = "router", .options = options),
     Some{var router_port} = map_get(options, "router-port"),
     nb.Logical_Router_Port(.name = router_port, ._uuid = lrp).
