@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017 Nicira, Inc.
+ * Copyright (c) 2015, 2016, 2017, 2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,13 +64,9 @@ struct dp_packet_batch;
 
 struct conntrack;
 
-struct ct_addr {
-    union {
-        ovs_16aligned_be32 ipv4;
-        union ovs_16aligned_in6_addr ipv6;
-        ovs_be32 ipv4_aligned;
-        struct in6_addr ipv6_aligned;
-    };
+union ct_addr {
+    ovs_be32 ipv4;
+    struct in6_addr ipv6;
 };
 
 enum nat_action_e {
@@ -81,8 +77,8 @@ enum nat_action_e {
 };
 
 struct nat_action_info_t {
-    struct ct_addr min_addr;
-    struct ct_addr max_addr;
+    union ct_addr min_addr;
+    union ct_addr max_addr;
     uint16_t min_port;
     uint16_t max_port;
     uint16_t nat_action;
@@ -122,6 +118,7 @@ int conntrack_flush_tuple(struct conntrack *, const struct ct_dpif_tuple *,
 int conntrack_set_maxconns(struct conntrack *ct, uint32_t maxconns);
 int conntrack_get_maxconns(struct conntrack *ct, uint32_t *maxconns);
 int conntrack_get_nconns(struct conntrack *ct, uint32_t *nconns);
+struct ipf *conntrack_ipf_ctx(struct conntrack *ct);
 
 /* 'struct ct_lock' is a wrapper for an adaptive mutex.  It's useful to try
  * different types of locks (e.g. spinlocks) */
@@ -292,6 +289,9 @@ struct conntrack {
      * last.
      */
     struct ct_rwlock resources_lock;
+
+    /* Fragmentation handling context. */
+    struct ipf *ipf;
 
 };
 

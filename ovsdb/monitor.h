@@ -39,78 +39,86 @@ enum ovsdb_monitor_version {
       OVSDB_MONITOR_V1,         /* RFC 7047 "monitor" method. */
       OVSDB_MONITOR_V2,         /* Extension to RFC 7047, see ovsdb-server
                                    man page for details. */
+      OVSDB_MONITOR_V3,         /* Extension to V2, see ovsdb-server man
+                                   page for details. */
 
       /* Last entry.  */
       OVSDB_MONITOR_VERSION_MAX
 };
 
-struct ovsdb_monitor *ovsdb_monitor_create(struct ovsdb *db,
-                       struct ovsdb_jsonrpc_monitor *jsonrpc_monitor);
+struct ovsdb_monitor *ovsdb_monitor_create(struct ovsdb *,
+                       struct ovsdb_jsonrpc_monitor *);
 void ovsdb_monitors_remove(struct ovsdb *);
 void ovsdb_monitors_commit(struct ovsdb *, const struct ovsdb_txn *);
 
 void ovsdb_monitor_prereplace_db(struct ovsdb *);
 
-struct ovsdb_monitor *ovsdb_monitor_add(struct ovsdb_monitor *dbmon);
+struct ovsdb_monitor *ovsdb_monitor_add(struct ovsdb_monitor *);
 
-void ovsdb_monitor_add_jsonrpc_monitor(struct ovsdb_monitor *dbmon,
-                       struct ovsdb_jsonrpc_monitor *jsonrpc_monitor);
+void ovsdb_monitor_add_jsonrpc_monitor(struct ovsdb_monitor *,
+                       struct ovsdb_jsonrpc_monitor *);
 
-void ovsdb_monitor_remove_jsonrpc_monitor(struct ovsdb_monitor *dbmon,
-                               struct ovsdb_jsonrpc_monitor *jsonrpc_monitor,
-                               uint64_t unflushed);
+struct ovsdb_monitor_change_set;
+void ovsdb_monitor_remove_jsonrpc_monitor(struct ovsdb_monitor *,
+                               struct ovsdb_jsonrpc_monitor *,
+                               struct ovsdb_monitor_change_set *);
 
-void ovsdb_monitor_add_table(struct ovsdb_monitor *m,
-                             const struct ovsdb_table *table);
+void ovsdb_monitor_add_table(struct ovsdb_monitor *,
+                             const struct ovsdb_table *);
 
-const char * ovsdb_monitor_add_column(struct ovsdb_monitor *dbmon,
-                                      const struct ovsdb_table *table,
-                                      const struct ovsdb_column *column,
-                                      enum ovsdb_monitor_selection select,
+const char * ovsdb_monitor_add_column(struct ovsdb_monitor *,
+                                      const struct ovsdb_table *,
+                                      const struct ovsdb_column *,
+                                      enum ovsdb_monitor_selection,
                                       bool monitored);
 bool
-ovsdb_monitor_table_exists(struct ovsdb_monitor *m,
-                           const struct ovsdb_table *table);
+ovsdb_monitor_table_exists(struct ovsdb_monitor *,
+                           const struct ovsdb_table *);
 
-struct json *ovsdb_monitor_get_update(struct ovsdb_monitor *dbmon,
+struct json *ovsdb_monitor_get_update(struct ovsdb_monitor *,
                                       bool initial,
                                       bool cond_updated,
-                                      uint64_t *unflushed_transaction,
-                                      struct ovsdb_monitor_session_condition *condition,
-                                      enum ovsdb_monitor_version version);
+                                      struct ovsdb_monitor_session_condition *,
+                                      enum ovsdb_monitor_version,
+                                      struct ovsdb_monitor_change_set **p_mcs);
 
-void ovsdb_monitor_table_add_select(struct ovsdb_monitor *dbmon,
-                                    const struct ovsdb_table *table,
-                                    enum ovsdb_monitor_selection select);
+const struct uuid *ovsdb_monitor_get_last_txnid(struct ovsdb_monitor *);
 
-bool ovsdb_monitor_needs_flush(struct ovsdb_monitor *dbmon,
-                               uint64_t next_transaction);
+void ovsdb_monitor_table_add_select(struct ovsdb_monitor *,
+                                    const struct ovsdb_table *,
+                                    enum ovsdb_monitor_selection);
 
-void ovsdb_monitor_get_initial(const struct ovsdb_monitor *dbmon);
+bool ovsdb_monitor_needs_flush(struct ovsdb_monitor *,
+                               struct ovsdb_monitor_change_set *);
 
-void ovsdb_monitor_get_memory_usage(struct simap *usage);
+void ovsdb_monitor_get_initial(struct ovsdb_monitor *,
+                               struct ovsdb_monitor_change_set **);
+void ovsdb_monitor_get_changes_after(const struct uuid *txn_uuid,
+        struct ovsdb_monitor *, struct ovsdb_monitor_change_set **);
+
+void ovsdb_monitor_get_memory_usage(struct simap *);
 
 struct ovsdb_monitor_session_condition *
 ovsdb_monitor_session_condition_create(void);
 
 void
 ovsdb_monitor_session_condition_destroy(
-                          struct ovsdb_monitor_session_condition *condition);
+                          struct ovsdb_monitor_session_condition *);
 struct ovsdb_error *
 ovsdb_monitor_table_condition_create(
-                          struct ovsdb_monitor_session_condition *condition,
-                          const struct ovsdb_table *table,
+                          struct ovsdb_monitor_session_condition *,
+                          const struct ovsdb_table *,
                           const struct json *json_cnd);
 
 void
-ovsdb_monitor_condition_bind(struct ovsdb_monitor *dbmon,
-                             struct ovsdb_monitor_session_condition *cond);
+ovsdb_monitor_condition_bind(struct ovsdb_monitor *,
+                             struct ovsdb_monitor_session_condition *);
 
 struct ovsdb_error *
 ovsdb_monitor_table_condition_update(
-                           struct ovsdb_monitor *dbmon,
-                           struct ovsdb_monitor_session_condition *condition,
-                           const struct ovsdb_table *table,
+                           struct ovsdb_monitor *,
+                           struct ovsdb_monitor_session_condition *,
+                           const struct ovsdb_table *,
                            const struct json *cond_json);
 
 #endif

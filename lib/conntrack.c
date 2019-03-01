@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016, 2017 Nicira, Inc.
+ * Copyright (c) 2015-2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@
 #include "ct-dpif.h"
 #include "dp-packet.h"
 #include "flow.h"
+#include "ipf.h"
 #include "netdev.h"
 #include "odp-netlink.h"
 #include "openvswitch/hmap.h"
@@ -272,10 +273,10 @@ ct_print_conn_info(const struct conn *c, const char *log_msg,
                     "%"PRIu16"/%"PRIu16" zone/rev zone "
                     "%"PRIu16"/%"PRIu16" nw_proto/rev nw_proto "
                     "%"PRIu8"/%"PRIu8, log_msg,
-                    IP_ARGS(c->key.src.addr.ipv4_aligned),
-                    IP_ARGS(c->key.dst.addr.ipv4_aligned),
-                    IP_ARGS(c->rev_key.src.addr.ipv4_aligned),
-                    IP_ARGS(c->rev_key.dst.addr.ipv4_aligned),
+                    IP_ARGS(c->key.src.addr.ipv4),
+                    IP_ARGS(c->key.dst.addr.ipv4),
+                    IP_ARGS(c->rev_key.src.addr.ipv4),
+                    IP_ARGS(c->rev_key.dst.addr.ipv4),
                     ntohs(c->key.src.port), ntohs(c->key.dst.port),
                     ntohs(c->rev_key.src.port), ntohs(c->rev_key.dst.port),
                     c->key.zone, c->rev_key.zone, c->key.nw_proto,
@@ -340,6 +341,7 @@ conntrack_init(struct conntrack *ct)
     atomic_init(&ct->n_conn_limit, DEFAULT_N_CONN_LIMIT);
     latch_init(&ct->clean_thread_exit);
     ct->clean_thread = ovs_thread_create("ct_clean", clean_thread_main, ct);
+    ct->ipf = ipf_init();
 }
 
 /* Destroys the connection tracker 'ct' and frees all the allocated memory. */
@@ -382,6 +384,7 @@ conntrack_destroy(struct conntrack *ct)
     hindex_destroy(&ct->alg_expectation_refs);
     ct_rwlock_unlock(&ct->resources_lock);
     ct_rwlock_destroy(&ct->resources_lock);
+    ipf_destroy(ct->ipf);
 }
 
 static unsigned hash_to_bucket(uint32_t hash)
@@ -420,8 +423,8 @@ write_ct_md(struct dp_packet *pkt, uint16_t zone, const struct conn *conn,
     if (key) {
         if (key->dl_type == htons(ETH_TYPE_IP)) {
             pkt->md.ct_orig_tuple.ipv4 = (struct ovs_key_ct_tuple_ipv4) {
-                key->src.addr.ipv4_aligned,
-                key->dst.addr.ipv4_aligned,
+                key->src.addr.ipv4,
+                key->dst.addr.ipv4,
                 key->nw_proto != IPPROTO_ICMP
                 ? key->src.port : htons(key->src.icmp_type),
                 key->nw_proto != IPPROTO_ICMP
@@ -431,8 +434,8 @@ write_ct_md(struct dp_packet *pkt, uint16_t zone, const struct conn *conn,
         } else {
             pkt->md.ct_orig_tuple_ipv6 = true;
             pkt->md.ct_orig_tuple.ipv6 = (struct ovs_key_ct_tuple_ipv6) {
-                key->src.addr.ipv6_aligned,
-                key->dst.addr.ipv6_aligned,
+                key->src.addr.ipv6,
+                key->dst.addr.ipv6,
                 key->nw_proto != IPPROTO_ICMPV6
                 ? key->src.port : htons(key->src.icmp_type),
                 key->nw_proto != IPPROTO_ICMPV6
@@ -556,13 +559,12 @@ nat_packet(struct dp_packet *pkt, const struct conn *conn, bool related)
         if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *nh = dp_packet_l3(pkt);
             packet_set_ipv4_addr(pkt, &nh->ip_src,
-                                 conn->rev_key.dst.addr.ipv4_aligned);
+                                 conn->rev_key.dst.addr.ipv4);
         } else {
             struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
             packet_set_ipv6_addr(pkt, conn->key.nw_proto,
                                  nh6->ip6_src.be32,
-                                 &conn->rev_key.dst.addr.ipv6_aligned,
-                                 true);
+                                 &conn->rev_key.dst.addr.ipv6, true);
         }
         if (!related) {
             pat_packet(pkt, conn);
@@ -572,13 +574,12 @@ nat_packet(struct dp_packet *pkt, const struct conn *conn, bool related)
         if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *nh = dp_packet_l3(pkt);
             packet_set_ipv4_addr(pkt, &nh->ip_dst,
-                                 conn->rev_key.src.addr.ipv4_aligned);
+                                 conn->rev_key.src.addr.ipv4);
         } else {
             struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
             packet_set_ipv6_addr(pkt, conn->key.nw_proto,
                                  nh6->ip6_dst.be32,
-                                 &conn->rev_key.src.addr.ipv6_aligned,
-                                 true);
+                                 &conn->rev_key.src.addr.ipv6, true);
         }
         if (!related) {
             pat_packet(pkt, conn);
@@ -655,10 +656,10 @@ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
 
         if (conn->nat_info->nat_action & NAT_ACTION_SRC) {
             packet_set_ipv4_addr(pkt, &inner_l3->ip_src,
-                                 conn->key.src.addr.ipv4_aligned);
+                                 conn->key.src.addr.ipv4);
         } else if (conn->nat_info->nat_action & NAT_ACTION_DST) {
             packet_set_ipv4_addr(pkt, &inner_l3->ip_dst,
-                                 conn->key.dst.addr.ipv4_aligned);
+                                 conn->key.dst.addr.ipv4);
         }
 
         reverse_pat_packet(pkt, conn);
@@ -678,19 +679,16 @@ reverse_nat_packet(struct dp_packet *pkt, const struct conn *conn)
         if (conn->nat_info->nat_action & NAT_ACTION_SRC) {
             packet_set_ipv6_addr(pkt, conn->key.nw_proto,
                                  inner_l3_6->ip6_src.be32,
-                                 &conn->key.src.addr.ipv6_aligned,
-                                 true);
+                                 &conn->key.src.addr.ipv6, true);
         } else if (conn->nat_info->nat_action & NAT_ACTION_DST) {
             packet_set_ipv6_addr(pkt, conn->key.nw_proto,
                                  inner_l3_6->ip6_dst.be32,
-                                 &conn->key.dst.addr.ipv6_aligned,
-                                 true);
+                                 &conn->key.dst.addr.ipv6, true);
         }
         reverse_pat_packet(pkt, conn);
-        uint32_t icmp6_csum = packet_csum_pseudoheader6(nh6);
         icmp6->icmp6_base.icmp6_cksum = 0;
-        icmp6->icmp6_base.icmp6_cksum = csum_finish(
-            csum_continue(icmp6_csum, icmp6, tail - (char *) icmp6 - pad));
+        icmp6->icmp6_base.icmp6_cksum = packet_csum_upperlayer6(nh6, icmp6,
+            IPPROTO_ICMPV6, tail - (char *) icmp6 - pad);
     }
     pkt->l3_ofs = orig_l3_ofs;
     pkt->l4_ofs = orig_l4_ofs;
@@ -705,12 +703,12 @@ un_nat_packet(struct dp_packet *pkt, const struct conn *conn,
         if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *nh = dp_packet_l3(pkt);
             packet_set_ipv4_addr(pkt, &nh->ip_dst,
-                                 conn->key.src.addr.ipv4_aligned);
+                                 conn->key.src.addr.ipv4);
         } else {
             struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
             packet_set_ipv6_addr(pkt, conn->key.nw_proto,
                                  nh6->ip6_dst.be32,
-                                 &conn->key.src.addr.ipv6_aligned, true);
+                                 &conn->key.src.addr.ipv6, true);
         }
 
         if (OVS_UNLIKELY(related)) {
@@ -723,12 +721,12 @@ un_nat_packet(struct dp_packet *pkt, const struct conn *conn,
         if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *nh = dp_packet_l3(pkt);
             packet_set_ipv4_addr(pkt, &nh->ip_src,
-                                 conn->key.dst.addr.ipv4_aligned);
+                                 conn->key.dst.addr.ipv4);
         } else {
             struct ovs_16aligned_ip6_hdr *nh6 = dp_packet_l3(pkt);
             packet_set_ipv6_addr(pkt, conn->key.nw_proto,
                                  nh6->ip6_src.be32,
-                                 &conn->key.dst.addr.ipv6_aligned, true);
+                                 &conn->key.dst.addr.ipv6, true);
         }
 
         if (OVS_UNLIKELY(related)) {
@@ -1094,8 +1092,8 @@ check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
     ctx.conn = NULL;
 
     if (ctx_in->key.dl_type == htons(ETH_TYPE_IP)) {
-        ctx.key.src.addr.ipv4_aligned = pkt->md.ct_orig_tuple.ipv4.ipv4_src;
-        ctx.key.dst.addr.ipv4_aligned = pkt->md.ct_orig_tuple.ipv4.ipv4_dst;
+        ctx.key.src.addr.ipv4 = pkt->md.ct_orig_tuple.ipv4.ipv4_src;
+        ctx.key.dst.addr.ipv4 = pkt->md.ct_orig_tuple.ipv4.ipv4_dst;
 
         if (ctx_in->key.nw_proto == IPPROTO_ICMP) {
             ctx.key.src.icmp_id = ctx_in->key.src.icmp_id;
@@ -1109,8 +1107,8 @@ check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
         }
         ctx.key.nw_proto = pkt->md.ct_orig_tuple.ipv4.ipv4_proto;
     } else {
-        ctx.key.src.addr.ipv6_aligned = pkt->md.ct_orig_tuple.ipv6.ipv6_src;
-        ctx.key.dst.addr.ipv6_aligned = pkt->md.ct_orig_tuple.ipv6.ipv6_dst;
+        ctx.key.src.addr.ipv6 = pkt->md.ct_orig_tuple.ipv6.ipv6_src;
+        ctx.key.dst.addr.ipv6 = pkt->md.ct_orig_tuple.ipv6.ipv6_dst;
 
         if (ctx_in->key.nw_proto == IPPROTO_ICMPV6) {
             ctx.key.src.icmp_id = ctx_in->key.src.icmp_id;
@@ -1298,8 +1296,9 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
 }
 
 /* Sends the packets in '*pkt_batch' through the connection tracker 'ct'.  All
- * the packets should have the same 'dl_type' (IPv4 or IPv6) and should have
- * the l3 and and l4 offset properly set.
+ * the packets must have the same 'dl_type' (IPv4 or IPv6) and should have
+ * the l3 and and l4 offset properly set.  Performs fragment reassembly with
+ * the help of ipf_preprocess_conntrack().
  *
  * If 'commit' is true, the packets are allowed to create new entries in the
  * connection tables.  'setmark', if not NULL, should point to a two
@@ -1314,12 +1313,15 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
                   const struct nat_action_info_t *nat_action_info,
                   long long now)
 {
+    ipf_preprocess_conntrack(ct->ipf, pkt_batch, now, dl_type, zone,
+                             ct->hash_basis);
 
     struct dp_packet *packet;
     struct conn_lookup_ctx ctx;
 
     DP_PACKET_BATCH_FOR_EACH (i, packet, pkt_batch) {
-        if (!conn_key_extract(ct, packet, dl_type, &ctx, zone)) {
+        if (packet->md.ct_state == CS_INVALID
+            || !conn_key_extract(ct, packet, dl_type, &ctx, zone)) {
             packet->md.ct_state = CS_INVALID;
             write_ct_md(packet, zone, NULL, NULL, NULL);
             continue;
@@ -1327,6 +1329,8 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
         process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
                     setlabel, nat_action_info, tp_src, tp_dst, helper);
     }
+
+    ipf_postprocess_conntrack(ct->ipf, pkt_batch, now, dl_type);
 
     return 0;
 }
@@ -1537,8 +1541,8 @@ extract_l3_ipv4(struct conn_key *key, const void *data, size_t size,
         *new_data = (char *) data + ip_len;
     }
 
-    key->src.addr.ipv4 = ip->ip_src;
-    key->dst.addr.ipv4 = ip->ip_dst;
+    key->src.addr.ipv4 = get_16aligned_be32(&ip->ip_src);
+    key->dst.addr.ipv4 = get_16aligned_be32(&ip->ip_dst);
     key->nw_proto = ip->ip_proto;
 
     return true;
@@ -1562,7 +1566,8 @@ extract_l3_ipv6(struct conn_key *key, const void *data, size_t size,
     uint8_t nw_proto = ip6->ip6_nxt;
     uint8_t nw_frag = 0;
 
-    if (!parse_ipv6_ext_hdrs(&data, &size, &nw_proto, &nw_frag)) {
+    const struct ovs_16aligned_ip6_frag *frag_hdr;
+    if (!parse_ipv6_ext_hdrs(&data, &size, &nw_proto, &nw_frag, &frag_hdr)) {
         return false;
     }
 
@@ -1574,8 +1579,8 @@ extract_l3_ipv6(struct conn_key *key, const void *data, size_t size,
         *new_data = data;
     }
 
-    key->src.addr.ipv6 = ip6->ip6_src;
-    key->dst.addr.ipv6 = ip6->ip6_dst;
+    memcpy(&key->src.addr.ipv6, &ip6->ip6_src, sizeof key->src.addr);
+    memcpy(&key->dst.addr.ipv6, &ip6->ip6_dst, sizeof key->dst.addr);
     key->nw_proto = nw_proto;
 
     return true;
@@ -1585,19 +1590,14 @@ static inline bool
 checksum_valid(const struct conn_key *key, const void *data, size_t size,
                const void *l3)
 {
-    uint32_t csum = 0;
-
     if (key->dl_type == htons(ETH_TYPE_IP)) {
-        csum = packet_csum_pseudoheader(l3);
+        uint32_t csum = packet_csum_pseudoheader(l3);
+        return csum_finish(csum_continue(csum, data, size)) == 0;
     } else if (key->dl_type == htons(ETH_TYPE_IPV6)) {
-        csum = packet_csum_pseudoheader6(l3);
+        return packet_csum_upperlayer6(l3, data, key->nw_proto, size) == 0;
     } else {
         return false;
     }
-
-    csum = csum_continue(csum, data, size);
-
-    return csum_finish(csum) == 0;
 }
 
 static inline bool
@@ -1759,7 +1759,7 @@ extract_l4_icmp(struct conn_key *key, const void *data, size_t size,
             return false;
         }
 
-        if (inner_key.src.addr.ipv4_aligned != key->dst.addr.ipv4_aligned) {
+        if (inner_key.src.addr.ipv4 != key->dst.addr.ipv4) {
             return false;
         }
 
@@ -1845,8 +1845,8 @@ extract_l4_icmp6(struct conn_key *key, const void *data, size_t size,
         }
 
         /* pf doesn't do this, but it seems a good idea */
-        if (!ipv6_addr_equals(&inner_key.src.addr.ipv6_aligned,
-                              &key->dst.addr.ipv6_aligned)) {
+        if (!ipv6_addr_equals(&inner_key.src.addr.ipv6,
+                              &key->dst.addr.ipv6)) {
             return false;
         }
 
@@ -1874,6 +1874,9 @@ extract_l4_icmp6(struct conn_key *key, const void *data, size_t size,
  * If 'related' is not NULL and an ICMP error packet is being
  * processed, the function will extract the key from the packet nested
  * in the ICMP payload and set '*related' to true.
+ *
+ * 'size' here is the layer 4 size, which can be a nested size if parsing
+ * an ICMP or ICMP6 header.
  *
  * If 'related' is NULL, it means that we're already parsing a header nested
  * in an ICMP error.  In this case, we skip checksum and length validation. */
@@ -1949,7 +1952,6 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
      *     we use a sparse representation (miniflow).
      *
      */
-    const char *tail = dp_packet_tail(pkt);
     bool ok;
     ctx->key.dl_type = dl_type;
 
@@ -1960,11 +1962,11 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
         } else {
             bool hwol_good_l3_csum = dp_packet_ip_checksum_valid(pkt);
             /* Validate the checksum only when hwol is not supported. */
-            ok = extract_l3_ipv4(&ctx->key, l3, tail - (char *) l3, NULL,
+            ok = extract_l3_ipv4(&ctx->key, l3, dp_packet_l3_size(pkt), NULL,
                                  !hwol_good_l3_csum);
         }
     } else if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-        ok = extract_l3_ipv6(&ctx->key, l3, tail - (char *) l3, NULL);
+        ok = extract_l3_ipv6(&ctx->key, l3, dp_packet_l3_size(pkt), NULL);
     } else {
         ok = false;
     }
@@ -1974,8 +1976,8 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
         if (!hwol_bad_l4_csum) {
             bool  hwol_good_l4_csum = dp_packet_l4_checksum_valid(pkt);
             /* Validate the checksum only when hwol is not supported. */
-            if (extract_l4(&ctx->key, l4, tail - l4, &ctx->icmp_related, l3,
-                           !hwol_good_l4_csum)) {
+            if (extract_l4(&ctx->key, l4, dp_packet_l4_size(pkt),
+                           &ctx->icmp_related, l3, !hwol_good_l4_csum)) {
                 ctx->hash = conn_key_hash(&ctx->key, ct->hash_basis);
                 return true;
             }
@@ -1986,7 +1988,7 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
 }
 
 static uint32_t
-ct_addr_hash_add(uint32_t hash, const struct ct_addr *addr)
+ct_addr_hash_add(uint32_t hash, const union ct_addr *addr)
 {
     BUILD_ASSERT_DECL(sizeof *addr % 4 == 0);
     return hash_add_bytes32(hash, (const uint32_t *) addr, sizeof *addr);
@@ -2012,11 +2014,9 @@ conn_key_hash(const struct conn_key *key, uint32_t basis)
     hash = hsrc ^ hdst;
 
     /* Hash the rest of the key(L3 and L4 types and zone). */
-    hash = hash_words((uint32_t *) (&key->dst + 1),
+    return hash_words((uint32_t *) (&key->dst + 1),
                       (uint32_t *) (key + 1) - (uint32_t *) (&key->dst + 1),
                       hash);
-
-    return hash_finish(hash, 0);
 }
 
 static void
@@ -2028,13 +2028,12 @@ conn_key_reverse(struct conn_key *key)
 }
 
 static uint32_t
-nat_ipv6_addrs_delta(struct in6_addr *ipv6_aligned_min,
-                     struct in6_addr *ipv6_aligned_max)
+nat_ipv6_addrs_delta(struct in6_addr *ipv6_min, struct in6_addr *ipv6_max)
 {
-    uint8_t *ipv6_min_hi = &ipv6_aligned_min->s6_addr[0];
-    uint8_t *ipv6_min_lo = &ipv6_aligned_min->s6_addr[0] +  sizeof(uint64_t);
-    uint8_t *ipv6_max_hi = &ipv6_aligned_max->s6_addr[0];
-    uint8_t *ipv6_max_lo = &ipv6_aligned_max->s6_addr[0] + sizeof(uint64_t);
+    uint8_t *ipv6_min_hi = &ipv6_min->s6_addr[0];
+    uint8_t *ipv6_min_lo = &ipv6_min->s6_addr[0] +  sizeof(uint64_t);
+    uint8_t *ipv6_max_hi = &ipv6_max->s6_addr[0];
+    uint8_t *ipv6_max_lo = &ipv6_max->s6_addr[0] + sizeof(uint64_t);
 
     ovs_be64 addr6_64_min_hi;
     ovs_be64 addr6_64_min_lo;
@@ -2071,10 +2070,10 @@ nat_ipv6_addrs_delta(struct in6_addr *ipv6_aligned_min,
 /* This function must be used in tandem with nat_ipv6_addrs_delta(), which
  * restricts the input parameters. */
 static void
-nat_ipv6_addr_increment(struct in6_addr *ipv6_aligned, uint32_t increment)
+nat_ipv6_addr_increment(struct in6_addr *ipv6, uint32_t increment)
 {
-    uint8_t *ipv6_hi = &ipv6_aligned->s6_addr[0];
-    uint8_t *ipv6_lo = &ipv6_aligned->s6_addr[0] + sizeof(ovs_be64);
+    uint8_t *ipv6_hi = &ipv6->s6_addr[0];
+    uint8_t *ipv6_lo = &ipv6->s6_addr[0] + sizeof(ovs_be64);
     ovs_be64 addr6_64_hi;
     ovs_be64 addr6_64_lo;
     memcpy(&addr6_64_hi, ipv6_hi, sizeof addr6_64_hi);
@@ -2148,52 +2147,49 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
 
     uint32_t deltaa = 0;
     uint32_t address_index;
-    struct ct_addr ct_addr;
+    union ct_addr ct_addr;
     memset(&ct_addr, 0, sizeof ct_addr);
-    struct ct_addr max_ct_addr;
+    union ct_addr max_ct_addr;
     memset(&max_ct_addr, 0, sizeof max_ct_addr);
     max_ct_addr = conn->nat_info->max_addr;
 
     if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
-        deltaa = ntohl(conn->nat_info->max_addr.ipv4_aligned) -
-                 ntohl(conn->nat_info->min_addr.ipv4_aligned);
+        deltaa = ntohl(conn->nat_info->max_addr.ipv4) -
+                 ntohl(conn->nat_info->min_addr.ipv4);
         address_index = hash % (deltaa + 1);
-        ct_addr.ipv4_aligned = htonl(
-            ntohl(conn->nat_info->min_addr.ipv4_aligned) + address_index);
+        ct_addr.ipv4 = htonl(
+            ntohl(conn->nat_info->min_addr.ipv4) + address_index);
     } else {
-        deltaa = nat_ipv6_addrs_delta(&conn->nat_info->min_addr.ipv6_aligned,
-                                      &conn->nat_info->max_addr.ipv6_aligned);
+        deltaa = nat_ipv6_addrs_delta(&conn->nat_info->min_addr.ipv6,
+                                      &conn->nat_info->max_addr.ipv6);
         /* deltaa must be within 32 bits for full hash coverage. A 64 or
          * 128 bit hash is unnecessary and hence not used here. Most code
          * is kept common with V4; nat_ipv6_addrs_delta() will do the
          * enforcement via max_ct_addr. */
         max_ct_addr = conn->nat_info->min_addr;
-        nat_ipv6_addr_increment(&max_ct_addr.ipv6_aligned, deltaa);
+        nat_ipv6_addr_increment(&max_ct_addr.ipv6, deltaa);
         address_index = hash % (deltaa + 1);
-        ct_addr.ipv6_aligned = conn->nat_info->min_addr.ipv6_aligned;
-        nat_ipv6_addr_increment(&ct_addr.ipv6_aligned, address_index);
+        ct_addr.ipv6 = conn->nat_info->min_addr.ipv6;
+        nat_ipv6_addr_increment(&ct_addr.ipv6, address_index);
     }
 
     uint16_t port = first_port;
     bool all_ports_tried = false;
-    /* For DNAT, we don't use ephemeral ports. */
-    bool ephemeral_ports_tried = conn->nat_info->nat_action & NAT_ACTION_DST
-                                 ? true : false;
-    struct ct_addr first_addr = ct_addr;
+    /* For DNAT or for specified port ranges, we don't use ephemeral ports. */
+    bool ephemeral_ports_tried
+        = conn->nat_info->nat_action & NAT_ACTION_DST ||
+              conn->nat_info->nat_action & NAT_ACTION_SRC_PORT
+          ? true : false;
+    union ct_addr first_addr = ct_addr;
+    bool pat_enabled = conn->key.nw_proto != IPPROTO_ICMP &&
+                       conn->key.nw_proto != IPPROTO_ICMPV6;
 
     while (true) {
         if (conn->nat_info->nat_action & NAT_ACTION_SRC) {
             nat_conn->rev_key.dst.addr = ct_addr;
-        } else {
-            nat_conn->rev_key.src.addr = ct_addr;
-        }
-
-        if ((conn->key.nw_proto == IPPROTO_ICMP) ||
-            (conn->key.nw_proto == IPPROTO_ICMPV6)) {
-            all_ports_tried = true;
-        } else if (conn->nat_info->nat_action & NAT_ACTION_SRC) {
             nat_conn->rev_key.dst.port = htons(port);
         } else {
+            nat_conn->rev_key.src.addr = ct_addr;
             nat_conn->rev_key.src.port = htons(port);
         }
 
@@ -2201,7 +2197,7 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
                                                ct->hash_basis);
         if (new_insert) {
             return true;
-        } else if (!all_ports_tried) {
+        } else if (pat_enabled && !all_ports_tried) {
             if (min_port == max_port) {
                 all_ports_tried = true;
             } else if (port == max_port) {
@@ -2215,16 +2211,15 @@ nat_select_range_tuple(struct conntrack *ct, const struct conn *conn,
         } else {
             if (memcmp(&ct_addr, &max_ct_addr, sizeof ct_addr)) {
                 if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
-                    ct_addr.ipv4_aligned = htonl(
-                        ntohl(ct_addr.ipv4_aligned) + 1);
+                    ct_addr.ipv4 = htonl(ntohl(ct_addr.ipv4) + 1);
                 } else {
-                    nat_ipv6_addr_increment(&ct_addr.ipv6_aligned, 1);
+                    nat_ipv6_addr_increment(&ct_addr.ipv6, 1);
                 }
             } else {
                 ct_addr = conn->nat_info->min_addr;
             }
             if (!memcmp(&ct_addr, &first_addr, sizeof ct_addr)) {
-                if (!ephemeral_ports_tried) {
+                if (pat_enabled && !ephemeral_ports_tried) {
                     ephemeral_ports_tried = true;
                     ct_addr = conn->nat_info->min_addr;
                     first_addr = ct_addr;
@@ -2370,14 +2365,14 @@ delete_conn(struct conn *conn)
  * Note that 'dl_type' should be either "ETH_TYPE_IP" or "ETH_TYPE_IPv6"
  * in network-byte order. */
 static void
-ct_endpoint_to_ct_dpif_inet_addr(const struct ct_addr *a,
+ct_endpoint_to_ct_dpif_inet_addr(const union ct_addr *a,
                                  union ct_dpif_inet_addr *b,
                                  ovs_be16 dl_type)
 {
     if (dl_type == htons(ETH_TYPE_IP)) {
-        b->ip = a->ipv4_aligned;
+        b->ip = a->ipv4;
     } else if (dl_type == htons(ETH_TYPE_IPV6)){
-        b->in6 = a->ipv6_aligned;
+        b->in6 = a->ipv6;
     }
 }
 
@@ -2387,13 +2382,12 @@ ct_endpoint_to_ct_dpif_inet_addr(const struct ct_addr *a,
  * in network-byte order. */
 static void
 ct_dpif_inet_addr_to_ct_endpoint(const union ct_dpif_inet_addr *a,
-                                 struct ct_addr *b,
-                                 ovs_be16 dl_type)
+                                 union ct_addr *b, ovs_be16 dl_type)
 {
     if (dl_type == htons(ETH_TYPE_IP)) {
-        b->ipv4_aligned = a->ip;
+        b->ipv4 = a->ip;
     } else if (dl_type == htons(ETH_TYPE_IPV6)){
-        b->ipv6_aligned = a->in6;
+        b->ipv6 = a->in6;
     }
 }
 
@@ -2480,6 +2474,12 @@ conn_to_ct_dpif_entry(const struct conn *conn, struct ct_dpif_entry *entry,
         /* Caller is responsible for freeing. */
         entry->helper.name = xstrdup(conn->alg);
     }
+}
+
+struct ipf *
+conntrack_ipf_ctx(struct conntrack *ct)
+{
+    return ct->ipf;
 }
 
 int
@@ -2707,9 +2707,9 @@ expectation_create(struct conntrack *ct, ovs_be16 dst_port,
                    const struct conn *master_conn, bool reply, bool src_ip_wc,
                    bool skip_nat)
 {
-    struct ct_addr src_addr;
-    struct ct_addr dst_addr;
-    struct ct_addr alg_nat_repl_addr;
+    union ct_addr src_addr;
+    union ct_addr dst_addr;
+    union ct_addr alg_nat_repl_addr;
     struct alg_exp_node *alg_exp_node = xzalloc(sizeof *alg_exp_node);
 
     if (reply) {
@@ -2997,23 +2997,18 @@ process_ftp_ctl_v4(struct conntrack *ct,
         return CT_FTP_CTL_INVALID;
     }
 
-    uint16_t port_lo_hs = value;
-    if (65535 - port_hs < port_lo_hs) {
-        return CT_FTP_CTL_INVALID;
-    }
-
-    port_hs |= port_lo_hs;
+    port_hs |= value;
     ovs_be16 port = htons(port_hs);
     ovs_be32 conn_ipv4_addr;
 
     switch (mode) {
     case CT_FTP_MODE_ACTIVE:
-        *v4_addr_rep = conn_for_expectation->rev_key.dst.addr.ipv4_aligned;
-        conn_ipv4_addr = conn_for_expectation->key.src.addr.ipv4_aligned;
+        *v4_addr_rep = conn_for_expectation->rev_key.dst.addr.ipv4;
+        conn_ipv4_addr = conn_for_expectation->key.src.addr.ipv4;
         break;
     case CT_FTP_MODE_PASSIVE:
-        *v4_addr_rep = conn_for_expectation->key.dst.addr.ipv4_aligned;
-        conn_ipv4_addr = conn_for_expectation->rev_key.src.addr.ipv4_aligned;
+        *v4_addr_rep = conn_for_expectation->key.dst.addr.ipv4;
+        conn_ipv4_addr = conn_for_expectation->rev_key.src.addr.ipv4;
         break;
     case CT_TFTP_MODE:
     default:
@@ -3046,8 +3041,7 @@ static enum ftp_ctl_pkt
 process_ftp_ctl_v6(struct conntrack *ct,
                    struct dp_packet *pkt,
                    const struct conn *conn_for_expectation,
-                   struct ct_addr *v6_addr_rep,
-                   char **ftp_data_start,
+                   union ct_addr *v6_addr_rep, char **ftp_data_start,
                    size_t *addr_offset_from_ftp_data_start,
                    size_t *addr_size, enum ct_alg_mode *mode)
 {
@@ -3117,8 +3111,8 @@ process_ftp_ctl_v6(struct conntrack *ct,
         *v6_addr_rep = conn_for_expectation->rev_key.dst.addr;
         /* Although most servers will block this exploit, there may be some
          * less well managed. */
-        if (memcmp(&ip6_addr, &v6_addr_rep->ipv6_aligned, sizeof ip6_addr) &&
-            memcmp(&ip6_addr, &conn_for_expectation->key.src.addr.ipv6_aligned,
+        if (memcmp(&ip6_addr, &v6_addr_rep->ipv6, sizeof ip6_addr) &&
+            memcmp(&ip6_addr, &conn_for_expectation->key.src.addr.ipv6,
                    sizeof ip6_addr)) {
             return CT_FTP_CTL_INVALID;
         }
@@ -3137,7 +3131,7 @@ process_ftp_ctl_v6(struct conntrack *ct,
 }
 
 static int
-repl_ftp_v6_addr(struct dp_packet *pkt, struct ct_addr v6_addr_rep,
+repl_ftp_v6_addr(struct dp_packet *pkt, union ct_addr v6_addr_rep,
                  char *ftp_data_start,
                  size_t addr_offset_from_ftp_data_start,
                  size_t addr_size, enum ct_alg_mode mode)
@@ -3161,7 +3155,7 @@ repl_ftp_v6_addr(struct dp_packet *pkt, struct ct_addr v6_addr_rep,
     }
 
     char v6_addr_str[INET6_ADDRSTRLEN] = {0};
-    ovs_assert(inet_ntop(AF_INET6, &v6_addr_rep.ipv6_aligned, v6_addr_str,
+    ovs_assert(inet_ntop(AF_INET6, &v6_addr_rep.ipv6, v6_addr_str,
                          sizeof v6_addr_str));
     modify_packet(pkt, ftp_data_start + addr_offset_from_ftp_data_start,
                   addr_size, v6_addr_str, strlen(v6_addr_str),
@@ -3183,7 +3177,7 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
 {
     struct ip_header *l3_hdr = dp_packet_l3(pkt);
     ovs_be32 v4_addr_rep = 0;
-    struct ct_addr v6_addr_rep;
+    union ct_addr v6_addr_rep;
     size_t addr_offset_from_ftp_data_start = 0;
     size_t addr_size = 0;
     char *ftp_data_start;
@@ -3258,16 +3252,14 @@ handle_ftp_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     }
 
     th->tcp_csum = 0;
-    uint32_t tcp_csum;
     if (ctx->key.dl_type == htons(ETH_TYPE_IPV6)) {
-        tcp_csum = packet_csum_pseudoheader6(nh6);
+        th->tcp_csum = packet_csum_upperlayer6(nh6, th, ctx->key.nw_proto,
+                           dp_packet_l4_size(pkt));
     } else {
-        tcp_csum = packet_csum_pseudoheader(l3_hdr);
+        uint32_t tcp_csum = packet_csum_pseudoheader(l3_hdr);
+        th->tcp_csum = csum_finish(
+             csum_continue(tcp_csum, th, dp_packet_l4_size(pkt)));
     }
-    const char *tail = dp_packet_tail(pkt);
-    uint8_t pad = dp_packet_l2_pad_size(pkt);
-    th->tcp_csum = csum_finish(
-        csum_continue(tcp_csum, th, tail - (char *) th - pad));
 
     if (seq_skew) {
         conn_seq_skew_set(ct, &ec->key, now, seq_skew + ec->seq_skew,

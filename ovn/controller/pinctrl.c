@@ -622,12 +622,13 @@ pinctrl_handle_put_dhcp_opts(
     in_dhcp_ptr += sizeof *in_dhcp_data;
     if (in_dhcp_ptr > end) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid or incomplete DHCP packet received");
+        VLOG_WARN_RL(&rl, "Invalid or incomplete DHCP packet received, "
+                     "bad data length");
         goto exit;
     }
     if (in_dhcp_data->op != DHCP_OP_REQUEST) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid opcode in the DHCP packet : %d",
+        VLOG_WARN_RL(&rl, "Invalid opcode in the DHCP packet: %d",
                      in_dhcp_data->op);
         goto exit;
     }
@@ -692,7 +693,7 @@ pinctrl_handle_put_dhcp_opts(
     if (*in_dhcp_msg_type != DHCP_MSG_DISCOVER &&
         *in_dhcp_msg_type != DHCP_MSG_REQUEST) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "Invalid DHCP message type : %d", *in_dhcp_msg_type);
+        VLOG_WARN_RL(&rl, "Invalid DHCP message type: %d", *in_dhcp_msg_type);
         goto exit;
     }
 
@@ -1024,13 +1025,13 @@ pinctrl_handle_put_dhcpv6_opts(
 
     if (!in_opt_client_id) {
         VLOG_WARN_RL(&rl, "DHCPv6 option - Client id not present in the "
-                     " DHCPv6 packet");
+                     "DHCPv6 packet");
         goto exit;
     }
 
     if (!iaid && in_dhcpv6_msg_type != DHCPV6_MSG_TYPE_INFO_REQ) {
         VLOG_WARN_RL(&rl, "DHCPv6 option - IA NA not present in the "
-                     " DHCPv6 packet");
+                     "DHCPv6 packet");
         goto exit;
     }
 
@@ -2259,9 +2260,9 @@ get_localnet_vifs_l3gwports(
         if (!strcmp(port_rec->name, br_int->name)) {
             continue;
         }
-        const char *chassis_id = smap_get(&port_rec->external_ids,
+        const char *tunnel_id = smap_get(&port_rec->external_ids,
                                           "ovn-chassis-id");
-        if (chassis_id && !strcmp(chassis_id, chassis->name)) {
+        if (tunnel_id && strstr(tunnel_id, chassis->name)) {
             continue;
         }
         const char *localnet = smap_get(&port_rec->external_ids,
@@ -2391,8 +2392,8 @@ extract_addresses_with_port(const char *addresses,
     if (lexer.token.type != LEX_T_STRING) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         VLOG_INFO_RL(&rl,
-                    "Syntax error: expecting quoted string after"
-                    " 'is_chassis_resident' in address '%s'", addresses);
+                    "Syntax error: expecting quoted string after "
+                    "'is_chassis_resident' in address '%s'", addresses);
         lexer_destroy(&lexer);
         return false;
     }

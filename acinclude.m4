@@ -223,9 +223,11 @@ AC_DEFUN([OVS_CHECK_DPDK], [
     case "$with_dpdk" in
       yes)
         DPDK_AUTO_DISCOVER="true"
-        PKG_CHECK_MODULES([DPDK], [libdpdk],
-                          [DPDK_INCLUDE="$DPDK_CFLAGS"],
-                          [DPDK_INCLUDE="-I/usr/local/include/dpdk -I/usr/include/dpdk"])
+        PKG_CHECK_MODULES_STATIC([DPDK], [libdpdk], [
+            DPDK_INCLUDE="$DPDK_CFLAGS"
+            DPDK_LIB="$DPDK_LIBS"], [
+            DPDK_INCLUDE="-I/usr/local/include/dpdk -I/usr/include/dpdk"
+            DPDK_LIB="-ldpdk"])
         ;;
       *)
         DPDK_AUTO_DISCOVER="false"
@@ -238,11 +240,9 @@ AC_DEFUN([OVS_CHECK_DPDK], [
            DPDK_INCLUDE="-I$DPDK_INCLUDE_PATH/dpdk"
         fi
         DPDK_LIB_DIR="$with_dpdk/lib"
+        DPDK_LIB="-ldpdk"
         ;;
     esac
-
-    DPDK_LIB="-ldpdk"
-    DPDK_EXTRA_LIB=""
 
     ovs_save_CFLAGS="$CFLAGS"
     ovs_save_LDFLAGS="$LDFLAGS"
@@ -251,17 +251,20 @@ AC_DEFUN([OVS_CHECK_DPDK], [
       LDFLAGS="$LDFLAGS -L${DPDK_LIB_DIR}"
     fi
 
+    AC_CHECK_HEADERS([rte_config.h], [], [
+      AC_MSG_ERROR([unable to find rte_config.h in $with_dpdk])
+    ], [AC_INCLUDES_DEFAULT])
+
     AC_COMPILE_IFELSE([
       AC_LANG_PROGRAM(
         [
           #include <rte_config.h>
-#if RTE_LIBRTE_VHOST_NUMA
+#if defined(RTE_LIBRTE_VHOST_NUMA) || defined(RTE_EAL_NUMA_AWARE_HUGEPAGES)
 #error
 #endif
         ], [])
       ], [],
       [AC_SEARCH_LIBS([get_mempolicy],[numa],[],[AC_MSG_ERROR([unable to find libnuma, install the dependency package])])
-       DPDK_EXTRA_LIB="-lnuma"
        AC_DEFINE([VHOST_NUMA], [1], [NUMA Aware vHost support detected in DPDK.])])
 
     AC_COMPILE_IFELSE([
@@ -274,7 +277,6 @@ AC_DEFUN([OVS_CHECK_DPDK], [
         ], [])
       ], [],
       [AC_SEARCH_LIBS([pcap_dump],[pcap],[],[AC_MSG_ERROR([unable to find libpcap, install the dependency package])])
-       DPDK_EXTRA_LIB="-lpcap"
        AC_COMPILE_IFELSE([
          AC_LANG_PROGRAM(
            [
@@ -296,9 +298,43 @@ AC_DEFUN([OVS_CHECK_DPDK], [
 #endif
         ], [])
       ], [],
-      [AC_SEARCH_LIBS([mnl_attr_put],[mnl],[],[AC_MSG_ERROR([unable to find libmnl, install the dependency package])])
-       DPDK_EXTRA_LIB="-lmnl"
-       AC_DEFINE([DPDK_MNL], [1], [MLX5 PMD detected in DPDK.])])
+      [AC_SEARCH_LIBS([mnl_attr_put],[mnl],[],[AC_MSG_ERROR([unable to find libmnl, install the dependency package])])])
+
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if defined(RTE_LIBRTE_MLX5_PMD) && !defined(RTE_LIBRTE_MLX5_DLOPEN_DEPS)
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([mlx5dv_create_wq],[mlx5],[],[AC_MSG_ERROR([unable to find libmlx5, install the dependency package])])])
+
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if defined(RTE_LIBRTE_MLX4_PMD) && !defined(RTE_LIBRTE_MLX4_DLOPEN_DEPS)
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([mlx4dv_init_obj],[mlx4],[],[AC_MSG_ERROR([unable to find libmlx4, install the dependency package])])])
+
+    AC_COMPILE_IFELSE([
+      AC_LANG_PROGRAM(
+        [
+          #include <rte_config.h>
+#if defined(RTE_LIBRTE_MLX5_PMD) && !defined(RTE_LIBRTE_MLX5_DLOPEN_DEPS)
+#error
+#endif
+#if defined(RTE_LIBRTE_MLX4_PMD) && !defined(RTE_LIBRTE_MLX4_DLOPEN_DEPS)
+#error
+#endif
+        ], [])
+      ], [],
+      [AC_SEARCH_LIBS([verbs_init_cq],[ibverbs],[],[AC_MSG_ERROR([unable to find libibverbs, install the dependency package])])])
 
     # On some systems we have to add -ldl to link with dpdk
     #
@@ -310,7 +346,7 @@ AC_DEFUN([OVS_CHECK_DPDK], [
     DPDKLIB_FOUND=false
     save_LIBS=$LIBS
     for extras in "" "-ldl"; do
-        LIBS="$DPDK_LIB $extras $save_LIBS $DPDK_EXTRA_LIB"
+        LIBS="$DPDK_LIB $extras $save_LIBS"
         AC_LINK_IFELSE(
            [AC_LANG_PROGRAM([#include <rte_config.h>
                              #include <rte_eal.h>],
@@ -346,7 +382,14 @@ AC_DEFUN([OVS_CHECK_DPDK], [
     #
     # These options are specified inside a single -Wl directive to prevent
     # autotools from reordering them.
-    DPDK_vswitchd_LDFLAGS=-Wl,--whole-archive,$DPDK_LIB,--no-whole-archive
+    #
+    # OTOH newer versions of dpdk pkg-config (generated with Meson)
+    # will already have flagged just the right set of libs with
+    # --whole-archive - in those cases do not wrap it once more.
+    case "$DPDK_LIB" in
+      *whole-archive*) DPDK_vswitchd_LDFLAGS=$DPDK_LIB;;
+      *) DPDK_vswitchd_LDFLAGS=-Wl,--whole-archive,$DPDK_LIB,--no-whole-archive
+    esac
     AC_SUBST([DPDK_vswitchd_LDFLAGS])
     AC_DEFINE([DPDK_NETDEV], [1], [System uses the DPDK module.])
   fi

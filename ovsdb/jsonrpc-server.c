@@ -986,13 +986,19 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
             ovsdb_jsonrpc_trigger_create(s, db, request);
         }
     } else if (!strcmp(request->method, "monitor") ||
-               (monitor_cond_enable__ && !strcmp(request->method,
-                                                 "monitor_cond"))) {
+               (monitor_cond_enable__ &&
+                (!strcmp(request->method, "monitor_cond") ||
+                 !strcmp(request->method, "monitor_cond_since")))) {
         struct ovsdb *db = ovsdb_jsonrpc_lookup_db(s, request, &reply);
         if (!reply) {
-            int l = strlen(request->method) - strlen("monitor");
-            enum ovsdb_monitor_version version = l ? OVSDB_MONITOR_V2
-                                                   : OVSDB_MONITOR_V1;
+            enum ovsdb_monitor_version version;
+            if (!strcmp(request->method, "monitor")) {
+                version = OVSDB_MONITOR_V1;
+            } else if (!strcmp(request->method, "monitor_cond")) {
+                version = OVSDB_MONITOR_V2;
+            } else {
+                version = OVSDB_MONITOR_V3;
+            }
             reply = ovsdb_jsonrpc_monitor_create(s, db, request->params,
                                                  version, request->id);
         }
@@ -1216,8 +1222,7 @@ struct ovsdb_jsonrpc_monitor {
     struct ovsdb *db;
     struct json *monitor_id;
     struct ovsdb_monitor *dbmon;
-    uint64_t unflushed;         /* The first transaction that has not been
-                                       flushed to the jsonrpc remote client. */
+    struct ovsdb_monitor_change_set *change_set;
     enum ovsdb_monitor_version version;
     struct ovsdb_monitor_session_condition *condition;/* Session's condition */
 };
@@ -1365,7 +1370,8 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     struct shash_node *node;
     struct json *json;
 
-    if (json_array(params)->n != 3) {
+    if ((version == OVSDB_MONITOR_V2 && json_array(params)->n != 3) ||
+        (version == OVSDB_MONITOR_V3 && json_array(params)->n != 4)) {
         error = ovsdb_syntax_error(params, NULL, "invalid parameters");
         goto error;
     }
@@ -1386,10 +1392,9 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     m->session = s;
     m->db = db;
     m->dbmon = ovsdb_monitor_create(db, m);
-    if (version == OVSDB_MONITOR_V2) {
+    if (version == OVSDB_MONITOR_V2 || version == OVSDB_MONITOR_V3) {
         m->condition = ovsdb_monitor_session_condition_create();
     }
-    m->unflushed = 0;
     m->version = version;
     hmap_insert(&s->monitors, &m->node, json_hash(monitor_id, 0));
     m->monitor_id = json_clone(monitor_id);
@@ -1436,7 +1441,7 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     dbmon = ovsdb_monitor_add(m->dbmon);
     if (dbmon != m->dbmon) {
         /* Found an exisiting dbmon, reuse the current one. */
-        ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m, m->unflushed);
+        ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m, NULL);
         ovsdb_monitor_add_jsonrpc_monitor(dbmon, m);
         m->dbmon = dbmon;
     }
@@ -1446,9 +1451,42 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
         ovsdb_monitor_condition_bind(m->dbmon, m->condition);
     }
 
-    ovsdb_monitor_get_initial(m->dbmon);
-    json = ovsdb_jsonrpc_monitor_compose_update(m, true);
+    bool initial = false;
+    if (version == OVSDB_MONITOR_V3) {
+        struct json *last_id = params->array.elems[3];
+        if (last_id->type != JSON_STRING) {
+            error = ovsdb_syntax_error(last_id, NULL,
+                                       "last-txn-id must be string");
+            goto error;
+        }
+        struct uuid txn_uuid;
+        if (!uuid_from_string(&txn_uuid, last_id->string)) {
+            error = ovsdb_syntax_error(last_id, NULL,
+                                       "last-txn-id must be UUID format.");
+            goto error;
+        }
+        if (!uuid_is_zero(&txn_uuid)) {
+            ovsdb_monitor_get_changes_after(&txn_uuid, m->dbmon,
+                                            &m->change_set);
+        }
+    }
+    if (!m->change_set) {
+        ovsdb_monitor_get_initial(m->dbmon, &m->change_set);
+        initial = true;
+    }
+    json = ovsdb_jsonrpc_monitor_compose_update(m, initial);
     json = json ? json : json_object_create();
+
+    if (m->version == OVSDB_MONITOR_V3) {
+        struct json *json_last_id = json_string_create_nocopy(
+                xasprintf(UUID_FMT,
+                          UUID_ARGS(ovsdb_monitor_get_last_txnid(
+                                  m->dbmon))));
+
+        struct json *json_found = json_boolean_create(!initial);
+        json = json_array_create_3(json_found, json_last_id, json);
+    }
+
     return jsonrpc_create_reply(json, request_id);
 
 error:
@@ -1578,12 +1616,21 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
     struct json *update_json;
 
     update_json = ovsdb_monitor_get_update(m->dbmon, false, true,
-                                    &m->unflushed, m->condition, m->version);
+                                    m->condition, m->version, &m->change_set);
     if (update_json) {
         struct jsonrpc_msg *msg;
         struct json *p;
+        if (m->version == OVSDB_MONITOR_V3) {
+            struct json *json_last_id = json_string_create_nocopy(
+                    xasprintf(UUID_FMT,
+                              UUID_ARGS(ovsdb_monitor_get_last_txnid(
+                                      m->dbmon))));
 
-        p = json_array_create_2(json_clone(m->monitor_id), update_json);
+            p = json_array_create_3(json_clone(m->monitor_id), json_last_id,
+                                    update_json);
+        } else {
+            p = json_array_create_2(json_clone(m->monitor_id), update_json);
+        }
         msg = ovsdb_jsonrpc_create_notify(m, p);
         jsonrpc_session_send(s->js, msg);
     }
@@ -1648,12 +1695,12 @@ ovsdb_jsonrpc_monitor_compose_update(struct ovsdb_jsonrpc_monitor *m,
                                      bool initial)
 {
 
-    if (!ovsdb_monitor_needs_flush(m->dbmon, m->unflushed)) {
+    if (!ovsdb_monitor_needs_flush(m->dbmon, m->change_set)) {
         return NULL;
     }
 
     return ovsdb_monitor_get_update(m->dbmon, initial, false,
-                                    &m->unflushed, m->condition, m->version);
+                                    m->condition, m->version, &m->change_set);
 }
 
 static bool
@@ -1662,7 +1709,7 @@ ovsdb_jsonrpc_monitor_needs_flush(struct ovsdb_jsonrpc_session *s)
     struct ovsdb_jsonrpc_monitor *m;
 
     HMAP_FOR_EACH (m, node, &s->monitors) {
-        if (ovsdb_monitor_needs_flush(m->dbmon, m->unflushed)) {
+        if (ovsdb_monitor_needs_flush(m->dbmon, m->change_set)) {
             return true;
         }
     }
@@ -1686,7 +1733,7 @@ ovsdb_jsonrpc_monitor_destroy(struct ovsdb_jsonrpc_monitor *m,
 
     json_destroy(m->monitor_id);
     hmap_remove(&m->session->monitors, &m->node);
-    ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m, m->unflushed);
+    ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m, m->change_set);
     ovsdb_monitor_session_condition_destroy(m->condition);
     free(m);
 }
@@ -1703,6 +1750,9 @@ ovsdb_jsonrpc_create_notify(const struct ovsdb_jsonrpc_monitor *m,
         break;
     case OVSDB_MONITOR_V2:
         method = "update2";
+        break;
+    case OVSDB_MONITOR_V3:
+        method = "update3";
         break;
     case OVSDB_MONITOR_VERSION_MAX:
     default:
@@ -1730,8 +1780,17 @@ ovsdb_jsonrpc_monitor_flush_all(struct ovsdb_jsonrpc_session *s)
         if (json) {
             struct jsonrpc_msg *msg;
             struct json *params;
+            if (m->version == OVSDB_MONITOR_V3) {
+                struct json *json_last_id = json_string_create_nocopy(
+                        xasprintf(UUID_FMT,
+                                  UUID_ARGS(ovsdb_monitor_get_last_txnid(
+                                          m->dbmon))));
+                params = json_array_create_3(json_clone(m->monitor_id),
+                                             json_last_id, json);
+            } else {
+                params = json_array_create_2(json_clone(m->monitor_id), json);
+            }
 
-            params = json_array_create_2(json_clone(m->monitor_id), json);
             msg = ovsdb_jsonrpc_create_notify(m, params);
             jsonrpc_session_send(s->js, msg);
         }
