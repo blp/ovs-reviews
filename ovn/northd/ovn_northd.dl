@@ -134,13 +134,12 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
     },
     Some{var router_port} = map_get(lsp.options, "router-port"),
     (var __type, var options, var nat_addresses) = {
+        var options: Map<string, string> = map_singleton("peer", router_port);
         match (map_get(lr.options, "chassis")) {
             None -> {
-                ("patch", map_empty(): Map<string, string>, set_empty(): Set<string>/*TODO*/)
+                ("patch", options, set_empty(): Set<string>/*TODO*/)
             },
             Some{chassis} -> {
-                var options: Map<string, string> = map_empty();
-                map_insert(options, "peer", router_port);
                 map_insert(options, "l3gateway-chassis", chassis);
                 ("l3gateway", options, set_empty(): Set<string>/*TODO*/)
             }
@@ -811,27 +810,44 @@ function mFF_N_LOG_REGS()          : bit<32> = 10
         external_ids: Map<string,string>)
  */
 
+relation Flow (
+    logical_datapath: string,
+    pipeline: string,
+    table_id: integer,
+    priority: integer,
+    __match: string,
+    actions: string,
+    external_ids: Map<string,string>
+)
 
+sb.Out_Logical_Flow(.logical_datapath = f.logical_datapath,
+                    .pipeline         = f.pipeline,
+                    .table_id         = f.table_id,
+                    .priority         = f.priority,
+                    .__match          = f.__match,
+                    .actions          = f.actions,
+                    .external_ids     = f.external_ids)
+    :- Flow[f].
 
 /* Logical switch ingress table 0: admission control framework (priority 100) */
 for (&Switch(.dpname = dpname)) {
     /* Logical VLANs not supported */
-    sb.Out_Logical_Flow(.logical_datapath = dpname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, PORT_SEC_L2),
-                        .priority         = 100,
-                        .__match          = "vlan.present",
-                        .actions          = "drop;",
-                        .external_ids     = map_empty() /*TODO: check*/);
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PORT_SEC_L2),
+         .priority         = 100,
+         .__match          = "vlan.present",
+         .actions          = "drop;",
+         .external_ids     = map_empty() /*TODO: check*/);
 
     /* Broadcast/multicast source address is invalid */
-    sb.Out_Logical_Flow(.logical_datapath = dpname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, PORT_SEC_L2),
-                        .priority         = 100,
-                        .__match          = "eth.src[40]",
-                        .actions          = "drop;",
-                        .external_ids     = map_empty() /*TODO: check*/)
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PORT_SEC_L2),
+         .priority         = 100,
+         .__match          = "eth.src[40]",
+         .actions          = "drop;",
+         .external_ids     = map_empty() /*TODO: check*/)
     /* Port security flows have priority 50 (see below) and will continue to the next table
        if packet source is acceptable. */
 }
@@ -892,22 +908,20 @@ function build_port_security_ipv6_nd_flow(
 for (&Switch(.ls =ls, .dpname = dpname)) {
     /* Ingress and Egress Pre-ACL Table (Priority 0): Packets are
      * allowed by default. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_ACL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_ACL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_ACL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_ACL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 
@@ -932,44 +946,40 @@ for (&SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "router"},
      * distributed conntrack state across all chassis. */
     // FIXME: is this check redundant?
     Some{var router_port} = map_get(lsp.options, "router-port") in {
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, PRE_ACL),
-            .priority         = 110,
-            .__match          = "ip && inport == ${lsp_name}",
-            .actions          = "next;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, PRE_ACL),
-            .priority         = 110,
-            .__match          = "ip && outport == ${lsp_name}",
-            .actions          = "next;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, PRE_ACL),
+             .priority         = 110,
+             .__match          = "ip && inport == ${lsp_name}",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, PRE_ACL),
+             .priority         = 110,
+             .__match          = "ip && outport == ${lsp_name}",
+             .actions          = "next;",
+             .external_ids     = map_empty())
     }
 }
 
 for (&SwitchPort(.lsp = nb.Logical_Switch_Port{.__type = "localnet"},
                  .json_name = lsp_name,
                  .sw = &Switch{.dpname = dpname, .has_stateful_acl = true})) {
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_ACL),
-        .priority         = 110,
-        .__match          = "ip && inport == ${lsp_name}",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_ACL),
-        .priority         = 110,
-        .__match          = "ip && outport == ${lsp_name}",
-        .actions          = "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_ACL),
+         .priority         = 110,
+         .__match          = "ip && inport == ${lsp_name}",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_ACL),
+         .priority         = 110,
+         .__match          = "ip && outport == ${lsp_name}",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 for (&Switch(.dpname = dpname, .has_stateful_acl = true)) {
@@ -977,24 +987,22 @@ for (&Switch(.dpname = dpname, .has_stateful_acl = true)) {
      *
      * Not to do conntrack on ND and ICMP destination
      * unreachable packets. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_ACL),
-        .priority         = 110,
-        .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                            "icmp6.type == 1 || (tcp && tcp.flags == 4)",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_ACL),
-        .priority         = 110,
-        .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                            "icmp6.type == 1 || (tcp && tcp.flags == 4)",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_ACL),
+         .priority         = 110,
+         .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
+                             "icmp6.type == 1 || (tcp && tcp.flags == 4)",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_ACL),
+         .priority         = 110,
+         .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
+                             "icmp6.type == 1 || (tcp && tcp.flags == 4)",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     /* Ingress and Egress Pre-ACL Table (Priority 100).
      *
@@ -1004,61 +1012,55 @@ for (&Switch(.dpname = dpname, .has_stateful_acl = true)) {
      *
      * 'REGBIT_CONNTRACK_DEFRAG' is set to let the pre-stateful table send
      * it to conntrack for tracking and defragmentation. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_ACL),
-        .priority         = 100,
-        .__match          = "ip",
-        .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_ACL),
-        .priority         = 100,
-        .__match          = "ip",
-        .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_ACL),
+         .priority         = 100,
+         .__match          = "ip",
+         .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_ACL),
+         .priority         = 100,
+         .__match          = "ip",
+         .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+         .external_ids     = map_empty())
 }
 
 /* Pre-LB */
 for (&Switch(.dpname = dpname)) {
     /* Do not send ND packets to conntrack */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_LB),
-        .priority         = 110,
-        .__match          = "nd || nd_rs || nd_ra",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_LB),
-        .priority         = 110,
-        .__match          = "nd || nd_rs || nd_ra",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_LB),
+         .priority         = 110,
+         .__match          = "nd || nd_rs || nd_ra",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_LB),
+         .priority         = 110,
+         .__match          = "nd || nd_rs || nd_ra",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     /* Allow all packets to go to next tables by default. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_LB),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_LB),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_LB),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_LB),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 /* 'REGBIT_CONNTRACK_DEFRAG' is set to let the pre-stateful table send
@@ -1076,66 +1078,60 @@ for (SwitchLBVIP(.sw = &sw, .vip = vip)) {
         } else {
            "ip && ip6.dst == ${ip_address}"
         } in
-    sb.Out_Logical_Flow(
-        .logical_datapath = sw.dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_LB),
-        .priority         = 100,
-        .__match          = __match,
-        .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_LB),
+         .priority         = 100,
+         .__match          = __match,
+         .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+         .external_ids     = map_empty())
 }
 
 for (SwitchHasLBVIP(&sw)) {
-    sb.Out_Logical_Flow(
-        .logical_datapath = sw.dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_LB),
-        .priority         = 100,
-        .__match          = "ip",
-        .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_LB),
+         .priority         = 100,
+         .__match          = "ip",
+         .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
+         .external_ids     = map_empty())
 }
 
 /* Pre-stateful */
 for (&Switch(.dpname = dpname)) {
     /* Ingress and Egress pre-stateful Table (Priority 0): Packets are
      * allowed by default. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_STATEFUL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_STATEFUL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_STATEFUL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_STATEFUL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     /* If REGBIT_CONNTRACK_DEFRAG is set as 1, then the packets should be
      * sent to conntrack for tracking and defragmentation. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, PRE_STATEFUL),
-        .priority         = 100,
-        .__match          = "${rEGBIT_CONNTRACK_DEFRAG()} == 1",
-        .actions          = "ct_next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PRE_STATEFUL),
-        .priority         = 100,
-        .__match          = "${rEGBIT_CONNTRACK_DEFRAG()} == 1",
-        .actions          = "ct_next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PRE_STATEFUL),
+         .priority         = 100,
+         .__match          = "${rEGBIT_CONNTRACK_DEFRAG()} == 1",
+         .actions          = "ct_next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PRE_STATEFUL),
+         .priority         = 100,
+         .__match          = "${rEGBIT_CONNTRACK_DEFRAG()} == 1",
+         .actions          = "ct_next;",
+         .external_ids     = map_empty())
 }
 
 function build_acl_log(acl: nb.ACL): string =
@@ -1199,14 +1195,13 @@ for (Reject(lsname, pipeline, stage, acl, extra_match, extra_actions)) {
         var actions = "${build_acl_log(acl)}reg0 = 0; "
                       "eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
                       "tcp_reset { outport <-> inport; ${if ingress \"output;\" else \"next(pipeline=ingress,table=0);\"} };" in
-        sb.Out_Logical_Flow(
-            .logical_datapath = lsname,
-            .pipeline         = pipeline,
-            .table_id         = stage,
-            .priority         = acl.priority + oVN_ACL_PRI_OFFSET() + 10,
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = pipeline,
+             .table_id         = stage,
+             .priority         = acl.priority + oVN_ACL_PRI_OFFSET() + 10,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty());
 
         var __match = if (extra_match != "") {
                 "(${extra_match}) && "
@@ -1215,14 +1210,13 @@ for (Reject(lsname, pipeline, stage, acl, extra_match, extra_actions)) {
         var actions = "${build_acl_log(acl)}reg0 = 0; "
                       "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
                       "tcp_reset { outport <-> inport; ${if ingress \"output;\" else \"next(pipeline=ingress,table=0);\"} };" in
-        sb.Out_Logical_Flow(
-            .logical_datapath = lsname,
-            .pipeline         = pipeline,
-            .table_id         = stage,
-            .priority         = acl.priority + oVN_ACL_PRI_OFFSET() + 10,
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = pipeline,
+             .table_id         = stage,
+             .priority         = acl.priority + oVN_ACL_PRI_OFFSET() + 10,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty());
 
         /* IP traffic */
         var __match = if (extra_match != "") {
@@ -1235,15 +1229,13 @@ for (Reject(lsname, pipeline, stage, acl, extra_match, extra_actions)) {
                       } else { "" } ++
                       "reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
                       "icmp4 { outport <-> inport; ${if ingress \"output;\" else \"next(pipeline=ingress,table=0);\"} };" in
-        sb.Out_Logical_Flow(
-            .logical_datapath = lsname,
-            .pipeline         = pipeline,
-            .table_id         = stage,
-            .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty());
-
+        Flow(.logical_datapath = lsname,
+             .pipeline         = pipeline,
+             .table_id         = stage,
+             .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty());
 
         var __match = if (extra_match != "") {
                 "(${extra_match}) && "
@@ -1256,14 +1248,13 @@ for (Reject(lsname, pipeline, stage, acl, extra_match, extra_actions)) {
                       "reg0 = 0; icmp6 { "
                       "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
                       "outport <-> inport; ${if ingress \"output;\" else \"next(pipeline=ingress,table=0);\"} };" in
-        sb.Out_Logical_Flow(
-            .logical_datapath = lsname,
-            .pipeline         = pipeline,
-            .table_id         = stage,
-            .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = lsname,
+             .pipeline         = pipeline,
+             .table_id         = stage,
+             .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty())
     }
 }
 
@@ -1275,22 +1266,20 @@ for (&Switch(.ls = ls,
     /* Ingress and Egress ACL Table (Priority 0): Packets are allowed by
      * default.  A related rule at priority 1 is added below if there
      * are any stateful ACLs in this datapath. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, ACL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, ACL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, ACL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, ACL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     if (has_stateful) {
         /* Ingress and Egress ACL Table (Priority 1).
@@ -1314,22 +1303,20 @@ for (&Switch(.ls = ls,
          * which will be done by ct_commit() in the "stateful" stage.
          * Subsequent packets will hit the flow at priority 0 that just
          * uses "next;". */
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, ACL),
-            .priority         = 1,
-            .__match          = "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
-            .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; next;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, ACL),
-            .priority         = 1,
-            .__match          = "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
-            .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; next;",
-            .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ACL),
+             .priority         = 1,
+             .__match          = "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
+             .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, ACL),
+             .priority         = 1,
+             .__match          = "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
+             .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; next;",
+             .external_ids     = map_empty());
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -1338,22 +1325,20 @@ for (&Switch(.ls = ls,
          * for deletion (bit 0 of ct_label is set).
          *
          * This is enforced at a higher priority than ACLs can be defined. */
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, ACL),
-            .priority         = 65535,
-            .__match          = "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
-            .actions          = "drop;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, ACL),
-            .priority         = 65535,
-            .__match          = "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
-            .actions          = "drop;",
-            .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ACL),
+             .priority         = 65535,
+             .__match          = "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+             .actions          = "drop;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, ACL),
+             .priority         = 65535,
+             .__match          = "ct.inv || (ct.est && ct.rpl && ct_label.blocked == 1)",
+             .actions          = "drop;",
+             .external_ids     = map_empty());
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -1364,24 +1349,22 @@ for (&Switch(.ls = ls,
          * direction to hit the currently defined policy from ACLs.
          *
          * This is enforced at a higher priority than ACLs can be defined. */
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, ACL),
-            .priority         = 65535,
-            .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv "
-                                "&& ct.rpl && ct_label.blocked == 0",
-            .actions          = "next;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, ACL),
-            .priority         = 65535,
-            .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv "
-                                "&& ct.rpl && ct_label.blocked == 0",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ACL),
+             .priority         = 65535,
+             .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv "
+                                 "&& ct.rpl && ct_label.blocked == 0",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, ACL),
+             .priority         = 65535,
+             .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv "
+                                 "&& ct.rpl && ct_label.blocked == 0",
+             .actions          = "next;",
+             .external_ids     = map_empty());
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
@@ -1394,58 +1377,53 @@ for (&Switch(.ls = ls,
          * a dynamically negotiated FTP data channel), but will allow
          * related traffic such as an ICMP Port Unreachable through
          * that's generated from a non-listening UDP port.  */
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, ACL),
-            .priority         = 65535,
-            .__match          = "!ct.est && ct.rel && !ct.new && !ct.inv "
-                                "&& ct_label.blocked == 0",
-            .actions          = "next;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, ACL),
-            .priority         = 65535,
-            .__match          = "!ct.est && ct.rel && !ct.new && !ct.inv "
-                                "&& ct_label.blocked == 0",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ACL),
+             .priority         = 65535,
+             .__match          = "!ct.est && ct.rel && !ct.new && !ct.inv "
+                                 "&& ct_label.blocked == 0",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, ACL),
+             .priority         = 65535,
+             .__match          = "!ct.est && ct.rel && !ct.new && !ct.inv "
+                                 "&& ct_label.blocked == 0",
+             .actions          = "next;",
+             .external_ids     = map_empty());
 
         /* Ingress and Egress ACL Table (Priority 65535).
          *
          * Not to do conntrack on ND packets. */
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, ACL),
-            .priority         = 65535,
-            .__match          = "nd",
-            .actions          = "next;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, ACL),
-            .priority         = 65535,
-            .__match          = "nd",
-            .actions          = "next;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ACL),
+             .priority         = 65535,
+             .__match          = "nd",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, ACL),
+             .priority         = 65535,
+             .__match          = "nd",
+             .actions          = "next;",
+             .external_ids     = map_empty())
     };
 
     /* Add a 34000 priority flow to advance the DNS reply from ovn-controller,
      * if the CMS has configured DNS records for the datapath.
      */
     if (has_dns_records) {
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, ACL),
-            .priority         = 34000,
-            .__match          = "udp.src == 53",
-            .actions          = if has_stateful "ct_commit; next;" else "next;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, ACL),
+             .priority         = 34000,
+             .__match          = "udp.src == 53",
+             .actions          = if has_stateful "ct_commit; next;" else "next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -1464,14 +1442,13 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
          * may and then its return traffic would not have an
          * associated conntrack entry and would return "+invalid". */
         if (not has_stateful) {
-            sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = pipeline,
-                .table_id         = stage,
-                .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                .__match          = acl.__match,
-                .actions          = "${build_acl_log(acl)}next;",
-                .external_ids     = stage_hint)
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = pipeline,
+                 .table_id         = stage,
+                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                 .__match          = acl.__match,
+                 .actions          = "${build_acl_log(acl)}next;",
+                 .external_ids     = stage_hint)
         } else {
             /* Commit the connection tracking entry if it's a new
              * connection that matches this ACL.  After this commit,
@@ -1485,15 +1462,14 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
              * by ct_commit in the "stateful" stage) to indicate that the
              * connection should be allowed to resume.
              */
-            sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = pipeline,
-                .table_id         = stage,
-                .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                .__match          = "((ct.new && !ct.est) || (!ct.new && ct.est && !ct.rpl "
-                                    "&& ct_label.blocked == 1)) && (${acl.__match})",
-                .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; ${build_acl_log(acl)}next;",
-                .external_ids     = stage_hint);
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = pipeline,
+                 .table_id         = stage,
+                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                 .__match          = "((ct.new && !ct.est) || (!ct.new && ct.est && !ct.rpl "
+                                     "&& ct_label.blocked == 1)) && (${acl.__match})",
+                 .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; ${build_acl_log(acl)}next;",
+                 .external_ids     = stage_hint);
 
             /* Match on traffic in the request direction for an established
              * connection tracking entry that has not been marked for
@@ -1501,15 +1477,14 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
              * proceed to the next table. We use this to ensure that this
              * connection is still allowed by the currently defined
              * policy. */
-            sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = pipeline,
-                .table_id         = stage,
-                .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                .__match          = "!ct.new && ct.est && !ct.rpl"
-                                    " && ct_label.blocked == 0 && (${acl.__match})",
-                .actions          = "${build_acl_log(acl)}next;",
-                .external_ids     = stage_hint)
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = pipeline,
+                 .table_id         = stage,
+                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                 .__match          = "!ct.new && ct.est && !ct.rpl"
+                                     " && ct_label.blocked == 0 && (${acl.__match})",
+                 .actions          = "${build_acl_log(acl)}next;",
+                 .external_ids     = stage_hint)
         }
     } else if (acl.action == "drop" or acl.action == "reject") {
         /* The implementation of "drop" differs if stateful ACLs are in
@@ -1523,8 +1498,7 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
             if (acl.action == "reject") {
                 Reject(dpname, pipeline, stage, acl, __match, "")
             } else {
-                sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
+                Flow(.logical_datapath = dpname,
                     .pipeline         = pipeline,
                     .table_id         = stage,
                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
@@ -1548,14 +1522,13 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
             if (acl.action == "reject") {
                 Reject(dpname, pipeline, stage, acl, __match, actions)
             } else {
-                sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = pipeline,
-                    .table_id         = stage,
-                    .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                    .__match          = __match ++ " && (${acl.__match})",
-                    .actions          = "${build_acl_log(acl)}/* drop */",
-                    .external_ids     = stage_hint)
+                Flow(.logical_datapath = dpname,
+                     .pipeline         = pipeline,
+                     .table_id         = stage,
+                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                     .__match          = __match ++ " && (${acl.__match})",
+                     .actions          = "${build_acl_log(acl)}/* drop */",
+                     .external_ids     = stage_hint)
             }
         } else {
             /* There are no stateful ACLs in use on this datapath,
@@ -1564,14 +1537,13 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
             if (acl.action == "reject") {
                 Reject(dpname, pipeline, stage, acl, "", "")
             } else {
-                sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = pipeline,
-                    .table_id         = stage,
-                    .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                    .__match          = acl.__match,
-                    .actions          = "${build_acl_log(acl)}/* drop */",
-                    .external_ids     = stage_hint)
+                Flow(.logical_datapath = dpname,
+                     .pipeline         = pipeline,
+                     .table_id         = stage,
+                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                     .__match          = acl.__match,
+                     .actions          = "${build_acl_log(acl)}/* drop */",
+                     .external_ids     = stage_hint)
             }
         }
     }
@@ -1584,16 +1556,15 @@ for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
                              .dhcpv4_options = &nb.DHCP_Options{.options = options})) {
     (Some{var server_id}, Some{var server_mac}, Some{var lease_time}) =
         (map_get(options, "server_id"), map_get(options, "server_mac"), map_get(options, "lease_time")) in
-    sb.Out_Logical_Flow(
-        .logical_datapath = sw.dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, ACL),
-        .priority         = 34000,
-        .__match          = "outport == \"${lsp.name}\" && eth.src == ${server_mac} "
-                            "&& ip4.src == ${server_id} && udp && udp.src == 67 "
-                            "&& udp.dst == 68",
-        .actions          = if (sw.has_stateful_acl) "ct_commit; next;" else "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, ACL),
+         .priority         = 34000,
+         .__match          = "outport == \"${lsp.name}\" && eth.src == ${server_mac} "
+                             "&& ip4.src == ${server_id} && udp && udp.src == 67 "
+                             "&& udp.dst == 68",
+         .actions          = if (sw.has_stateful_acl) "ct_commit; next;" else "next;",
+         .external_ids     = map_empty())
 }
 
 for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
@@ -1603,16 +1574,15 @@ for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
     var server_ip = ipv6_string_mapped(in6_generate_lla(ea)) in
     /* Get the link local IP of the DHCPv6 server from the
      * server MAC. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = sw.dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, ACL),
-        .priority         = 34000,
-        .__match          = "outport == \"${lsp.name}\" && eth.src == ${server_mac} "
-                            "&& ip6.src == ${server_ip} && udp && udp.src == 547 "
-                            "&& udp.dst == 546",
-        .actions          = if (sw.has_stateful_acl) "ct_commit; next;" else "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, ACL),
+         .priority         = 34000,
+         .__match          = "outport == \"${lsp.name}\" && eth.src == ${server_mac} "
+                             "&& ip6.src == ${server_ip} && udp && udp.src == 547 "
+                             "&& udp.dst == 546",
+         .actions          = if (sw.has_stateful_acl) "ct_commit; next;" else "next;",
+         .external_ids     = map_empty())
 }
 
 relation QoSAction(qos: uuid, key_action: string, value_action: integer)
@@ -1624,38 +1594,34 @@ QoSAction(qos, k, v) :-
 
 /* QoS rules */
 for (&Switch(.dpname = dpname)) {
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, QOS_MARK),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, QOS_MARK),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, QOS_METER),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, QOS_METER),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, QOS_MARK),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, QOS_MARK),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, QOS_METER),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, QOS_METER),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 for (SwitchQoS(.sw = &sw, .qos = &qos)) {
@@ -1665,14 +1631,13 @@ for (SwitchQoS(.sw = &sw, .qos = &qos)) {
         /* FIXME: Can value_action be negative? */
         for (QoSAction(qos._uuid, key_action, value_action)) {
             if (key_action == "dscp") {
-                sb.Out_Logical_Flow(
-                    .logical_datapath = sw.dpname,
-                    .pipeline         = pipeline,
-                    .table_id         = stage,
-                    .priority         = qos.priority,
-                    .__match          = qos.__match,
-                    .actions          = "ip.dscp = ${value_action}; next;",
-                    .external_ids     = map_empty())
+                Flow(.logical_datapath = sw.dpname,
+                     .pipeline         = pipeline,
+                     .table_id         = stage,
+                     .priority         = qos.priority,
+                     .__match          = qos.__match,
+                     .actions          = "ip.dscp = ${value_action}; next;",
+                     .external_ids     = map_empty())
             }
         };
 
@@ -1701,14 +1666,13 @@ for (SwitchQoS(.sw = &sw, .qos = &qos)) {
              *
              * We limit the bandwidth of this flow by adding a meter table.
              */
-            sb.Out_Logical_Flow(
-                .logical_datapath = sw.dpname,
-                .pipeline         = pipeline,
-                .table_id         = stage,
-                .priority         = qos.priority,
-                .__match          = qos.__match,
-                .actions          = meter_action,
-                .external_ids     = map_empty())
+            Flow(.logical_datapath = sw.dpname,
+                 .pipeline         = pipeline,
+                 .table_id         = stage,
+                 .priority         = qos.priority,
+                 .__match          = qos.__match,
+                 .actions          = meter_action,
+                 .external_ids     = map_empty())
         }
     }
 }
@@ -1717,43 +1681,39 @@ for (SwitchQoS(.sw = &sw, .qos = &qos)) {
 for (&Switch(.ls = ls, .dpname = dpname)) {
     /* Ingress and Egress LB Table (Priority 0): Packets are allowed by
      * default.  */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, LB),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, LB),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, LB),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, LB),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     if (not set_is_empty(ls.load_balancer)) {
         /* Ingress and Egress LB Table (Priority 65535).
          *
          * Send established traffic through conntrack for just NAT. */
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, LB),
-            .priority         = 65535,
-            .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv",
-            .actions          = "${rEGBIT_CONNTRACK_NAT()} = 1; next;",
-            .external_ids     = map_empty());
-        sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, LB),
-            .priority         = 65535,
-            .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv",
-            .actions          = "${rEGBIT_CONNTRACK_NAT()} = 1; next;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, LB),
+             .priority         = 65535,
+             .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv",
+             .actions          = "${rEGBIT_CONNTRACK_NAT()} = 1; next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, LB),
+             .priority         = 65535,
+             .__match          = "ct.est && !ct.rel && !ct.new && !ct.inv",
+             .actions          = "${rEGBIT_CONNTRACK_NAT()} = 1; next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -1761,43 +1721,39 @@ for (&Switch(.ls = ls, .dpname = dpname)) {
 for (&Switch(.dpname = dpname)) {
     /* Ingress and Egress stateful Table (Priority 0): Packets are
      * allowed by default. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, STATEFUL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, STATEFUL),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, STATEFUL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, STATEFUL),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     /* If REGBIT_CONNTRACK_COMMIT is set as 1, then the packets should be
      * committed to conntrack. We always set ct_label.blocked to 0 here as
      * any packet that makes it this far is part of a connection we
      * want to allow to continue. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, STATEFUL),
-        .priority         = 100,
-        .__match          = "${rEGBIT_CONNTRACK_COMMIT()} == 1",
-        .actions          = "ct_commit(ct_label=0/1); next;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, STATEFUL),
-        .priority         = 100,
-        .__match          = "${rEGBIT_CONNTRACK_COMMIT()} == 1",
-        .actions          = "ct_commit(ct_label=0/1); next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, STATEFUL),
+         .priority         = 100,
+         .__match          = "${rEGBIT_CONNTRACK_COMMIT()} == 1",
+         .actions          = "ct_commit(ct_label=0/1); next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, STATEFUL),
+         .priority         = 100,
+         .__match          = "${rEGBIT_CONNTRACK_COMMIT()} == 1",
+         .actions          = "ct_commit(ct_label=0/1); next;",
+         .external_ids     = map_empty());
 
     /* If REGBIT_CONNTRACK_NAT is set as 1, then packets should just be sent
      * through nat (without committing).
@@ -1806,22 +1762,20 @@ for (&Switch(.dpname = dpname)) {
      * REGBIT_CONNTRACK_NAT is set for established connections. So they
      * don't overlap.
      */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = switch_stage(IN, STATEFUL),
-        .priority         = 100,
-        .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1",
-        .actions          = "ct_lb;",
-        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, STATEFUL),
-        .priority         = 100,
-        .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1",
-        .actions          = "ct_lb;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, STATEFUL),
+         .priority         = 100,
+         .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1",
+         .actions          = "ct_lb;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, STATEFUL),
+         .priority         = 100,
+         .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1",
+         .actions          = "ct_lb;",
+         .external_ids     = map_empty())
 }
 
 /* Load balancing rules for new connections get committed to conntrack
@@ -1845,23 +1799,21 @@ for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = (vip_key, vip_val))) {
             } else {
                 " && tcp.dst == ${port}"
             } in
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, STATEFUL),
-            .priority         = 120,
-            .__match          = __match2,
-            .actions          = "ct_lb(${vip_val});",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, STATEFUL),
+             .priority         = 120,
+             .__match          = __match2,
+             .actions          = "ct_lb(${vip_val});",
+             .external_ids     = map_empty())
     } else {
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, STATEFUL),
-            .priority         = 110,
-            .__match          = __match,
-            .actions          = "ct_lb(${vip_val});",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, STATEFUL),
+             .priority         = 110,
+             .__match          = __match,
+             .actions          = "ct_lb(${vip_val});",
+             .external_ids     = map_empty())
     }
 }
 
@@ -1881,14 +1833,13 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name, .ps_eth_addresse
                 None -> "next;",
                 Some{id} -> "set_queue(${id}); next;"
             } in
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, PORT_SEC_L2),
-            .priority         = 50,
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, PORT_SEC_L2),
+             .priority         = 50,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty())
     }
 }
 
@@ -1917,14 +1868,13 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                          " && ip4.src == 0.0.0.0"
                          " && ip4.dst == 255.255.255.255"
                          " && udp.src == 68 && udp.dst == 67" in {
-            sb.Out_Logical_Flow(
-                .logical_datapath = sw.dpname,
-                .pipeline         = "ingress",
-                .table_id         = switch_stage(IN, PORT_SEC_IP),
-                .priority         = 90,
-                .__match          = dhcp_match,
-                .actions          = "next;",
-                .external_ids     = map_empty())
+            Flow(.logical_datapath = sw.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = switch_stage(IN, PORT_SEC_IP),
+                 .priority         = 90,
+                 .__match          = dhcp_match,
+                 .actions          = "next;",
+                 .external_ids     = map_empty())
         };
         var addrs = {
             var addrs: Vec<string> = vec_empty();
@@ -1948,14 +1898,13 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
             "inport == ${port.json_name} && eth.src == ${ps.ea_s} && ip4.src == {" ++
             string_join(addrs, ", ") ++ "}" in
         {
-            sb.Out_Logical_Flow(
-                .logical_datapath = sw.dpname,
-                .pipeline         = "ingress",
-                .table_id         = switch_stage(IN, PORT_SEC_IP),
-                .priority         = 90,
-                .__match          = __match,
-                .actions          = "next;",
-                .external_ids     = map_empty())
+            Flow(.logical_datapath = sw.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = switch_stage(IN, PORT_SEC_IP),
+                 .priority         = 90,
+                 .__match          = __match,
+                 .actions          = "next;",
+                 .external_ids     = map_empty())
         }
     };
     if (vec_len(ps.ipv6_addrs) > 64'd0) {
@@ -1965,38 +1914,35 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                         " && ip6.dst == ff02::/16"
                         " && icmp6.type == {131, 135, 143}" in
         {
-            sb.Out_Logical_Flow(
-                .logical_datapath = sw.dpname,
-                .pipeline         = "ingress",
-                .table_id         = switch_stage(IN, PORT_SEC_IP),
-                .priority         = 90,
-                .__match          = dad_match,
-                .actions          = "next;",
-                .external_ids     = map_empty())
+            Flow(.logical_datapath = sw.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = switch_stage(IN, PORT_SEC_IP),
+                 .priority         = 90,
+                 .__match          = dad_match,
+                 .actions          = "next;",
+                 .external_ids     = map_empty())
         };
         var __match = "inport == ${port.json_name} && eth.src: ${ps.ea_s}" ++
                       build_port_security_ipv6_flow(IN, ps.ea, ps.ipv6_addrs) in
         {
-            sb.Out_Logical_Flow(
-                .logical_datapath = sw.dpname,
-                .pipeline         = "ingress",
-                .table_id         = switch_stage(IN, PORT_SEC_IP),
-                .priority         = 90,
-                .__match          = __match,
-                .actions          = "next;",
-                .external_ids     = map_empty())
+            Flow(.logical_datapath = sw.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = switch_stage(IN, PORT_SEC_IP),
+                 .priority         = 90,
+                 .__match          = __match,
+                 .actions          = "next;",
+                 .external_ids     = map_empty())
         }
     };
     var __match = "inport == ${port.json_name} && eth.src == ${ps.ea_s} && ip" in
     {
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, PORT_SEC_IP),
-            .priority         = 80,
-            .__match          = __match,
-            .actions          = "drop;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, PORT_SEC_IP),
+             .priority         = 80,
+             .__match          = __match,
+             .actions          = "drop;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -2047,59 +1993,55 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                     prefix
                 }
             } in {
-                sb.Out_Logical_Flow(
-                    .logical_datapath = sw.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = switch_stage(IN, PORT_SEC_ND),
-                    .priority         = 90,
-                    .__match          = __match,
-                    .actions          = "next;",
-                    .external_ids     = map_empty())
+                Flow(.logical_datapath = sw.dpname,
+                     .pipeline         = "ingress",
+                     .table_id         = switch_stage(IN, PORT_SEC_ND),
+                     .priority         = 90,
+                     .__match          = __match,
+                     .actions          = "next;",
+                     .external_ids     = map_empty())
             }
         };
         if (not vec_is_empty(ps.ipv6_addrs) or no_ip) {
             var __match = "inport == ${port.json_name} && eth.src == ${ps.ea_s}" ++
                           build_port_security_ipv6_nd_flow(ps.ea, ps.ipv6_addrs) in
             {
-                sb.Out_Logical_Flow(
-                    .logical_datapath = sw.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = switch_stage(IN, PORT_SEC_ND),
-                    .priority         = 90,
-                    .__match          = __match,
-                    .actions          = "next;",
-                    .external_ids     = map_empty())
+                Flow(.logical_datapath = sw.dpname,
+                     .pipeline         = "ingress",
+                     .table_id         = switch_stage(IN, PORT_SEC_ND),
+                     .priority         = 90,
+                     .__match          = __match,
+                     .actions          = "next;",
+                     .external_ids     = map_empty())
             }
         };
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "ingress",
-            .table_id         = switch_stage(IN, PORT_SEC_ND),
-            .priority         = 80,
-            .__match          = "inport == ${port.json_name} && (arp || nd)",
-            .actions          = "drop;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, PORT_SEC_ND),
+             .priority         = 80,
+             .__match          = "inport == ${port.json_name} && (arp || nd)",
+             .actions          = "drop;",
+             .external_ids     = map_empty())
     }
 }
 
 /* Ingress table 1 and 2: Port security - IP and ND, by default goto next.
  * (priority 0)*/
 for (&Switch(.ls = ls, .dpname = dpname)) {
-    sb.Out_Logical_Flow(.logical_datapath = dpname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, PORT_SEC_ND),
-                        .priority         = 0,
-                        .__match          = "1",
-                        .actions          = "next;",
-                        .external_ids     = map_empty());
-
-    sb.Out_Logical_Flow(.logical_datapath = dpname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, PORT_SEC_IP),
-                        .priority         = 0,
-                        .__match          = "1",
-                        .actions          = "next;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PORT_SEC_ND),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, PORT_SEC_IP),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 /* Ingress table 11: ARP/ND responder, skip requests coming from localnet
@@ -2109,13 +2051,13 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name)
      if is_enabled(lsp.enabled) and
         (lsp.__type == "localnet" or lsp.__type == "vtep"))
 {
-    sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, ARP_ND_RSP),
-                        .priority         = 100,
-                        .__match          = "inport == ${json_name}",
-                        .actions          = "next;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, ARP_ND_RSP),
+         .priority         = 100,
+         .__match          = "inport == ${json_name}",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
@@ -2147,13 +2089,13 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
                   "flags.loopback = 1; "
                   "output;" in
     {
-        sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, ARP_ND_RSP),
-                            .priority         = 50,
-                            .__match          = __match,
-                            .actions          = actions,
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ARP_ND_RSP),
+             .priority         = 50,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty());
 
         /* Do not reply to an ARP request from the port that owns the
          * address (otherwise a DHCP client that ARPs to check for a
@@ -2167,13 +2109,13 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
          * detect situations where the network is not working as
          * configured, so dropping the request would frustrate that
          * intent.) */
-        sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, ARP_ND_RSP),
-                            .priority         = 100,
-                            .__match          = __match ++ " && inport == ${json_name}",
-                            .actions          = "next;",
-                            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ARP_ND_RSP),
+             .priority         = 100,
+             .__match          = __match ++ " && inport == ${json_name}",
+             .actions          = "next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -2196,23 +2138,23 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
                   "output; "
                   "};" in
     {
-        sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, ARP_ND_RSP),
-                            .priority         = 50,
-                            .__match          = __match,
-                            .actions          = actions,
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ARP_ND_RSP),
+             .priority         = 50,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty());
 
         /* Do not reply to a solicitation from the port that owns the
          * address (otherwise DAD detection will fail). */
-        sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, ARP_ND_RSP),
-                            .priority         = 100,
-                            .__match          = __match ++ " && inport == ${json_name}",
-                            .actions          = actions,
-                            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ARP_ND_RSP),
+             .priority         = 100,
+             .__match          = __match ++ " && inport == ${json_name}",
+             .actions          = actions,
+             .external_ids     = map_empty())
     }
 }
 
@@ -2220,13 +2162,13 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
  * (priority 0)*/
 for (ls in nb.Logical_Switch) {
     var lsname = uuid2name(ls._uuid) in {
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, ARP_ND_RSP),
-                            .priority         = 0,
-                            .__match          = "1",
-                            .actions          = "next;",
-                            .external_ids     = map_empty())
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, ARP_ND_RSP),
+             .priority         = 0,
+             .__match          = "1",
+             .actions          = "next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -2407,13 +2349,13 @@ for (lsp in nb.Logical_Switch_Port
                             var __match = "inport == ${json_key} && eth.src == ${ea_s} && "
                                           "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
                                           "udp.src == 68 && udp.dst == 67" in
-                            sb.Out_Logical_Flow(.logical_datapath = lsname,
-                                                .pipeline         = "ingress",
-                                                .table_id         = switch_stage(IN, DHCP_OPTIONS),
-                                                .priority         = 100,
-                                                .__match          = __match,
-                                                .actions          = options_action,
-                                                .external_ids     = map_empty());
+                            Flow(.logical_datapath = lsname,
+                                 .pipeline         = "ingress",
+                                 .table_id         = switch_stage(IN, DHCP_OPTIONS),
+                                 .priority         = 100,
+                                 .__match          = __match,
+                                 .actions          = options_action,
+                                 .external_ids     = map_empty());
 
                             /* Allow ip4.src = OFFER_IP and
                              * ip4.dst = {SERVER_IP, 255.255.255.255} for the below
@@ -2425,26 +2367,26 @@ for (lsp in nb.Logical_Switch_Port
                              */
                             var __match = "inport == ${json_key} && eth.src == ${ea_s} && "
                                           "${ipv4_addr_match} && udp.src == 68 && udp.dst == 67" in
-                            sb.Out_Logical_Flow(.logical_datapath = lsname,
-                                                .pipeline         = "ingress",
-                                                .table_id         = switch_stage(IN, DHCP_OPTIONS),
-                                                .priority         = 100,
-                                                .__match          = __match,
-                                                .actions          = options_action,
-                                                .external_ids     = map_empty());
+                            Flow(.logical_datapath = lsname,
+                                 .pipeline         = "ingress",
+                                 .table_id         = switch_stage(IN, DHCP_OPTIONS),
+                                 .priority         = 100,
+                                 .__match          = __match,
+                                 .actions          = options_action,
+                                 .external_ids     = map_empty());
 
                             /* If REGBIT_DHCP_OPTS_RESULT is set, it means the
                              * put_dhcp_opts action  is successful. */
                             var __match = "inport == ${json_key} && eth.src == ${ea_s} && "
                                           "ip4 && udp.src == 68 && udp.dst == 67 && " ++
                                           rEGBIT_DHCP_OPTS_RESULT() in
-                            sb.Out_Logical_Flow(.logical_datapath = lsname,
-                                                .pipeline         = "ingress",
-                                                .table_id         = switch_stage(IN, DHCP_RESPONSE),
-                                                .priority         = 100,
-                                                .__match          = __match,
-                                                .actions          = response_action,
-                                                .external_ids     = map_empty())
+                            Flow(.logical_datapath = lsname,
+                                 .pipeline         = "ingress",
+                                 .table_id         = switch_stage(IN, DHCP_RESPONSE),
+                                 .priority         = 100,
+                                 .__match          = __match,
+                                 .actions          = response_action,
+                                 .external_ids     = map_empty())
                             // FIXME: is there a constraint somewhere that guarantees that build_dhcpv4_action
                             // returns Some() for at most 1 address in lsp_addrs? Otherwise, simulate this breaks
                             // by computing an aggregate that returns the first element of a group.
@@ -2466,23 +2408,23 @@ for (lsp in nb.Logical_Switch_Port
                                           " && ip6.dst == ff02::1:2 && udp.src == 546 &&"
                                           " udp.dst == 547" in
                             {
-                                sb.Out_Logical_Flow(.logical_datapath = lsname,
-                                                    .pipeline         = "ingress",
-                                                    .table_id         = switch_stage(IN, DHCP_OPTIONS),
-                                                    .priority         = 100,
-                                                    .__match          = __match,
-                                                    .actions          = options_action,
-                                                    .external_ids     = map_empty());
+                                Flow(.logical_datapath = lsname,
+                                     .pipeline         = "ingress",
+                                     .table_id         = switch_stage(IN, DHCP_OPTIONS),
+                                     .priority         = 100,
+                                     .__match          = __match,
+                                     .actions          = options_action,
+                                     .external_ids     = map_empty());
 
                                 /* If REGBIT_DHCP_OPTS_RESULT is set to 1, it means the
                                  * put_dhcpv6_opts action is successful */
-                                sb.Out_Logical_Flow(.logical_datapath = lsname,
-                                                    .pipeline         = "ingress",
-                                                    .table_id         = switch_stage(IN, DHCP_RESPONSE),
-                                                    .priority         = 100,
-                                                    .__match          = __match ++ " && ${rEGBIT_DHCP_OPTS_RESULT()}",
-                                                    .actions          = response_action,
-                                                    .external_ids     = map_empty())
+                                Flow(.logical_datapath = lsname,
+                                     .pipeline         = "ingress",
+                                     .table_id         = switch_stage(IN, DHCP_RESPONSE),
+                                     .priority         = 100,
+                                     .__match          = __match ++ " && ${rEGBIT_DHCP_OPTS_RESULT()}",
+                                     .actions          = response_action,
+                                     .external_ids     = map_empty())
                                 // FIXME: is there a constraint somewhere that guarantees that build_dhcpv4_action
                                 // returns Some() for at most 1 address in lsp_addrs? Otherwise, simulate this breaks
                                 // by computing an aggregate that returns the first element of a group.
@@ -2503,35 +2445,35 @@ for (LogicalSwitchHasDNSRecords(ls, true))
 {
     var lsname = uuid2name(ls) in
     {
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DNS_RESPONSE),
-                            .priority         = 100,
-                            .__match          = "udp.dst == 53",
-                            .actions          = "${rEGBIT_DNS_LOOKUP_RESULT()} = dns_lookup(); next;",
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DNS_RESPONSE),
+             .priority         = 100,
+             .__match          = "udp.dst == 53",
+             .actions          = "${rEGBIT_DNS_LOOKUP_RESULT()} = dns_lookup(); next;",
+             .external_ids     = map_empty());
 
         var action = "eth.dst <-> eth.src; ip4.src <-> ip4.dst; "
                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
                      "flags.loopback = 1; output;" in
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DNS_RESPONSE),
-                            .priority         = 100,
-                            .__match          = "udp.dst == 53 && ${rEGBIT_DNS_LOOKUP_RESULT()}",
-                            .actions          = action,
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DNS_RESPONSE),
+             .priority         = 100,
+             .__match          = "udp.dst == 53 && ${rEGBIT_DNS_LOOKUP_RESULT()}",
+             .actions          = action,
+             .external_ids     = map_empty());
 
         var action = "eth.dst <-> eth.src; ip6.src <-> ip6.dst; "
                      "udp.dst = udp.src; udp.src = 53; outport = inport; "
                      "flags.loopback = 1; output;" in
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DNS_RESPONSE),
-                            .priority         = 100,
-                            .__match          = "udp.dst == 53 && ${rEGBIT_DNS_LOOKUP_RESULT()}",
-                            .actions          = action,
-                            .external_ids     = map_empty())
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DNS_RESPONSE),
+             .priority         = 100,
+             .__match          = "udp.dst == 53 && ${rEGBIT_DNS_LOOKUP_RESULT()}",
+             .actions          = action,
+             .external_ids     = map_empty())
     }
 }
 
@@ -2541,37 +2483,37 @@ for (LogicalSwitchHasDNSRecords(ls, true))
  * (priority 0).*/
 for (ls in nb.Logical_Switch) {
     var lsname = uuid2name(ls._uuid) in {
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DHCP_OPTIONS),
-                            .priority         = 0,
-                            .__match          = "1",
-                            .actions          = "next;",
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DHCP_OPTIONS),
+             .priority         = 0,
+             .__match          = "1",
+             .actions          = "next;",
+             .external_ids     = map_empty());
 
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DHCP_RESPONSE),
-                            .priority         = 0,
-                            .__match          = "1",
-                            .actions          = "next;",
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DHCP_RESPONSE),
+             .priority         = 0,
+             .__match          = "1",
+             .actions          = "next;",
+             .external_ids     = map_empty());
 
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DNS_LOOKUP),
-                            .priority         = 0,
-                            .__match          = "1",
-                            .actions          = "next;",
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DNS_LOOKUP),
+             .priority         = 0,
+             .__match          = "1",
+             .actions          = "next;",
+             .external_ids     = map_empty());
 
-        sb.Out_Logical_Flow(.logical_datapath = lsname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, DNS_RESPONSE),
-                            .priority         = 0,
-                            .__match          = "1",
-                            .actions          = "next;",
-                            .external_ids     = map_empty())
+        Flow(.logical_datapath = lsname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, DNS_RESPONSE),
+             .priority         = 0,
+             .__match          = "1",
+             .actions          = "next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -2580,24 +2522,24 @@ for (ls in nb.Logical_Switch) {
  * (priority 100). */
 for (ls in nb.Logical_Switch) {
     var lsname = uuid2name(ls._uuid) in
-    sb.Out_Logical_Flow(.logical_datapath = lsname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, L2_LKUP),
-                        .priority         = 100,
-                        .__match          = "eth.mcast",
-                        .actions          = "outport = \"${mC_FLOOD()}\"; output;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = lsname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, L2_LKUP),
+         .priority         = 100,
+         .__match          = "eth.mcast",
+         .actions          = "outport = \"${mC_FLOOD()}\"; output;",
+         .external_ids     = map_empty())
 }
 
 /* Ingress table 16: Destination lookup, unicast handling (priority 50), */
 for (SwitchPortAddresses(.port = &SwitchPort{.json_name = json_name, .sw = &sw}, .addrs = addrs)) {
-    sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, L2_LKUP),
-                        .priority         = 50,
-                        .__match          = "eth.dst == ${addrs.ea}",
-                        .actions          = "outport = ${json_name}; output;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, L2_LKUP),
+         .priority         = 50,
+         .__match          = "eth.dst == ${addrs.ea}",
+         .actions          = "outport = ${json_name}; output;",
+         .external_ids     = map_empty())
 }
 
 for (&SwitchPort(.lsp = lsp,
@@ -2617,13 +2559,13 @@ for (&SwitchPort(.lsp = lsp,
         } else {
             "eth.dst == ${mac}"
         } in
-        sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = switch_stage(IN, L2_LKUP),
-                            .priority         = 50,
-                            .__match          = __match,
-                            .actions          = "outport = ${json_name}; output;",
-                            .external_ids     = map_empty());
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "ingress",
+             .table_id         = switch_stage(IN, L2_LKUP),
+             .priority         = 50,
+             .__match          = __match,
+             .actions          = "outport = ${json_name}; output;",
+             .external_ids     = map_empty());
 
         /* Add ethernet addresses specified in NAT rules on
          * distributed logical routers. */
@@ -2634,13 +2576,13 @@ for (&SwitchPort(.lsp = lsp,
                     Some{var emac} = set_nth(nat.external_mac, 0) in
                     Some{var nat_mac} = eth_addr_from_string(emac) in
                     var __match = "eth.dst == ${nat_mac} && is_chassis_resident(\"${lport}\")" in
-                    sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                                        .pipeline         = "ingress",
-                                        .table_id         = switch_stage(IN, L2_LKUP),
-                                        .priority         = 50,
-                                        .__match          = __match,
-                                        .actions          = "outport = ${json_name}; output;",
-                                        .external_ids     = map_empty())
+                    Flow(.logical_datapath = sw.dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = switch_stage(IN, L2_LKUP),
+                         .priority         = 50,
+                         .__match          = __match,
+                         .actions          = "outport = ${json_name}; output;",
+                         .external_ids     = map_empty())
                 }
             }
         }
@@ -2658,32 +2600,32 @@ for (&SwitchPort(.lsp = lsp,
 /* Ingress table 16: Destination lookup for unknown MACs (priority 0). */
 for (LogicalSwitchUnknownPorts(.ls = ls_uuid)) {
     var lsname = uuid2name(ls_uuid) in
-    sb.Out_Logical_Flow(.logical_datapath = lsname,
-                        .pipeline         = "ingress",
-                        .table_id         = switch_stage(IN, L2_LKUP),
-                        .priority         = 0,
-                        .__match          = "1",
-                        .actions          = "outport = \"${mC_UNKNOWN()}\"; output;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = lsname,
+         .pipeline         = "ingress",
+         .table_id         = switch_stage(IN, L2_LKUP),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "outport = \"${mC_UNKNOWN()}\"; output;",
+         .external_ids     = map_empty())
 }
 
 /* Egress tables 8: Egress port security - IP (priority 0)
  * Egress table 9: Egress port security L2 - multicast/broadcast (priority 100). */
 for (&Switch(.dpname = dpname)) {
-    sb.Out_Logical_Flow(.logical_datapath = dpname,
-                        .pipeline         = "egress",
-                        .table_id         = switch_stage(OUT, PORT_SEC_IP),
-                        .priority         = 0,
-                        .__match          = "1",
-                        .actions          = "next;",
-                        .external_ids     = map_empty());
-    sb.Out_Logical_Flow(.logical_datapath = dpname,
-                        .pipeline         = "egress",
-                        .table_id         = switch_stage(OUT, PORT_SEC_L2),
-                        .priority         = 100,
-                        .__match          = "eth.mcast",
-                        .actions          = "output;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PORT_SEC_IP),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PORT_SEC_L2),
+         .priority         = 100,
+         .__match          = "eth.mcast",
+         .actions          = "output;",
+         .external_ids     = map_empty())
 }
 
 /* Egress table 8: Egress port security - IP (priorities 90 and 80)
@@ -2702,23 +2644,23 @@ for (&SwitchPort(.sw = &sw, .lsp = lsp, .json_name = json_name, .ps_eth_addresse
         } else {
             "outport == ${json_name} && eth.dst == {${vec_space_sep(ps_eth_addresses)}}"
         } in
-    sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                        .pipeline         = "egress",
-                        .table_id         = switch_stage(OUT, PORT_SEC_L2),
-                        .priority         = 50,
-                        .__match          = __match,
-                        .actions          = "output;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PORT_SEC_L2),
+         .priority         = 50,
+         .__match          = __match,
+         .actions          = "output;",
+         .external_ids     = map_empty())
 }
 
 for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = &sw) if not is_enabled(lsp.enabled)) {
-    sb.Out_Logical_Flow(.logical_datapath = sw.dpname,
-                        .pipeline         = "egress",
-                        .table_id         = switch_stage(OUT, PORT_SEC_L2),
-                        .priority         = 150,
-                        .__match          = "outport == {$json_name}",
-                        .actions          = "drop;",
-                        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PORT_SEC_L2),
+         .priority         = 150,
+         .__match          = "outport == {$json_name}",
+         .actions          = "drop;",
+         .external_ids     = map_empty())
 }
 
 for (SwitchPortPSAddresses(.port = &SwitchPort{.json_name = json_name, .sw = &sw}, .ps_addrs = ps)
@@ -2747,50 +2689,46 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.json_name = json_name, .sw = &sw
         var __match =
             "outport == ${json_name} && eth.dst == ${ps.ea_s} && ip4.dst == {255.255.255.255, 224.0.0.0/4, " ++
             string_join(addrs, ", ") ++ "}" in
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, PORT_SEC_IP),
-            .priority         = 90,
-            .__match          = __match,
-            .actions          = "next;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, PORT_SEC_IP),
+             .priority         = 90,
+             .__match          = __match,
+             .actions          = "next;",
+             .external_ids     = map_empty())
     };
     if (vec_len(ps.ipv6_addrs) > 64'd0) {
         var __match = "outport == ${json_name} && eth.dst: ${ps.ea_s}" ++
                       build_port_security_ipv6_flow(OUT, ps.ea, ps.ipv6_addrs) in
-        sb.Out_Logical_Flow(
-            .logical_datapath = sw.dpname,
-            .pipeline         = "egress",
-            .table_id         = switch_stage(OUT, PORT_SEC_IP),
-            .priority         = 90,
-            .__match          = __match,
-            .actions          = "next;",
-            .external_ids     = map_empty())
+        Flow(.logical_datapath = sw.dpname,
+             .pipeline         = "egress",
+             .table_id         = switch_stage(OUT, PORT_SEC_IP),
+             .priority         = 90,
+             .__match          = __match,
+             .actions          = "next;",
+             .external_ids     = map_empty())
     };
     var __match = "outport == ${json_name} && eth.dst == ${ps.ea_s} && ip" in
-    sb.Out_Logical_Flow(
-        .logical_datapath = sw.dpname,
-        .pipeline         = "egress",
-        .table_id         = switch_stage(OUT, PORT_SEC_IP),
-        .priority         = 80,
-        .__match          = __match,
-        .actions          = "drop;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = sw.dpname,
+         .pipeline         = "egress",
+         .table_id         = switch_stage(OUT, PORT_SEC_IP),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "drop;",
+         .external_ids     = map_empty())
 }
 
 /* Logical router ingress table 0: Admission control framework. */
 for (&Router(.dpname = dpname)) {
     /* Logical VLANs not supported.
      * Broadcast/multicast source address is invalid. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, ADMISSION),
-        .priority         = 100,
-        .__match          = "vlan.present || eth.src[40]",
-        .actions          = "drop;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ADMISSION),
+         .priority         = 100,
+         .__match          = "vlan.present || eth.src[40]",
+         .actions          = "drop;",
+         .external_ids     = map_empty())
 }
 
 /* Logical router ingress table 0: match (priority 50). */
@@ -2809,14 +2747,13 @@ for (&RouterPort(.lrp = lrp,
     //    continue;
     //}
 
-    sb.Out_Logical_Flow(
-        .logical_datapath = router.dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, ADMISSION),
-        .priority         = 50,
-        .__match          = "eth.mcast && inport == ${json_name}",
-        .actions          = "next;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ADMISSION),
+         .priority         = 50,
+         .__match          = "eth.mcast && inport == ${json_name}",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     var __match =
         "eth.dst == ${lrp_networks.ea_s} && inport == ${json_name}" ++
@@ -2825,14 +2762,13 @@ for (&RouterPort(.lrp = lrp,
              * should only be received on the "redirect-chassis". */
             " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})"
         } else { "" } in
-    sb.Out_Logical_Flow(
-        .logical_datapath = router.dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, ADMISSION),
-        .priority         = 50,
-        .__match          = __match,
-        .actions          = "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ADMISSION),
+         .priority         = 50,
+         .__match          = __match,
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 
@@ -2841,44 +2777,41 @@ for (&Router(.dpname = dpname)) {
     /* L3 admission control: drop multicast and broadcast source, localhost
      * source or destination, and zero network source or destination
      * (priority 100). */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, IP_INPUT),
-        .priority         = 100,
-        .__match          = "ip4.mcast || "
-                            "ip4.src == 255.255.255.255 || "
-                            "ip4.src == 127.0.0.0/8 || "
-                            "ip4.dst == 127.0.0.0/8 || "
-                            "ip4.src == 0.0.0.0/8 || "
-                            "ip4.dst == 0.0.0.0/8",
-        .actions          = "drop;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 100,
+         .__match          = "ip4.mcast || "
+         "ip4.src == 255.255.255.255 || "
+         "ip4.src == 127.0.0.0/8 || "
+         "ip4.dst == 127.0.0.0/8 || "
+         "ip4.src == 0.0.0.0/8 || "
+         "ip4.dst == 0.0.0.0/8",
+         .actions          = "drop;",
+         .external_ids     = map_empty());
 
     /* ARP reply handling.  Use ARP replies to populate the logical
      * router's ARP table. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, IP_INPUT),
-        .priority         = 90,
-        .__match          = "arp.op == 2",
-        .actions          = "put_arp(inport, arp.spa, arp.sha);",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 90,
+         .__match          = "arp.op == 2",
+         .actions          = "put_arp(inport, arp.spa, arp.sha);",
+         .external_ids     = map_empty());
 
     /* Drop Ethernet local broadcast.  By definition this traffic should
      * not be forwarded.*/
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, IP_INPUT),
-        .priority         = 50,
-        .__match          = "eth.bcast",
-        .actions          = "drop;",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 50,
+         .__match          = "eth.bcast",
+         .actions          = "drop;",
+         .external_ids     = map_empty());
 
     /* TTL discard */
-    sb.Out_Logical_Flow(
+    Flow(
         .logical_datapath = dpname,
         .pipeline         = "ingress",
         .table_id         = router_stage(IN, IP_INPUT),
@@ -2889,37 +2822,34 @@ for (&Router(.dpname = dpname)) {
 
     /* ND advertisement handling.  Use advertisements to populate
      * the logical router's ARP/ND table. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, IP_INPUT),
-        .priority         = 90,
-        .__match          = "nd_na",
-        .actions          = "put_nd(inport, nd.target, nd.tll);",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 90,
+         .__match          = "nd_na",
+         .actions          = "put_nd(inport, nd.target, nd.tll);",
+         .external_ids     = map_empty());
 
     /* Lean from neighbor solicitations that were not directed at
      * us.  (A priority-90 flow will respond to requests to us and
      * learn the sender's mac address. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, IP_INPUT),
-        .priority         = 80,
-        .__match          = "nd_ns",
-        .actions          = "put_nd(inport, ip6.src, nd.sll);",
-        .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = "nd_ns",
+         .actions          = "put_nd(inport, ip6.src, nd.sll);",
+         .external_ids     = map_empty());
 
     /* Pass other traffic not already handled to the next table for
      * routing. */
-    sb.Out_Logical_Flow(
-        .logical_datapath = dpname,
-        .pipeline         = "ingress",
-        .table_id         = router_stage(IN, IP_INPUT),
-        .priority         = 0,
-        .__match          = "1",
-        .actions          = "next;",
-        .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 function format_v4_networks(networks: lport_addresses, add_bcast: bool): string =
@@ -3023,14 +2953,13 @@ for (&RouterPort(.router = &router, .networks = networks)
     var __match = "ip4.src == "                                  ++
                    format_v4_networks(networks, true)            ++
                    " && ${rEGBIT_EGRESS_LOOPBACK()} == 0" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 100,
-            .__match          = __match,
-            .actions          = "drop;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 100,
+         .__match          = __match,
+         .actions          = "drop;",
+         .external_ids     = map_empty());
 
     /* ICMP echo reply.  These flows reply to ICMP echo requests
      * received for the router's IP address. Since packets only
@@ -3040,18 +2969,17 @@ for (&RouterPort(.router = &router, .networks = networks)
     var __match = "ip4.dst == "                                  ++
                   format_v4_networks(networks, false)            ++
                   " && icmp4.type == 8 && icmp4.code == 0" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 90,
-            .__match          = __match,
-            .actions          = "ip4.dst <-> ip4.src; "
-                                "ip.ttl = 255; "
-                                "icmp4.type = 0; "
-                                "flags.loopback = 1; "
-                                "next; ",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 90,
+         .__match          = __match,
+         .actions          = "ip4.dst <-> ip4.src; "
+                             "ip.ttl = 255; "
+                             "icmp4.type = 0; "
+                             "flags.loopback = 1; "
+                             "next; ",
+         .external_ids     = map_empty())
 }
 
 /* ICMP time exceeded */
@@ -3062,22 +2990,21 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
                                                     .is_redirect = is_redirect},
                                 .addr = addr))
 {
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 40,
-            .__match          = "inport == ${json_name} && ip4 && "
-                                "ip.ttl == {0, 1} && !ip.later_frag",
-            .actions          = "icmp4 {"
-                                "eth.dst <-> eth.src; "
-                                "icmp4.type = 11; /* Time exceeded */ "
-                                "icmp4.code = 0; /* TTL exceeded in transit */ "
-                                "ip4.dst = ip4.src; "
-                                "ip4.src = ${addr.addr_s}; "
-                                "ip.ttl = 255; "
-                                "next; };",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 40,
+         .__match          = "inport == ${json_name} && ip4 && "
+                             "ip.ttl == {0, 1} && !ip.later_frag",
+         .actions          = "icmp4 {"
+                             "eth.dst <-> eth.src; "
+                             "icmp4.type = 11; /* Time exceeded */ "
+                             "icmp4.code = 0; /* TTL exceeded in transit */ "
+                             "ip4.dst = ip4.src; "
+                             "ip4.src = ${addr.addr_s}; "
+                             "ip.ttl = 255; "
+                             "next; };",
+         .external_ids     = map_empty());
 
     /* ARP reply.  These flows reply to ARP requests for the router's own
      * IP address. */
@@ -3101,14 +3028,13 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
             "outport = ${json_name}; "
             "flags.loopback = 1; "
             "output;" in
-        sb.Out_Logical_Flow(
-                .logical_datapath = router.dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, IP_INPUT),
-                .priority         = 90,
-                .__match          = __match,
-                .actions          = actions,
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = router.dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, IP_INPUT),
+             .priority         = 90,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty())
     };
 
     /* Learn from ARP requests that were not directed at us. A typical
@@ -3118,14 +3044,13 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
         "inport == ${json_name} && arp.spa == ${addr.network_s}/${addr.plen}"
         " && arp.op == 1" ++
         if is_redirect " && is_chassis_resident(${json_name})" else "" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 80,
-            .__match          = __match,
-            .actions          = "put_arp(inport, arp.spa, arp.sha);",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "put_arp(inport, arp.spa, arp.sha);",
+         .external_ids     = map_empty())
 }
 
 for (&RouterPort(.lrp = lrp,
@@ -3163,14 +3088,13 @@ for (&RouterPort(.lrp = lrp,
             "output; "
             "};"
         } in
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, IP_INPUT),
-                .priority         = 90,
-                .__match          = __match,
-                .actions          = actions,
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, IP_INPUT),
+             .priority         = 90,
+             .__match          = __match,
+             .actions          = actions,
+             .external_ids     = map_empty())
     };
 
     for (LogicalRouterNAT(lr._uuid, &nat) if nat.__type != "snat") {
@@ -3224,19 +3148,18 @@ for (&RouterPort(.lrp = lrp,
             ( __match
             , actions ++ "eth.src = ${networks.ea_s}; arp.sha = ${networks.ea_s}; ")
         } in
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, IP_INPUT),
-                .priority         = 90,
-                .__match          = __match2,
-                .actions          = actions2                    ++
-                                    "arp.tpa = arp.spa; "
-                                    "arp.spa = ${ip_fmt(ip)}; "
-                                    "outport = ${json_name}; "
-                                    "flags.loopback = 1; "
-                                    "output;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, IP_INPUT),
+             .priority         = 90,
+             .__match          = __match2,
+             .actions          = actions2                    ++
+                                "arp.tpa = arp.spa; "
+                                "arp.spa = ${ip_fmt(ip)}; "
+                                "outport = ${json_name}; "
+                                "flags.loopback = 1; "
+                                "output;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -3247,49 +3170,46 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.router = &Router{.dpname = 
 {
     /* UDP/TCP port unreachable. */
     var __match = "ip4 && ip4.dst == ${addr.addr_s} && !ip.later_frag && udp" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 80,
-            .__match          = __match,
-            .actions          = "icmp4 {"
-                                "eth.dst <-> eth.src; "
-                                "ip4.dst <-> ip4.src; "
-                                "ip.ttl = 255; "
-                                "icmp4.type = 3; "
-                                "icmp4.code = 3; "
-                                "next; };",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "icmp4 {"
+                             "eth.dst <-> eth.src; "
+                             "ip4.dst <-> ip4.src; "
+                             "ip.ttl = 255; "
+                             "icmp4.type = 3; "
+                             "icmp4.code = 3; "
+                             "next; };",
+         .external_ids     = map_empty());
 
     var __match = "ip4 && ip4.dst == ${addr.addr_s} && !ip.later_frag && tcp" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 80,
-            .__match          = __match,
-            .actions          = "tcp_reset {"
-                                "eth.dst <-> eth.src; "
-                                "ip4.dst <-> ip4.src; "
-                                "next; };",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "tcp_reset {"
+                             "eth.dst <-> eth.src; "
+                             "ip4.dst <-> ip4.src; "
+                             "next; };",
+         .external_ids     = map_empty());
 
     var __match = "ip4 && ip4.dst == ${addr.addr_s} && !ip.later_frag" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 70,
-            .__match          = __match,
-            .actions          = "icmp4 {"
-                                "eth.dst <-> eth.src; "
-                                "ip4.dst <-> ip4.src; "
-                                "ip.ttl = 255; "
-                                "icmp4.type = 3; "
-                                "icmp4.code = 2; "
-                                "next; };",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 70,
+         .__match          = __match,
+         .actions          = "icmp4 {"
+                             "eth.dst <-> eth.src; "
+                             "ip4.dst <-> ip4.src; "
+                             "ip.ttl = 255; "
+                             "icmp4.type = 3; "
+                             "icmp4.code = 2; "
+                             "next; };",
+         .external_ids     = map_empty())
 }
 
 
@@ -3332,14 +3252,13 @@ for (&RouterPort(.lrp = lrp,
     } in
     var __match = "ip4.dst == {" ++ string_join(ips, ", ") ++ "}" in
     if (not vec_is_empty(ips)) {
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, IP_INPUT),
-                .priority         = 60,
-                .__match          = __match,
-                .actions          = "drop;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, IP_INPUT),
+             .priority         = 60,
+             .__match          = __match,
+             .actions          = "drop;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -3356,44 +3275,41 @@ for (&RouterPort(.router = &router, .networks = networks)
      * IPv6 address owned by the router (priority 100). */
     var __match = "ip6.src == " ++
                    format_v6_networks(networks) in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 100,
-            .__match          = __match,
-            .actions          = "drop;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 100,
+         .__match          = __match,
+         .actions          = "drop;",
+         .external_ids     = map_empty());
 
     /* ICMPv6 echo reply.  These flows reply to echo requests
      * received for the router's IP address. */
     var __match = "ip6.dst == "                   ++
                   format_v6_networks(networks)    ++
                   " && icmp6.type == 128 && icmp6.code == 0" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 90,
-            .__match          = __match,
-            .actions          = "ip6.dst <-> ip6.src; "
-                                "ip.ttl = 255; "
-                                "icmp6.type = 129; "
-                                "flags.loopback = 1; "
-                                "next; ",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 90,
+         .__match          = __match,
+         .actions          = "ip6.dst <-> ip6.src; "
+         "ip.ttl = 255; "
+         "icmp6.type = 129; "
+         "flags.loopback = 1; "
+         "next; ",
+         .external_ids     = map_empty());
 
     /* Drop IPv6 traffic to this router. */
     var __match = "ip6.dst == " ++
                   format_v6_networks(networks) in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 60,
-            .__match          = __match,
-            .actions          = "drop;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 60,
+         .__match          = __match,
+         .actions          = "drop;",
+         .external_ids     = map_empty())
 }
 
 /* ND reply.  These flows reply to ND solicitations for the
@@ -3425,14 +3341,13 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.is_redirect = is_redirect,
                   "flags.loopback = 1; "
                   "output; "
                   "};" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 90,
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 90,
+         .__match          = __match,
+         .actions          = actions,
+         .external_ids     = map_empty())
 }
 
 /* UDP/TCP port unreachable */
@@ -3443,49 +3358,46 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.router = &Router{.dpname = 
                                 .addr = addr))
 {
     var __match = "ip6 && ip6.dst == ${addr.addr_s} && !ip.later_frag && tcp" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 80,
-            .__match          = __match,
-            .actions          = "tcp_reset {"
-                                "eth.dst <-> eth.src; "
-                                "ip6.dst <-> ip6.src; "
-                                "next; };",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "tcp_reset {"
+                             "eth.dst <-> eth.src; "
+                             "ip6.dst <-> ip6.src; "
+                             "next; };",
+         .external_ids     = map_empty());
 
     var __match = "ip6 && ip6.dst == ${addr.addr_s} && !ip.later_frag && udp" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 80,
-            .__match          = __match,
-            .actions          = "icmp6 {"
-                                "eth.dst <-> eth.src; "
-                                "ip6.dst <-> ip6.src; "
-                                "ip.ttl = 255; "
-                                "icmp6.type = 1; "
-                                "icmp6.code = 4; "
-                                "next; };",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "icmp6 {"
+                             "eth.dst <-> eth.src; "
+                             "ip6.dst <-> ip6.src; "
+                             "ip.ttl = 255; "
+                             "icmp6.type = 1; "
+                             "icmp6.code = 4; "
+                             "next; };",
+         .external_ids     = map_empty());
 
     var __match = "ip6 && ip6.dst == ${addr.addr_s} && !ip.later_frag" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 70,
-            .__match          = __match,
-            .actions          = "icmp6 {"
-                                "eth.dst <-> eth.src; "
-                                "ip6.dst <-> ip6.src; "
-                                "ip.ttl = 255; "
-                                "icmp6.type = 1; "
-                                "icmp6.code = 3; "
-                                "next; };",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 70,
+         .__match          = __match,
+         .actions          = "icmp6 {"
+                             "eth.dst <-> eth.src; "
+                             "ip6.dst <-> ip6.src; "
+                             "ip.ttl = 255; "
+                             "icmp6.type = 1; "
+                             "icmp6.code = 3; "
+                             "next; };",
+         .external_ids     = map_empty())
 }
 
 /* ICMPv6 time exceeded */
@@ -3506,73 +3418,66 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.router = &router,
                   "icmp6.type = 3; /* Time exceeded */ "
                   "icmp6.code = 0; /* TTL exceeded in transit */ "
                   "next; };" in
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_INPUT),
-            .priority         = 40,
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_INPUT),
+         .priority         = 40,
+         .__match          = __match,
+         .actions          = actions,
+         .external_ids     = map_empty())
 }
 
 /* NAT, Defrag and load balancing. */
 
 for (&Router(.lr = lr, .dpname = dpname)) {
     /* Packets are allowed by default. */
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, DEFRAG),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, DEFRAG),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, UNSNAT),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, UNSNAT),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = router_stage(OUT, SNAT),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = router_stage(OUT, SNAT),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, DNAT),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, DNAT),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = router_stage(OUT, UNDNAT),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = router_stage(OUT, UNDNAT),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "egress",
-            .table_id         = router_stage(OUT, EGR_LOOP),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "egress",
+         .table_id         = router_stage(OUT, EGR_LOOP),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 /* NAT rules are only valid on Gateway routers and routers with
@@ -3647,14 +3552,13 @@ for (&Router(.dpname = dpname,
             if (nat.__type == "snat" or nat.__type == "dnat_and_snat") {
                 if (l3dgw_port == None) {
                     /* Gateway router. */
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = router_stage(IN, UNSNAT),
-                            .priority         = 90,
-                            .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                            .actions          = "ct_snat;",
-                            .external_ids     = map_empty())
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = router_stage(IN, UNSNAT),
+                         .priority         = 90,
+                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
+                         .actions          = "ct_snat;",
+                         .external_ids     = map_empty())
                 };
                 Some{var gwport} = l3dgw_port in {
                     /* Distributed router. */
@@ -3668,26 +3572,24 @@ for (&Router(.dpname = dpname,
                              * programmed on the "redirect-chassis". */
                             " && is_chassis_resident(${redirect_port_name})"
                         } else { "" } in
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = router_stage(IN, UNSNAT),
-                            .priority         = 100,
-                            .__match          = __match,
-                            .actions          = "ct_snat;",
-                            .external_ids     = map_empty());
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = router_stage(IN, UNSNAT),
+                         .priority         = 100,
+                         .__match          = __match,
+                         .actions          = "ct_snat;",
+                         .external_ids     = map_empty());
 
                     /* Traffic received on other router ports must be
                      * redirected to the central instance of the l3dgw_port
                      * for NAT processing. */
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = router_stage(IN, UNSNAT),
-                            .priority         = 50,
-                            .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                            .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
-                            .external_ids     = map_empty())
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = router_stage(IN, UNSNAT),
+                         .priority         = 50,
+                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
+                         .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
+                         .external_ids     = map_empty())
                 }
             };
 
@@ -3707,14 +3609,13 @@ for (&Router(.dpname = dpname,
                                       "flags.force_snat_for_dnat = 1; "
                                   } else { "" } ++
                                   "flags.loopback = 1; ct_dnat(${nat.logical_ip});" in
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = router_stage(IN, DNAT),
-                            .priority         = 100,
-                            .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                            .actions          = actions,
-                            .external_ids     = map_empty())
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = router_stage(IN, DNAT),
+                         .priority         = 100,
+                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
+                         .actions          = actions,
+                         .external_ids     = map_empty())
                 };
 
                 Some{var gwport} = l3dgw_port in {
@@ -3728,26 +3629,24 @@ for (&Router(.dpname = dpname,
                              * programmed on the "redirect-chassis". */
                             " && is_chassis_resident(${redirect_port_name})"
                         } else { "" } in
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = router_stage(IN, DNAT),
-                            .priority         = 100,
-                            .__match          = __match,
-                            .actions          = "ct_dnat(${nat.logical_ip});",
-                            .external_ids     = map_empty());
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = router_stage(IN, DNAT),
+                         .priority         = 100,
+                         .__match          = __match,
+                         .actions          = "ct_dnat(${nat.logical_ip});",
+                         .external_ids     = map_empty());
 
                     /* Traffic received on other router ports must be
                      * redirected to the central instance of the l3dgw_port
                      * for NAT processing. */
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "ingress",
-                            .table_id         = router_stage(IN, DNAT),
-                            .priority         = 50,
-                            .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                            .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
-                            .external_ids     = map_empty())
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "ingress",
+                         .table_id         = router_stage(IN, DNAT),
+                         .priority         = 50,
+                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
+                         .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
+                         .external_ids     = map_empty())
                 }
             };
 
@@ -3774,14 +3673,13 @@ for (&Router(.dpname = dpname,
                         Some{mac_addr} -> "eth.src = ${mac_addr}; ",
                         None -> ""
                     } ++ "ct_dnat;" in
-                sb.Out_Logical_Flow(
-                        .logical_datapath = dpname,
-                        .pipeline         = "egress",
-                        .table_id         = router_stage(OUT, UNDNAT),
-                        .priority         = 100,
-                        .__match          = __match,
-                        .actions          = actions,
-                        .external_ids     = map_empty())
+                Flow(.logical_datapath = dpname,
+                     .pipeline         = "egress",
+                     .table_id         = router_stage(OUT, UNDNAT),
+                     .priority         = 100,
+                     .__match          = __match,
+                     .actions          = actions,
+                     .external_ids     = map_empty())
             };
 
             /* Egress SNAT table: Packets enter the egress pipeline with
@@ -3794,14 +3692,13 @@ for (&Router(.dpname = dpname,
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "egress",
-                            .table_id         = router_stage(OUT, SNAT),
-                            .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
-                            .__match          = "ip && ip4.src == ${nat.logical_ip}",
-                            .actions          = "ct_snat(${nat.external_ip});",
-                            .external_ids     = map_empty())
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "egress",
+                         .table_id         = router_stage(OUT, SNAT),
+                         .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
+                         .__match          = "ip && ip4.src == ${nat.logical_ip}",
+                         .actions          = "ct_snat(${nat.external_ip});",
+                         .external_ids     = map_empty())
                 };
 
                 Some{var gwport} = l3dgw_port in
@@ -3824,14 +3721,13 @@ for (&Router(.dpname = dpname,
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
-                    sb.Out_Logical_Flow(
-                            .logical_datapath = dpname,
-                            .pipeline         = "egress",
-                            .table_id         = router_stage(OUT, SNAT),
-                            .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
-                            .__match          = __match,
-                            .actions          = actions,
-                            .external_ids     = map_empty())
+                    Flow(.logical_datapath = dpname,
+                         .pipeline         = "egress",
+                         .table_id         = router_stage(OUT, SNAT),
+                         .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
+                         .__match          = __match,
+                         .actions          = actions,
+                         .external_ids     = map_empty())
                 }
             };
 
@@ -3846,14 +3742,13 @@ for (&Router(.dpname = dpname,
             var __match =
                 "eth.dst == ${mac_addr} && inport == ${json_string_escape(gwport.name)}"
                 " && is_chassis_resident(\"${logical_port}\")" in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ADMISSION),
-                    .priority         = 50,
-                    .__match          = __match,
-                    .actions          = "next;",
-                    .external_ids     = map_empty());
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ADMISSION),
+                 .priority         = 50,
+                 .__match          = __match,
+                 .actions          = "next;",
+                 .external_ids     = map_empty());
 
             /* Ingress Gateway Redirect Table: For NAT on a distributed
              * router, add flows that are specific to a NAT rule.  These
@@ -3863,14 +3758,13 @@ for (&Router(.dpname = dpname,
             Some{var gwport} = l3dgw_port in
             var __match =
                 "ip4.src == ${nat.logical_ip} && outport == ${json_string_escape(gwport.name)}" in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, GW_REDIRECT),
-                    .priority         = 100,
-                    .__match          = __match,
-                    .actions          = "next;",
-                    .external_ids     = map_empty());
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, GW_REDIRECT),
+                 .priority         = 100,
+                 .__match          = __match,
+                 .actions          = "next;",
+                 .external_ids     = map_empty());
 
             /* Egress Loopback table: For NAT on a distributed router.
              * If packets in the egress pipeline on the distributed
@@ -3894,14 +3788,13 @@ for (&Router(.dpname = dpname,
                 string_join(regs, "")                ++
                 "${rEGBIT_EGRESS_LOOPBACK()} = 1; "
                 "next(pipeline=ingress, table=0); };" in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "egress",
-                    .table_id         = router_stage(OUT, EGR_LOOP),
-                    .priority         = 100,
-                    .__match          = __match,
-                    .actions          = actions,
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "egress",
+                 .table_id         = router_stage(OUT, EGR_LOOP),
+                 .priority         = 100,
+                 .__match          = __match,
+                 .actions          = actions,
+                 .external_ids     = map_empty())
         }
     };
 
@@ -3911,26 +3804,24 @@ for (&Router(.dpname = dpname,
         /* If a packet with destination IP address as that of the
          * gateway router (as set in options:dnat_force_snat_ip) is seen,
          * UNSNAT it. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, UNSNAT),
-                .priority         = 110,
-                .__match          = "ip && ip4.dst == ${dnat_force_snat_ip}",
-                .actions          = "ct_snat;",
-                .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, UNSNAT),
+             .priority         = 110,
+             .__match          = "ip && ip4.dst == ${dnat_force_snat_ip}",
+             .actions          = "ct_snat;",
+             .external_ids     = map_empty());
 
         /* Higher priority rules to force SNAT with the IP addresses
          * configured in the Gateway router.  This only takes effect
          * when the packet has already been DNATed once. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "egress",
-                .table_id         = router_stage(OUT, SNAT),
-                .priority         = 100,
-                .__match          = "flags.force_snat_for_dnat == 1 && ip",
-                .actions          = "ct_snat(${dnat_force_snat_ip});",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = router_stage(OUT, SNAT),
+             .priority         = 100,
+             .__match          = "flags.force_snat_for_dnat == 1 && ip",
+             .actions          = "ct_snat(${dnat_force_snat_ip});",
+             .external_ids     = map_empty())
     };
 
     Some{(var lb_force_snat_ip, _)} = get_force_snat_ip(lr, "lb") in
@@ -3938,25 +3829,23 @@ for (&Router(.dpname = dpname,
         /* If a packet with destination IP address as that of the
          * gateway router (as set in options:lb_force_snat_ip) is seen,
          * UNSNAT it. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, UNSNAT),
-                .priority         = 100,
-                .__match          = "ip && ip4.dst == ${lb_force_snat_ip}",
-                .actions          = "ct_snat;",
-                .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, UNSNAT),
+             .priority         = 100,
+             .__match          = "ip && ip4.dst == ${lb_force_snat_ip}",
+             .actions          = "ct_snat;",
+             .external_ids     = map_empty());
 
         /* Load balanced traffic will have flags.force_snat_for_lb set.
          * Force SNAT it. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "egress",
-                .table_id         = router_stage(OUT, SNAT),
-                .priority         = 100,
-                .__match          = "flags.force_snat_for_lb == 1 && ip",
-                .actions          = "ct_snat(${lb_force_snat_ip});",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "egress",
+             .table_id         = router_stage(OUT, SNAT),
+             .priority         = 100,
+             .__match          = "flags.force_snat_for_lb == 1 && ip",
+             .actions          = "ct_snat(${lb_force_snat_ip});",
+             .external_ids     = map_empty())
     };
 
     if (not is_gateway) {
@@ -3969,14 +3858,13 @@ for (&Router(.dpname = dpname,
         * does not have any feature that depends on the source
         * ip address being external IP address for IP routing,
         * we can do it here, saving a future re-circulation. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, SNAT),
-                .priority         = 50,
-                .__match          = "ip",
-                .actions          = "flags.loopback = 1; ct_dnat;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, SNAT),
+             .priority         = 50,
+             .__match          = "ip",
+             .actions          = "flags.loopback = 1; ct_dnat;",
+             .external_ids     = map_empty())
     } else {
         /* For NAT on a distributed router, add flows to Ingress
          * IP Routing table, Ingress ARP Resolution table, and
@@ -3987,14 +3875,13 @@ for (&Router(.dpname = dpname,
          * with REGBIT_NAT_REDIRECT (set in DNAT or UNSNAT stages),
          * with action "ip.ttl--; next;".  The IN_GW_REDIRECT table
          * will take care of setting the outport. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, IP_ROUTING),
-                .priority         = 300,
-                .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
-                .actions          = "ip.ttl--; next;",
-                .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, IP_ROUTING),
+             .priority         = 300,
+             .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
+             .actions          = "ip.ttl--; next;",
+             .external_ids     = map_empty());
 
         /* The highest priority IN_ARP_RESOLVE rule matches packets
          * with REGBIT_NAT_REDIRECT (set in DNAT or UNSNAT stages),
@@ -4002,28 +3889,26 @@ for (&Router(.dpname = dpname,
          * ethernet address. */
         Some{var gwport} = l3dgw_port in
         for (&RouterPort(.lrp = nb.Logical_Router_Port{._uuid = gwport._uuid}, .networks = networks)) {
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ARP_RESOLVE),
-                    .priority         = 200,
-                    .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
-                    .actions          = "eth.dst = ${networks.ea_s}; next;",
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ARP_RESOLVE),
+                 .priority         = 200,
+                 .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
+                 .actions          = "eth.dst = ${networks.ea_s}; next;",
+                 .external_ids     = map_empty())
         };
 
         /* The highest priority IN_GW_REDIRECT rule redirects packets
          * with REGBIT_NAT_REDIRECT (set in DNAT or UNSNAT stages) to
          * the central instance of the l3dgw_port for NAT processing. */
         Some{var gwport} = l3dgw_port in
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, GW_REDIRECT),
-                .priority         = 200,
-                .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
-                .actions          = "outport = ${redirect_port_name}; next;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, GW_REDIRECT),
+             .priority         = 200,
+             .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
+             .actions          = "outport = ${redirect_port_name}; next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -4061,14 +3946,13 @@ for (RouterLBVIP(
          * We create one for each VIP:port pair; flows with the same IP and
          * different port numbers will produce identical flows that will
          * get merged by DDlog. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, DEFRAG),
-                .priority         = 100,
-                .__match          = __match,
-                .actions          = "ct_next;",
-                .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, DEFRAG),
+             .priority         = 100,
+             .__match          = __match,
+             .actions          = "ct_next;",
+             .external_ids     = map_empty());
 
         /* Higher priority rules are added for load-balancing in DNAT
          * table.  For every match (on a VIP[:port]), we add two flows
@@ -4110,14 +3994,13 @@ for (RouterLBVIP(
                     Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_lb(${vip_value});",
                     None -> "ct_lb(${vip_value});"
                 } in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, DNAT),
-                    .priority         = prio,
-                    .__match          = new_match,
-                    .actions          = actions,
-                    .external_ids     = map_empty());
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, DNAT),
+                 .priority         = prio,
+                 .__match          = new_match,
+                 .actions          = actions,
+                 .external_ids     = map_empty());
 
             /* A match and actions for established connections. */
             var est_match = "ct.est && " ++ __match in
@@ -4126,14 +4009,13 @@ for (RouterLBVIP(
                     Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_dnat;",
                     None -> "ct_dnat;"
                 } in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, DNAT),
-                    .priority         = prio,
-                    .__match          = est_match,
-                    .actions          = actions,
-                    .external_ids     = map_empty());
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, DNAT),
+                 .priority         = prio,
+                 .__match          = est_match,
+                 .actions          = actions,
+                 .external_ids     = map_empty());
 
             Some{var gwport} = l3dgw_port in
             /* Add logical flows to UNDNAT the load balanced reverse traffic in
@@ -4171,14 +4053,13 @@ for (RouterLBVIP(
                     Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_dnat;",
                     None -> "ct_dnat;"
                 } in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = dpname,
-                    .pipeline         = "egress",
-                    .table_id         = router_stage(OUT, UNDNAT),
-                    .priority         = 120,
-                    .__match          = undnat_match,
-                    .actions          = action,
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = dpname,
+                 .pipeline         = "egress",
+                 .table_id         = router_stage(OUT, UNDNAT),
+                 .priority         = 120,
+                 .__match          = undnat_match,
+                 .actions          = action,
+                 .external_ids     = map_empty())
         }
     }
 }
@@ -4314,14 +4195,13 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_e
                 "addr_mode = \"${address_mode}\", slla = ${networks.ea_s}" ++
                 if (mtu > 0) { ", mtu = ${mtu}" } else { "" } in
             var actions = actions0 ++ prefix ++ "); next;" in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = router.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ND_RA_OPTIONS),
-                    .priority         = 50,
-                    .__match          = __match,
-                    .actions          = actions,
-                    .external_ids     = map_empty());
+            Flow(.logical_datapath = router.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ND_RA_OPTIONS),
+                 .priority         = 50,
+                 .__match          = __match,
+                 .actions          = actions,
+                 .external_ids     = map_empty());
 
             var __match = "inport == ${json_name} && ip6.dst == ff02::2 && "
                           "nd_ra && ${rEGBIT_ND_RA_OPTS_RESULT()}" in
@@ -4330,14 +4210,13 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_e
                           "ip6.dst = ip6.src; ip6.src = ${ip6_str}; "
                           "outport = inport; flags.loopback = 1; "
                           "output;" in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = router.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ND_RA_OPTIONS),
-                    .priority         = 50,
-                    .__match          = __match,
-                    .actions          = actions,
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = router.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ND_RA_OPTIONS),
+                 .priority         = 50,
+                 .__match          = __match,
+                 .actions          = actions,
+                 .external_ids     = map_empty())
         }
     }
 }
@@ -4347,22 +4226,20 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_e
  * (priority 0)*/
 for (&Router(.dpname = dpname))
 {
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ND_RA_OPTIONS),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ND_RA_RESPONSE),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ND_RA_OPTIONS),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ND_RA_RESPONSE),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 /* Proxy table that stores per-port routes.
@@ -4424,14 +4301,13 @@ for (Route(.port_name   = port_name,
         "next;" in
     /* The priority here is calculated to implement longest-prefix-match
      * routing. */
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, IP_ROUTING),
-            .priority         = 32'd0 ++ priority,
-            .__match          = __match,
-            .actions          = actions,
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, IP_ROUTING),
+         .priority         = 32'd0 ++ priority,
+         .__match          = __match,
+         .actions          = actions,
+         .external_ids     = map_empty())
 }
 
 /* Logical router ingress table 7: IP Routing.
@@ -4516,27 +4392,25 @@ for (&RouterPort(.peer = PeerRouter{peer_port},
         if (not vec_is_empty(networks.ipv4_addrs)) {
             var __match = "outport == ${peer_json_name} && reg0 == " ++
                           format_v4_networks(networks, false) in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = peer_router.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ARP_RESOLVE),
-                    .priority         = 100,
-                    .__match          = __match,
-                    .actions          = "eth.dst = ${networks.ea_s}; next;",
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = peer_router.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ARP_RESOLVE),
+                 .priority         = 100,
+                 .__match          = __match,
+                 .actions          = "eth.dst = ${networks.ea_s}; next;",
+                 .external_ids     = map_empty())
         };
 
         if (not vec_is_empty(networks.ipv6_addrs)) {
             var __match = "outport == ${peer_json_name} && xxreg0 == " ++
                           format_v6_networks(networks) in
-            sb.Out_Logical_Flow(
-                    .logical_datapath = peer_router.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ARP_RESOLVE),
-                    .priority         = 100,
-                    .__match          = __match,
-                    .actions          = "eth.dst = ${networks.ea_s}; next;",
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = peer_router.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ARP_RESOLVE),
+                 .priority         = 100,
+                 .__match          = __match,
+                 .actions          = "eth.dst = ${networks.ea_s}; next;",
+                 .external_ids     = map_empty())
         }
     }
 }
@@ -4557,14 +4431,13 @@ for (SwitchPortIPv4Address(
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
     {
         Some{_} = find_lrp_member_ip(peer.networks, addr.addr_s) in
-        sb.Out_Logical_Flow(
-                .logical_datapath = peer_router.dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, ARP_RESOLVE),
-                .priority         = 100,
-                .__match          = "outport == ${peer.json_name} && reg0 == ${addr.addr_s}",
-                .actions          = "eth.dst = ${ea_s}; next;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = peer_router.dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, ARP_RESOLVE),
+             .priority         = 100,
+             .__match          = "outport == ${peer.json_name} && reg0 == ${addr.addr_s}",
+             .actions          = "eth.dst = ${ea_s}; next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -4578,14 +4451,13 @@ for (SwitchPortIPv6Address(
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
     {
         Some{_} = find_lrp_member_ip(peer.networks, addr.addr_s) in
-        sb.Out_Logical_Flow(
-                .logical_datapath = peer_router.dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, ARP_RESOLVE),
-                .priority         = 100,
-                .__match          = "outport == ${peer.json_name} && xxreg0 == ${addr.addr_s}",
-                .actions          = "eth.dst = ${ea_s}; next;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = peer_router.dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, ARP_RESOLVE),
+             .priority         = 100,
+             .__match          = "outport == ${peer.json_name} && xxreg0 == ${addr.addr_s}",
+             .actions          = "eth.dst = ${ea_s}; next;",
+             .external_ids     = map_empty())
     }
 }
 
@@ -4606,47 +4478,43 @@ for (&SwitchPort(.lsp = lsp1,
          if peer2.lrp._uuid != peer1.lrp._uuid)
     {
         if (not vec_is_empty(peer2.networks.ipv4_addrs)) {
-            sb.Out_Logical_Flow(
-                    .logical_datapath = peer_router.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ARP_RESOLVE),
-                    .priority         = 100,
-                    .__match          = "outport == ${peer1.json_name} && reg0 == ${format_v4_networks(peer2.networks, false)}",
-                    .actions          = "eth.dst = ${peer2.networks.ea_s}; next;",
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = peer_router.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ARP_RESOLVE),
+                 .priority         = 100,
+                 .__match          = "outport == ${peer1.json_name} && reg0 == ${format_v4_networks(peer2.networks, false)}",
+                 .actions          = "eth.dst = ${peer2.networks.ea_s}; next;",
+                 .external_ids     = map_empty())
         };
 
         if (not vec_is_empty(peer2.networks.ipv6_addrs)) {
-            sb.Out_Logical_Flow(
-                    .logical_datapath = peer_router.dpname,
-                    .pipeline         = "ingress",
-                    .table_id         = router_stage(IN, ARP_RESOLVE),
-                    .priority         = 100,
-                    .__match          = "outport == ${peer1.json_name} && xxreg0 == ${format_v6_networks(peer2.networks)}",
-                    .actions          = "eth.dst = ${peer2.networks.ea_s}; next;",
-                    .external_ids     = map_empty())
+            Flow(.logical_datapath = peer_router.dpname,
+                 .pipeline         = "ingress",
+                 .table_id         = router_stage(IN, ARP_RESOLVE),
+                 .priority         = 100,
+                 .__match          = "outport == ${peer1.json_name} && xxreg0 == ${format_v6_networks(peer2.networks)}",
+                 .actions          = "eth.dst = ${peer2.networks.ea_s}; next;",
+                 .external_ids     = map_empty())
         }
     }
 }
 
 for (&Router(.dpname = dpname))
 {
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ARP_RESOLVE),
-            .priority         = 0,
-            .__match          = "ip4",
-            .actions          = "get_arp(outport, reg0); next;",
-            .external_ids     = map_empty());
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ARP_RESOLVE),
-            .priority         = 0,
-            .__match          = "ip6",
-            .actions          = "get_nd(outport, xxreg0); next;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ARP_RESOLVE),
+         .priority         = 0,
+         .__match          = "ip4",
+         .actions          = "get_arp(outport, reg0); next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ARP_RESOLVE),
+         .priority         = 0,
+         .__match          = "ip6",
+         .actions          = "get_nd(outport, xxreg0); next;",
+         .external_ids     = map_empty())
 }
 
 
@@ -4667,14 +4535,13 @@ for (&Router(.dpname = dpname,
          * packet did not match any higher priority redirect
          * rule, then the traffic is redirected to the central
          * instance of the l3dgw_port. */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, GW_REDIRECT),
-                .priority         = 50,
-                .__match          = "outport == ${json_string_escape(gwport.name)}",
-                .actions          = "outport = ${redirect_port_name}; next;",
-                .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, GW_REDIRECT),
+             .priority         = 50,
+             .__match          = "outport == ${json_string_escape(gwport.name)}",
+             .actions          = "outport = ${redirect_port_name}; next;",
+             .external_ids     = map_empty());
 
         /* If the Ethernet destination has not been resolved,
          * redirect to the central instance of the l3dgw_port.
@@ -4682,25 +4549,23 @@ for (&Router(.dpname = dpname,
          * Neighbor Solicitation in the ARP request ingress
          * table, before being redirected to the central instance.
          */
-        sb.Out_Logical_Flow(
-                .logical_datapath = dpname,
-                .pipeline         = "ingress",
-                .table_id         = router_stage(IN, GW_REDIRECT),
-                .priority         = 150,
-                .__match          = "outport == ${json_string_escape(gwport.name)} && eth.dst == 00:00:00:00:00:00",
-                .actions          = "outport = ${redirect_port_name}; next;",
-                .external_ids     = map_empty())
+        Flow(.logical_datapath = dpname,
+             .pipeline         = "ingress",
+             .table_id         = router_stage(IN, GW_REDIRECT),
+             .priority         = 150,
+             .__match          = "outport == ${json_string_escape(gwport.name)} && eth.dst == 00:00:00:00:00:00",
+             .actions          = "outport = ${redirect_port_name}; next;",
+             .external_ids     = map_empty())
     };
 
     /* Packets are allowed by default. */
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, GW_REDIRECT),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "next;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, GW_REDIRECT),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 /* Local router ingress table 10: ARP request.
@@ -4710,41 +4575,38 @@ for (&Router(.dpname = dpname,
  * and sends an ARP/IPv6 NA request (priority 100). */
 for (&Router(.dpname = dpname))
 {
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ARP_REQUEST),
-            .priority         = 100,
-            .__match          = "eth.dst == 00:00:00:00:00:00",
-            .actions          = "arp { "
-                                "eth.dst = ff:ff:ff:ff:ff:ff; "
-                                "arp.spa = reg1; "
-                                "arp.tpa = reg0; "
-                                "arp.op = 1; " /* ARP request */
-                                "output; "
-                                "};",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ARP_REQUEST),
+         .priority         = 100,
+         .__match          = "eth.dst == 00:00:00:00:00:00",
+         .actions          = "arp { "
+                             "eth.dst = ff:ff:ff:ff:ff:ff; "
+                             "arp.spa = reg1; "
+                             "arp.tpa = reg0; "
+                             "arp.op = 1; " /* ARP request */
+                             "output; "
+                             "};",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ARP_REQUEST),
-            .priority         = 100,
-            .__match          = "eth.dst == 00:00:00:00:00:00",
-            .actions          = "nd_ns { "
-                                "nd.target = xxreg0; "
-                                "output; "
-                                "};",
-            .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ARP_REQUEST),
+         .priority         = 100,
+         .__match          = "eth.dst == 00:00:00:00:00:00",
+         .actions          = "nd_ns { "
+                             "nd.target = xxreg0; "
+                             "output; "
+                             "};",
+         .external_ids     = map_empty());
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = dpname,
-            .pipeline         = "ingress",
-            .table_id         = router_stage(IN, ARP_REQUEST),
-            .priority         = 0,
-            .__match          = "1",
-            .actions          = "output;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = dpname,
+         .pipeline         = "ingress",
+         .table_id         = router_stage(IN, ARP_REQUEST),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "output;",
+         .external_ids     = map_empty())
 }
 
 
@@ -4763,14 +4625,13 @@ for (&RouterPort(.lrp = lrp,
      * be replaced by the l3dgw port in the local output
      * pipeline stage before egress processing. */
 
-    sb.Out_Logical_Flow(
-            .logical_datapath = router.dpname,
-            .pipeline         = "egress",
-            .table_id         = router_stage(OUT, DELIVERY),
-            .priority         = 100,
-            .__match          = "outport == ${json_name}",
-            .actions          = "output;",
-            .external_ids     = map_empty())
+    Flow(.logical_datapath = router.dpname,
+         .pipeline         = "egress",
+         .table_id         = router_stage(OUT, DELIVERY),
+         .priority         = 100,
+         .__match          = "outport == ${json_name}",
+         .actions          = "output;",
+         .external_ids     = map_empty())
 }
 
 /*
