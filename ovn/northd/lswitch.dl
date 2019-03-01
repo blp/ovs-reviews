@@ -8,12 +8,12 @@ import ipam
 relation SwitchRouterPeerRef(lsp: uuid, rport: Option<Ref<RouterPort>>)
 
 SwitchRouterPeerRef(lsp, Some{rport}) :-
-    SwitchRouterPeer(lsp, lrp),
+    SwitchRouterPeer(lsp, _, lrp),
     rport in &RouterPort(.lrp = nb.Logical_Router_Port{._uuid = lrp}).
 
 SwitchRouterPeerRef(lsp, None) :-
     nb.Logical_Switch_Port(._uuid = lsp),
-    not SwitchRouterPeer(lsp, _).
+    not SwitchRouterPeer(lsp, _, _).
 
 /* map logical ports to logical switches */
 relation LogicalPortSwitch(lport: uuid, lswitch: uuid)
