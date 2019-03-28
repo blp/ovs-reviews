@@ -206,6 +206,74 @@ compose_rarp(struct dp_packet *b, const struct eth_addr eth_src)
     b->packet_type = htonl(PT_ETH);
 }
 
+/* Insert dLAN header with the specified 'dlan_id' into 'packet', which must be
+ * an Ethernet packet.
+ *
+ * A 'dlan_id' of 0 is not valid, but this function will insert it anyway.  In
+ * such a case, the caller should update the ID before passing the packet along
+ * further.
+ *
+ * Also adjusts the layer offsets accordingly. */
+void
+eth_push_dlan(struct dp_packet *packet, ovs_be16 dlan_id)
+{
+    for (size_t offset = 2 * ETH_ADDR_LEN;
+         offset + 2 < dp_packet_size(packet);
+         offset += VLAN_HEADER_LEN) {
+        ovs_be16 *eth_type = dp_packet_at_assert(packet, offset, 2);
+        if (!eth_type_vlan(*eth_type)) {
+            /* 'offset' is the offset of the first Ethertype that is not a
+             * VLAN.  Shift everything up to 'offset' by 4 bytes, then put the
+             * dLAN header in the space that just opened up. */
+            char *l2 = dp_packet_resize_l2(packet, DLAN_HEADER_LEN);
+            memmove(l2, l2 + DLAN_HEADER_LEN, offset);
+
+            ovs_be16 *dlan = dp_packet_at_assert(packet, offset, 4);
+            dlan[0] = htons(ETH_TYPE_DLAN);
+            dlan[1] = dlan_id;
+            return;
+        }
+    }
+}
+
+/* Removes outermost dLAN header (if any is present) from 'packet'. */
+void
+eth_pop_dlan(struct dp_packet *packet)
+{
+    for (size_t offset = 2 * ETH_ADDR_LEN;
+         offset + 6 < dp_packet_size(packet);
+         offset += VLAN_HEADER_LEN) {
+        ovs_be16 *eth_type = dp_packet_at_assert(packet, offset, 2);
+        if (!eth_type_vlan(*eth_type)) {
+            /* 'offset' is the offset of the first Ethertype that is not a
+             * VLAN. */
+            if (*eth_type == htons(ETH_TYPE_DLAN) && eth_type[1] != 0) {
+                char *l2 = dp_packet_data(packet);
+                memmove(l2 + DLAN_HEADER_LEN, l2, offset);
+                dp_packet_resize_l2(packet, -DLAN_HEADER_LEN);
+            }
+            return;
+        }
+    }
+}
+
+/* Changes the outermost dLAN header's ID to 'dlan_id', masked by 'mask'. */
+void
+eth_set_dlan(struct dp_packet *packet, ovs_be16 dlan_id, ovs_be16 mask)
+{
+    for (size_t offset = 2 * ETH_ADDR_LEN;
+         offset + 6 < dp_packet_size(packet);
+         offset += VLAN_HEADER_LEN) {
+        ovs_be16 *eth_type = dp_packet_at_assert(packet, offset, 2);
+        if (!eth_type_vlan(*eth_type)) {
+            if (*eth_type == htons(ETH_TYPE_DLAN)) {
+                eth_type[1] = (eth_type[1] & ~mask) | dlan_id;
+            }
+            return;
+        }
+    }
+}
+
 /* Insert VLAN header according to given TCI. Packet passed must be Ethernet
  * packet.  Ignores the CFI bit of 'tci' using 0 instead.
  *

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2019 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -740,6 +740,22 @@ match_set_vlan_vid_masked(struct match *match, ovs_be16 vid, ovs_be16 mask)
         mask | (match->wc.masks.vlans[0].tci & pcp_mask);
 }
 
+/* Sets the dLAN ID that 'match' matches to 'id'. */
+void
+match_set_dlan_id(struct match *match, ovs_be16 id)
+{
+    match_set_dlan_id_masked(match, id, OVS_BE16_MAX);
+}
+
+/* Sets the dLAN ID that 'flow' matches to 'id', with the corresponding
+ * 'mask'. */
+void
+match_set_dlan_id_masked(struct match *match, ovs_be16 id, ovs_be16 mask)
+{
+    match->flow.dlan_id = id & mask;
+    match->wc.masks.dlan_id = mask;
+}
+
 /* Modifies 'match' so that the VLAN PCP is wildcarded.  If the VID is already
  * wildcarded, then 'match' will match a packet regardless of whether it has an
  * 802.1Q header or not. */
@@ -1390,7 +1406,7 @@ match_format(const struct match *match,
     bool is_megaflow = false;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "%spriority=%s%d,",
@@ -1588,6 +1604,9 @@ match_format(const struct match *match,
                           ntohs(f->vlans[i].tci),
                           ntohs(wc->masks.vlans[i].tci));
         }
+    }
+    if (f->dlan_id) {           /* XXX shortcut */
+        format_be16_masked(s, "dlan_id", f->dlan_id, wc->masks.dlan_id);
     }
 
     format_eth_masked(s, "dl_src", f->dl_src, wc->masks.dl_src);

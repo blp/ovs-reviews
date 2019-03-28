@@ -7249,6 +7249,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_PUSH_NSH:
     case OVS_ACTION_ATTR_POP_NSH:
     case OVS_ACTION_ATTR_CT_CLEAR:
+    case OVS_ACTION_ATTR_PUSH_DLAN:
+    case OVS_ACTION_ATTR_POP_DLAN:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }

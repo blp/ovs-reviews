@@ -299,6 +299,9 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
     case MFF_ND_TLL:
         return eth_addr_is_zero(wc->masks.arp_tha);
 
+    case MFF_DLAN_ID:
+        return !wc->masks.dlan_id;
+
     case MFF_VLAN_TCI:
         return !wc->masks.vlans[0].tci;
     case MFF_DL_VLAN:
@@ -551,6 +554,7 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_ETH_SRC:
     case MFF_ETH_DST:
     case MFF_ETH_TYPE:
+    case MFF_DLAN_ID:
     case MFF_VLAN_TCI:
     case MFF_MPLS_TTL:
     case MFF_IPV4_SRC:
@@ -803,6 +807,10 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
 
     case MFF_ETH_TYPE:
         value->be16 = flow->dl_type;
+        break;
+
+    case MFF_DLAN_ID:
+        value->be16 = flow->dlan_id;
         break;
 
     case MFF_VLAN_TCI:
@@ -1141,6 +1149,10 @@ mf_set_value(const struct mf_field *mf,
 
     case MFF_ETH_TYPE:
         match_set_dl_type(match, value->be16);
+        break;
+
+    case MFF_DLAN_ID:
+        match_set_dlan_id(match, value->be16);
         break;
 
     case MFF_VLAN_TCI:
@@ -1552,6 +1564,10 @@ mf_set_flow_value(const struct mf_field *mf,
         flow->dl_type = value->be16;
         break;
 
+    case MFF_DLAN_ID:
+        flow->dlan_id = value->be16;
+        break;
+
     case MFF_VLAN_TCI:
         flow->vlans[0].tci = value->be16;
         flow_fix_vlan_tpid(flow);
@@ -1812,6 +1828,7 @@ mf_is_pipeline_field(const struct mf_field *mf)
     case MFF_ETH_SRC:
     case MFF_ETH_DST:
     case MFF_ETH_TYPE:
+    case MFF_DLAN_ID:
     case MFF_VLAN_TCI:
     case MFF_DL_VLAN:
     case MFF_VLAN_VID:
@@ -2080,6 +2097,10 @@ mf_set_wild(const struct mf_field *mf, struct match *match, char **err_str)
     case MFF_ETH_TYPE:
         match->flow.dl_type = htons(0);
         match->wc.masks.dl_type = htons(0);
+        break;
+
+    case MFF_DLAN_ID:
+        match_set_dlan_id_masked(match, 0, 0);
         break;
 
     case MFF_VLAN_TCI:
@@ -2435,6 +2456,10 @@ mf_set(const struct mf_field *mf,
     case MFF_ARP_THA:
     case MFF_ND_TLL:
         match_set_arp_tha_masked(match, value->mac, mask->mac);
+        break;
+
+    case MFF_DLAN_ID:
+        match_set_dlan_id_masked(match, value->be16, mask->be16);
         break;
 
     case MFF_VLAN_TCI:

@@ -93,6 +93,7 @@ static bool actions_may_change_flow(const struct nlattr *actions)
 		case OVS_ACTION_ATTR_SET:
 		case OVS_ACTION_ATTR_SET_MASKED:
 		case OVS_ACTION_ATTR_METER:
+		case OVS_ACTION_ATTR_DLAN:
 		default:
 			return true;
 		}
@@ -377,6 +378,7 @@ size_t ovs_key_attr_size(void)
 		+ nla_total_size(12)  /* OVS_KEY_ATTR_ETHERNET */
 		+ nla_total_size(2)   /* OVS_KEY_ATTR_ETHERTYPE */
 		+ nla_total_size(4)   /* OVS_KEY_ATTR_VLAN */
+		+ nla_total_size(2)   /* OVS_KEY_ATTR_DLAN */
 		+ nla_total_size(0)   /* OVS_KEY_ATTR_ENCAP */
 		+ nla_total_size(2)   /* OVS_KEY_ATTR_ETHERTYPE */
 		+ nla_total_size(40)  /* OVS_KEY_ATTR_IPV6 */
@@ -448,6 +450,7 @@ static const struct ovs_len_tbl ovs_key_lens[OVS_KEY_ATTR_MAX + 1] = {
 		.len = sizeof(struct ovs_key_ct_tuple_ipv6) },
 	[OVS_KEY_ATTR_NSH]       = { .len = OVS_ATTR_NESTED,
 				     .next = ovs_nsh_key_attr_lens, },
+	[OVS_KEY_ATTR_DLAN]	 = { .len = sizeof(__be16) },
 };
 
 static bool check_attr_len(unsigned int attr_len, unsigned int expected_len)
@@ -1502,11 +1505,12 @@ static int ovs_key_from_nlattrs(struct net *net, struct sw_flow_match *match,
 				eth_key->eth_dst, ETH_ALEN, is_mask);
 		attrs &= ~(1ULL << OVS_KEY_ATTR_ETHERNET);
 
-		if (attrs & (1ULL << OVS_KEY_ATTR_VLAN)) {
-			/* VLAN attribute is always parsed before getting here since it
-			 * may occur multiple times.
+		if (attrs & (1ULL << OVS_KEY_ATTR_VLAN |
+			     1ULL << OVS_KEY_ATTR_DLAN)) {
+			/* VLAN and DLAN attributes are always parsed before
+			 * getting here since they may occur multiple times.
 			 */
-			OVS_NLERR(log, "VLAN attribute unexpected.");
+			OVS_NLERR(log, "VLAN or DLAN attribute unexpected.");
 			return -EINVAL;
 		}
 

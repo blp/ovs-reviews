@@ -344,7 +344,6 @@ parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
     const ovs_be16 *eth_type;
 
     memset(vlan_hdrs, 0, sizeof(union flow_vlan_hdr) * FLOW_MAX_VLAN_HEADERS);
-    data_pull(datap, sizep, ETH_ADDR_LEN * 2);
 
     eth_type = *datap;
 
@@ -360,6 +359,35 @@ parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
         eth_type = *datap;
     }
     return n;
+}
+
+/* Attempts to parse a dLAN header at the current position in the packet (which
+ * points to an Ethertype).  '*datap' and '*sizep' are the remaining data in
+ * the packet; the function updates them.
+ *
+ * On entry, '*sizep' is at least 2.  On exit, it will also be at least 2.
+ *
+ * Returns 0 if no valid dLAN header was parsed, otherwise the dLAN ID. */
+static ovs_be16
+parse_dlan(const void **datap, size_t *sizep)
+{
+    /* If a dLAN header is present, then data[0] == ETH_TYPE_VLAN and data[1]
+     * is the dLAN ID.  We also ensure that there are at least 2 additional
+     * bytes beyond the dLAN ID (for the Ethertype of the next protocol). */
+    const ovs_be16 *data = *datap;
+    if (*data != htons(ETH_TYPE_DLAN) || *sizep < 6) {
+        return 0;
+    }
+
+    ovs_be16 dlan_id = data[1];
+    if (!dlan_id) {
+        /* dLAN ID of zero is invalid. */
+        return 0;
+    }
+
+    *datap = data + 2;
+    *sizep -= 4;
+    return dlan_id;
 }
 
 static inline ALWAYS_INLINE ovs_be16
@@ -736,7 +764,7 @@ void
 miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 {
     /* Add code to this function (or its callees) to extract new fields. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     const struct pkt_metadata *md = &packet->md;
     const void *data = dp_packet_data(packet);
@@ -816,6 +844,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             /* Link layer. */
             ASSERT_SEQUENTIAL(dl_dst, dl_src);
             miniflow_push_macs(mf, dl_dst, data);
+            data_pull(&data, &size, ETH_ADDR_LEN * 2);
 
             /* VLAN */
             union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
@@ -828,6 +857,11 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                 miniflow_push_words_32(mf, vlans, vlans, num_vlans);
             }
 
+            /* dLAN */
+            ovs_be16 did = parse_dlan(&data, &size);
+            if (did) {
+                miniflow_push_be16(mf, dlan_id, did);
+            }
         }
     } else {
         /* Take dl_type from packet_type. */
@@ -1193,7 +1227,7 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
 {
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     match_init_catchall(flow_metadata);
     if (flow->tunnel.tun_id != htonll(0)) {
@@ -1773,7 +1807,7 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
     memset(&wc->masks, 0x0, sizeof wc->masks);
 
     /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     if (flow_tnl_dst_is_set(&flow->tunnel)) {
         if (flow->tunnel.flags & FLOW_TNL_F_KEY) {
@@ -1830,6 +1864,7 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
         WC_MASK_FIELD(wc, dl_dst);
         WC_MASK_FIELD(wc, dl_src);
         WC_MASK_FIELD(wc, dl_type);
+        WC_MASK_FIELD(wc, dlan_id);
         /* No need to set mask of inner VLANs that don't exist. */
         for (int i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
             /* Always show the first zero VLAN. */
@@ -1924,7 +1959,7 @@ void
 flow_wc_map(const struct flow *flow, struct flowmap *map)
 {
     /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     flowmap_init(map);
 
@@ -1950,6 +1985,7 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
     FLOWMAP_SET(map, dl_dst);
     FLOWMAP_SET(map, dl_src);
     FLOWMAP_SET(map, dl_type);
+    FLOWMAP_SET(map, dlan_id);
     FLOWMAP_SET(map, vlans);
     FLOWMAP_SET(map, ct_state);
     FLOWMAP_SET(map, ct_zone);
@@ -2027,7 +2063,7 @@ void
 flow_wildcards_clear_non_packet_fields(struct flow_wildcards *wc)
 {
     /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     memset(&wc->masks.metadata, 0, sizeof wc->masks.metadata);
     memset(&wc->masks.regs, 0, sizeof wc->masks.regs);
@@ -2171,7 +2207,7 @@ flow_wildcards_set_xxreg_mask(struct flow_wildcards *wc, int idx,
 uint32_t
 miniflow_hash_5tuple(const struct miniflow *flow, uint32_t basis)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
     uint32_t hash = basis;
 
     if (flow) {
@@ -2218,7 +2254,7 @@ ASSERT_SEQUENTIAL(ipv6_src, ipv6_dst);
 uint32_t
 flow_hash_5tuple(const struct flow *flow, uint32_t basis)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
     uint32_t hash = basis;
 
     if (flow) {
@@ -2891,7 +2927,7 @@ flow_push_mpls(struct flow *flow, int n, ovs_be16 mpls_eth_type,
 
         if (clear_flow_L3) {
             /* Clear all L3 and L4 fields and dp_hash. */
-            BUILD_ASSERT(FLOW_WC_SEQ == 41);
+            BUILD_ASSERT(FLOW_WC_SEQ == 42);
             memset((char *) flow + FLOW_SEGMENT_2_ENDS_AT, 0,
                    sizeof(struct flow) - FLOW_SEGMENT_2_ENDS_AT);
             flow->dp_hash = 0;
@@ -3188,7 +3224,7 @@ flow_compose(struct dp_packet *p, const struct flow *flow,
     /* Add code to this function (or its callees) for emitting new fields or
      * protocols.  (This isn't essential, so it can be skipped for initial
      * testing.) */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     uint32_t pseudo_hdr_csum;
     size_t l4_len;
@@ -3206,6 +3242,10 @@ flow_compose(struct dp_packet *p, const struct flow *flow,
             eth_push_vlan(p, flow->vlans[encaps].tpid,
                           flow->vlans[encaps].tci);
         }
+    }
+
+    if (flow->dlan_id) {
+        eth_push_dlan(p, flow->dlan_id);
     }
 
     if (flow->dl_type == htons(ETH_TYPE_IP)) {

@@ -366,6 +366,7 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4,   /* struct ovs_key_ct_tuple_ipv4 */
 	OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6,   /* struct ovs_key_ct_tuple_ipv6 */
 	OVS_KEY_ATTR_NSH,       /* Nested set of ovs_nsh_key_* */
+	OVS_KEY_ATTR_DLAN,	/* be16 dLAN ID */
 
 #ifdef __KERNEL__
 	/* Only used within kernel data path. */
@@ -904,6 +905,8 @@ enum ovs_nat_attr {
  * @OVS_ACTION_ATTR_CT_CLEAR: Clear conntrack state from the packet.
  * @OVS_ACTION_ATTR_PUSH_NSH: push NSH header to the packet.
  * @OVS_ACTION_ATTR_POP_NSH: pop the outermost NSH header off the packet.
+ * @OVS_ACTION_ATTR_PUSH_DLAN: Push a new outermost dLAN header.
+ * @OVS_ACTION_ATTR_POP_DLAN: Pop the outermost dLAN header.
  *
  * Only a single header can be set with a single %OVS_ACTION_ATTR_SET.  Not all
  * fields within a header are modifiable, e.g. the IPv4 protocol and fragment
@@ -946,6 +949,8 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_POP_NSH,      /* No argument. */
 	OVS_ACTION_ATTR_METER,        /* u32 meter number. */
 	OVS_ACTION_ATTR_CLONE,        /* Nested OVS_CLONE_ATTR_*.  */
+	OVS_ACTION_ATTR_PUSH_DLAN,    /* __be16 dLAN ID. */
+	OVS_ACTION_ATTR_POP_DLAN,     /* No argument. */
 
 #ifndef __KERNEL__
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/

@@ -1000,6 +1000,7 @@ sflow_read_set_action(const struct nlattr *attr,
     case OVS_KEY_ATTR_IN_PORT:
     case OVS_KEY_ATTR_ETHERNET:
     case OVS_KEY_ATTR_VLAN:
+    case OVS_KEY_ATTR_DLAN:
         break;
 
     case OVS_KEY_ATTR_MPLS: {
@@ -1222,6 +1223,8 @@ dpif_sflow_read_actions(const struct flow *flow,
         case OVS_ACTION_ATTR_SAMPLE:
         case OVS_ACTION_ATTR_PUSH_NSH:
         case OVS_ACTION_ATTR_POP_NSH:
+        case OVS_ACTION_ATTR_PUSH_DLAN:
+        case OVS_ACTION_ATTR_POP_DLAN:
         case OVS_ACTION_ATTR_UNSPEC:
         case __OVS_ACTION_ATTR_MAX:
         default:

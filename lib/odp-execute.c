@@ -473,6 +473,10 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
         md->recirc_id = nl_attr_get_u32(a);
         break;
 
+    case OVS_KEY_ATTR_DLAN:
+        eth_set_dlan(packet, nl_attr_get_be16(a), OVS_BE16_MAX);
+        break;
+
     case OVS_KEY_ATTR_UNSPEC:
     case OVS_KEY_ATTR_PACKET_TYPE:
     case OVS_KEY_ATTR_ENCAP:
@@ -580,6 +584,10 @@ odp_execute_masked_set_action(struct dp_packet *packet,
     case OVS_KEY_ATTR_RECIRC_ID:
         md->recirc_id = nl_attr_get_u32(a)
             | (md->recirc_id & ~*get_mask(a, uint32_t));
+        break;
+
+    case OVS_KEY_ATTR_DLAN:
+        eth_set_dlan(packet, nl_attr_get_be16(a), *get_mask(a, ovs_be16));
         break;
 
     case OVS_KEY_ATTR_TUNNEL:    /* Masked data not supported for tunnel. */
@@ -704,6 +712,8 @@ requires_datapath_assistance(const struct nlattr *a)
     case OVS_ACTION_ATTR_CLONE:
     case OVS_ACTION_ATTR_PUSH_NSH:
     case OVS_ACTION_ATTR_POP_NSH:
+    case OVS_ACTION_ATTR_PUSH_DLAN:
+    case OVS_ACTION_ATTR_POP_DLAN:
     case OVS_ACTION_ATTR_CT_CLEAR:
         return false;
 
@@ -929,6 +939,21 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_CT_CLEAR:
             DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
                 conntrack_clear(packet);
+            }
+            break;
+
+        case OVS_ACTION_ATTR_PUSH_DLAN: {
+            ovs_be16 dlan_id = nl_attr_get_be16(a);
+
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+                eth_push_dlan(packet, dlan_id);
+            }
+            break;
+        }
+
+        case OVS_ACTION_ATTR_POP_DLAN:
+            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+                eth_pop_dlan(packet);
             }
             break;
 

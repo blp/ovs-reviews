@@ -27,7 +27,7 @@ extern "C" {
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
-#define FLOW_WC_SEQ 41
+#define FLOW_WC_SEQ 42
 
 /* Number of Open vSwitch extension 32-bit registers. */
 #define FLOW_N_REGS 16
@@ -125,8 +125,10 @@ struct flow {
                                    packets of type PACKET_TYPE(1, Ethertype) */
     uint8_t pad1[2];            /* Pad to 64 bits. */
     union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS]; /* VLANs */
-    ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
-                                                             (with padding). */
+    ovs_be32 mpls_lse[FLOW_MAX_MPLS_LABELS];          /* MPLS label stack. */
+    ovs_be16 dlan_id;           /* dLAN ID (zero if no dLAN present). */
+    uint8_t pad4[2];            /* Pad to 64 bits. */
+
     /* L3 (64-bit aligned) */
     ovs_be32 nw_src;            /* IPv4 source address or ARP SPA. */
     ovs_be32 nw_dst;            /* IPv4 destination address or ARP TPA. */
@@ -168,7 +170,7 @@ BUILD_ASSERT_DECL(sizeof(struct ovs_key_nsh) % sizeof(uint64_t) == 0);
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
 BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
                   == sizeof(struct flow_tnl) + sizeof(struct ovs_key_nsh) + 300
-                  && FLOW_WC_SEQ == 41);
+                  && FLOW_WC_SEQ == 42);
 
 /* Incremental points at which flow classification may be performed in
  * segments.

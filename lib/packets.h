@@ -330,6 +330,10 @@ bool eth_addr_from_string(const char *, struct eth_addr *);
 
 void compose_rarp(struct dp_packet *, const struct eth_addr);
 
+void eth_push_dlan(struct dp_packet *, ovs_be16 dlan_id);
+void eth_pop_dlan(struct dp_packet *);
+void eth_set_dlan(struct dp_packet *, ovs_be16 dlan_id, ovs_be16 mask);
+
 void eth_push_vlan(struct dp_packet *, ovs_be16 tpid, ovs_be16 tci);
 void eth_pop_vlan(struct dp_packet *);
 
@@ -407,6 +411,7 @@ ovs_be32 set_mpls_lse_values(uint8_t ttl, uint8_t tc, uint8_t bos,
 #define ETH_TYPE_NSH           0x894f
 #define ETH_TYPE_ERSPAN1       0x88be   /* version 1 type II */
 #define ETH_TYPE_ERSPAN2       0x22eb   /* version 2 type III */
+#define ETH_TYPE_DLAN          0xdddd
 
 static inline bool eth_type_mpls(ovs_be16 eth_type)
 {
@@ -512,6 +517,13 @@ vlan_tci_to_cfi(ovs_be16 vlan_tci)
 {
     return (vlan_tci & htons(VLAN_CFI)) != 0;
 }
+
+#define DLAN_HEADER_LEN 4
+struct dlan_header {
+    ovs_be16 dlan_id;
+    ovs_be16 dlan_next_type;
+};
+BUILD_ASSERT_DECL(DLAN_HEADER_LEN == sizeof(struct dlan_header));
 
 #define VLAN_HEADER_LEN 4
 struct vlan_header {

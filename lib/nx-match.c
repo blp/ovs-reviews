@@ -1051,7 +1051,7 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     ovs_be32 spi_mask;
     int match_len;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     struct nxm_put_ctx ctx = { .output = b, .implied_ethernet = false };
 
@@ -1120,6 +1120,10 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
         nxm_put_16m(&ctx, MFF_VLAN_TCI, oxm, flow->vlans[0].tci,
                     match->wc.masks.vlans[0].tci);
     }
+
+    /* dLAN ID. */
+    nxm_put_16m(&ctx, MFF_DLAN_ID, oxm,
+                flow->dlan_id, match->wc.masks.dlan_id);
 
     /* MPLS. */
     if (eth_type_mpls(dl_type)) {

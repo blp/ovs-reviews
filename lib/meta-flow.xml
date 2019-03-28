@@ -3606,6 +3606,35 @@ r r c c c.
     </dl>
   </group>
 
+  <group title="dLAN">
+    <p>
+      A dLAN header is an Open vSwitch extension.  It consists of two 16-bit
+      fields:
+    </p>
+
+    <diagram>
+      <header>
+        <bits name="dLAN ID" above="16" width="1.8"/>
+        <bits name="Ethertype" above="16" below="0xdddd" width="1.8"/>
+      </header>
+    </diagram>
+
+    <p>
+      The first 16 bits of the dLAN header is the dLAN ID.  A dLAN ID of 0 is
+      invalid, but otherwise its value is arbitrary.
+    </p>
+
+    <p>
+      The remaining 16 bits of the dLAN header is the Ethertype of the header
+      that follows it.
+    </p>
+
+    <field id="MFF_DLAN_ID" title="dLAN ID">
+      For a packet without a dLAN ID, this field is zero.  For a packet with
+      a dLAN header, this field is the dLAN ID.
+    </field>
+  </group>
+
   <group title="Layer 2.5: MPLS">
     <p>
       One or more MPLS headers (more commonly called <dfn>MPLS

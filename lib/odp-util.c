@@ -132,6 +132,8 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_CLONE: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_PUSH_NSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_POP_NSH: return 0;
+    case OVS_ACTION_ATTR_PUSH_DLAN: return sizeof(ovs_be16);
+    case OVS_ACTION_ATTR_POP_DLAN: return 0;
 
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -180,6 +182,7 @@ ovs_key_attr_to_string(enum ovs_key_attr attr, char *namebuf, size_t bufsize)
     case OVS_KEY_ATTR_RECIRC_ID: return "recirc_id";
     case OVS_KEY_ATTR_PACKET_TYPE: return "packet_type";
     case OVS_KEY_ATTR_NSH: return "nsh";
+    case OVS_KEY_ATTR_DLAN: return "dlan";
 
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -1182,6 +1185,13 @@ format_odp_action(struct ds *ds, const struct nlattr *a,
     }
     case OVS_ACTION_ATTR_POP_NSH:
         ds_put_cstr(ds, "pop_nsh()");
+        break;
+    case OVS_ACTION_ATTR_PUSH_DLAN:
+        ds_put_format(ds, "push_dlan(%#04"PRIx16")",
+                      ntohs(nl_attr_get_be16(a)));
+        break;
+    case OVS_ACTION_ATTR_POP_DLAN:
+        ds_put_cstr(ds, "pop_dlan");
         break;
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -3030,6 +3040,7 @@ odp_mask_is_constant__(enum ovs_key_attr attr, const void *mask, size_t size,
     case OVS_KEY_ATTR_CT_LABELS:
     case OVS_KEY_ATTR_PACKET_TYPE:
     case OVS_KEY_ATTR_NSH:
+    case OVS_KEY_ATTR_DLAN:
         return is_all_byte(mask, size, u8);
 
     case OVS_KEY_ATTR_TCP_FLAGS:
@@ -4131,6 +4142,12 @@ format_odp_key_attr__(const struct nlattr *a, const struct nlattr *ma,
         format_odp_nsh_attr(a, ma, ds);
         break;
     }
+    case OVS_KEY_ATTR_DLAN:
+        ds_put_format(ds, "0x%04"PRIx16, ntohs(nl_attr_get_be16(a)));
+        if (!is_exact) {
+            ds_put_format(ds, "/0x%04"PRIx16, ntohs(nl_attr_get_be16(ma)));
+        }
+        break;
     case OVS_KEY_ATTR_UNSPEC:
     case __OVS_KEY_ATTR_MAX:
     default:
@@ -5822,7 +5839,7 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
     /* New "struct flow" fields that are visible to the datapath (including all
      * data fields) should be translated into equivalent datapath flow fields
      * here (you will have to add a OVS_KEY_ATTR_* for them). */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     struct ovs_key_ethernet *eth_key;
     size_t encap[FLOW_MAX_VLAN_HEADERS] = {0};
@@ -5927,6 +5944,17 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
             if (flow->vlans[encaps].tci == htons(0)) {
                 goto unencap;
             }
+        }
+
+        if (flow->dlan_id) {
+            if (export_mask) {
+                nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE, OVS_BE16_MAX);
+            } else {
+                nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE,
+                                htons(ETH_TYPE_DLAN));
+            }
+            nl_msg_put_be16(buf, OVS_KEY_ATTR_DLAN, data->dlan_id);
+            dlan_encap = nl_msg_start_nested(buf, OVS_KEY_ATTR_ENCAP);
         }
     }
 
@@ -6060,6 +6088,9 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
     }
 
 unencap:
+    if (dlan_encap) {
+        nl_msg_end_nested(buf, dlan_encap);
+    }
     for (int encaps = max_vlans - 1; encaps >= 0; encaps--) {
         if (encap[encaps]) {
             nl_msg_end_nested(buf, encap[encaps]);
@@ -6244,6 +6275,7 @@ odp_key_to_dp_packet(const struct nlattr *key, size_t key_len,
         case OVS_KEY_ATTR_MPLS:
         case OVS_KEY_ATTR_PACKET_TYPE:
         case OVS_KEY_ATTR_NSH:
+        case OVS_KEY_ATTR_DLAN:
         case __OVS_KEY_ATTR_MAX:
         default:
             break;
@@ -6805,6 +6837,106 @@ done:
                             *expected_attrs, key, key_len) : ODP_FIT_PERFECT;
 }
 
+/* Parse DLAN header then encapsulated attributes.
+ *
+ * Initializes MPLS, L3, and L4 fields in 'flow' based on the attributes in
+ * 'attrs', in which the attributes in the bit-mask 'present_attrs' are
+ * present.  The caller also indicates an out-of-range attribute
+ * 'out_of_range_attr' if one was present when parsing (if so, the fitness
+ * cannot be perfect).
+ *
+ * Sets 1-bits in '*expected_attrs' for the attributes in 'attrs' that were
+ * consulted.  'flow' is assumed to be a flow key unless 'src_flow' is nonnull,
+ * in which case 'flow' is a flow mask and 'src_flow' is its corresponding
+ * previously parsed flow key.
+ *
+ * Returns fitness based on any discrepancies between present and expected
+ * attributes, except that a 'need_check' of false overrides this.
+ *
+ * If 'errorp' is nonnull and the function returns false, stores a malloc()'d
+ * error message in '*errorp'.  'key' and 'key_len' are just used for error
+ * reporting in this case. */
+static enum odp_key_fitness
+parse_dlan_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
+                  uint64_t present_attrs, int out_of_range_attr,
+                  uint64_t *expected_attrs, struct flow *flow,
+                  const struct nlattr *key, size_t key_len,
+                  const struct flow *src_flow, bool need_check, char **errorp)
+{
+    bool is_mask = src_flow != flow;
+
+    if (is_mask
+        ? src_flow->dlan_id != 0
+        : flow->dl_type == htons(ETH_TYPE_DLAN)) {
+
+        const struct nlattr *encap
+            = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)
+               ? attrs[OVS_KEY_ATTR_ENCAP] : NULL);
+
+        /* Calculate fitness of outer attributes. */
+        if (!is_mask) {
+            *expected_attrs |= ((UINT64_C(1) << OVS_KEY_ATTR_DLAN) |
+                                (UINT64_C(1) << OVS_KEY_ATTR_ENCAP));
+        } else {
+            if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_DLAN)) {
+                *expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_DLAN);
+            }
+            if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)) {
+                *expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_ENCAP);
+            }
+        }
+        enum odp_key_fitness fitness
+            = check_expectations(present_attrs, out_of_range_attr,
+                                 *expected_attrs, key, key_len);
+
+        /* Set dlan_id.
+         * Zero the dl_type since it's not the real Ethertype.  */
+        flow->dl_type = htons(0);
+        flow->dlan_id = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_DLAN)
+                         ? nl_attr_get_be16(attrs[OVS_KEY_ATTR_DLAN])
+                         : htons(0));
+        if (!is_mask) {
+            if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_DLAN)) ||
+                !(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP))) {
+                return ODP_FIT_TOO_LITTLE;
+            } else if (!flow->dlan_id) {
+                /* Corner case for a truncated dLAN header. */
+                if (fitness == ODP_FIT_PERFECT && nl_attr_get_size(encap)) {
+                    return ODP_FIT_TOO_MUCH;
+                }
+                return fitness;
+            }
+        } else {
+            if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP))) {
+                return fitness;
+            }
+        }
+
+        /* Now parse the encapsulated attributes. */
+        if (!parse_flow_nlattrs(nl_attr_get(encap), nl_attr_get_size(encap),
+                                attrs, &present_attrs, &out_of_range_attr,
+                                errorp)) {
+            return ODP_FIT_ERROR;
+        }
+        *expected_attrs = 0;
+
+        if (!parse_ethertype(attrs, present_attrs, expected_attrs,
+                             flow, src_flow, errorp)) {
+            return ODP_FIT_ERROR;
+        }
+        enum odp_key_fitness encap_fitness
+            = parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
+                                expected_attrs, flow, key, key_len,
+                                src_flow, need_check, errorp);
+        if (encap_fitness != ODP_FIT_PERFECT) {
+            return encap_fitness;
+        }
+    }
+
+    return check_expectations(present_attrs, out_of_range_attr,
+                              *expected_attrs, key, key_len);
+}
+
 /* Parse 802.1Q header then encapsulated L3 attributes. */
 static enum odp_key_fitness
 parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
@@ -6886,7 +7018,7 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
                              flow, src_flow, errorp)) {
             return ODP_FIT_ERROR;
         }
-        encap_fitness = parse_l2_5_onward(attrs, present_attrs,
+        encap_fitness = parse_dlan_onward(attrs, present_attrs,
                                           out_of_range_attr,
                                           &expected_attrs,
                                           flow, key, key_len,
@@ -6909,7 +7041,7 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
     /* New "struct flow" fields that are visible to the datapath (including all
      * data fields) should be translated from equivalent datapath flow fields
      * here (you will have to add a OVS_KEY_ATTR_* for them).  */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     enum odp_key_fitness fitness = ODP_FIT_ERROR;
     if (errorp) {
@@ -7067,7 +7199,7 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
                 expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
             }
         }
-        fitness = parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
+        fitness = parse_dlan_onward(attrs, present_attrs, out_of_range_attr,
                                     &expected_attrs, flow, key, key_len,
                                     src_flow, true, errorp);
     }
@@ -7472,6 +7604,24 @@ commit_set_ether_action(const struct flow *flow, struct flow *base_flow,
                ovs_key_ethernet_offsetof_sizeof_arr, odp_actions)) {
         put_ethernet_key(&base, base_flow);
         put_ethernet_key(&mask, &wc->masks);
+    }
+}
+
+static void
+commit_dlan_action(const struct flow *flow, struct flow *base,
+                   struct ofpbuf *odp_actions, struct flow_wildcards *wc)
+{
+    if (base->dlan_id != flow->dlan_id) {
+        wc->masks.dlan_id = OVS_BE16_MAX;
+
+        if (base->dlan_id) {
+            nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_DLAN);
+        }
+        if (flow->dlan_id) {
+            nl_msg_put_be16(odp_actions, OVS_ACTION_ATTR_PUSH_DLAN,
+                            flow->dlan_id);
+        }
+        base->dlan_id = flow->dlan_id;
     }
 }
 
@@ -8258,7 +8408,7 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
     /* If you add a field that OpenFlow actions can change, and that is visible
      * to the datapath (including all data fields), then you should also add
      * code here to commit changes to the field. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
     enum slow_path_reason slow1, slow2;
     bool mpls_done = false;
@@ -8280,6 +8430,7 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
         commit_mpls_action(flow, base, odp_actions);
     }
     commit_vlan_action(flow, base, odp_actions, wc);
+    commit_dlan_action(flow, base, odp_actions, wc);
     commit_set_priority_action(flow, base, odp_actions, wc, use_masked);
     commit_set_pkt_mark_action(flow, base, odp_actions, wc, use_masked);
 

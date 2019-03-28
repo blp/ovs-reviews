@@ -164,6 +164,8 @@ void match_set_dl_tci(struct match *, ovs_be16 tci);
 void match_set_dl_tci_masked(struct match *, ovs_be16 tci, ovs_be16 mask);
 void match_set_any_vid(struct match *);
 void match_set_dl_vlan(struct match *, ovs_be16, int id);
+void match_set_dlan_id(struct match *, ovs_be16);
+void match_set_dlan_id_masked(struct match *, ovs_be16 id, ovs_be16 mask);
 void match_set_vlan_vid(struct match *, ovs_be16);
 void match_set_vlan_vid_masked(struct match *, ovs_be16 vid, ovs_be16 mask);
 void match_set_any_pcp(struct match *);

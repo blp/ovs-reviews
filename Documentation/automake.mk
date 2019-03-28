@@ -22,6 +22,7 @@ DOC_SOURCE = \
 	Documentation/intro/install/userspace.rst \
 	Documentation/intro/install/windows.rst \
 	Documentation/intro/install/xenserver.rst \
+	Documentation/tutorials/adding-a-protocol.rst \
 	Documentation/tutorials/index.rst \
 	Documentation/tutorials/faucet.rst \
 	Documentation/tutorials/ovs-advanced.rst \
