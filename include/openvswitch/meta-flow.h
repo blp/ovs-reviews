@@ -1111,7 +1111,7 @@ enum OVS_PACKED_ENUM mf_field_id {
     MFF_ETH_TYPE,
 
 /* ## ---- ## */
-/* ## DLAN ## */
+/* ## dLAN ## */
 /* ## ---- ## */
 
     /* "dlan_id".
@@ -1127,7 +1127,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Formatting: decimal.
      * Prerequisites: Ethernet.
      * Access: read/write.
-     * NXM: NXM_OF_DLAN_ID(126) since v2.12.
+     * NXM: NXM_NX_DLAN_ID(126) since v2.12.
      * OXM: none.
      */
     MFF_DLAN_ID,
