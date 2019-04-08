@@ -143,7 +143,8 @@ similar process there:
 2. Passes the packet through the series of OpenFlow flow tables, using the
    OpenFlow action to determine what datapath actions should be executed and
    otherwise what the datapath flow entry should look like.  We often call this
-   "flow translation".
+   "flow translation", thinking of an analogy between packet processing and a
+   compiler for OpenFlow.
 
 3. Sends the packet back to the datapath, which executes the actions and adds
    a new flow entry.
@@ -319,6 +320,29 @@ dLAN ID, changing the definition of ``mpls_lse`` to::
    NSDI. 2015. `PDF
    <https://www.usenix.org/system/files/conference/nsdi15/nsdi15-paper-pfaff.pdf>`_.
 
+Incrementing ``FLOW_WC_SEQ``
+++++++++++++++++++++++++++++
+
+OVS has a mechanism to make it easier to find the bits of code that need to be
+updated when ``struct flow`` changes.  This mechanism kicks in automatically
+if we change the size of ``struct flow``.  We didn't do that, since we put our
+new field in a hole in the structure, so we need to invoke it ourselves.
+
+This mechanism is the macro ``FLOW_WC_SEQ`` in ``include/openvswitch/flow.h``.
+It is defined this way::
+
+    /* This sequence number should be incremented whenever anything involving
+     * flows or the wildcarding of flows changes.  This will cause build
+     * assertion failures in places which likely need to be updated. */
+    #define FLOW_WC_SEQ 41
+
+To invoke it, we just modify the macro's value.  The particular value doesn't
+matter, so long as it's different, but it's customary to increment it, like
+this::
+
+    #define FLOW_WC_SEQ 42 /* The Answer to the Ultimate Question of Life,
+                            * the Universe, and Networking. */
+
 B. Add dLAN ID to Datapath Interface
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -344,7 +368,7 @@ ovs_key_attr`` enumeration:[#]_
         OVS_KEY_ATTR_VLAN,      /* be16 VLAN TCI */
         OVS_KEY_ATTR_ETHERTYPE, /* be16 Ethernet type */
         OVS_KEY_ATTR_IPV4,      /* struct ovs_key_ipv4 */
-   ...
+    ...
 
     #ifdef __KERNEL__
         /* Only used within kernel data path. */
@@ -547,32 +571,512 @@ Finally, we define a data structure for a dLAN header::
     };
     BUILD_ASSERT_DECL(DLAN_HEADER_LEN == sizeof(struct dlan_header));
 
-Pitfalls
-++++++++
+Aside: Alignment Pitfalls in Protocol Definitions
++++++++++++++++++++++++++++++++++++++++++++++++++
 
-Two pitfalls, both related to alignment, sometimes arise in defining data
-structures for network data.  The first issue comes up with network protocols
-that contain misaligned fields.  For example, a SNAP header consists of a
-3-byte field followed by a 16-bit field.  The 16-bit field is therefore not
-naturally aligned for its size, and if a structure is defined naively
-consisting of a ``uint8_t[3]`` member followed by a ``ovs_be16`` member, the
-compiler will insert a pad byte between the members, which breaks the code.
+Two data alignment pitfalls sometimes arise in defining data structures for
+network data.  First, some network protocols contain misaligned fields.  For
+example, a SNAP header consists of a 3-byte field followed by a 16-bit field.
+The 16-bit field is therefore not naturally aligned for its size, and if a
+structure is defined naively consisting of a ``uint8_t[3]`` member followed by
+a ``ovs_be16`` member, the compiler will insert a pad byte between the members,
+which breaks the code.
 
-The second issue comes up because, even when the headers themselves do not pose
-their own internal alignment problems, network headers are not always stored in
-memory starting at aligned addresses.  In some cases, it is not even possible
-for all the fields in a packet to be aligned.  For example, VXLAN's design
-means that either the inner or the outer headers can be properly aligned, but
-not both.
+A similar problem arises if the fields in a network header are naturally
+aligned but the header ends in a misaligned way.  For example, a LACP
+information structure (``struct lacp_info`` in OVS) contains 16-bit members,
+but its length is not a multiple of 16 bits, so a compiler would normally
+append a padding byte to the structure.
 
-   
+Both forms of this problems can be solved by marking the data structure as
+"packed", which keeps the compiler from inserting pad bytes and makes it emit
+code that does not assume that instances of the structure are aligned on any
+particular boundary.  The ``OVS_PACKED`` macro, which is defined to work with
+all the compilers that OVS supports, is available for this purpose.  Here is
+how ``lib/packets.h`` uses it to define the SNAP header structure::
+
+    #define SNAP_HEADER_LEN 5
+    OVS_PACKED(
+    struct snap_header {
+        uint8_t snap_org[3];
+        ovs_be16 snap_type;
+    });
+    BUILD_ASSERT_DECL(SNAP_HEADER_LEN == sizeof(struct snap_header));
+
+Second, even when the headers themselves do not pose their own internal
+alignment problems, network headers are not always stored in memory starting at
+aligned addresses.  In some cases, it is not even possible for all the fields
+in a packet to be aligned.  For example, VXLAN's design means that either the
+inner or the outer headers can be properly aligned, but not both.  Given all
+the protocols that OVS supports, only 16-bit alignment can be guaranteed for
+any given field.
+
+This second problem could also be solved with ``OVS_PACKED``, but OVS usually
+takes a different approach, by declaring variants of many 32-bit and larger
+types that require only 16-bit alignment.  For example, ``ovs_16aligned_be32``
+is a ``typedef`` for a structure with two 16-bit members, which therefore only
+requires 16-bit alignment.  Most of the OVS protocol definitions use these
+types, which come with helpers for reading and writing them,
+e.g. ``get_16aligned_be32`` and ``put_16aligned_be32``.
+
+The dLAN header doesn't have either of these problems.
 
 2. Fixing Compiler Errors
 -------------------------
 
-By design, when you add the kinds of declarations we did above, compiler
-warnings and errors kick in to point out the important places that OVS needs to
-be changed to fully implement the new field.
+By design, when you add the kinds of declarations we did above, and run
+``make``, then compiler and linker diagnostics, and eventually unit test
+failures, kick in to point out the important places that OVS needs to be
+changed to fully implement the new field.
+
+The fixes we need to implement relate to the following changes we've already
+made:
+
+A. New ``dlan_id`` member in ``struct flow``.
+
+B. New ``OVS_KEY_ATTR_DLAN`` member in ``enum ovs_key_attr``.
+
+C. New ``OVS_ACTION_ATTR_*_DLAN`` members in ``enum ovs_action_attr``.
+
+D. New ``MFF_DLAN_ID`` member in ``enum mf_field_id``.
+
+E. New function prototypes we added.
+
+The following sections cover each of these categories.
+
+A. New ``dlan_id`` Member in ``struct flow``.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The change we made to ``FLOW_WC_SEQ`` in ``include/openvswitch/flow.h`` causes
+many diagnostics in build assertions.  Each of the build assertions is intended
+to draw our attention to some code that might need to change when ``struct
+flow`` changes.  Many of these locations only require something new for
+particular kinds of changes; for example, some of them only require our
+attention if we added (or removed) a metadata field or a tunnel field.  We will
+look at each of these in turn.
+
+We will skip a few of them and come back in a later section where they fit
+better.
+
+Build Assertions in Header Files
+++++++++++++++++++++++++++++++++
+
+Some of the build assertions are in header files that are widely included and
+thus account for most of the compiler diagnostics.  These are worth looking at
+first since fixing them cleans up so much of the build.
+
+Two of these are in ``include/openvswitch/flow.h``. The first of these is for
+the following code::
+
+    /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
+    BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
+                      == sizeof(struct flow_tnl) + sizeof(struct ovs_key_nsh) + 300
+                      && FLOW_WC_SEQ == 41);
+
+This is just a way to remind the programmer to update ``FLOW_WC_SEQ`` when
+changing ``struct flow``.  If we had changed the size of ``struct flow``, then
+it would have triggered as soon as we had done that.  It doesn't otherwise
+point to anything we need to update, so we can just change the assertion to use
+our new value of ``FLOW_WC_SEQ``::
+
+    ...
+                      && FLOW_WC_SEQ == 42);
+
+The second is in the inline function ``pkt_metadata_from_flow()``.  This
+function copies metadata (such as the OpenFlow input port ``in_port``) from a
+flow into a structure that only carries metadata.  It checks ``FLOW_WC_SEQ`` in
+a way that will soon seem familiar::
+
+    /* Update this function whenever struct flow changes. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+
+Our new field ``dlan_id`` is an L2 data field, not metadata, so we do not need
+to update anything in this function other than the assertion itself::
+
+    /* Update this function whenever struct flow changes. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
+
+The header file ``ofproto/ofproto-dpif-rid.h`` has another build assertion that
+is just for metadata fields::
+
+    /* Metadata for restoring pipeline context after recirculation.  Helpers
+     * are inlined below to keep them together with the definition for easier
+     * updates. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+
+We can safely update this one, too, without further changes::
+
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
+
+Flow Extraction
++++++++++++++++
+
+A build assertion will alert us to ``miniflow_extract()`` in ``lib/flow.c``.
+This function extracts the fields in a packet in the slow path into a ``struct
+flow``, as described back in `Introduction to Open vSwitch Packet Processing`_,
+We need to make it look for a dLAN ID and copy that into the ``dlan_id`` field.
+
+The ``miniflow_extract()`` function does not work directly with a ``struct
+flow``.  Instead, it works with ``struct miniflow``, which is a compressed
+version of ``struct flow`` .  Miniflows exist because ``struct flow`` is
+relatively large (672 bytes, as of this writing).  In contexts where we might
+need many flows, such as for representing an OpenFlow flow table that can have
+millions of flows, the size itself is limiting.
+
+``struct miniflow`` compresses ``struct flow`` by omitting all-zero 64-bit
+doublewords.  Most flow and match structures are very sparse, so this is
+effective compression.  It is not necessary to understand all the details of
+the compression, but you can look up its definition in ``lib/flow.h`` if you
+want to know more.
+
+Despite this advantages, it is less convenient to work with the mini-structure,
+so the full-size version remain in use for many purposes.
+
+The ``miniflow_extract()`` function is a fast-path in the OVS userspace
+datapath, which means that it is written to be as fast as possible.  This means
+that its code is not necessarily as easy to read as it otherwise could be.  In
+particular, it uses somewhat awkward techniques to construct the miniflow that
+it outputs.  The programmer has to have some knowledge of the layout of the
+flow structure, the order of fields within it, and which fields occupy which
+64-bit doublewords.  The source file includes various functions and macros,
+named ``miniflow_push_*()``, for appending a field to the extracted miniflow,
+which has to happen in the same order as the ``struct flow`` members.  (This is
+why it was important earlier to put the ``dlan_id`` member in ``struct flow``
+just after the VLAN fields.)
+
+The existing code in ``miniflow_extract()`` to extract the VLAN headers looks
+like this::
+
+            /* VLAN */
+            union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
+            size_t num_vlans = parse_vlan(&data, &size, vlans);
+
+            dl_type = parse_ethertype(&data, &size);
+            miniflow_push_be16(mf, dl_type, dl_type);
+            miniflow_pad_to_64(mf, dl_type);
+            if (num_vlans > 0) {
+                miniflow_push_words_32(mf, vlans, vlans, num_vlans);
+            }
+
+We can add dLAN parsing just after this as::
+
+            /* dLAN */
+            ovs_be16 did = parse_dlan(&data, &size);
+            if (did) {
+                miniflow_push_be16(mf, dlan_id, did);
+            }
+
+We also add a helper to do the actual parsing and return the dLAN ID, like
+this::
+
+    /* Attempts to parse a dLAN header at the current position in the packet
+     * (which points to an Ethertype).  '*datap' and '*sizep' are the remaining
+     * data in the packet; the function updates them.
+     *
+     * On entry, '*sizep' is at least 2.  On exit, it will also be at least 2.
+     *
+     * Returns 0 if no valid dLAN header was parsed, otherwise the dLAN ID. */
+    static ovs_be16
+    parse_dlan(const void **datap, size_t *sizep)
+    {
+        /* If a dLAN header is present, then data[0] == ETH_TYPE_DLAN and
+         * data[1] is the dLAN ID.  We also ensure that there are at least 2
+         * additional bytes beyond the dLAN ID (for the Ethertype of the next
+         * protocol). */
+        const ovs_be16 *data = *datap;
+        if (*data != htons(ETH_TYPE_DLAN) || *sizep < 6) {
+            return 0;
+        }
+
+        ovs_be16 dlan_id = data[1];
+        if (!dlan_id) {
+            /* dLAN ID of zero is invalid. */
+            return 0;
+        }
+
+        *datap = data + 2;
+        *sizep -= 4;
+        return dlan_id;
+    }
+
+Of course we also need to update the build assertion from::
+
+    /* Add code to this function (or its callees) to extract new fields. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
+
+to::
+
+    /* Add code to this function (or its callees) to extract new fields. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
+
+Updating build assertions should be routine at this point, so it won't be
+mentioned explicitly from now on.
+
+Flow Composition
+++++++++++++++++
+
+The ``flow_compose()`` function in ``lib/flow.c`` is something like this
+opposite of ``flow_extract()``.  Whereas ``flow_extract()`` takes a packet as
+input and yields a microflow as output, ``flow_compose()`` takes a microflow as
+input and produces a packet as output.  Obviously, a single microflow
+corresponds to a very large number of possible packets, so this is only useful
+for debugging situations where one wants to be able to test code with *some*
+packet of a given microflow.
+
+We can add support for dLAN IDs in ``flow_compose()`` by adding the following
+after its code for VLANs::
+
+    if (flow->dlan_id) {
+        eth_push_dlan(p, flow->dlan_id);
+    }
+
+Committing Changes
+++++++++++++++++++
+
+``lib/odp-util.c`` has a function ``commit_odp_actions()`` that implements
+OpenFlow actions that change fields.  Open vSwitch implements such actions in
+what at first might seem a surprising way.  Ultimately, OVS has to implement an
+OpenFlow action that, say, modifies the IP destination or pushes a VLAN by
+translating it into an equivalent datapath (ODP) action that does the same
+thing.  For example, given that a flow initially had no VLAN tag, it might
+ultimately translate the OpenFlow action::
+
+    set_field:1234->vlan_vid
+
+into the ODP action::
+
+    push_vlan(tpid=0x8100, tci=1234)
+
+However, OVS doesn't do that translation immediately when it encounters the
+``set_field`` action as part of processing a packet through OpenFlow.  That is
+because it is common for controllers to include redundant, unneeded, or
+mutually offsetting actions in the programs that they pass to Open vSwitch.
+For example, the controller might push a VLAN on a packet when it enters the
+switch through an access port, then pop that VLAN off before it exits the
+switch through an access port, so that the net effect is that no change is
+needed.  In that case, if OVS emitted a ``push_vlan`` action followed by
+``pop_vlan``, the datapath would waste time processing every packet uselessly
+pushing and then popping a VLAN.
+
+Instead, OVS only bothers to emit ODP actions to update fields when their side
+effects would be visible, for example, just before an ``output`` action that
+transmits a packet to a physical or virtual port.  The ``commit_odp_actions()``
+function implements that feature.  Its primary arguments are a pair of ``struct
+flow`` structures: ``flow`` that represents the desired field values and
+``base`` that represents the actual current field values.  The function
+compares all of the values and, for the ones that differ, emits actions that
+update them to match ``flow`` (and changes ``base`` to match ``flow``).
+
+We need to add functionality to update the dLAN header.  The logic is simple:
+if the dLAN ID differs between ``flow`` and ``base``, then pop off the dLAN
+header (if there was one) and push on a new dLAN header (if there should be
+one), and in any case update ``base`` to match ``flow``::
+
+    static void
+    commit_dlan_action(const struct flow *flow, struct flow *base,
+                       struct ofpbuf *odp_actions, struct flow_wildcards *wc)
+    {
+        if (base->dlan_id != flow->dlan_id) {
+            wc->masks.dlan_id = OVS_BE16_MAX;
+
+            if (base->dlan_id) {
+                nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_DLAN);
+            }
+            if (flow->dlan_id) {
+                nl_msg_put_be16(odp_actions, OVS_ACTION_ATTR_PUSH_DLAN,
+                                flow->dlan_id);
+            }
+            base->dlan_id = flow->dlan_id;
+        }
+    }
+
+We also add a call to our new function in an appropriate place in
+``commit_odp_actions()``::
+
+    ...
+    commit_vlan_action(flow, base, odp_actions, wc);
+    commit_dlan_action(flow, base, odp_actions, wc);
+    commit_set_priority_action(flow, base, odp_actions, wc, use_masked);
+    ...
+
+Marking Significant Fields
+++++++++++++++++++++++++++
+
+``lib/flow.c`` has a couple of functions that, for a given ``struct flow`` that
+represents a microflow, mark the members that are significant for it.  For
+example, if a microflow represents an ARP packet, then they would mark
+``arp_sha`` and ``arp_tha``, but they would not do so for other kinds of
+packets.
+
+In this case, the ``dlan_id`` member is significant for all Ethernet packets.
+This might not be obvious at first, because most packets will not have a dLAN
+header.  However, the ``dlan_id`` member is what tells us that the packet does
+not have a dLAN header, so its value is still significant, and that is what
+these functions are attempting to determine.
+
+There are two functions that do this kind of thing.  The first one is
+``flow_wildcards_init_for_packet()``.  For this one, the relevant section of
+code is this::
+
+    if (flow->packet_type == htonl(PT_ETH)) {
+        WC_MASK_FIELD(wc, dl_dst);
+        WC_MASK_FIELD(wc, dl_src);
+        WC_MASK_FIELD(wc, dl_type);
+        /* No need to set mask of inner VLANs that don't exist. */
+        for (int i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+            /* Always show the first zero VLAN. */
+            WC_MASK_FIELD(wc, vlans[i]);
+            if (flow->vlans[i].tci == htons(0)) {
+                break;
+            }
+        }
+        dl_type = flow->dl_type;
+    } else {
+
+As you can see, each significant field is marked using ``WC_MASK_FIELD``.  To
+mark ``dlan_id``, we just add the following someplace.  The particular spot
+does not matter, although just after the VLANs maintains the logical ordering::
+
+        WC_MASK_FIELD(wc, dlan_id);
+
+The ``flow_wc_map()`` function does something similar.  In this case the
+relevant stanza is::
+
+    /* Metadata fields that can appear on packet input. */
+    FLOWMAP_SET(map, skb_priority);
+    FLOWMAP_SET(map, pkt_mark);
+    FLOWMAP_SET(map, recirc_id);
+    FLOWMAP_SET(map, dp_hash);
+    FLOWMAP_SET(map, in_port);
+    FLOWMAP_SET(map, dl_dst);
+    FLOWMAP_SET(map, dl_src);
+    FLOWMAP_SET(map, dl_type);
+    FLOWMAP_SET(map, vlans);
+    FLOWMAP_SET(map, ct_state);
+    FLOWMAP_SET(map, ct_zone);
+    FLOWMAP_SET(map, ct_mark);
+    FLOWMAP_SET(map, ct_label);
+    FLOWMAP_SET(map, packet_type);
+
+and we can just add ``dlan_id`` to it somewhere, like this::
+
+    FLOWMAP_SET(map, dlan_id);
+
+Functions That Don't Need to Change
++++++++++++++++++++++++++++++++++++
+
+``lib/flow.c`` has a bunch of functions that trigger build assertions that we
+don't actually need to update (besides the build assertions themselves).  These
+are:
+
+* ``flow_get_metadata()`` and ``flow_wildcards_clear_non_packet_fields()``: The
+  dLAN ID is a data field, not a metadata field.
+
+* ``miniflow_hash_5tuple()`` and ``flow_hash_5tuple()``: The dLAN ID is not
+  part of the 5-tuple.
+
+* ``flow_push_mpls()``: This function has an internal need to clear all the L3
+  and L4 fields in a flow, but the dLAN ID is an L2 field.
+
+This is also true for ``ofputil_wildcard_from_ofpfw10()`` in
+``lib/ofp-match.c``.  This function works with OpenFlow 1.0 flows.  OpenFlow
+1.0 supported a fixed set of packet headers, which OVS has fully supported for
+a long time.  OpenFlow 1.0 did not support dLAN and never will, and dLAN has no
+effect on OpenFlow 1.0, so nothing needs to change there.
+
+Finally, ``compose_output_action__()`` in ``ofproto/ofproto-dpif-xlate.c`` has
+some code that needs to change if we introduce a new metadata field.  Since the
+dLAN ID is not metadata, nothing needs to change here either.
+
+B. New ``OVS_KEY_ATTR_DLAN`` Member in ``enum ovs_key_attr``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Now we have to implement userspace code related to the dLAN ID field, which we
+previously added as ``OVS_KEY_ATTR_DLAN``.  We will implement the interface
+between the slow path and the datapath, which also makes the dLAN ID work in
+the userspace datapath.
+
+The compiler tells us about most of the places we have to update by reporting
+missing cases for ``OVS_KEY_ATTR_DLAN`` in ``switch`` statements.  The fix for
+these messages is always to add a case for the new attribute, and sometimes no
+more work than that is needed.  (In a few cases where there is no relevant
+``switch`` statement, build assertions on ``FLOW_WC_SEQ`` let us know about the
+problem instead.)
+
+Datapath Field Modification
++++++++++++++++++++++++++++
+
+The file ``lib/odp-execute.c`` has two functions that allow datapath actions to
+modify fields.  In both cases we just follow the pattern set by existing code.
+We need to add code to ``odp_execute_set_action()`` to modify the whole dLAN ID
+field.  This is easy::
+
+    case OVS_KEY_ATTR_DLAN:
+        eth_set_dlan(packet, nl_attr_get_be16(a), OVS_BE16_MAX);
+        break;
+
+We also need to add code to ``odp_execute_masked_set_action()`` to modify part
+of the dLAN ID field based on a mask provided by the caller, which is just as
+easy::
+
+    case OVS_KEY_ATTR_DLAN:
+        eth_set_dlan(packet, nl_attr_get_be16(a), *get_mask(a, ovs_be16));
+        break;
+
+Easy Changes
+++++++++++++
+
+There are a few related changes in ``lib/odp-util.c`` that are easy.  We need
+to add a case to ``ovs_key_attr_to_string()`` to return the name of the field::
+
+    case OVS_KEY_ATTR_DLAN: return "dlan";
+
+The function ``odp_mask_is_constant__()`` needs to be able to identify when a
+mask for a field is all-0-bits or all-1-bits.  For dLAN, like most fields, we
+can use the "default" implementation that just checks whether all the bytes are
+0x00 or 0xff::
+
+    ...
+    case OVS_KEY_ATTR_CT_ZONE:
+    case OVS_KEY_ATTR_CT_MARK:
+    case OVS_KEY_ATTR_CT_LABELS:
+    case OVS_KEY_ATTR_PACKET_TYPE:
+    case OVS_KEY_ATTR_NSH:
+    case OVS_KEY_ATTR_DLAN:
+        return is_all_byte(mask, size, u8);
+
+And the function ``format_odp_key_attr__()`` needs to be able to print a match
+against the field, possibly with a mask.  It's easy to follow the same pattern
+as other fields here, too::
+
+    case OVS_KEY_ATTR_DLAN:
+        ds_put_format(ds, "0x%04"PRIx16, ntohs(nl_attr_get_be16(a)));
+        if (!is_exact) {
+            ds_put_format(ds, "/0x%04"PRIx16, ntohs(nl_attr_get_be16(ma)));
+        }
+        break;
+
+The sFlow code in ``sflow_read_set_action()`` in
+``ofproto/ofproto-dpif-sflow.c`` has a switch statement that treats a few kinds
+of datapath fields specially.  Like most fields, though, dLAN needs no special
+treatment, so we can just make ``OVS_KEY_ATTR_DLAN`` do nothing::
+
+    case OVS_KEY_ATTR_IN_PORT:
+    case OVS_KEY_ATTR_ETHERNET:
+    case OVS_KEY_ATTR_VLAN:
+    case OVS_KEY_ATTR_DLAN:
+        break;
+
+Translating Datapath Microflows into Slow Path Microflows
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+The hardest part of implementing a new field is dealing with the differences
+between microflows in the slow path and microflows in the datapath.  This is
+difficult because of the need for version compatibility: the OVS slow path is
+supposed to work properly with any version of an OVS datapath, and vice versa.
+As mentioned previously in `Introduction to Open vSwitch Packet Processing`_,
+this is done
+
 
 
 
@@ -609,36 +1113,6 @@ Updating ``flow.h``
 Two of the compiler errors are in ``flow.h`` itself, which means that these get
 reported for every single ``.c`` file that ``make`` rebuilds.  That's super
 annoying, so we should address these first.
-
-The first of them is for the following code::
-
-    /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
-    BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
-                      == sizeof(struct flow_tnl) + sizeof(struct ovs_key_nsh) + 300
-                      && FLOW_WC_SEQ == 41);
-
-This is just a way to remind the programmer to update ``FLOW_WC_SEQ`` when
-changing ``struct flow``.  If we had changed the size of ``struct flow``, then
-it would have triggered as soon as we had done that.  It doesn't otherwise
-point to anything we need to update, so we can just change the assertion to use
-our new value of ``FLOW_WC_SEQ``::
-
-    ...
-                      && FLOW_WC_SEQ == 42);
-
-The second is in the inline function ``pkt_metadata_from_flow()``.  This
-function copies metadata (such as the OpenFlow input port ``in_port``) from a
-flow into a structure that only carries metadata.  It checks ``FLOW_WC_SEQ`` in
-a way that will soon seem familiar::
-
-    /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 41);
-
-Our new field ``dlan_id`` is an L2 data field, not metadata, so we do not need
-to update anything in this function other than the assertion itself::
-
-    /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
 
 (Not) Updating ``odp-util.h``
 -----------------------------

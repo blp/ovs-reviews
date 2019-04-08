@@ -344,6 +344,7 @@ parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
     const ovs_be16 *eth_type;
 
     memset(vlan_hdrs, 0, sizeof(union flow_vlan_hdr) * FLOW_MAX_VLAN_HEADERS);
+    data_pull(datap, sizep, ETH_ADDR_LEN * 2);
 
     eth_type = *datap;
 
@@ -371,7 +372,7 @@ parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
 static ovs_be16
 parse_dlan(const void **datap, size_t *sizep)
 {
-    /* If a dLAN header is present, then data[0] == ETH_TYPE_VLAN and data[1]
+    /* If a dLAN header is present, then data[0] == ETH_TYPE_DLAN and data[1]
      * is the dLAN ID.  We also ensure that there are at least 2 additional
      * bytes beyond the dLAN ID (for the Ethertype of the next protocol). */
     const ovs_be16 *data = *datap;
@@ -844,7 +845,6 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
             /* Link layer. */
             ASSERT_SEQUENTIAL(dl_dst, dl_src);
             miniflow_push_macs(mf, dl_dst, data);
-            data_pull(&data, &size, ETH_ADDR_LEN * 2);
 
             /* VLAN */
             union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
@@ -1864,7 +1864,6 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
         WC_MASK_FIELD(wc, dl_dst);
         WC_MASK_FIELD(wc, dl_src);
         WC_MASK_FIELD(wc, dl_type);
-        WC_MASK_FIELD(wc, dlan_id);
         /* No need to set mask of inner VLANs that don't exist. */
         for (int i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
             /* Always show the first zero VLAN. */
@@ -1873,6 +1872,7 @@ flow_wildcards_init_for_packet(struct flow_wildcards *wc,
                 break;
             }
         }
+        WC_MASK_FIELD(wc, dlan_id);
         dl_type = flow->dl_type;
     } else {
         dl_type = pt_ns_type_be(flow->packet_type);
