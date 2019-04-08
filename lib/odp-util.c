@@ -5826,6 +5826,7 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
 
     struct ovs_key_ethernet *eth_key;
     size_t encap[FLOW_MAX_VLAN_HEADERS] = {0};
+    size_t dlan_encap = 0;
     size_t max_vlans;
     const struct flow *flow = parms->flow;
     const struct flow *mask = parms->mask;
