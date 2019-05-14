@@ -20,6 +20,7 @@ COMMON_MACROS_AT = \
 TESTSUITE_AT = \
 	tests/testsuite.at \
 	tests/checkpatch.at \
+	tests/network-functions.at \
 	tests/ovn.at \
 	tests/ovn-northd.at \
 	tests/ovn-nbctl.at \
@@ -209,7 +210,8 @@ tests_ovstest_LDADD = $(OVS_LIBDIR)/daemon.lo \
 CHECK_PYFILES = \
 	tests/test-l7.py \
 	tests/uuidfilt.py \
-	tests/test-tcp-rst.py
+	tests/test-tcp-rst.py \
+	tests/stableid.py
 
 EXTRA_DIST += $(CHECK_PYFILES)
 PYCOV_CLEAN_FILES += $(CHECK_PYFILES:.py=.py,cover) .coverage
