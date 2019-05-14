@@ -3,10 +3,16 @@ AT_TESTED([ovs-vsctl])
 
 m4_include([m4/compat.m4])
 
-dnl Make AT_SETUP automatically run the ovs_init() shell function
-dnl as the first step in every test.
+dnl Make AT_SETUP automatically do some things for us:
+dnl - Run the ovs_init() shell function as the first step in every test.
+dnl - If NORTHD_TYPE is defined, then append it to the test name and
+dnl   set it as a shell variable as well.
 m4_rename([AT_SETUP], [OVS_AT_SETUP])
-m4_define([AT_SETUP], [OVS_AT_SETUP($@)
+m4_define([AT_SETUP],
+  [OVS_AT_SETUP($@[]m4_ifdef([NORTHD_TYPE], [ -- NORTHD_TYPE]))
+m4_ifdef([NORTHD_TYPE], [[NORTHD_TYPE]=NORTHD_TYPE
+AT_SKIP_IF([test $NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
+])dnl
 ovs_init
 ])
 
@@ -164,6 +170,11 @@ wc () {
 
 uuidfilt () {
     $PYTHON "$top_srcdir"/tests/uuidfilt.py "$@"
+}
+
+# xxx Move this to OVN code
+stableid () {
+    $PYTHON "$top_srcdir"/tests/stableid.py "$@"
 }
 
 # run_as PROGRAM_NAME COMMAND [ARG...]

@@ -1,0 +1,9 @@
+#! /bin/sh
+ovsdb2ddlog -f "$1" \
+    -o Logical_Switch_Port \
+    -o NB_Global \
+    --ro NB_Global.name \
+    --ro NB_Global.nb_cfg \
+    --ro NB_Global.external_ids \
+    --ro NB_Global.connections \
+    --ro NB_Global.ssl

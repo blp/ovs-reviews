@@ -187,6 +187,7 @@ ts_run(struct ic_context *ctx)
         NBREC_LOGICAL_SWITCH_FOR_EACH (ls, ctx->ovnnb_idl) {
             const char *ts_name = smap_get(&ls->other_config, "interconn-ts");
             if (ts_name) {
+                VLOG_INFO("ls %s", ts_name);
                 shash_add(&nb_tses, ts_name, ls);
             }
         }
@@ -194,6 +195,7 @@ ts_run(struct ic_context *ctx)
         /* Create/update NB Logical_Switch for each TS */
         ICNBREC_TRANSIT_SWITCH_FOR_EACH (ts, ctx->ovninb_idl) {
             ls = shash_find_and_delete(&nb_tses, ts->name);
+            VLOG_INFO("ts %s", ts->name);
             if (!ls) {
                 ls = nbrec_logical_switch_insert(ctx->ovnnb_txn);
                 nbrec_logical_switch_set_name(ls, ts->name);
