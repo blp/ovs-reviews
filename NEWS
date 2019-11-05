@@ -29,6 +29,7 @@ OVN v21.06.0 - 18 Jun 2021
     * ovn-sbctl now also supports daemon mode.
   - Added support in native DNS to respond to PTR request types.
   - New --dry-run option for ovn-northd and ovn-northd-ddlog.
+  - Added Control Plane Protection support (control plane traffic metering).
 
 OVN v21.03.0 - 12 Mar 2021
 -------------------------
