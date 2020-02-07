@@ -14,7 +14,8 @@ EXTRA_DIST += \
 	northd/ovn_northd.dl northd/ovn.dl northd/ovn.rs \
 	northd/ovn.toml northd/lswitch.dl northd/lrouter.dl \
 	northd/helpers.dl northd/ipam.dl northd/multicast.dl \
-	northd/docs/design.md  northd/docs/debugging.md
+	northd/docs/design.md  northd/docs/debugging.md \
+	northd/docs/new-feature-tutorial.md
 
 if DDLOG
 BUILT_SOURCES += northd/ovn_northd_ddlog/ddlog.h
