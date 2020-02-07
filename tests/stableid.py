@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import sys
 import pickle
@@ -18,12 +18,13 @@ import pickle
 #
 #   * "--dump": Dump the current mappings.
 
+
 def allocate_id(ids, id, strict):
     if strict:
         if id in ids and ids[id] == id:
             return
         elif id not in ids.values():
-            ids[id] = id;
+            ids[id] = id
         else:
             sys.stderr.write("Couldn't assign requested id\n")
             sys.exit(1)
@@ -39,6 +40,7 @@ def allocate_id(ids, id, strict):
 
     sys.stderr.write("Couldn't allocate stable id\n")
     sys.exit(1)
+
 
 if __name__ == '__main__':
     strict = False
@@ -65,7 +67,7 @@ if __name__ == '__main__':
         ids = {}
 
     if dump:
-        print ids
+        print(ids)
         sys.exit(0)
 
     id = sys.stdin.readline().rstrip()
@@ -77,7 +79,7 @@ if __name__ == '__main__':
             del ids[id]
     else:
         allocate_id(ids, id, strict)
-        print ids[id]
+        print(ids[id])
 
     f = open(filename, 'wb')
     pickle.dump(ids, f, pickle.HIGHEST_PROTOCOL)
