@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -25,8 +25,10 @@
 Authors
 =======
 
-The following people authored or signed off on commits in the Open
-vSwitch source code or webpage version control repository.
+The following people authored or signed off on commits in the OVN
+source code or webpage version control repository.  Since OVN originated in the
+Open vSwitch git repository, this list also includes all of the names in the
+AUTHORS file at the time OVN was split out from OVS.
 
 ================================== ===============================================
 Name                               Email
@@ -234,6 +236,7 @@ Luis E. P.                         l31g@hotmail.com
 Lukasz Rzasik                      lukasz.rzasik@gmail.com
 Madhu Challa                       challa@noironetworks.com
 Manohar K C                        manukc@gmail.com
+Manoj Sharma                       manoj.sharma@nutanix.com
 Marcin Mirecki                     mmirecki@redhat.com
 Mario Cabrera                      mario.cabrera@hpe.com
 Mark D. Gray                       mark.d.gray@intel.com
@@ -365,6 +368,7 @@ Tony van der Peet                  tony.vanderpeet@alliedtelesis.co.nz
 Tonghao Zhang                      xiangxia.m.yue@gmail.com
 Valient Gough                      vgough@pobox.com
 Venkata Anil Kommaddi              vkommadi@redhat.com
+Venu Iyer                          venugopali@nvidia.com
 Vishal Deep Ajmera                 vishal.deep.ajmera@ericsson.com
 Vivien Bernet-Rollande             vbr@soprive.net
 wangqianyu                         wang.qianyu@zte.com.cn
@@ -651,5 +655,5 @@ weizj                           34965317@qq.com
 张强                            zhangqiang@meizu.com
 =============================== ===============================================
 
-Thanks to all Open vSwitch contributors.  If you are not listed above
+Thanks to all Open vSwitch and OVN contributors.  If you are not listed above
 but believe that you should be, please write to dev@openvswitch.org.

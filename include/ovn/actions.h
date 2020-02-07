@@ -61,6 +61,7 @@ struct ovn_extend_table;
     OVNACT(CT_DNAT,           ovnact_ct_nat)          \
     OVNACT(CT_SNAT,           ovnact_ct_nat)          \
     OVNACT(CT_LB,             ovnact_ct_lb)           \
+    OVNACT(SELECT,            ovnact_select)          \
     OVNACT(CT_CLEAR,          ovnact_null)            \
     OVNACT(CLONE,             ovnact_nest)            \
     OVNACT(ARP,               ovnact_nest)            \
@@ -73,8 +74,10 @@ struct ovn_extend_table;
     OVNACT(ND_NA_ROUTER,      ovnact_nest)            \
     OVNACT(GET_ARP,           ovnact_get_mac_bind)    \
     OVNACT(PUT_ARP,           ovnact_put_mac_bind)    \
+    OVNACT(LOOKUP_ARP,        ovnact_lookup_mac_bind) \
     OVNACT(GET_ND,            ovnact_get_mac_bind)    \
     OVNACT(PUT_ND,            ovnact_put_mac_bind)    \
+    OVNACT(LOOKUP_ND,         ovnact_lookup_mac_bind) \
     OVNACT(PUT_DHCPV4_OPTS,   ovnact_put_opts)        \
     OVNACT(PUT_DHCPV6_OPTS,   ovnact_put_opts)        \
     OVNACT(SET_QUEUE,         ovnact_set_queue)       \
@@ -86,7 +89,9 @@ struct ovn_extend_table;
     OVNACT(OVNFIELD_LOAD,     ovnact_load)            \
     OVNACT(CHECK_PKT_LARGER,  ovnact_check_pkt_larger) \
     OVNACT(TRIGGER_EVENT,     ovnact_controller_event) \
-    OVNACT(BIND_VPORT,        ovnact_bind_vport)
+    OVNACT(BIND_VPORT,        ovnact_bind_vport)       \
+    OVNACT(HANDLE_SVC_CHECK,  ovnact_handle_svc_check) \
+    OVNACT(FWD_GROUP,         ovnact_fwd_group)
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -223,7 +228,11 @@ struct ovnact_ct_commit {
 /* OVNACT_CT_DNAT, OVNACT_CT_SNAT. */
 struct ovnact_ct_nat {
     struct ovnact ovnact;
-    ovs_be32 ip;
+    int family;
+    union {
+        struct in6_addr ipv6;
+        ovs_be32 ipv4;
+    };
     uint8_t ltable;             /* Logical table ID of next table. */
 };
 
@@ -244,6 +253,20 @@ struct ovnact_ct_lb {
     uint8_t ltable;             /* Logical table ID of next table. */
 };
 
+struct ovnact_select_dst {
+    uint16_t id;
+    uint16_t weight;
+};
+
+/* OVNACT_SELECT. */
+struct ovnact_select {
+    struct ovnact ovnact;
+    struct ovnact_select_dst *dsts;
+    size_t n_dsts;
+    uint8_t ltable;             /* Logical table ID of next table. */
+    struct expr_field res_field;
+};
+
 /* OVNACT_ARP, OVNACT_ND_NA, OVNACT_CLONE. */
 struct ovnact_nest {
     struct ovnact ovnact;
@@ -261,6 +284,15 @@ struct ovnact_get_mac_bind {
 /* OVNACT_PUT_ARP, ONVACT_PUT_ND. */
 struct ovnact_put_mac_bind {
     struct ovnact ovnact;
+    struct expr_field port;     /* Logical port name. */
+    struct expr_field ip;       /* 32-bit or 128-bit IP address. */
+    struct expr_field mac;      /* 48-bit Ethernet address. */
+};
+
+/* OVNACT_LOOKUP_ARP, OVNACT_LOOKUP_ND. */
+struct ovnact_lookup_mac_bind {
+    struct ovnact ovnact;
+    struct expr_field dst;      /* 1-bit destination field. */
     struct expr_field port;     /* Logical port name. */
     struct expr_field ip;       /* 32-bit or 128-bit IP address. */
     struct expr_field mac;      /* 48-bit Ethernet address. */
@@ -335,6 +367,21 @@ struct ovnact_bind_vport {
     struct ovnact ovnact;
     char *vport;
     struct expr_field vport_parent;     /* Logical virtual port's port name. */
+};
+
+/* OVNACT_HANDLE_SVC_CHECK. */
+struct ovnact_handle_svc_check {
+    struct ovnact ovnact;
+    struct expr_field port;     /* Logical port name. */
+};
+
+/* OVNACT_FWD_GROUP. */
+struct ovnact_fwd_group {
+    struct ovnact ovnact;
+    bool liveness;
+    char **child_ports;       /* Logical ports */
+    size_t n_child_ports;
+    uint8_t ltable;           /* Logical table ID of next table. */
 };
 
 /* Internal use by the helpers below. */
@@ -522,6 +569,14 @@ enum action_opcode {
      *    MFF_LOG_INPORT.
      */
     ACTION_OPCODE_BIND_VPORT,
+
+    /* "handle_svc_check(port)"."
+     *
+     * Arguments are passed through the packet metadata and data, as follows:
+     *
+     *     MFF_LOG_INPORT = port
+     */
+    ACTION_OPCODE_HANDLE_SVC_CHECK,
 };
 
 /* Header. */
@@ -590,6 +645,13 @@ struct ovnact_encode_params {
      * '*portp' and returns true; otherwise, returns false. */
     bool (*lookup_port)(const void *aux, const char *port_name,
                         unsigned int *portp);
+
+    /* Looks up tunnel port to a chassis by its port name.  If found, stores
+     * its openflow port number in '*ofport' and returns true;
+     * otherwise, returns false. */
+    bool (*tunnel_ofport)(const void *aux, const char *port_name,
+                          ofp_port_t *ofport);
+
     const void *aux;
 
     /* 'true' if the flow is for a switch. */
@@ -628,6 +690,8 @@ struct ovnact_encode_params {
     uint8_t output_ptable;      /* OpenFlow table for 'output' to resubmit. */
     uint8_t mac_bind_ptable;    /* OpenFlow table for 'get_arp'/'get_nd' to
                                    resubmit. */
+    uint8_t mac_lookup_ptable;  /* OpenFlow table for
+                                   'lookup_arp'/'lookup_nd' to resubmit. */
 };
 
 void ovnacts_encode(const struct ovnact[], size_t ovnacts_len,

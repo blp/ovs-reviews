@@ -24,6 +24,7 @@ struct svec;
 struct uuid;
 struct eth_addr;
 struct sbrec_port_binding;
+struct sbrec_datapath_binding;
 
 struct ipv4_netaddr {
     ovs_be32 addr;            /* 192.168.10.123 */
@@ -78,6 +79,8 @@ char *alloc_nat_zone_key(const struct uuid *key, const char *type);
 
 const char *default_nb_db(void);
 const char *default_sb_db(void);
+const char *default_ic_nb_db(void);
+const char *default_ic_sb_db(void);
 char *get_abs_unix_ctl_path(void);
 
 struct ovsdb_idl_table_class;
@@ -102,4 +105,20 @@ void ddlog_err(const char *msg);
 #endif
 
 
+bool datapath_is_switch(const struct sbrec_datapath_binding *);
+
+#define OVN_MAX_DP_KEY ((1u << 24) - 1)
+#define OVN_MAX_DP_GLOBAL_NUM ((1u << 16) - 1)
+#define OVN_MIN_DP_KEY_LOCAL 1
+#define OVN_MAX_DP_KEY_LOCAL (OVN_MAX_DP_KEY - OVN_MAX_DP_GLOBAL_NUM)
+#define OVN_MIN_DP_KEY_GLOBAL (OVN_MAX_DP_KEY_LOCAL + 1)
+#define OVN_MAX_DP_KEY_GLOBAL OVN_MAX_DP_KEY
+struct hmap;
+void ovn_destroy_tnlids(struct hmap *tnlids);
+void ovn_add_tnlid(struct hmap *set, uint32_t tnlid);
+bool ovn_tnlid_in_use(const struct hmap *set, uint32_t tnlid);
+uint32_t ovn_allocate_tnlid(struct hmap *set, const char *name, uint32_t min,
+                            uint32_t max, uint32_t *hint);
+
+char *ovn_chassis_redirect_name(const char *port_name);
 #endif

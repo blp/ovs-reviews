@@ -60,16 +60,6 @@ AC_DEFUN([OVS_CHECK_NDEBUG],
      [ndebug=false])
    AM_CONDITIONAL([NDEBUG], [test x$ndebug = xtrue])])
 
-dnl Checks for ESX.
-AC_DEFUN([OVS_CHECK_ESX],
-  [AC_CHECK_HEADER([vmware.h],
-                   [ESX=yes],
-                   [ESX=no])
-   AM_CONDITIONAL([ESX], [test "$ESX" = yes])
-   if test "$ESX" = yes; then
-      AC_DEFINE([ESX], [1], [Define to 1 if building on ESX.])
-   fi])
-
 dnl Checks for MSVC x64 compiler.
 AC_DEFUN([OVS_CHECK_WIN64],
   [AC_CACHE_CHECK(
@@ -203,42 +193,6 @@ AC_ARG_WITH([vstudiotargetver],
   AM_CONDITIONAL([VSTUDIO_DDK], [test -n "$VSTUDIO_CONFIG"])
 ])
 
-dnl Checks for libcap-ng.
-AC_DEFUN([OVN_CHECK_LIBCAPNG],
-  [AC_ARG_ENABLE(
-     [libcapng],
-     [AC_HELP_STRING([--disable-libcapng], [Disable Linux capability support])],
-     [case "${enableval}" in
-        (yes) libcapng=true ;;
-        (no)  libcapng=false ;;
-        (*) AC_MSG_ERROR([bad value ${enableval} for --enable-libcapng]) ;;
-      esac],
-     [libcapng=check])
-
-   if test "$libcapng" != false; then
-       AC_CHECK_LIB([cap-ng], [capng_clear], [HAVE_LIBCAPNG=yes])
-
-       if test "$HAVE_LIBCAPNG" != yes; then
-           if test "$libcapng" = true ; then
-                AC_MSG_ERROR([libcap-ng support requested, but not found])
-           fi
-           if test "$libcapng" = check ; then
-                 AC_MSG_WARN([cannot find libcap-ng.
---user option will not be supported on Linux.
-(you may use --disable-libcapng to suppress this warning). ])
-           fi
-       fi
-   fi
-
-   AC_SUBST([HAVE_LIBCAPNG])
-   AM_CONDITIONAL([HAVE_LIBCAPNG], [test "$HAVE_LIBCAPNG" = yes])
-   if test "$HAVE_LIBCAPNG" = yes; then
-      AC_DEFINE([HAVE_LIBCAPNG], [1],
-                [Define to 1 if libcap-ng is available.])
-      CAPNG_LDADD="-lcap-ng"
-      AC_SUBST([CAPNG_LDADD])
-   fi])
-
 dnl Checks for OpenSSL.
 AC_DEFUN([OVS_CHECK_OPENSSL],
   [AC_ARG_ENABLE(
@@ -346,57 +300,16 @@ dnl Checks for valgrind/valgrind.h.
 AC_DEFUN([OVN_CHECK_VALGRIND],
   [AC_CHECK_HEADERS([valgrind/valgrind.h])])
 
-dnl Checks for Python 2.x, x >= 7.
-AC_DEFUN([OVN_CHECK_PYTHON2],
-  [AC_CACHE_CHECK(
-     [for Python 2.x for x >= 7],
-     [ovs_cv_python2],
-     [if test -n "$PYTHON2"; then
-        ovs_cv_python2=$PYTHON2
-      else
-        ovs_cv_python2=no
-        for binary in python2 python2.7 python; do
-          ovs_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-          for dir in $PATH; do
-            IFS=$ovs_save_IFS
-            test -z "$dir" && dir=.
-            if test -x "$dir"/"$binary" && "$dir"/"$binary" -c 'import sys
-if sys.hexversion >= 0x02070000 and sys.hexversion < 0x03000000:
-    sys.exit(0)
-else:
-    sys.exit(1)'; then
-              ovs_cv_python2=$dir/$binary
-              break 2
-            fi
-          done
-        done
-        if test "$ovs_cv_python2" != no && test -x "$ovs_cv_python2"; then
-          if ! "$ovs_cv_python2" -c 'import six ; six.moves.range' >&AS_MESSAGE_LOG_FD 2>&1; then
-            ovs_cv_python2=no
-            AC_MSG_WARN([Missing Python six library or version too old.])
-          fi
-        fi
-      fi])
-   AC_SUBST([HAVE_PYTHON2])
-   AM_MISSING_PROG([PYTHON2], [python2])
-   if test "$ovs_cv_python2" != no; then
-     PYTHON2=$ovs_cv_python2
-     HAVE_PYTHON2=yes
-   else
-     HAVE_PYTHON2=no
-   fi
-   AM_CONDITIONAL([HAVE_PYTHON2], [test "$HAVE_PYTHON2" = yes])])
-
-dnl Checks for Python 3.x, x >= 4.
+dnl Checks for Python 3.4 or later.
 AC_DEFUN([OVN_CHECK_PYTHON3],
   [AC_CACHE_CHECK(
-     [for Python 3.x for x >= 4],
+     [for Python 3 (version 3.4 or later)],
      [ovs_cv_python3],
      [if test -n "$PYTHON3"; then
         ovs_cv_python3=$PYTHON3
       else
         ovs_cv_python3=no
-        for binary in python3 python3.4; do
+        for binary in python3 python3.4 python3.5 python3.6 python3.7; do
           ovs_save_IFS=$IFS; IFS=$PATH_SEPARATOR
           for dir in $PATH; do
             IFS=$ovs_save_IFS
@@ -411,46 +324,12 @@ else:
             fi
           done
         done
-        if test "$ovs_cv_python3" != no; then
-          if test -x "$ovs_cv_python3" && ! "$ovs_cv_python3" -c 'import six' >/dev/null 2>&1; then
-            ovs_cv_python3=no
-            AC_MSG_WARN([Missing Python six library.])
-          fi
-        fi
       fi])
-   AC_SUBST([HAVE_PYTHON3])
-   AM_MISSING_PROG([PYTHON3], [python3])
-   if test "$ovs_cv_python3" != no; then
-     PYTHON3=$ovs_cv_python3
-     HAVE_PYTHON3=yes
-   else
-     HAVE_PYTHON3=no
+   if test "$ovs_cv_python3" = no; then
+     AC_MSG_ERROR([Python 3.4 or later is required but not found in $PATH, please install it or set $PYTHON3 to point to it])
    fi
-   AM_CONDITIONAL([HAVE_PYTHON3], [test "$HAVE_PYTHON3" = yes])])
-
-dnl Checks if you have any compatible Python version installed.
-dnl Python 2.7+ has the preference to 3.4+
-AC_DEFUN([OVN_CHECK_PYTHON],
-  [AC_CACHE_CHECK(
-     [for Python 2 or 3],
-     [ovs_cv_python],
-     [if test -n "$PYTHON"; then
-        ovs_cv_python=$PYTHON
-      else
-        ovs_cv_python=no
-        if test "$ovs_cv_python2" != no; then
-          ovs_cv_python=$ovs_cv_python2
-        elif test "$ovs_cv_python3" != no; then
-          ovs_cv_python=$ovs_cv_python3
-        else
-          AC_MSG_ERROR([Missing Python.])
-        fi
-      fi])
-    AC_SUBST([PYTHON])
-    PYTHON=$ovs_cv_python
-    AC_SUBST([HAVE_PYTHON])
-    HAVE_PYTHON=yes
-    AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON" = yes])])
+   AC_ARG_VAR([PYTHON3])
+   PYTHON3=$ovs_cv_python3])
 
 dnl Checks for flake8.
 AC_DEFUN([OVN_CHECK_FLAKE8],

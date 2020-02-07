@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -81,6 +81,13 @@ command:
 ::
 
    $ ovn-sbctl set-connection role=ovn-controller ssl:192.168.0.1:6642
+
+.. note::
+
+   There is currently no pre-defined role for ovn-northd. You must configure
+   a separate listener on the OVN southbound database that ovn-northd can
+   connect to if your deployment topology require ovn-northd to connect to a
+   OVN southbound database instance on a remote machine.
 
 Pre-defined Roles
 -----------------

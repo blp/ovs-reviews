@@ -36,7 +36,9 @@ m4_define([OVS_TRAFFIC_VSWITCHD_START],
 m4_define([OVS_TRAFFIC_VSWITCHD_STOP],
   [OVS_VSWITCHD_STOP([dnl
 $1";/netdev_linux.*obtaining netdev stats via vport failed/d
-/dpif_netlink.*Generic Netlink family 'ovs_datapath' does not exist. The Open vSwitch kernel module is probably not loaded./d"])
+/dpif_netlink.*Generic Netlink family 'ovs_datapath' does not exist. The Open vSwitch kernel module is probably not loaded./d
+/dpif_netdev(revalidator.*)|ERR|internal error parsing flow key.*proto=2.*/d
+/dpif(revalidator.*)|WARN|netdev@ovs-netdev: failed to.*proto=2.*/d"])
    AT_CHECK([:; $2])
   ])
 
@@ -63,7 +65,6 @@ m4_define([CONFIGURE_VETH_OFFLOADS],
 # Perform requirements checks for running conntrack tests.
 #
 m4_define([CHECK_CONNTRACK],
-    [AT_SKIP_IF([test $HAVE_PYTHON = no])]
 )
 
 # CHECK_CONNTRACK_ALG()

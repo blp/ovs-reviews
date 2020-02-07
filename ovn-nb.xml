@@ -36,6 +36,13 @@
       one row.
     </p>
 
+    <group title="Identity">
+      <column name="name">
+        The name of the OVN cluster, which uniquely identifies the OVN cluster
+        throughout all OVN clusters supposed to interconnect with each other.
+      </column>
+    </group>
+
     <group title="Status">
       These columns allow a client to track the overall configuration state of
       the system.
@@ -197,6 +204,11 @@
       Please see the <ref table="DNS"/> table.
     </column>
 
+    <column name="forwarding_groups">
+      Groups a set of logical port endpoints for traffic going out of the
+      logical switch.
+    </column>
+
     <group title="Naming">
       <p>
         These columns provide names for the logical switch.  From OVN's
@@ -344,6 +356,34 @@
       <column name="other_config" key="mcast_ip4_src">
         Configures the source IPv4 address for queries originated by the
         logical switch.
+      </column>
+      <column name="other_config" key="mcast_ip6_src">
+        Configures the source IPv6 address for queries originated by the
+        logical switch.
+      </column>
+    </group>
+
+    <group title="Interconnection">
+      <column name="other_config" key="interconn-ts"
+          type='{"type": "string"}'>
+        The <ref table="Transit_Switch" column="name" db="OVN_IC_Northbound"/>
+        of corresponding transit switch in <ref db="OVN_IC_Northbound"/>
+        database.  This kind of logical switch is created and controlled
+        by <code>ovn-ic</code>.
+      </column>
+    </group>
+
+    <group title="Tunnel Key">
+      <column name="other_config" key="requested-tnl-key"
+          type='{"type": "integer", "minInteger": 1, "maxInteger": 16777215}'>
+        Configures the datapath tunnel key for the logical switch.  Usually
+        this is not needed because <code>ovn-northd</code> will assign an
+        unique key for each datapath by itself.  However, if it is configured,
+        <code>ovn-northd</code> honors the configured value.  The typical use
+        case is for interconnection: the tunnel keys for transit switches need
+        to be unique globally, so they are maintained in the global
+        <ref db="OVN_IC_Southbound"/> database, and <code>ovn-ic</code> simply
+        syncs the value from <ref db="OVN_IC_Southbound"/> through this config.
       </column>
     </group>
 
@@ -497,7 +537,16 @@
                 parent owning the <code>virtual ip</code>.
               </li>
             </ul>
-           </dd>
+          </dd>
+
+          <dt><code>remote</code></dt>
+          <dd>
+            A remote port is to model a port that resides remotely on another
+            OVN, which is on the other side of a transit logical switch for OVN
+            interconnection.  This type of ports are created by
+            <code>ovn-ic</code> instead of by CMS.  Any change to the port will
+            be automatically overwritten by <code>ovn-ic</code>.
+          </dd>
         </dl>
       </column>
     </group>
@@ -1136,6 +1185,21 @@
       </column>
     </group>
 
+    <group title="Tunnel Key">
+      <column name="options" key="requested-tnl-key"
+          type='{"type": "integer", "minInteger": 1, "maxInteger": 65535}'>
+        Configures the port binding tunnel key for the port.  Usually
+        this is not needed because <code>ovn-northd</code> will assign an
+        unique key for each port by itself.  However, if it is configured,
+        <code>ovn-northd</code> honors the configured value.  The typical use
+        case is for interconnection: the tunnel keys for ports on transit
+        switches need to be unique globally, so they are maintained in the
+        global <ref db="OVN_IC_Southbound"/> database, and <code>ovn-ic</code>
+        simply syncs the value from <ref db="OVN_IC_Southbound"/> through this
+        config.
+      </column>
+    </group>
+
     <group title="Common Columns">
       <column name="external_ids">
         <p>
@@ -1150,6 +1214,36 @@
         </p>
       </column>
     </group>
+  </table>
+
+  <table name="Forwarding_Group" title="forwarding group">
+    <p>
+      Each row represents one forwarding group.
+    </p>
+
+    <column name="name">
+      A name for the forwarding group.  This name has no special meaning or
+      purpose other than to provide convenience for human interaction with
+      the ovn-nb database.
+    </column>
+
+    <column name="vip">
+      The virtual IP address assigned to the forwarding group. It will respond
+      with vmac when an ARP request is sent for vip.
+    </column>
+
+    <column name="vmac">
+      The virtual MAC address assigned to the forwarding group.
+    </column>
+
+    <column name="liveness">
+      If set to <code>true</code>, liveness is enabled for child ports
+      otherwise it is disabled.
+    </column>
+
+    <column name="child_port">
+      List of child ports in the forwarding group.
+    </column>
   </table>
 
   <table name="Address_Set" title="Address Sets">
@@ -1296,6 +1390,74 @@
         protocol to be <code>tcp</code>.
       </p>
     </column>
+
+    <column name="health_check">
+      Load balancer health checks associated with this load balancer.
+      If health check is desired for a vip's endpoints defined in
+      the <ref column="vips" table="Load_Balancer" db="OVN_Northbound"/>
+      column, then a row in the table
+      <ref table="Load_Balancer_Health_Check" db="OVN_Northbound"/> should
+      be created and referenced here and L4 port should be defined
+      for the vip and it's endpoints. Health checks are supported only
+      for IPv4 load balancers.
+    </column>
+
+    <column name="ip_port_mappings">
+      <p>
+        This column is used if load balancer health checks are enabled.
+        This keeps a mapping of endpoint IP to the logical port name.
+        The source ip to be used for health checks is also expected to be
+        defined. The key of the mapping is the endpoint IP and the value
+        is in the format : <code>port_name:SRC_IP</code>
+      </p>
+
+      <p>
+        Eg. If there is a VIP entry:
+        <code>"10.0.0.10:80=10.0.0.4:8080,20.0.0.4:8080"</code>,
+        then the IP to port mappings should be defined as:
+        <code>"10.0.0.4"="sw0-p1:10.0.0.2"</code> and
+        <code>"20.0.0.4"="sw1-p1:20.0.0.2"</code>. <code>10.0.0.2</code>
+        and <code>20.0.0.2</code> will be used by <code>ovn-controller</code>
+        as source ip when it sends out health check packets.
+      </p>
+    </column>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
+  </table>
+
+  <table name="Load_Balancer_Health_Check" title="load balancer">
+    <p>
+      Each row represents one load balancer health check. Health checks
+      are supported for IPv4 load balancers only.
+    </p>
+
+    <column name="vip">
+      <code>vip</code> whose endpoints should be monitored for health check.
+    </column>
+
+    <group title="Health check options">
+      <column name="options" key="interval" type='{"type": "integer"}'>
+        The interval, in seconds, between health checks.
+      </column>
+
+      <column name="options" key="timeout" type='{"type": "integer"}'>
+        The time, in seconds, after which a health check times out.
+      </column>
+
+      <column name="options" key="success_count" type='{"type": "integer"}'>
+        The number of successful checks after which the endpoint is
+        considered online.
+      </column>
+
+      <column name="options" key="failure_count" type='{"type": "integer"}'>
+        The number of failure checks after which the endpoint is considered
+        offline.
+      </column>
+    </group>
 
     <group title="Common Columns">
       <column name="external_ids">
@@ -1859,6 +2021,32 @@
         </ul>
       </column>
 
+      <column name="ipv6_ra_configs" key="router_preference">
+        Default Router Preference (PRF) indicates whether to prefer this
+        router over other default routers (RFC 4191).
+        Possible values are:
+
+        <ul>
+          <li>HIGH: mapped to 0x01 in RA PRF field</li>
+          <li>MEDIUM: mapped to 0x00 in RA PRF field</li>
+          <li>LOW: mapped to 0x11 in RA PRF field</li>
+        </ul>
+      </column>
+
+      <column name="ipv6_ra_configs" key="route_info">
+        Route Info is used to configure Route Info Option sent in Router
+        Advertisment according to RFC 4191. Route Info is a comma
+        separated string where each field provides PRF and prefix for a
+        given route (e.g: HIGH-aef1::11/48,LOW-aef2::11/96)
+        Possible PRF values are:
+
+        <ul>
+          <li>HIGH: mapped to 0x01 in RA PRF field</li>
+          <li>MEDIUM: mapped to 0x00 in RA PRF field</li>
+          <li>LOW: mapped to 0x11 in RA PRF field</li>
+        </ul>
+      </column>
+
       <column name="ipv6_ra_configs" key="mtu">
         The recommended MTU for the link. Default is 0, which means no MTU
         Option will be included in RA packet replied by ovn-controller.
@@ -1884,6 +2072,16 @@
         column="ipv6_ra_configs" key="send_periodic"/> is false.  The default
         is one-third of <ref column="ipv6_ra_configs" key="max_interval"/>,
         i.e. 200 seconds if that key is unset.
+      </column>
+
+      <column name="ipv6_ra_configs" key="rdnss">
+        IPv6 address of RDNSS server announced in RA packets. At the moment
+        OVN supports just one RDNSS server.
+      </column>
+
+      <column name="ipv6_ra_configs" key="dnssl">
+        DNS Search List announced in RA packets. Multiple DNS Search List
+        must be 'comma' separated (e.g. "a.b.c, d.e.f")
       </column>
     </group>
 
@@ -2038,6 +2236,15 @@
           to <code>true</code>.
         </p>
       </column>
+
+      <column name="options" key="requested-tnl-key"
+          type='{"type": "integer", "minInteger": 1, "maxInteger": 65535}'>
+        Configures the port binding tunnel key for the port.  Usually
+        this is not needed because <code>ovn-northd</code> will assign an
+        unique key for each port by itself.  However, if it is configured,
+        <code>ovn-northd</code> honors the configured value.
+      </column>
+
     </group>
 
     <group title="Attachment">
@@ -2093,6 +2300,12 @@
       When multiple routes match a packet, the longest-prefix match is chosen.
       For a given prefix length, a <code>dst-ip</code> route is preferred over
       a <code>src-ip</code> route.
+    </p>
+
+    <p>
+      When there are ECMP routes, i.e. multiple routes with same prefix and
+      policy, one of them will be selected based on the 5-tuple hashing of the
+      packet header.
     </p>
 
     <column name="ip_prefix">
@@ -2285,6 +2498,11 @@
         will be processed in a centralized manner on the gateway
         port instance on the <code>redirect-chassis</code>.
       </p>
+    </column>
+
+    <column name="options" key="stateless">
+      Indicates if a dnat_and_snat rule should lead to connection
+      tracking state or not.
     </column>
 
     <group title="Common Columns">

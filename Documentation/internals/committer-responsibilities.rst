@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -21,9 +21,9 @@
 
       Avoid deeper levels because they do not render well.
 
-=========================================================
-Expectations for Developers with Open vSwitch Repo Access
-=========================================================
+================================================
+Expectations for Developers with OVN Repo Access
+================================================
 
 Pre-requisites
 --------------

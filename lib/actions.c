@@ -218,17 +218,18 @@ action_parse_field(struct action_context *ctx,
 }
 
 static bool
-action_parse_port(struct action_context *ctx, uint16_t *port)
+action_parse_uint16(struct action_context *ctx, uint16_t *_value,
+                    const char *msg)
 {
     if (lexer_is_int(ctx->lexer)) {
         int value = ntohll(ctx->lexer->token.value.integer);
         if (value <= UINT16_MAX) {
-            *port = value;
+            *_value = value;
             lexer_get(ctx->lexer);
             return true;
         }
     }
-    lexer_syntax_error(ctx->lexer, "expecting port number");
+    lexer_syntax_error(ctx->lexer, "expecting %s", msg);
     return false;
 }
 
@@ -240,8 +241,8 @@ add_prerequisite(struct action_context *ctx, const char *prerequisite)
     struct expr *expr;
     char *error;
 
-    expr = expr_parse_string(prerequisite, ctx->pp->symtab, NULL, NULL, NULL,
-                             &error);
+    expr = expr_parse_string(prerequisite, ctx->pp->symtab, NULL, NULL,
+                             NULL, NULL, &error);
     ovs_assert(!error);
     ctx->prereqs = expr_combine(EXPR_T_AND, ctx->prereqs, expr);
 }
@@ -755,11 +756,18 @@ parse_ct_nat(struct action_context *ctx, const char *name,
 
     if (lexer_match(ctx->lexer, LEX_T_LPAREN)) {
         if (ctx->lexer->token.type != LEX_T_INTEGER
-            || ctx->lexer->token.format != LEX_F_IPV4) {
-            lexer_syntax_error(ctx->lexer, "expecting IPv4 address");
+            || (ctx->lexer->token.format != LEX_F_IPV4
+                && ctx->lexer->token.format != LEX_F_IPV6)) {
+            lexer_syntax_error(ctx->lexer, "expecting IPv4 or IPv6 address");
             return;
         }
-        cn->ip = ctx->lexer->token.value.ipv4;
+        if (ctx->lexer->token.format == LEX_F_IPV4) {
+            cn->family = AF_INET;
+            cn->ipv4 = ctx->lexer->token.value.ipv4;
+        } else if (ctx->lexer->token.format == LEX_F_IPV6) {
+            cn->family = AF_INET6;
+            cn->ipv6 = ctx->lexer->token.value.ipv6;
+        }
         lexer_get(ctx->lexer);
 
         if (!lexer_force_match(ctx->lexer, LEX_T_RPAREN)) {
@@ -784,8 +792,12 @@ static void
 format_ct_nat(const struct ovnact_ct_nat *cn, const char *name, struct ds *s)
 {
     ds_put_cstr(s, name);
-    if (cn->ip) {
-        ds_put_format(s, "("IP_FMT")", IP_ARGS(cn->ip));
+    if (cn->family == AF_INET) {
+        ds_put_format(s, "("IP_FMT")", IP_ARGS(cn->ipv4));
+    } else if (cn->family == AF_INET6) {
+        ds_put_char(s, '(');
+        ipv6_format_addr(&cn->ipv6, s);
+        ds_put_char(s, ')');
     }
     ds_put_char(s, ';');
 }
@@ -831,9 +843,17 @@ encode_ct_nat(const struct ovnact_ct_nat *cn,
     nat->flags = 0;
     nat->range_af = AF_UNSPEC;
 
-    if (cn->ip) {
+    if (cn->family == AF_INET) {
         nat->range_af = AF_INET;
-        nat->range.addr.ipv4.min = cn->ip;
+        nat->range.addr.ipv4.min = cn->ipv4;
+        if (snat) {
+            nat->flags |= NX_NAT_F_SRC;
+        } else {
+            nat->flags |= NX_NAT_F_DST;
+        }
+    } else if (cn->family == AF_INET6) {
+        nat->range_af = AF_INET6;
+        nat->range.addr.ipv6.min = cn->ipv6;
         if (snat) {
             nat->flags |= NX_NAT_F_SRC;
         } else {
@@ -843,7 +863,7 @@ encode_ct_nat(const struct ovnact_ct_nat *cn,
 
     ofpacts->header = ofpbuf_push_uninit(ofpacts, nat_offset);
     ct = ofpacts->header;
-    if (cn->ip) {
+    if (cn->family == AF_INET || cn->family == AF_INET6) {
         ct->flags |= NX_CT_F_COMMIT;
     }
     ofpact_finish(ofpacts, &ct->ofpact);
@@ -908,7 +928,7 @@ parse_ct_lb_action(struct action_context *ctx)
                 }
                 dst.port = 0;
                 if (lexer_match(ctx->lexer, LEX_T_COLON)
-                    && !action_parse_port(ctx, &dst.port)) {
+                    && !action_parse_uint16(ctx, &dst.port, "port number")) {
                     free(dsts);
                     return;
                 }
@@ -938,7 +958,8 @@ parse_ct_lb_action(struct action_context *ctx)
                         lexer_syntax_error(ctx->lexer, "IPv6 address needs "
                                 "square brackets if port is included");
                         return;
-                    } else if (!action_parse_port(ctx, &dst.port)) {
+                    } else if (!action_parse_uint16(ctx, &dst.port,
+                                                    "port number")) {
                         free(dsts);
                         return;
                     }
@@ -1077,6 +1098,143 @@ static void
 ovnact_ct_lb_free(struct ovnact_ct_lb *ct_lb)
 {
     free(ct_lb->dsts);
+}
+
+static void
+parse_select_action(struct action_context *ctx, struct expr_field *res_field)
+{
+    /* Check if the result field is modifiable. */
+    char *error = expr_type_check(res_field, res_field->n_bits, true);
+    if (error) {
+        lexer_error(ctx->lexer, "%s", error);
+        free(error);
+        return;
+    }
+
+    if (res_field->n_bits < 16) {
+        lexer_error(ctx->lexer, "cannot use %d-bit field %s[%d..%d] "
+                    "for \"select\", which requires at least 16 bits.",
+                    res_field->n_bits, res_field->symbol->name,
+                    res_field->ofs,
+                    res_field->ofs + res_field->n_bits - 1);
+        return;
+    }
+
+    if (ctx->pp->cur_ltable >= ctx->pp->n_tables) {
+        lexer_error(ctx->lexer,
+                    "\"select\" action not allowed in last table.");
+        return;
+    }
+
+    struct ovnact_select_dst *dsts = NULL;
+    size_t allocated_dsts = 0;
+    size_t n_dsts = 0;
+
+    lexer_get(ctx->lexer); /* Skip "select". */
+    lexer_get(ctx->lexer); /* Skip '('. */
+
+    while (!lexer_match(ctx->lexer, LEX_T_RPAREN)) {
+        struct ovnact_select_dst dst;
+        if (!action_parse_uint16(ctx, &dst.id, "id")) {
+            free(dsts);
+            return;
+        }
+
+        dst.weight = 0;
+        if (lexer_match(ctx->lexer, LEX_T_EQUALS)) {
+            if (!action_parse_uint16(ctx, &dst.weight, "weight")) {
+                free(dsts);
+                return;
+            }
+            if (dst.weight == 0) {
+                lexer_syntax_error(ctx->lexer, "weight can't be 0");
+            }
+        }
+
+        if (dst.weight == 0) {
+            dst.weight = 100;
+        }
+
+        lexer_match(ctx->lexer, LEX_T_COMMA);
+
+        /* Append to dsts. */
+        if (n_dsts >= allocated_dsts) {
+            dsts = x2nrealloc(dsts, &allocated_dsts, sizeof *dsts);
+        }
+        dsts[n_dsts++] = dst;
+    }
+    if (n_dsts <= 1) {
+        lexer_syntax_error(ctx->lexer, "expecting at least 2 group members");
+        return;
+    }
+
+    struct ovnact_select *select = ovnact_put_SELECT(ctx->ovnacts);
+    select->ltable = ctx->pp->cur_ltable + 1;
+    select->dsts = dsts;
+    select->n_dsts = n_dsts;
+    select->res_field = *res_field;
+}
+
+static void
+format_SELECT(const struct ovnact_select *select, struct ds *s)
+{
+    expr_field_format(&select->res_field, s);
+    ds_put_cstr(s, " = ");
+    ds_put_cstr(s, "select");
+    ds_put_char(s, '(');
+    for (size_t i = 0; i < select->n_dsts; i++) {
+        if (i) {
+            ds_put_cstr(s, ", ");
+        }
+
+        const struct ovnact_select_dst *dst = &select->dsts[i];
+        ds_put_format(s, "%"PRIu16, dst->id);
+        ds_put_format(s, "=%"PRIu16, dst->weight);
+    }
+    ds_put_char(s, ')');
+    ds_put_char(s, ';');
+}
+
+static void
+encode_SELECT(const struct ovnact_select *select,
+             const struct ovnact_encode_params *ep,
+             struct ofpbuf *ofpacts)
+{
+    ovs_assert(select->n_dsts >= 1);
+    uint8_t resubmit_table = select->ltable + first_ptable(ep, ep->pipeline);
+    uint32_t table_id = 0;
+    struct ofpact_group *og;
+
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    ds_put_format(&ds, "type=select,selection_method=dp_hash");
+
+    struct mf_subfield sf = expr_resolve_field(&select->res_field);
+
+    for (size_t bucket_id = 0; bucket_id < select->n_dsts; bucket_id++) {
+        const struct ovnact_select_dst *dst = &select->dsts[bucket_id];
+        ds_put_format(&ds, ",bucket=bucket_id=%"PRIuSIZE",weight:%"PRIu16
+                      ",actions=", bucket_id, dst->weight);
+        ds_put_format(&ds, "load:%u->%s[%u..%u],", dst->id, sf.field->name,
+                      sf.ofs, sf.ofs + sf.n_bits - 1);
+        ds_put_format(&ds, "resubmit(,%d)", resubmit_table);
+    }
+
+    table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
+                                          ep->lflow_uuid);
+    ds_destroy(&ds);
+    if (table_id == EXT_TABLE_ID_INVALID) {
+        return;
+    }
+
+    /* Create an action to set the group. */
+    og = ofpact_put_GROUP(ofpacts);
+    og->group_id = table_id;
+}
+
+static void
+ovnact_select_free(struct ovnact_select *select)
+{
+    free(select->dsts);
 }
 
 static void
@@ -1607,6 +1765,112 @@ ovnact_put_mac_bind_free(struct ovnact_put_mac_bind *put_mac OVS_UNUSED)
 {
 }
 
+static void format_lookup_mac(const struct ovnact_lookup_mac_bind *lookup_mac,
+                              struct ds *s, const char *name)
+{
+    expr_field_format(&lookup_mac->dst, s);
+    ds_put_format(s, " = %s(", name);
+    expr_field_format(&lookup_mac->port, s);
+    ds_put_cstr(s, ", ");
+    expr_field_format(&lookup_mac->ip, s);
+    ds_put_cstr(s, ", ");
+    expr_field_format(&lookup_mac->mac, s);
+    ds_put_cstr(s, ");");
+}
+
+static void
+format_LOOKUP_ARP(const struct ovnact_lookup_mac_bind *lookup_mac,
+                         struct ds *s)
+{
+    format_lookup_mac(lookup_mac, s, "lookup_arp");
+}
+
+static void
+format_LOOKUP_ND(const struct ovnact_lookup_mac_bind *lookup_mac,
+                        struct ds *s)
+{
+    format_lookup_mac(lookup_mac, s, "lookup_nd");
+}
+
+static void
+encode_lookup_mac(const struct ovnact_lookup_mac_bind *lookup_mac,
+                  enum mf_field_id ip_field,
+                  const struct ovnact_encode_params *ep,
+                  struct ofpbuf *ofpacts)
+{
+    const struct arg args[] = {
+        { expr_resolve_field(&lookup_mac->port), MFF_LOG_INPORT },
+        { expr_resolve_field(&lookup_mac->ip), ip_field },
+        { expr_resolve_field(&lookup_mac->mac),  MFF_ETH_SRC},
+    };
+
+    encode_setup_args(args, ARRAY_SIZE(args), ofpacts);
+
+    struct mf_subfield dst = expr_resolve_field(&lookup_mac->dst);
+    ovs_assert(dst.field);
+
+    put_load(0, MFF_LOG_FLAGS, MLF_LOOKUP_MAC_BIT, 1, ofpacts);
+    emit_resubmit(ofpacts, ep->mac_lookup_ptable);
+
+    struct ofpact_reg_move *orm = ofpact_put_REG_MOVE(ofpacts);
+    orm->dst = dst;
+    orm->src.field = mf_from_id(MFF_LOG_FLAGS);
+    orm->src.ofs = MLF_LOOKUP_MAC_BIT;
+    orm->src.n_bits = 1;
+
+    encode_restore_args(args, ARRAY_SIZE(args), ofpacts);
+}
+
+static void
+encode_LOOKUP_ARP(const struct ovnact_lookup_mac_bind *lookup_mac,
+                  const struct ovnact_encode_params *ep,
+                  struct ofpbuf *ofpacts)
+{
+    encode_lookup_mac(lookup_mac, MFF_REG0, ep, ofpacts);
+}
+
+static void
+encode_LOOKUP_ND(const struct ovnact_lookup_mac_bind *lookup_mac,
+                        const struct ovnact_encode_params *ep,
+                        struct ofpbuf *ofpacts)
+{
+    encode_lookup_mac(lookup_mac, MFF_XXREG0, ep, ofpacts);
+}
+
+static void
+parse_lookup_mac_bind(struct action_context *ctx,
+                      const struct expr_field *dst,
+                      int width,
+                      struct ovnact_lookup_mac_bind *lookup_mac)
+{
+    /* Validate that the destination is a 1-bit, modifiable field. */
+    char *error = expr_type_check(dst, 1, true);
+    if (error) {
+        lexer_error(ctx->lexer, "%s", error);
+        free(error);
+        return;
+    }
+
+    lexer_get(ctx->lexer); /* Skip lookup_arp/lookup_nd. */
+    lexer_get(ctx->lexer); /* Skip '('. * */
+
+    action_parse_field(ctx, 0, false, &lookup_mac->port);
+    lexer_force_match(ctx->lexer, LEX_T_COMMA);
+    action_parse_field(ctx, width, false, &lookup_mac->ip);
+    lexer_force_match(ctx->lexer, LEX_T_COMMA);
+    action_parse_field(ctx, 48, false, &lookup_mac->mac);
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+    lookup_mac->dst = *dst;
+}
+
+static void
+ovnact_lookup_mac_bind_free(
+    struct ovnact_lookup_mac_bind *lookup_mac OVS_UNUSED)
+{
+
+}
+
+
 static void
 parse_gen_opt(struct action_context *ctx, struct ovnact_gen_option *o,
               const struct hmap *gen_opts, const char *opts_type)
@@ -2689,6 +2953,187 @@ ovnact_bind_vport_free(struct ovnact_bind_vport *bp)
     free(bp->vport);
 }
 
+static void
+parse_handle_svc_check(struct action_context *ctx OVS_UNUSED)
+{
+     if (!lexer_force_match(ctx->lexer, LEX_T_LPAREN)) {
+        return;
+    }
+
+    struct ovnact_handle_svc_check *svc_chk =
+        ovnact_put_HANDLE_SVC_CHECK(ctx->ovnacts);
+    action_parse_field(ctx, 0, false, &svc_chk->port);
+    lexer_force_match(ctx->lexer, LEX_T_RPAREN);
+}
+
+static void
+format_HANDLE_SVC_CHECK(const struct ovnact_handle_svc_check *svc_chk,
+                        struct ds *s)
+{
+    ds_put_cstr(s, "handle_svc_check(");
+    expr_field_format(&svc_chk->port, s);
+    ds_put_cstr(s, ");");
+}
+
+static void
+encode_HANDLE_SVC_CHECK(const struct ovnact_handle_svc_check *svc_chk,
+                        const struct ovnact_encode_params *ep OVS_UNUSED,
+                        struct ofpbuf *ofpacts)
+{
+    const struct arg args[] = {
+        { expr_resolve_field(&svc_chk->port), MFF_LOG_INPORT },
+    };
+    encode_setup_args(args, ARRAY_SIZE(args), ofpacts);
+    encode_controller_op(ACTION_OPCODE_HANDLE_SVC_CHECK, ofpacts);
+    encode_restore_args(args, ARRAY_SIZE(args), ofpacts);
+}
+
+static void
+ovnact_handle_svc_check_free(struct ovnact_handle_svc_check *sc OVS_UNUSED)
+{
+}
+
+static void
+parse_fwd_group_action(struct action_context *ctx)
+{
+    char *child_port, **child_port_list = NULL;
+    size_t allocated_ports = 0;
+    size_t n_child_ports = 0;
+    bool liveness = false;
+
+    if (lexer_match(ctx->lexer, LEX_T_LPAREN)) {
+        if (lexer_match_id(ctx->lexer, "liveness")) {
+            if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
+                return;
+            }
+            if (ctx->lexer->token.type != LEX_T_STRING) {
+                lexer_syntax_error(ctx->lexer,
+                                   "expecting true/false");
+                return;
+            }
+            if (!strcmp(ctx->lexer->token.s, "true")) {
+                liveness = true;
+                lexer_get(ctx->lexer);
+            }
+            lexer_force_match(ctx->lexer, LEX_T_COMMA);
+        }
+        if (lexer_match_id(ctx->lexer, "childports")) {
+            if (!lexer_force_match(ctx->lexer, LEX_T_EQUALS)) {
+                return;
+            }
+            while (!lexer_match(ctx->lexer, LEX_T_RPAREN)) {
+                if (ctx->lexer->token.type != LEX_T_STRING) {
+                    lexer_syntax_error(ctx->lexer,
+                                       "expecting logical switch port");
+                    if (child_port_list) {
+                        free(child_port_list);
+                    }
+                    return;
+                }
+                /* Parse child's logical ports */
+                child_port = xstrdup(ctx->lexer->token.s);
+                lexer_get(ctx->lexer);
+                lexer_match(ctx->lexer, LEX_T_COMMA);
+
+                if (n_child_ports >= allocated_ports) {
+                    child_port_list = x2nrealloc(child_port_list,
+                                                 &allocated_ports,
+                                                 sizeof *child_port_list);
+                }
+                child_port_list[n_child_ports++] = child_port;
+            }
+        }
+    }
+
+    struct ovnact_fwd_group *fwd_group = ovnact_put_FWD_GROUP(ctx->ovnacts);
+    fwd_group->ltable = ctx->pp->cur_ltable + 1;
+    fwd_group->liveness = liveness;
+    fwd_group->child_ports = child_port_list;
+    fwd_group->n_child_ports = n_child_ports;
+}
+
+static void
+format_FWD_GROUP(const struct ovnact_fwd_group *fwd_group, struct ds *s)
+{
+    ds_put_cstr(s, "fwd_group(");
+    if (fwd_group->liveness) {
+        ds_put_cstr(s, "liveness=\"true\", ");
+    }
+    if (fwd_group->n_child_ports) {
+        ds_put_cstr(s, "childports=");
+        for (size_t i = 0; i < fwd_group->n_child_ports; i++) {
+            if (i) {
+                ds_put_cstr(s, ", ");
+            }
+
+            ds_put_format(s, "\"%s\"", fwd_group->child_ports[i]);
+        }
+    }
+    ds_put_cstr(s, ");");
+}
+
+static void
+encode_FWD_GROUP(const struct ovnact_fwd_group *fwd_group,
+                 const struct ovnact_encode_params *ep,
+                 struct ofpbuf *ofpacts)
+{
+    if (!fwd_group->n_child_ports) {
+        /* Nothing to do without child ports */
+        return;
+    }
+
+    uint32_t reg_index = MFF_LOG_OUTPORT - MFF_REG0;
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    ds_put_format(&ds, "type=select,selection_method=dp_hash");
+
+    for (size_t i = 0; i < fwd_group->n_child_ports; i++) {
+        uint32_t  port_tunnel_key;
+        ofp_port_t ofport;
+
+        const char *port_name = fwd_group->child_ports[i];
+
+        /* Find the tunnel key of the logical port */
+        if (!ep->lookup_port(ep->aux, port_name, &port_tunnel_key)) {
+            return;
+        }
+        ds_put_format(&ds, ",bucket=");
+
+        if (fwd_group->liveness) {
+            /* Find the openflow port number of the tunnel port */
+            if (!ep->tunnel_ofport(ep->aux, port_name, &ofport)) {
+                return;
+            }
+
+            /* Watch port for failure, used with BFD */
+            ds_put_format(&ds, "watch_port:%d,", ofport);
+        }
+
+        ds_put_format(&ds, "load=0x%d->NXM_NX_REG%d[0..15]",
+                      port_tunnel_key, reg_index);
+        ds_put_format(&ds, ",resubmit(,%d)", ep->output_ptable);
+    }
+
+    uint32_t table_id = 0;
+    struct ofpact_group *og;
+    table_id = ovn_extend_table_assign_id(ep->group_table, ds_cstr(&ds),
+                                          ep->lflow_uuid);
+    ds_destroy(&ds);
+    if (table_id == EXT_TABLE_ID_INVALID) {
+        return;
+    }
+
+    /* Create an action to set the group */
+    og = ofpact_put_GROUP(ofpacts);
+    og->group_id = table_id;
+}
+
+static void
+ovnact_fwd_group_free(struct ovnact_fwd_group *fwd_group)
+{
+    free(fwd_group->child_ports);
+}
+
 /* Parses an assignment or exchange or put_dhcp_opts action. */
 static void
 parse_set_action(struct action_context *ctx)
@@ -2703,6 +3148,9 @@ parse_set_action(struct action_context *ctx)
     } else if (lexer_match(ctx->lexer, LEX_T_EQUALS)) {
         if (ctx->lexer->token.type != LEX_T_ID) {
             parse_LOAD(ctx, &lhs);
+        } else if (!strcmp(ctx->lexer->token.s, "select")
+                   && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_select_action(ctx, &lhs);
         } else if (!strcmp(ctx->lexer->token.s, "put_dhcp_opts")
                    && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_put_dhcp_opts(ctx, &lhs, ovnact_put_PUT_DHCPV4_OPTS(
@@ -2722,6 +3170,14 @@ parse_set_action(struct action_context *ctx)
                 && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
             parse_check_pkt_larger(ctx, &lhs,
                                    ovnact_put_CHECK_PKT_LARGER(ctx->ovnacts));
+        } else if (!strcmp(ctx->lexer->token.s, "lookup_arp")
+                && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_lookup_mac_bind(ctx, &lhs, 32,
+                                  ovnact_put_LOOKUP_ARP(ctx->ovnacts));
+        } else if (!strcmp(ctx->lexer->token.s, "lookup_nd")
+                && lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            parse_lookup_mac_bind(ctx, &lhs, 128,
+                                  ovnact_put_LOOKUP_ND(ctx->ovnacts));
         } else {
             parse_assignment_action(ctx, false, &lhs);
         }
@@ -2798,6 +3254,10 @@ parse_action(struct action_context *ctx)
         parse_trigger_event(ctx, ovnact_put_TRIGGER_EVENT(ctx->ovnacts));
     } else if (lexer_match_id(ctx->lexer, "bind_vport")) {
         parse_bind_vport(ctx);
+    } else if (lexer_match_id(ctx->lexer, "handle_svc_check")) {
+        parse_handle_svc_check(ctx);
+    } else if (lexer_match_id(ctx->lexer, "fwd_group")) {
+        parse_fwd_group_action(ctx);
     } else {
         lexer_syntax_error(ctx->lexer, "expecting action");
     }

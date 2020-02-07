@@ -20,6 +20,7 @@ DOC_SOURCE = \
 	Documentation/tutorials/ovn-sandbox.rst \
 	Documentation/tutorials/ovn-ipsec.rst \
 	Documentation/tutorials/ovn-rbac.rst \
+	Documentation/tutorials/ovn-interconnection.rst \
 	Documentation/topics/index.rst \
 	Documentation/topics/testing.rst \
 	Documentation/topics/high-availability.rst \
@@ -39,7 +40,6 @@ DOC_SOURCE = \
 	Documentation/internals/index.rst \
 	Documentation/internals/authors.rst \
 	Documentation/internals/bugs.rst \
-	Documentation/internals/charter.rst \
 	Documentation/internals/committer-emeritus-status.rst \
 	Documentation/internals/committer-grant-revocation.rst \
 	Documentation/internals/committer-responsibilities.rst \
@@ -52,7 +52,6 @@ DOC_SOURCE = \
 	Documentation/internals/contributing/index.rst \
 	Documentation/internals/contributing/backporting-patches.rst \
 	Documentation/internals/contributing/coding-style.rst \
-	Documentation/internals/contributing/coding-style-windows.rst \
 	Documentation/internals/contributing/documentation-style.rst \
 	Documentation/internals/contributing/libopenvswitch-abi.rst \
 	Documentation/internals/contributing/submitting-patches.rst \
@@ -108,7 +107,7 @@ RST_MANPAGES = \
 # rST formatted manpages that we don't want to install because they
 # document stuff that only works with a build tree, not with an
 # installed OVS.
-RST_MANPAGES_NOINST = ovs-sim.1.rst
+RST_MANPAGES_NOINST = ovn-sim.1.rst
 
 # The GNU standards say that these variables should control
 # installation directories for manpages in each section.  Automake

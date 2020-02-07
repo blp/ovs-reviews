@@ -390,11 +390,13 @@ void expr_print(const struct expr *);
 struct expr *expr_parse(struct lexer *, const struct shash *symtab,
                         const struct shash *addr_sets,
                         const struct shash *port_groups,
-                        struct sset *addr_sets_ref);
+                        struct sset *addr_sets_ref,
+                        struct sset *port_groups_ref);
 struct expr *expr_parse_string(const char *, const struct shash *symtab,
                                const struct shash *addr_sets,
                                const struct shash *port_groups,
                                struct sset *addr_sets_ref,
+                               struct sset *port_groups_ref,
                                char **errorp);
 
 struct expr *expr_clone(struct expr *);
@@ -402,10 +404,12 @@ void expr_destroy(struct expr *);
 
 struct expr *expr_annotate(struct expr *, const struct shash *symtab,
                            char **errorp);
-struct expr *expr_simplify(struct expr *,
-                           bool (*is_chassis_resident)(const void *c_aux,
-                                                       const char *port_name),
-                           const void *c_aux);
+struct expr *expr_simplify(struct expr *);
+struct expr *expr_evaluate_condition(
+    struct expr *,
+    bool (*is_chassis_resident)(const void *c_aux,
+                                const char *port_name),
+    const void *c_aux);
 struct expr *expr_normalize(struct expr *);
 
 bool expr_honors_invariants(const struct expr *);

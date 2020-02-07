@@ -293,6 +293,21 @@
       See <code>ovn-controller</code>(8) for more information.
     </column>
 
+    <column name="external_ids" key="is-interconn">
+      <code>ovn-controller</code> populates this key with the setting
+      configured in the <ref table="Open_vSwitch"
+      column="external_ids:ovn-is-interconn"/> column of the Open_vSwitch
+      database's <ref table="Open_vSwitch" db="Open_vSwitch"/> table.
+      If set to true, the chassis is used as an interconnection gateway.
+      See <code>ovn-controller</code>(8) for more information.
+    </column>
+
+    <column name="external_ids" key="is-remote">
+      <code>ovn-ic</code> set this key to true for remote interconnection
+      gateway chassises learned from the interconnection southbound database.
+      See <code>ovn-ic</code>(8) for more information.
+    </column>
+
     <column name="transport_zones">
       <code>ovn-controller</code> populates this key with the transport
       zones configured in the <ref table="Open_vSwitch"
@@ -1397,6 +1412,35 @@
           <p><b>Example:</b> <code>put_arp(inport, arp.spa, arp.sha);</code></p>
         </dd>
 
+        <dt>
+          <code><var>R</var> = lookup_arp(<var>P</var>, <var>A</var>, <var>M</var>);</code>
+        </dt>
+
+        <dd>
+          <p>
+            <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
+            IP address field <var>A</var>, 48-bit MAC address field
+            <var>M</var>.
+          </p>
+
+          <p>
+            <b>Result</b>: stored to a 1-bit subfield <var>R</var>.
+          </p>
+
+          <p>
+            Looks up <var>A</var> and <var>M</var> in <var>P</var>'s mac
+            binding table. If an entry is found, stores <code>1</code> in
+            the 1-bit subfield <var>R</var>, else 0.
+          </p>
+
+          <p>
+            <b>Example:</b>
+            <code>
+              reg0[0] = lookup_arp(inport, arp.spa, arp.sha);
+            </code>
+          </p>
+        </dd>
+
         <dt><code>nd_ns { <var>action</var>; </code>...<code> };</code></dt>
         <dd>
           <p>
@@ -1551,6 +1595,34 @@
           </p>
 
           <p><b>Example:</b> <code>put_nd(inport, nd.target, nd.tll);</code></p>
+        </dd>
+
+        <dt><code><var>R</var> = lookup_nd(<var>P</var>, <var>A</var>, <var>M</var>);</code>
+        </dt>
+
+        <dd>
+          <p>
+            <b>Parameters</b>: logical port string field <var>P</var>, 128-bit
+            IP address field <var>A</var>, 48-bit MAC address field
+            <var>M</var>.
+          </p>
+
+          <p>
+            <b>Result</b>: stored to a 1-bit subfield <var>R</var>.
+          </p>
+
+          <p>
+            Looks up <var>A</var> and <var>M</var> in <var>P</var>'s mac
+            binding table. If an entry is found, stores <code>1</code> in
+            the 1-bit subfield <var>R</var>, else 0.
+          </p>
+
+          <p>
+            <b>Example:</b>
+            <code>
+              reg0[0] = lookup_nd(inport, ip6.src, eth.src);
+            </code>
+          </p>
         </dd>
 
         <dt>
@@ -1900,6 +1972,25 @@
             </dd>
           </dl>
         </dd>
+
+        <dt><code>fwd_group(<var>P</var>);</code></dt>
+        <dd>
+          <p>
+            <b>Parameters</b>: liveness, list of child ports <var>P</var>.
+          </p>
+
+          <p>
+            It load balances traffic to one or more child ports in a
+            logical switch. <code>ovn-controller</code> translates the
+            <code>fwd_group</code> into openflow group with one bucket
+            for each child port. If liveness is set to true, it also
+            integrates the bucket selection with BFD status on the tunnel
+            interface corresponding to child port.
+          </p>
+
+          <p><b>Example:</b> <code>fwd_group(liveness=true, childports=p1,p2
+            </code></p>
+        </dd>
       </dl>
 
       <dl>
@@ -2040,6 +2131,57 @@ tcp.flags = RST;
             set to <var>P</var>.
           </p>
         </dd>
+
+        <dt><code>handle_svc_check(<var>P</var>);</code></dt>
+        <dd>
+          <p>
+            <b>Parameters</b>: logical port string field <var>P</var>.
+          </p>
+
+          <p>
+            Handles the service monitor reply received from the VIF of
+            the logical port <var>P</var>. <code>ovn-controller</code>
+            periodically sends out the service monitor packets for the
+            services configured in the <ref table="Service_Monitor"/>
+            table and this action updates the status of those services.
+          </p>
+
+          <p><b>Example:</b> <code>handle_svc_check(inport);</code></p>
+        </dd>
+
+        <dt><code><var>R</var> = select(<var>N1</var>[=<var>W1</var>], <var>N2</var>[=<var>W2</var>], ...);</code></dt>
+        <dd>
+          <p>
+            <b>Parameters</b>: Integer <var>N1</var>, <var>N2</var>..., with
+            optional weight <var>W1</var>, <var>W2</var>, ...
+          </p>
+
+          <p>
+            <b>Result</b>: stored to a logical field or subfield <var>R</var>.
+          </p>
+
+          <p>
+            Select from a list of integers <var>N1</var>, <var>N2</var>...,
+            each within the range 0 ~ 65535, and store the selected one in the
+            field <var>R</var>.  There must be 2 or more integers listed, each
+            with an optional weight, which is an integer within the range 1 ~
+            65535.  If weight is not specified, it defaults to 100. The
+            selection method is based on the 5-tuple hash of packet header.
+          </p>
+
+          <p>
+            Processing automatically moves on to the next table, as if
+            <code>next;</code> were specified.  The <code>select</code> action
+            must be put as the last action of the logical flow when there are
+            multiple actions (actions put after <code>select</code> will not
+            take effect).
+          </p>
+
+          <p>
+            <b>Example:</b> <code>reg8[16..31] = select(1=20, 2=30, 3=50);</code>
+          </p>
+        </dd>
+
       </dl>
     </column>
 
@@ -2232,6 +2374,15 @@ tcp.flags = RST;
         <code>ovn-northd</code> stores in this key the UUID of the
         corresponding <ref table="Logical_Router" db="OVN_Northbound"/> row in
         the <ref db="OVN_Northbound"/> database.
+      </column>
+
+      <column name="external_ids" key="interconn-ts" type='{"type": "string"}'>
+        For a logical datapath that represents a logical switch that represents
+        a transit switch for interconnection, <code>ovn-northd</code> stores in
+        this key the value of the same <code>interconn-ts</code> key of the <ref
+        column="external_ids" table="Logical_Switch" db="OVN_Northbound"/>
+        column of the corresponding <ref table="Logical_Switch"
+        db="OVN_Northbound"/> row in the <ref db="OVN_Northbound"/> database.
       </column>
 
       <group title="Naming">
@@ -3651,13 +3802,16 @@ tcp.flags = RST;
 
     <group title="Querier configuration options">
       The <code>ovn-controller</code> process that runs on OVN hypervisor
-      nodes uses the following columns to determine field values in IGMP
+      nodes uses the following columns to determine field values in IGMP/MLD
       queries that it originates:
       <column name="eth_src">
         Source Ethernet address.
       </column>
       <column name="ip4_src">
         Source IPv4 address.
+      </column>
+      <column name="ip6_src">
+        Source IPv6 address.
       </column>
       <column name="query_max_resp">
         Value (in seconds) to be used as "max-response" field in multicast
@@ -3685,5 +3839,90 @@ tcp.flags = RST;
     <column name="ports">
       The destination port bindings for this IGMP group.
     </column>
+  </table>
+
+  <table name="Service_Monitor">
+    <p>
+      This table montiors a service for its liveliness. The service
+      can be an IPv4 tcp or a udp service. <code>ovn-controller</code>
+      periodically sends out service monitor packets and updates the
+      status of the service. Service monitoring for IPv6 services is
+      not supported.
+    </p>
+
+    <column name="ip">
+      IP of the service to be monitored. Only IPv4 is supported.
+    </column>
+
+    <column name="protocol">
+      The protocol of the service. It can be either <code>tcp</code> or
+      <code>udp</code>.
+    </column>
+
+    <column name="port">
+     The tcp or udp port of the service.
+    </column>
+
+    <column name="logical_port">
+      The VIF of logical port on which the service is running. The
+      <code>ovn-controller</code> which binds this <code>logical_port</code>
+      monitors the service by sending periodic monitor packets.
+    </column>
+
+    <column name="status">
+      <p>
+        The <code>ovn-controller</code> which binds the
+        <code>logical_port</code> updates the status to <code>online</code>
+        <code>offline</code> or <code>error</code>.
+      </p>
+
+      <p>
+        For tcp service, <code>ovn-controller</code> sends a
+        <code>TCP SYN</code> packet to the service and expects a
+        <code>TCP ACK</code> response to consider the service to be
+        <code>online</code>.
+      </p>
+
+      <p>
+        For udp service, <code>ovn-controller</code> sends a <code>udp</code>
+        packet to the service and doesn't expect any reply. If it receives
+        ICMP reply, then it considers the service to be <code>offline</code>.
+      </p>
+    </column>
+
+    <column name="src_mac">
+      Source Ethernet address to use in the service monitor packet.
+    </column>
+
+    <column name="src_ip">
+      Source IPv4 address to use in the service monitor packet.
+    </column>
+
+    <group title="Service monitor options">
+      <column name="options" key="interval" type='{"type": "integer"}'>
+        The interval, in seconds, between service monitor checks.
+      </column>
+
+      <column name="options" key="timeout" type='{"type": "integer"}'>
+        The time, in seconds, after which the service monitor check times
+        out.
+      </column>
+
+      <column name="options" key="success_count" type='{"type": "integer"}'>
+        The number of successful checks after which the service is
+        considered <code>online</code>.
+      </column>
+
+      <column name="options" key="failure_count" type='{"type": "integer"}'>
+        The number of failure checks after which the service is considered
+        <code>offline</code>.
+      </column>
+    </group>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
+    </group>
   </table>
 </database>

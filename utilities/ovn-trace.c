@@ -81,6 +81,9 @@ static size_t ct_state_idx;
 /* --lb-dst: load balancer destination info. */
 static struct ovnact_ct_lb_dst lb_dst;
 
+/* --select-id: "select" action member id. */
+static uint16_t select_id;
+
 /* --friendly-names, --no-friendly-names: Whether to substitute human-friendly
  * port and datapath names for the awkward UUIDs typically used in the actual
  * logical flows. */
@@ -209,6 +212,16 @@ parse_lb_option(const char *s)
 }
 
 static void
+parse_select_option(const char *s)
+{
+    unsigned long int integer = strtoul(s, NULL, 10);
+    if (!integer) {
+        ovs_fatal(0, "%s: bad select-id", s);
+    }
+    select_id = integer;
+}
+
+static void
 parse_options(int argc, char *argv[])
 {
     enum {
@@ -225,7 +238,8 @@ parse_options(int argc, char *argv[])
         DAEMON_OPTION_ENUMS,
         SSL_OPTION_ENUMS,
         VLOG_OPTION_ENUMS,
-        OPT_LB_DST
+        OPT_LB_DST,
+        OPT_SELECT_ID
     };
     static const struct option long_options[] = {
         {"db", required_argument, NULL, OPT_DB},
@@ -241,6 +255,7 @@ parse_options(int argc, char *argv[])
         {"help", no_argument, NULL, 'h'},
         {"version", no_argument, NULL, 'V'},
         {"lb-dst", required_argument, NULL, OPT_LB_DST},
+        {"select-id", required_argument, NULL, OPT_SELECT_ID},
         DAEMON_LONG_OPTIONS,
         VLOG_LONG_OPTIONS,
         STREAM_SSL_LONG_OPTIONS,
@@ -300,6 +315,10 @@ parse_options(int argc, char *argv[])
 
         case OPT_LB_DST:
             parse_lb_option(optarg);
+            break;
+
+        case OPT_SELECT_ID:
+            parse_select_option(optarg);
             break;
 
         case 'h':
@@ -550,6 +569,22 @@ ovntrace_mac_binding_find(const struct ovntrace_datapath *dp,
     HMAP_FOR_EACH_WITH_HASH (bind, node, hash_mac_binding(port_key, ip),
                              &dp->mac_bindings) {
         if (bind->port_key == port_key && ipv6_addr_equals(ip, &bind->ip)) {
+            return bind;
+        }
+    }
+    return NULL;
+}
+
+static const struct ovntrace_mac_binding *
+ovntrace_mac_binding_find_mac_ip(const struct ovntrace_datapath *dp,
+                                 uint16_t port_key, const struct in6_addr *ip,
+                                 struct eth_addr mac)
+{
+    const struct ovntrace_mac_binding *bind;
+    HMAP_FOR_EACH_WITH_HASH (bind, node, hash_mac_binding(port_key, ip),
+                             &dp->mac_bindings) {
+        if (bind->port_key == port_key && ipv6_addr_equals(ip, &bind->ip)
+            && eth_addr_equals(bind->mac, mac)) {
             return bind;
         }
     }
@@ -850,7 +885,7 @@ read_flows(void)
         char *error;
         struct expr *match;
         match = expr_parse_string(sblf->match, &symtab, &address_sets,
-                                  &port_groups, NULL, &error);
+                                  &port_groups, NULL, NULL, &error);
         if (error) {
             VLOG_WARN("%s: parsing expression failed (%s)",
                       sblf->match, error);
@@ -891,7 +926,10 @@ read_flows(void)
             continue;
         }
         if (match) {
-            match = expr_simplify(match, ovntrace_is_chassis_resident, NULL);
+            match = expr_simplify(match);
+            match = expr_evaluate_condition(match,
+                                            ovntrace_is_chassis_resident,
+                                            NULL);
         }
 
         struct ovntrace_flow *flow = xzalloc(sizeof *flow);
@@ -1705,6 +1743,51 @@ execute_get_mac_bind(const struct ovnact_get_mac_bind *bind,
 }
 
 static void
+execute_lookup_mac(const struct ovnact_lookup_mac_bind *bind OVS_UNUSED,
+                   const struct ovntrace_datapath *dp OVS_UNUSED,
+                   struct flow *uflow OVS_UNUSED,
+                   struct ovs_list *super OVS_UNUSED)
+{
+    /* Get logical port number.*/
+    struct mf_subfield port_sf = expr_resolve_field(&bind->port);
+    ovs_assert(port_sf.n_bits == 32);
+    uint32_t port_key = mf_get_subfield(&port_sf, uflow);
+
+    /* Get IP address. */
+    struct mf_subfield ip_sf = expr_resolve_field(&bind->ip);
+    ovs_assert(ip_sf.n_bits == 32 || ip_sf.n_bits == 128);
+    union mf_subvalue ip_sv;
+    mf_read_subfield(&ip_sf, uflow, &ip_sv);
+    struct in6_addr ip = (ip_sf.n_bits == 32
+                          ? in6_addr_mapped_ipv4(ip_sv.ipv4)
+                          : ip_sv.ipv6);
+
+    /* Get MAC. */
+    struct mf_subfield mac_sf = expr_resolve_field(&bind->mac);
+    ovs_assert(mac_sf.n_bits == 48);
+    union mf_subvalue mac_sv;
+    mf_read_subfield(&mac_sf, uflow, &mac_sv);
+
+    const struct ovntrace_mac_binding *binding
+        = ovntrace_mac_binding_find_mac_ip(dp, port_key, &ip, mac_sv.mac);
+
+    struct mf_subfield dst = expr_resolve_field(&bind->dst);
+    uint8_t val = 0;
+
+    if (binding) {
+        val = 1;
+        ovntrace_node_append(super, OVNTRACE_NODE_ACTION,
+                             "/* MAC binding to "ETH_ADDR_FMT" found. */",
+                             ETH_ADDR_ARGS(uflow->dl_dst));
+    } else {
+        ovntrace_node_append(super, OVNTRACE_NODE_ACTION,
+                             "/* lookup failed - No MAC binding. */");
+    }
+    union mf_subvalue sv = { .u8_val = val };
+    mf_write_subfield_flow(&dst, &sv, uflow);
+}
+
+static void
 execute_put_opts(const struct ovnact_put_opts *po,
                  const char *name, struct flow *uflow,
                  struct ovs_list *super)
@@ -1825,7 +1908,7 @@ execute_ct_nat(const struct ovnact_ct_nat *ct_nat,
                enum ovnact_pipeline pipeline, struct ovs_list *super)
 {
     bool is_dst = ct_nat->ovnact.type == OVNACT_CT_DNAT;
-    if (!is_dst && dp->has_local_l3gateway && !ct_nat->ip) {
+    if (!is_dst && dp->has_local_l3gateway && ct_nat->family == AF_UNSPEC) {
         /* "ct_snat;" has no visible effect in a gateway router. */
         return;
     }
@@ -1836,10 +1919,15 @@ execute_ct_nat(const struct ovnact_ct_nat *ct_nat,
     struct flow ct_flow = *uflow;
     struct ds s = DS_EMPTY_INITIALIZER;
     ds_put_format(&s, "ct_%cnat", direction[0]);
-    if (ct_nat->ip) {
-        ds_put_format(&s, "(ip4.%s="IP_FMT")", direction, IP_ARGS(ct_nat->ip));
-        ovs_be32 *ip = is_dst ? &ct_flow.nw_dst : &ct_flow.nw_src;
-        *ip = ct_nat->ip;
+    if (ct_nat->family != AF_UNSPEC) {
+        if (ct_nat->family == AF_INET) {
+            ds_put_format(&s, "(ip4.%s="IP_FMT")", direction,
+                          IP_ARGS(ct_nat->ipv4));
+        } else {
+            ds_put_format(&s, "(ip6.%s=", direction);
+            ipv6_format_addr(&ct_nat->ipv6, &s);
+            ds_put_char(&s, ')');
+        }
 
         uint8_t state = is_dst ? CS_DST_NAT : CS_SRC_NAT;
         ct_flow.ct_state |= state;
@@ -1922,6 +2010,46 @@ execute_ct_lb(const struct ovnact_ct_lb *ct_lb,
     struct ovntrace_node *node = ovntrace_node_append(
         super, OVNTRACE_NODE_TRANSFORMATION, "ct_lb");
     trace__(dp, &ct_lb_flow, ct_lb->ltable, pipeline, &node->subs);
+}
+
+static void
+execute_select(const struct ovnact_select *select,
+              const struct ovntrace_datapath *dp, struct flow *uflow,
+              enum ovnact_pipeline pipeline, struct ovs_list *super)
+{
+    struct flow select_flow = *uflow;
+
+    const struct ovnact_select_dst *dst = NULL;
+    ovs_assert(select->n_dsts > 1);
+    bool user_specified = false;
+    for (int i = 0; i < select->n_dsts; i++) {
+        const struct ovnact_select_dst *d = &select->dsts[i];
+
+        /* Check for the dst specified by --select-id, if any. */
+        if (select_id == d->id) {
+            dst = d;
+            user_specified = true;
+            break;
+        }
+    }
+
+    if (!dst) {
+        /* Select a random dst as a fallback. */
+        dst = &select->dsts[random_range(select->n_dsts)];
+    }
+
+    struct mf_subfield sf = expr_resolve_field(&select->res_field);
+    union mf_subvalue sv = { .be16_int = htons(dst->id) };
+    mf_write_subfield_flow(&sf, &sv, &select_flow);
+    struct ds sf_str = DS_EMPTY_INITIALIZER;
+    expr_field_format(&select->res_field, &sf_str);
+    struct ovntrace_node *node = ovntrace_node_append(
+        super, OVNTRACE_NODE_TRANSFORMATION,
+        "select: %s = %"PRIu16"%s",
+        ds_cstr(&sf_str), dst->id, user_specified ?  "" :
+        " /* Randomly selected. Use --select-id to specify. */");
+    ds_destroy(&sf_str);
+    trace__(dp, &select_flow, select->ltable, pipeline, &node->subs);
 }
 
 static void
@@ -2034,6 +2162,11 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
             execute_ct_lb(ovnact_get_CT_LB(a), dp, uflow, pipeline, super);
             break;
 
+        case OVNACT_SELECT:
+            execute_select(ovnact_get_SELECT(a), dp, uflow,
+                                   pipeline, super);
+            break;
+
         case OVNACT_CT_CLEAR:
             flow_clear_conntrack(uflow);
             break;
@@ -2070,6 +2203,14 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_PUT_ARP:
         case OVNACT_PUT_ND:
             /* Nothing to do for tracing. */
+            break;
+
+        case OVNACT_LOOKUP_ARP:
+            execute_lookup_mac(ovnact_get_LOOKUP_ARP(a), dp, uflow, super);
+            break;
+
+        case OVNACT_LOOKUP_ND:
+            execute_lookup_mac(ovnact_get_LOOKUP_ND(a), dp, uflow, super);
             break;
 
         case OVNACT_PUT_DHCPV4_OPTS:
@@ -2146,6 +2287,12 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
             break;
 
         case OVNACT_BIND_VPORT:
+            break;
+
+        case OVNACT_HANDLE_SVC_CHECK:
+            break;
+
+        case OVNACT_FWD_GROUP:
             break;
         }
     }

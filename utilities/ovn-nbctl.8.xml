@@ -483,6 +483,44 @@
 
     </dl>
 
+    <h1>Forwarding Group Commands</h1>
+
+    <dl>
+      <dt>[<code>--liveness</code>]<code>fwd-group-add</code> <var>group</var> <var>switch</var> <var>vip</var> <var>vmac</var> <var>ports</var></dt>
+      <dd>
+        <p>
+          Creates a new forwarding group named <var>group</var> as the name
+          with the provided <var>vip</var> and <var>vmac</var>. <var>vip</var>
+          should be a virtual IP address and <var>vmac</var> should be a
+          virtual MAC address to access the forwarding group. <var>ports</var>
+          are the logical switch port names that are put in the forwarding
+          group. Example for <var>ports</var> is lsp1 lsp2 ...
+          Traffic destined to virtual IP of the forwarding group will be load
+          balanced to all the child ports.
+        </p>
+        <p>
+          When <code>--liveness</code> is specified then child ports are
+          expected to be bound to external devices like routers. BFD should
+          be configured between hypervisors and the external devices.
+          The child port selection will become dependent on BFD status with
+          its external device.
+        </p>
+      </dd>
+
+      <dt>[<code>--if-exists</code>] <code>fwd-group-del</code> <var>group
+          </var></dt>
+      <dd>
+        Deletes <var>group</var>.  It is an error if <var>group</var> does
+        not exist, unless <code>--if-exists</code> is specified.
+      </dd>
+
+      <dt><code>fwd-group-list</code> [<var>switch</var>]</dt>
+      <dd>
+        Lists all existing forwarding groups, If <var>switch</var> is specified
+        then only the forwarding groups configured for <var>switch</var> will
+        be listed.
+      </dd>
+    </dl>
     <h1>Logical Router Commands</h1>
 
     <dl>
@@ -612,7 +650,9 @@
     <h1>Logical Router Static Route Commands</h1>
 
     <dl>
-      <dt>[<code>--may-exist</code>] [<code>--policy</code>=<var>POLICY</var>] <code>lr-route-add</code> <var>router</var> <var>prefix</var> <var>nexthop</var> [<var>port</var>]</dt>
+      <dt>[<code>--may-exist</code>] [<code>--policy</code>=<var>POLICY</var>]
+        [<code>--ecmp</code>] <code>lr-route-add</code> <var>router</var>
+        <var>prefix</var> <var>nexthop</var> [<var>port</var>]</dt>
       <dd>
         <p>
           Adds the specified route to <var>router</var>.
@@ -634,25 +674,33 @@
         </p>
 
         <p>
-          It is an error if a route with <var>prefix</var> already exists,
-          unless <code>--may-exist</code> is specified.
+          It is an error if a route with <var>prefix</var> and
+          <var>POLICY</var> already exists, unless <code>--may-exist</code> or
+          <code>--ecmp</code> is specified.  If <code>--may-exist</code> is
+          specified but not <code>--ecmp</code>, the existed route will be
+          updated with the new nexthop and port.  If <code>--ecmp</code> is
+          specified, a new route will be added, regardless of the existed
+          route, which is useful when adding ECMP routes, i.e. routes with same
+          <var>POLICY</var> and <var>prefix</var> but different
+          <var>nexthop</var> and <var>port</var>.
         </p>
       </dd>
 
-      <dt>[<code>--if-exists</code>] <code>lr-route-del</code> <var>router</var> [<var>prefix</var>]</dt>
+      <dt>[<code>--if-exists</code>] [<code>--policy</code>=<var>POLICY</var>]
+        <code>lr-route-del</code> <var>router</var> [<var>prefix</var>
+        [<var>nexthop</var> [<var>port</var>]]]</dt>
       <dd>
         <p>
           Deletes routes from <var>router</var>.  If only <var>router</var>
-          is supplied, all the routes from the logical router are
-          deleted.  If <var>prefix</var> is also specified, then all the
-          routes that match the prefix will be deleted from the logical
-          router.
+          is supplied, all the routes from the logical router are deleted.  If
+          <var>POLICY</var>, <var>prefix</var>, <var>nexthop</var> and/or
+          <var>port</var> are also specified, then all the routes that match
+          the conditions will be deleted from the logical router.
         </p>
 
         <p>
-          It is an error if <var>prefix</var> is specified and there
-          is no matching route entry, unless <code>--if-exists</code> is
-          specified.
+          It is an error if there is no matching route entry, unless
+          <code>--if-exists</code> is specified.
         </p>
       </dd>
 
@@ -665,7 +713,7 @@
     <h1>NAT Commands</h1>
 
     <dl>
-      <dt>[<code>--may-exist</code>] <code>lr-nat-add</code> <var>router</var> <var>type</var> <var>external_ip</var> <var>logical_ip</var> [<var>logical_port</var> <var>external_mac</var>]</dt>
+      <dt>[<code>--may-exist</code>] [<code>--stateless</code>]<code>lr-nat-add</code> <var>router</var> <var>type</var> <var>external_ip</var> <var>logical_ip</var> [<var>logical_port</var> <var>external_mac</var>]</dt>
       <dd>
         <p>
           Adds the specified NAT to <var>router</var>.
@@ -681,7 +729,17 @@
           The <var>logical_port</var> is the name of an existing logical
           switch port where the <var>logical_ip</var> resides.
           The <var>external_mac</var> is an Ethernet address.
+          The <var>--stateless</var>
         </p>
+        <p>
+          When <code>--stateless</code> is specified then it implies that
+          we will be not use connection tracker, i.e internal ip and external
+          ip are 1:1 mapped. This implies that <code>--stateless</code> is
+          applicable only to dnat_and_snat type NAT rules.
+          An external ip with <code>--stateless</code> NAT cannot be shared
+          with any other NAT rule.
+        </p>
+
         <p>
           When <var>type</var> is <code>dnat</code>, the externally
           visible IP address <var>external_ip</var> is DNATted to the
@@ -1178,6 +1236,31 @@
           wait at all.  Use the <code>sync</code> command to override this
           behavior.
         </p>
+
+        <p>
+          User can set one or more <env>OVN_NBCTL_OPTIONS</env> options in
+          environment variable. Under the Bourne shell this might be
+          done like this:
+        </p>
+
+        <pre fixed="yes">
+          OVN_NBCTL_OPTIONS="--db=unix:nb1.ovsdb --no-leader-only"
+        </pre>
+
+        <p>
+          When <env>OVN_NBCTL_OPTIONS</env> is set, <code>ovn-nbctl</code>
+          automatically and transparently uses the environment variable to
+          execute its commands. However user can still over-ride environment
+          options by passing different in cli.
+        </p>
+
+        <p>
+          When the environment variable is no longer needed, unset it, e.g.:
+        </p>
+
+        <pre fixed="yes">
+          unset OVN_NBCTL_OPTIONS
+        </pre>
       </dd>
 
     <dt><code>--db</code> <var>database</var></dt>

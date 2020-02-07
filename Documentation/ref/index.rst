@@ -13,7 +13,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -39,7 +39,7 @@ time:
 .. toctree::
    :maxdepth: 3
 
-   ovs-sim.1
+   ovn-sim.1
    ovsdb-server.7
    ovsdb.5
    ovsdb.7

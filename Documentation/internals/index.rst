@@ -13,7 +13,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -23,11 +23,11 @@
 
       Avoid deeper levels because they do not render well.
 
-======================
-Open vSwitch Internals
-======================
+=============
+OVN Internals
+=============
 
-Information for people who want to know more about the Open vSwitch project
+Information for people who want to know more about the OVN project
 itself and how they might involved.
 
 .. toctree::
@@ -39,7 +39,6 @@ itself and how they might involved.
    release-process
    bugs
    security
-   charter
    committer-emeritus-status
    committer-responsibilities
    committer-grant-revocation

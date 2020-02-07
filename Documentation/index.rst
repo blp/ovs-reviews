@@ -13,7 +13,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -82,11 +82,9 @@ Learn more about the Open vSwitch project and about how you can contribute:
 
 - **Contributing:** :doc:`internals/contributing/submitting-patches` |
   :doc:`internals/contributing/backporting-patches` |
-  :doc:`internals/contributing/coding-style` |
-  :doc:`internals/contributing/coding-style-windows`
+  :doc:`internals/contributing/coding-style`
 
-- **Maintaining:** :doc:`internals/charter` |
-  :doc:`internals/maintainers` |
+- **Maintaining:** :doc:`internals/maintainers` |
   :doc:`internals/committer-responsibilities` |
   :doc:`internals/committer-grant-revocation` |
   :doc:`internals/committer-emeritus-status`

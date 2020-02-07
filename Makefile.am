@@ -52,13 +52,6 @@ AM_CFLAGS = -Wstrict-prototypes
 AM_CFLAGS += $(WARNING_FLAGS)
 AM_CFLAGS += $(OVS_CFLAGS)
 
-if DPDK_NETDEV
-AM_CFLAGS += -D_FILE_OFFSET_BITS=64
-DPDKSTRIP_FLAGS = --dpdk
-else
-DPDKSTRIP_FLAGS = --nodpdk
-endif
-
 if NDEBUG
 AM_CPPFLAGS += -DNDEBUG
 AM_CFLAGS += -fomit-frame-pointer
@@ -77,8 +70,8 @@ endif
 # foo/__init__.py into an (older) version with plain foo.py, since
 # foo/__init__.pyc will cause Python to ignore foo.py.
 run_python = \
-	PYTHONPATH=$(top_srcdir)/python$(psep)$$PYTHONPATH \
-	PYTHONDONTWRITEBYTECODE=yes $(PYTHON)
+	PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH \
+	PYTHONDONTWRITEBYTECODE=yes $(PYTHON3)
 
 ALL_LOCAL =
 BUILT_SOURCES =
@@ -117,7 +110,11 @@ EXTRA_DIST = \
 	ovn-nb.ovsschema \
 	ovn-nb.xml \
 	ovn-sb.ovsschema \
-	ovn-sb.xml
+	ovn-sb.xml \
+	ovn-ic-nb.ovsschema \
+	ovn-ic-nb.xml \
+	ovn-ic-sb.ovsschema \
+	ovn-ic-sb.xml
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
@@ -172,14 +169,15 @@ ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-
 
 SUFFIXES += .in
 .in:
-	$(AM_V_GEN)PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON) $(srcdir)/build-aux/soexpand.py -I$(srcdir) -I$(OVS_SRCDIR) < $< | \
-	  $(PYTHON) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
+	$(AM_V_GEN)PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON3) $(srcdir)/build-aux/soexpand.py -I$(srcdir) -I$(OVS_SRCDIR) < $< | \
+	  $(PYTHON3) $(srcdir)/build-aux/dpdkstrip.py $(DPDKSTRIP_FLAGS) | \
 	  sed \
 	    -e 's,[@]PKIDIR[@],$(PKIDIR),g' \
 	    -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
 	    -e 's,[@]DBDIR[@],$(DBDIR),g' \
-	    -e 's,[@]PYTHON[@],$(PYTHON),g' \
+	    -e 's,[@]PYTHON3[@],$(PYTHON3),g' \
 	    -e 's,[@]OVN_RUNDIR[@],$(OVN_RUNDIR),g' \
+	    -e 's,[@]OVSBUILDDIR[@],$(OVSBUILDDIR),g' \
 	    -e 's,[@]VERSION[@],$(VERSION),g' \
 	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
 	    -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
@@ -203,7 +201,7 @@ SUFFIXES += .xml
 	  PKIDIR='$(PKIDIR)' \
 	  LOGDIR='$(LOGDIR)' \
 	  DBDIR='$(DBDIR)' \
-	  PYTHON='$(PYTHON)' \
+	  PYTHON3='$(PYTHON3)' \
 	  RUNDIR='$(RUNDIR)' \
 	  OVN_RUNDIR='$(OVN_RUNDIR)' \
 	  VERSION='$(VERSION)' \
@@ -430,8 +428,8 @@ endif
 CLEANFILES += flake8-check
 
 include $(srcdir)/manpages.mk
-$(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py python/build/soutil.py
-	@PYTHONPATH=$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON) $(srcdir)/build-aux/sodepends.py -I. -I$(srcdir) -I$(OVS_MANDIR) $(MAN_ROOTS) >$(@F).tmp
+$(srcdir)/manpages.mk: $(MAN_ROOTS) build-aux/sodepends.py $(OVS_SRCDIR)/python/build/soutil.py
+	@PYTHONPATH=$(OVS_SRCDIR)/python$(psep)$$PYTHONPATH$(psep)$(srcdir)/python $(PYTHON3) $(srcdir)/build-aux/sodepends.py -I. -I$(srcdir) -I$(OVS_MANDIR) $(MAN_ROOTS) >$(@F).tmp
 	@if cmp -s $(@F).tmp $@; then \
 	  touch $@; \
 	  rm -f $(@F).tmp; \
@@ -501,10 +499,10 @@ include lib/ovsdb_automake.mk
 include ipsec/automake.mk
 include rhel/automake.mk
 include xenserver/automake.mk
-include python/automake.mk
 include tutorial/automake.mk
 include selinux/automake.mk
 include controller/automake.mk
 include controller-vtep/automake.mk
 include northd/automake.mk
+include ic/automake.mk
 include build-aux/automake.mk

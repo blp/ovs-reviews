@@ -13,7 +13,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -27,12 +27,12 @@
 Patchwork
 =========
 
-Open vSwitch uses `Patchwork`__ to track the status of patches sent to the
-:doc:`ovs-dev mailing list <mailing-lists>`. The Open vSwitch Patchwork
+Open vSwitch and OVN use `Patchwork`__ to track the status of patches
+sent to the :doc:`ovs-dev mailing list <mailing-lists>`. Our Patchwork
 instance can be found on `ozlabs.org`__.
 
-Patchwork provides a number of useful features for developers working on Open
-vSwitch:
+Patchwork provides a number of useful features for developers working on
+Open vSwitch and OVN:
 
 - Tracking the lifecycle of patches (accepted, rejected, under-review, ...)
 - Assigning reviewers (delegates) to patches
@@ -60,7 +60,7 @@ from your `Patchwork User Profile`__ page. If you do not already have a
 Patchwork user account, you should create one now.
 
 Once your token is obtained, configure *git-pw* as below. Note that this must
-be run from within the Open vSwitch Git repository::
+be run from within the OVN Git repository::
 
     $ git config pw.server https://patchwork.ozlabs.org/
     $ git config pw.project openvswitch

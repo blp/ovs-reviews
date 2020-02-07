@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -171,3 +171,8 @@ OVN To-do List
   200: ovn -- IGMP snoop/querier/relay                 FAILED (ovs-macros.at:225)
   203: ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR N-S Ping FAILED (ovs-macros.at:225)
 
+* OVN Interconnection
+
+  * Packaging for RHEL, Debian, etc.
+
+  * Route advertisement between edge routers.

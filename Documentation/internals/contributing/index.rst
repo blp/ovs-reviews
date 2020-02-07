@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -21,11 +21,11 @@
 
       Avoid deeper levels because they do not render well.
 
-============================
-Contributing to Open vSwitch
-============================
+===================
+Contributing to OVN
+===================
 
-The below guides provide information on contributing to Open vSwitch itself.
+The below guides provide information on contributing to OVN itself.
 
 .. toctree::
    :maxdepth: 2
@@ -33,6 +33,5 @@ The below guides provide information on contributing to Open vSwitch itself.
    submitting-patches
    backporting-patches
    coding-style
-   coding-style-windows
    documentation-style
    libopenvswitch-abi

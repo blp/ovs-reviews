@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -21,14 +21,12 @@
 
       Avoid deeper levels because they do not render well.
 
-=========================
-Open vSwitch Coding Style
-=========================
+================
+OVN Coding Style
+================
 
-This file describes the coding style used in most C files in the Open vSwitch
-distribution. However, Linux kernel code datapath directory follows the Linux
-kernel's established coding conventions. For the Windows kernel datapath code,
-use the coding style described in :doc:`coding-style-windows`.
+This file describes the coding style used in C files in the OVN
+distribution.
 
 The following GNU indent options approximate this style.
 
@@ -408,8 +406,8 @@ The first non-comment line in a ``.c`` source file should be:
    that must be included in a particular order, in which case that order must
    take precedence.)
 
-4. Open vSwitch headers, in alphabetical order. Use ``""``, not ``<>``, to
-   specify Open vSwitch header names.
+4. OVN headers, in alphabetical order. Use ``""``, not ``<>``, to
+   specify OVN header names.
 
 .. _header files:
 

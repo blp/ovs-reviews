@@ -11,7 +11,7 @@
       License for the specific language governing permissions and limitations
       under the License.
 
-      Convention for heading levels in Open vSwitch documentation:
+      Convention for heading levels in OVN documentation:
 
       =======  Heading 0 (reserved for the title in a document)
       -------  Heading 1
@@ -25,65 +25,45 @@
 Committers
 ==========
 
-Open vSwitch committers are the people who have been granted access to push
-changes to to the Open vSwitch git repository.
+OVN committers are the people who have been granted access to push
+changes to to the OVN git repository.
 
-The responsibilities of an Open vSwitch committer are documented
+The responsibilities of an OVN committer are documented
 `here <Documentation/internals/committer-responsibilities.rst>`__.
 
 The process for adding or removing committers is documented
 `here <Documentation/internals/committer-grant-revocation.rst>`__.
 
-This is the current list of active Open vSwitch committers:
+This is the current list of active OVN committers:
 
 .. list-table:: OVS Maintainers
    :header-rows: 1
 
    * - Name
      - Email
-   * - Alex Wang
-     - ee07b291@gmail.com
-   * - Alin Serdean
-     - aserdean@cloudbasesolutions.com
-   * - Andy Zhou
-     - azhou@ovn.org
-   * - Ansis Atteka
-     - aatteka@nicira.com
    * - Ben Pfaff
      - blp@ovn.org
-   * - Daniele Di Proietto
-     - daniele.di.proietto@gmail.com
    * - Gurucharan Shetty
      - guru@ovn.org
-   * - Ian Stokes
-     - istokes@ovn.org
-   * - Jarno Rajahalme
-     - jarno@ovn.org
-   * - Jesse Gross
-     - jesse@kernel.org
-   * - Joe Stringer
-     - joe@ovn.org
+   * - Han Zhou
+     - zhouhan@gmail.com
    * - Justin Pettit
      - jpettit@ovn.org
-   * - Pravin B Shelar
-     - pshelar@ovn.org
+   * - Leonid Ryzhyk
+     - lryzhyk@vmware.com
+   * - Mark Michelson
+     - mmichels@redhat.com
+   * - Numan Siddique
+     - nusddiq@redhat.com
    * - Russell Bryant
      - russell@ovn.org
-   * - Simon Horman
-     - horms@ovn.org
-   * - Thomas Graf
-     - tgraf@noironetworks.com
-   * - YAMAMOTO Takashi
-     - yamamoto@midokura.com
 
 The project also maintains a list of Emeritus Committers (or Maintainers).
 More information about Emeritus Committers can be found
 `here <Documentation/internals/committer-emeritus-status.rst>`__.
 
 .. list-table:: OVS Emeritus Maintainers
-   :header-rows: 1
+   :header-rows: 0
 
    * - Name
      - Email
-   * - Ethan J. Jackson
-     - ejj@eecs.berkeley.edu

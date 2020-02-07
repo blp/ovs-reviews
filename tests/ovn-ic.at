@@ -1,0 +1,188 @@
+AT_BANNER([OVN Interconnection Controller])
+AT_SETUP([ovn-ic -- AZ register])
+
+ovn_init_ic_db
+ovn_start az1
+ovn_start az2
+
+AT_CHECK([ovn-ic-sbctl show], [0], [dnl
+availability-zone az1
+availability-zone az2
+])
+
+ovn_as az1
+ovn-nbctl set NB_Global . name=az3
+AT_CHECK([ovn-ic-sbctl show], [0], [dnl
+availability-zone az2
+availability-zone az3
+])
+
+ovn_as az2
+ovn-nbctl set NB_Global . name=\"\"
+AT_CHECK([ovn-ic-sbctl show], [0], [dnl
+availability-zone az3
+])
+
+OVN_CLEANUP_IC([az1], [az2])
+
+AT_CLEANUP
+
+AT_SETUP([ovn-ic -- transit switch handling])
+
+ovn_init_ic_db
+ovn_start az1
+
+AT_CHECK([ovn-ic-nbctl ts-add ts1])
+AT_CHECK([ovn-ic-nbctl ts-add ts2])
+
+# Check ISB
+OVS_WAIT_UNTIL([ovn-ic-sbctl list datapath | grep ts2])
+AT_CHECK([ovn-ic-sbctl -f csv -d bare --no-headings --columns transit_switch list datapath | sort], [0], [dnl
+ts1
+ts2
+])
+
+# Check NB
+AT_CHECK([ovn-nbctl -f csv -d bare --no-headings --columns name list logical_switch | sort], [0], [dnl
+ts1
+ts2
+])
+
+# Check SB DP key
+ts1_key=$(ovn-ic-sbctl -f csv -d bare --no-headings --columns tunnel_key find datapath transit_switch=ts1)
+sb_ts1_key=$(ovn-sbctl -f csv -d bare --no-headings --columns tunnel_key find datapath_binding external_ids:interconn-ts=ts1)
+AT_CHECK([test $ts1_key = $sb_ts1_key])
+
+# Test delete
+AT_CHECK([ovn-ic-nbctl ts-del ts1])
+OVS_WAIT_WHILE([ovn-ic-sbctl list datapath | grep ts1])
+AT_CHECK([ovn-ic-sbctl -f csv -d bare --no-headings --columns transit_switch list datapath], [0], [dnl
+ts2
+])
+AT_CHECK([ovn-nbctl -f csv -d bare --no-headings --columns name list logical_switch | sort], [0], [dnl
+ts2
+])
+
+OVN_CLEANUP_IC([az1])
+
+AT_CLEANUP
+
+AT_SETUP([ovn-ic -- gateway sync])
+
+ovn_init_ic_db
+net_add n1
+ovn_start az1
+ovn_start az2
+sim_add gw1
+as gw1
+ovs-vsctl add-br br-phys
+ovn_az_attach az1 n1 br-phys 192.168.0.1
+ovs-vsctl set open . external-ids:ovn-is-interconn=true external-ids:hostname=gw1
+
+AT_CHECK([ovn_as az2 ovn-sbctl show | sort -r], [0], [dnl
+Chassis gw1
+    hostname: gw1
+    Encap vxlan
+    Encap geneve
+        options: {csum="true"}
+        options: {csum="true"}
+        ip: "192.168.0.1"
+        ip: "192.168.0.1"
+])
+
+AT_CHECK([ovn_as az2 ovn-sbctl -f csv -d bare --no-headings --columns external_ids list chassis], [0], [dnl
+is-remote=true
+])
+
+ovs-vsctl set open . external-ids:ovn-is-interconn=false
+AT_CHECK([ovn_as az2 ovn-sbctl show], [0], [dnl
+])
+
+ovs-vsctl set open . external-ids:ovn-is-interconn=true
+AT_CHECK([ovn_as az2 ovn-sbctl show | grep gw1], [0], [ignore])
+
+OVN_CLEANUP_SBOX(gw1)
+AT_CHECK([ovn_as az2 ovn-sbctl show], [0], [dnl
+])
+
+# Test encap change
+sim_add gw2
+as gw2
+ovs-vsctl add-br br-phys
+ovn_az_attach az1 n1 br-phys 192.168.0.1
+ovs-vsctl set open . external-ids:ovn-is-interconn=true
+OVS_WAIT_UNTIL([ovn_as az2 ovn-sbctl show | grep "192.168.0.1"])
+ovs-vsctl set open . external_ids:ovn-encap-ip=192.168.0.2
+OVS_WAIT_UNTIL([ovn_as az2 ovn-sbctl show | grep "192.168.0.2"])
+ovs-vsctl set open . external_ids:ovn-encap-type="geneve,stt"
+OVS_WAIT_UNTIL([ovn_as az2 ovn-sbctl show | grep stt])
+
+OVN_CLEANUP_SBOX(gw2)
+OVN_CLEANUP_IC([az1], [az2])
+
+AT_CLEANUP
+
+
+AT_SETUP([ovn-ic -- port sync])
+
+ovn_init_ic_db
+ovn-ic-nbctl ts-add ts1
+net_add n1
+ovn_start az1
+ovn_start az2
+sim_add gw1
+as gw1
+ovs-vsctl add-br br-phys
+ovn_az_attach az1 n1 br-phys 192.168.0.1
+ovs-vsctl set open . external-ids:ovn-is-interconn=true
+
+ovn_as az1
+OVS_WAIT_UNTIL([ovn-sbctl list datapath_binding | grep interconn-ts | grep ts1])
+
+# Create LRP and connect to TS
+ovn-nbctl lr-add lr1
+ovn-nbctl lrp-add lr1 lrp-lr1-ts1 aa:aa:aa:aa:aa:01 169.254.100.1/24
+ovn-nbctl lsp-add ts1 lsp-ts1-lr1
+ovn-nbctl lsp-set-addresses lsp-ts1-lr1 router
+ovn-nbctl lsp-set-type lsp-ts1-lr1 router
+ovn-nbctl lsp-set-options lsp-ts1-lr1 router-port=lrp-lr1-ts1
+
+AT_CHECK([ovn_as az2 ovn-nbctl show | uuidfilt], [0], [dnl
+switch <0> (ts1)
+    port lsp-ts1-lr1
+        type: remote
+        addresses: [["aa:aa:aa:aa:aa:01 169.254.100.1/24"]]
+])
+
+AT_CHECK([ovn_as az2 ovn-sbctl -f csv -d bare --no-headings --columns logical_port,type list port_binding], [0], [dnl
+lsp-ts1-lr1,remote
+])
+
+ovn-nbctl lrp-set-gateway-chassis lrp-lr1-ts1 gw1
+OVS_WAIT_UNTIL([ovn_as az2 ovn-sbctl show | grep lsp-ts1-lr1])
+
+ovn-nbctl lrp-del-gateway-chassis lrp-lr1-ts1 gw1
+OVS_WAIT_WHILE([ovn_as az2 ovn-sbctl show | grep lsp-ts1-lr1])
+
+ovn-nbctl set logical_router_port lrp-lr1-ts1 mac="\"aa:aa:aa:aa:aa:02\"" \
+              networks="169.254.100.2/24 169.254.200.3/24"
+OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl show | grep "aa:aa:aa:aa:aa:02 169.254.100.2/24 169.254.200.3/24"])
+
+# Delete the router port from az1, the remote port in az2 should still remain
+# but just lost address.
+ovn-nbctl lrp-del lrp-lr1-ts1
+OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl show | grep "aa:aa:aa:aa:aa:02 169.254.100.2/24 169.254.200.3/24"])
+AT_CHECK([ovn_as az2 ovn-nbctl show | uuidfilt], [0], [dnl
+switch <0> (ts1)
+    port lsp-ts1-lr1
+        type: remote
+])
+
+# Delete the lsp from az1, the remote port in az2 should be gone
+ovn-nbctl lsp-del lsp-ts1-lr1
+OVS_WAIT_WHILE([ovn_as az2 ovn-nbctl show | grep lsp-ts1-lr1])
+
+OVN_CLEANUP_SBOX(gw1)
+OVN_CLEANUP_IC([az1], [az2])
+
+AT_CLEANUP

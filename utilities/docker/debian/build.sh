@@ -12,33 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-KERNEL_VERSION=$1
-OVN_BRANCH=$2
-GITHUB_SRC=$3
+OVN_BRANCH=$1
+GITHUB_SRC=$2
 
 # Install deps
-linux="linux-image-$KERNEL_VERSION linux-headers-$KERNEL_VERSION"
-build_deps="apt-utils libelf-dev build-essential libssl-dev python \
-python-six wget gdb autoconf libtool git automake bzip2 debhelper \
+build_deps="apt-utils libelf-dev build-essential libssl-dev python3 \
+python3-six wget gdb autoconf libtool git automake bzip2 debhelper \
 dh-autoreconf openssl"
 
 apt-get update
-apt-get install -y ${linux} ${build_deps}
+apt-get install -y ${build_deps}
 
-# get the source
-mkdir /build; cd /build
-git clone --depth 1 -b $OVN_BRANCH $GITHUB_SRC
-cd ovn
-
-# build and install
-./boot.sh
-./configure --localstatedir="/var" --sysconfdir="/etc" --prefix="/usr" \
---with-linux=/lib/modules/$KERNEL_VERSION/build --enable-ssl
-make -j8; make install
+./install_ovn.sh $OVN_BRANCH $GITHUB_SRC
 
 # remove deps to make the container light weight.
 apt-get remove --purge -y ${build_deps}
 apt-get autoremove -y --purge
-cd ..; rm -rf ovn
+cd ..; rm -rf ovn; rm -rf ovs
 basic_utils="vim kmod net-tools uuid-runtime iproute2"
 apt-get install -y ${basic_utils}
