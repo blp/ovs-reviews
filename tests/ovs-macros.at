@@ -319,3 +319,10 @@ m4_ifndef([AT_FAIL_IF],
   [m4_define([AT_FAIL_IF],
     [AT_CHECK([($1) \
     && exit 99 || exit 0], [0], [ignore], [ignore])])])
+
+dnl This is like m4_include but it does not warn against including
+dnl the same file multiple times.
+dnl
+dnl (The warning comes from Autom4te's override for m4_include, not
+dnl from m4 itself, so we just use the builtin directly here.)
+m4_define([m4_include_multiple], [m4_builtin([include], [$1])])
