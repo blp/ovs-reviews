@@ -47,22 +47,16 @@ dnl
 dnl Configure ddlog source tree
 AC_DEFUN([OVS_CHECK_DDLOG], [
   AC_ARG_WITH([ddlog],
-              [AC_HELP_STRING([--with-ddlog=/path/to/ddlog],
-                              [Specify the ddlog library directory])],
-                              [have_ddlog=true])
+              [AC_HELP_STRING([--with-ddlog=.../differential-datalog/lib],
+                              [Enables DDlog by pointing to its library dir])],
+              [DDLOGLIBDIR=$withval], [DDLOGLIBDIR=none])
 
-  if test "$have_ddlog" != true || test "$with_ddlog" = no; then
-    AC_MSG_RESULT([no])
-    DDLOGLIB_FOUND=false
-  else
-    AC_MSG_RESULT([yes])
-
-    DDLOG_LIB=$with_ddlog
-    if test -d "$DDLOG_LIB"; then
-      AC_SUBST([DDLOG_LIB])
-      DDLOGLIB_FOUND=true
-    else
-      AC_MSG_ERROR([ddlog library dir "$DDLOG_LIB" doesn't exist])
+  AC_MSG_CHECKING([for DDlog library directory])
+  if test "$DDLOGLIBDIR" != none; then
+    if test ! -d "$DDLOGLIBDIR"; then
+      AC_MSG_ERROR([ddlog library dir "$DDLOGLIBDIR" doesn't exist])
+    elif test ! -f "$DDLOGLIBDIR"/std.dl; then
+      AC_MSG_ERROR([ddlog library dir "$DDLOGLIBDIR" lacks std.dl])
     fi
 
     # Check the prerequisites.
@@ -74,10 +68,12 @@ AC_DEFUN([OVS_CHECK_DDLOG], [
       AC_MSG_ERROR([Rust required for ddlog])
     fi
 
+    AC_SUBST([DDLOGLIBDIR])
     AC_DEFINE([DDLOG], [1], [Build OVN daemons with ddlog.])
   fi
+  AC_MSG_RESULT([$DDLOGLIBDIR])
 
-  AM_CONDITIONAL([DDLOG], test "$DDLOGLIB_FOUND" = true)
+  AM_CONDITIONAL([DDLOG], test "$DDLOGLIBDIR" != none)
 ])
 
 dnl Checks for net/if_dl.h.

@@ -31,7 +31,7 @@ northd_ovn_northd_ddlog_LDADD = \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la
 
 northd/OVN_Northbound.dl: ovn-nb.ovsschema
-	ovsdb2ddlog -f ovn-nb.ovsschema         \
+	ovsdb2ddlog -f $(srcdir)/ovn-nb.ovsschema         \
 				-o Logical_Switch_Port          \
 				-k Logical_Switch_Port.name     \
 				-o NB_Global                    \
@@ -43,7 +43,7 @@ northd/OVN_Northbound.dl: ovn-nb.ovsschema
 				> $@.tmp && mv $@.tmp $@
 
 northd/OVN_Southbound.dl: ovn-sb.ovsschema
-	ovsdb2ddlog -f ovn-sb.ovsschema \
+	ovsdb2ddlog -f $(srcdir)/ovn-sb.ovsschema \
 				-o SB_Global        	\
 				-o Logical_Flow     	\
 				-o Multicast_Group  	\
@@ -110,7 +110,7 @@ northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: \
 	northd/OVN_Southbound.dl \
 	lib/libovn.la            \
 	$(OVS_LIBDIR)/libopenvswitch.la
-	$(AM_V_GEN)ddlog -i $< -L @DDLOG_LIB@
+	$(AM_V_GEN)ddlog -i $< -L $(DDLOGLIBDIR) -L $(builddir)/northd
 	$(eval LIBOPENVSWITCH_DEPS=$(shell sh -c "grep -oP \"dependency_libs=\'\K[^\']*\" lib/libovn.la"))
 	$(eval LIBOVN_DEPS=$(shell sh -c "grep -oP \"dependency_libs=\'\K[^\']*\" $(OVS_LIBDIR)/libopenvswitch.la"))
 	$(AM_V_at)cd northd/ovn_northd_ddlog && \
