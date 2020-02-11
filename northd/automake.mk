@@ -40,7 +40,7 @@ northd/OVN_Northbound.dl: ovn-nb.ovsschema
 				--ro NB_Global.external_ids     \
 				--ro NB_Global.connections      \
 				--ro NB_Global.ssl              \
-				> $@
+				> $@.tmp && mv $@.tmp $@
 
 northd/OVN_Southbound.dl: ovn-sb.ovsschema
 	ovsdb2ddlog -f ovn-sb.ovsschema \
@@ -87,7 +87,7 @@ northd/OVN_Southbound.dl: ovn-sb.ovsschema
 				-k Logical_Flow.match			\
 				-k Logical_Flow.actions			\
 				-k IP_Multicast.datapath		\
-				> $@
+				> $@.tmp && mv $@.tmp $@
 
 CLEANFILES += northd/OVN_Northbound.dl northd/OVN_Southbound.dl
 
