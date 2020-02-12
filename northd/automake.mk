@@ -47,6 +47,11 @@ northd/ovn_northd_ddlog/ddlog.h: \
 northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la: \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a
 
+CARGO_VERBOSE = $(cargo_verbose_$(V))
+cargo_verbose_ = $(cargo_verbose_$(AM_DEFAULT_VERBOSITY))
+cargo_verbose_0 =
+cargo_verbose_1 = --verbose
+
 northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: \
 	northd/ovn_northd.dl	 \
 	northd/lswitch.dl	 	 \
@@ -66,7 +71,7 @@ northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: \
 	$(AM_V_at)cd northd/ovn_northd_ddlog && \
 		RUSTFLAGS="-L ../../lib/.libs -L $(OVS_LIBDIR)/.libs $(LIBOPENVSWITCH_DEPS) $(LIBOVN_DEPS) \
 		-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)" cargo build --release \
-		$(DDLOG_NORTHD_LIB_ONLY)
+		$(DDLOG_NORTHD_LIB_ONLY) $(CARGO_VERBOSE)
 
 CLEAN_LOCAL += clean-ddlog
 clean-ddlog:
