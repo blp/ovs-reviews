@@ -839,6 +839,12 @@ sb.Out_DHCP_Options (
     .__type = "str"
 ).
 
+sb.Out_DHCP_Options (
+    .name   = "tftp_server_address",
+    .code   = 150,
+    .__type = "ipv4"
+).
+
 
 /*
  * DHCPv6 options: fixed table
