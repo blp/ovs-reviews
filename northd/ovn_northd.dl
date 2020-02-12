@@ -822,6 +822,12 @@ sb.Out_DHCP_Options (
 ).
 
 sb.Out_DHCP_Options (
+    .name   = "bootfile_name",
+    .code   = 67,
+    .__type = "str"
+).
+
+sb.Out_DHCP_Options (
     .name   = "wpad",
     .code   = 252,
     .__type = "str"
