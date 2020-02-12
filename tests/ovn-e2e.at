@@ -5638,7 +5638,7 @@ AT_CHECK([ovn-nbctl ls-add ls2])
 dnl When there is no parent_name provided (for say, 'localnet'), 'tag_request'
 dnl gets copied to 'tag'
 AT_CHECK([ovn-nbctl --wait=sb lsp-add ls2 local0 "" 25])
-AT_CHECK([ovn-nbctl lsp-get-tag local0 | tableid --strict no_name], [0], [25
+AT_CHECK([ovn-nbctl lsp-get-tag local0 | stableid --strict no_name], [0], [25
 ])
 dnl The same 'tag' gets created in southbound database.
 AT_CHECK([ovn-sbctl --data=bare --no-heading --columns=tag find port_binding \
