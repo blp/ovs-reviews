@@ -833,6 +833,12 @@ sb.Out_DHCP_Options (
     .__type = "str"
 ).
 
+sb.Out_DHCP_Options (
+    .name   = "path_prefix",
+    .code   = 210,
+    .__type = "str"
+).
+
 
 /*
  * DHCPv6 options: fixed table
