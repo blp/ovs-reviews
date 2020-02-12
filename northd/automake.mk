@@ -65,7 +65,7 @@ northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: \
 	northd/OVN_Southbound.dl \
 	lib/libovn.la            \
 	$(OVS_LIBDIR)/libopenvswitch.la
-	$(AM_V_GEN)ddlog -i $< -L $(DDLOGLIBDIR) -L $(builddir)/northd
+	$(AM_V_GEN)ddlog -i $< -L $(DDLOGLIBDIR) -L $(builddir)/northd --output-dir $(builddir)/northd
 	$(AM_V_at)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
 		LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
 		cd northd/ovn_northd_ddlog && \
