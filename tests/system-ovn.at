@@ -2268,7 +2268,7 @@ ovn-nbctl ls-add alice
 ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 192.168.1.1/24
 ovn-nbctl lrp-add R1 bar 00:00:01:01:02:04 192.168.2.1/24
 ovn-nbctl lrp-add R1 alice 00:00:02:01:02:03 172.16.1.1/24 \
-    -- set Logical_Router_Port alice options:redirect-chassis=hv1
+    -- lrp-set-gateway-chassis alice hv1
 
 # Connect foo to R1
 ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
@@ -2409,7 +2409,7 @@ ovn-nbctl ls-add alice
 ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 fd01::1/64
 ovn-nbctl lrp-add R1 bar 00:00:01:01:02:04 fd02::1/64
 ovn-nbctl lrp-add R1 alice 00:00:02:01:02:03 fd72::1/64 \
-    -- set Logical_Router_Port alice options:redirect-chassis=hv1
+    -- lrp-set-gateway-chassis alice hv1
 
 # Connect foo to R1
 ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
@@ -2550,7 +2550,7 @@ ovn-nbctl ls-add alice
 ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 192.168.1.1/24
 ovn-nbctl lrp-add R1 bar 00:00:01:01:02:04 192.168.2.1/24
 ovn-nbctl lrp-add R1 alice 00:00:02:01:02:03 172.16.1.1/24 \
-    -- set Logical_Router_Port alice options:redirect-chassis=hv1
+    -- lrp-set-gateway-chassis alice hv1
 
 # Connect foo to R1
 ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
@@ -2699,7 +2699,7 @@ ovn-nbctl ls-add alice
 ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 fd11::1/64
 ovn-nbctl lrp-add R1 bar 00:00:01:01:02:04 fd12::1/64
 ovn-nbctl lrp-add R1 alice 00:00:02:01:02:03 fd20::1/64 \
-    -- set Logical_Router_Port alice options:redirect-chassis=hv1
+    -- lrp-set-gateway-chassis alice hv1
 
 # Connect foo to R1
 ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
@@ -2855,7 +2855,7 @@ ovn-nbctl ls-add alice
 ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 192.168.1.1/24
 ovn-nbctl lrp-add R1 bar 00:00:01:01:02:04 192.168.2.1/24
 ovn-nbctl lrp-add R1 alice 00:00:02:01:02:03 172.16.1.1/24 \
-    -- set Logical_Router_Port alice options:redirect-chassis=hv1
+    -- lrp-set-gateway-chassis alice hv1
 
 # Connect foo to R1
 ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
@@ -3032,7 +3032,7 @@ ovn-nbctl ls-add alice
 ovn-nbctl lrp-add R1 foo 00:00:01:01:02:03 fd11::1/64
 ovn-nbctl lrp-add R1 bar 00:00:01:01:02:04 fd12::1/64
 ovn-nbctl lrp-add R1 alice 00:00:02:01:02:03 fd20::1/64 \
-    -- set Logical_Router_Port alice options:redirect-chassis=hv1
+    -- lrp-set-gateway-chassis alice hv1
 
 # Connect foo to R1
 ovn-nbctl lsp-add foo rp-foo -- set Logical_Switch_Port rp-foo \
