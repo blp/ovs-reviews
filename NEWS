@@ -1,5 +1,7 @@
 Post-v20.03.0
 --------------------------
+   - The obsolete "redirect-chassis" way to configure gateways has been
+     removed.  See ovn-nb(5) for advice on how to update your config if needed.
 
 
 OVN v20.03.0 - xx xxx xxxx
