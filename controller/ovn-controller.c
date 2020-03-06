@@ -436,9 +436,10 @@ static int
 get_ofctrl_probe_interval(struct ovsdb_idl *ovs_idl)
 {
     const struct ovsrec_open_vswitch *cfg = ovsrec_open_vswitch_first(ovs_idl);
-    return smap_get_int(&cfg->external_ids,
-                        "ovn-openflow-probe-interval",
-                        OFCTRL_DEFAULT_PROBE_INTERVAL_SEC);
+    return !cfg ? OFCTRL_DEFAULT_PROBE_INTERVAL_SEC :
+                  smap_get_int(&cfg->external_ids,
+                               "ovn-openflow-probe-interval",
+                               OFCTRL_DEFAULT_PROBE_INTERVAL_SEC);
 }
 
 /* Retrieves the pointer to the OVN Southbound database from 'ovs_idl' and
@@ -1239,9 +1240,6 @@ struct ed_type_flow_output {
     uint32_t conj_id_ofs;
     /* lflow resource cross reference */
     struct lflow_resource_ref lflow_resource_ref;
-
-    /* Cache of lflow expr tree. */
-    struct hmap lflow_expr_cache;
 };
 
 static void init_physical_ctx(struct engine_node *node,
@@ -1379,7 +1377,6 @@ static void init_lflow_ctx(struct engine_node *node,
     l_ctx_out->group_table = &fo->group_table;
     l_ctx_out->meter_table = &fo->meter_table;
     l_ctx_out->lfrr = &fo->lflow_resource_ref;
-    l_ctx_out->lflow_expr_cache = &fo->lflow_expr_cache;
     l_ctx_out->conj_id_ofs = &fo->conj_id_ofs;
 }
 
@@ -1394,7 +1391,6 @@ en_flow_output_init(struct engine_node *node OVS_UNUSED,
     ovn_extend_table_init(&data->meter_table);
     data->conj_id_ofs = 1;
     lflow_resource_init(&data->lflow_resource_ref);
-    hmap_init(&data->lflow_expr_cache);
     return data;
 }
 
@@ -1406,7 +1402,6 @@ en_flow_output_cleanup(void *data)
     ovn_extend_table_destroy(&flow_output_data->group_table);
     ovn_extend_table_destroy(&flow_output_data->meter_table);
     lflow_resource_destroy(&flow_output_data->lflow_resource_ref);
-    lflow_expr_destroy(&flow_output_data->lflow_expr_cache);
 }
 
 static void
@@ -1504,11 +1499,15 @@ flow_output_sb_mac_binding_handler(struct engine_node *node, void *data)
         (struct sbrec_mac_binding_table *)EN_OVSDB_GET(
             engine_get_input("SB_mac_binding", node));
 
+    struct ed_type_runtime_data *rt_data =
+        engine_get_input_data("runtime_data", node);
+    const struct hmap *local_datapaths = &rt_data->local_datapaths;
+
     struct ed_type_flow_output *fo = data;
     struct ovn_desired_flow_table *flow_table = &fo->flow_table;
 
     lflow_handle_changed_neighbors(sbrec_port_binding_by_name,
-            mac_binding_table, flow_table);
+            mac_binding_table, local_datapaths, flow_table);
 
     engine_set_node_state(node, EN_UPDATED);
     return true;
@@ -1723,12 +1722,12 @@ main(int argc, char *argv[])
     int retval;
 
     ovs_cmdl_proctitle_init(argc, argv);
-    set_program_name(argv[0]);
+    ovn_set_program_name(argv[0]);
     service_start(&argc, &argv);
     char *ovs_remote = parse_options(argc, argv);
     fatal_ignore_sigpipe();
 
-    daemonize_start(false);
+    daemonize_start(true);
 
     char *abs_unixctl_path = get_abs_unix_ctl_path();
     retval = unixctl_server_create(abs_unixctl_path, &unixctl);
@@ -2011,12 +2010,6 @@ main(int argc, char *argv[])
                 }
 
                 if (chassis) {
-                    patch_run(ovs_idl_txn,
-                              ovsrec_bridge_table_get(ovs_idl_loop.idl),
-                              ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
-                              ovsrec_port_table_get(ovs_idl_loop.idl),
-                              sbrec_port_binding_table_get(ovnsb_idl_loop.idl),
-                              br_int, chassis);
                     encaps_run(ovs_idl_txn,
                                bridge_table, br_int,
                                sbrec_chassis_table_get(ovnsb_idl_loop.idl),
@@ -2079,6 +2072,12 @@ main(int argc, char *argv[])
                     }
                     runtime_data = engine_get_data(&en_runtime_data);
                     if (runtime_data) {
+                        patch_run(ovs_idl_txn,
+                            ovsrec_bridge_table_get(ovs_idl_loop.idl),
+                            ovsrec_open_vswitch_table_get(ovs_idl_loop.idl),
+                            ovsrec_port_table_get(ovs_idl_loop.idl),
+                            sbrec_port_binding_table_get(ovnsb_idl_loop.idl),
+                            br_int, chassis, &runtime_data->local_datapaths);
                         pinctrl_run(ovnsb_idl_txn,
                                     sbrec_datapath_binding_by_key,
                                     sbrec_port_binding_by_datapath,

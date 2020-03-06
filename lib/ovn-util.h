@@ -17,6 +17,13 @@
 #define OVN_UTIL_H 1
 
 #include "lib/packets.h"
+#include "include/ovn/version.h"
+
+#define ovn_set_program_name(name) \
+    ovs_set_program_name(name, OVN_PACKAGE_VERSION)
+
+#define ovn_print_version(MIN_OFP, MAX_OFP) \
+    ovs_print_version(MIN_OFP, MAX_OFP)
 
 struct nbrec_logical_router_port;
 struct sbrec_logical_flow;
@@ -96,7 +103,7 @@ uint32_t ovn_logical_flow_hash(const struct uuid *logical_datapath,
                                uint16_t priority,
                                const char *match, const char *actions);
 
-void ip_address_and_port_from_lb_key(const char *key, char **ip_address,
+bool ip_address_and_port_from_lb_key(const char *key, char **ip_address,
                                      uint16_t *port, int *addr_family);
 
 #ifdef DDLOG
@@ -121,4 +128,16 @@ uint32_t ovn_allocate_tnlid(struct hmap *set, const char *name, uint32_t min,
                             uint32_t max, uint32_t *hint);
 
 char *ovn_chassis_redirect_name(const char *port_name);
+
+/* An IPv4 or IPv6 address */
+struct v46_ip {
+    int family;
+    union {
+        ovs_be32 ipv4;
+        struct in6_addr ipv6;
+    };
+};
+bool ip46_parse_cidr(const char *str, struct v46_ip *prefix,
+                     unsigned int *plen);
+bool ip46_equals(const struct v46_ip *addr1, const struct v46_ip *addr2);
 #endif

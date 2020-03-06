@@ -99,7 +99,7 @@ static unixctl_cb_func ovntrace_trace;
 int
 main(int argc, char *argv[])
 {
-    set_program_name(argv[0]);
+    ovn_set_program_name(argv[0]);
     service_start(&argc, &argv);
     fatal_ignore_sigpipe();
     vlog_set_levels_from_string_assert("reconnect:warn");
@@ -325,7 +325,7 @@ parse_options(int argc, char *argv[])
             usage();
 
         case 'V':
-            ovs_print_version(0, 0);
+            ovn_print_version(0, 0);
             printf("DB Schema %s\n", sbrec_get_db_version());
             exit(EXIT_SUCCESS);
 
@@ -926,10 +926,8 @@ read_flows(void)
             continue;
         }
         if (match) {
-            match = expr_simplify(match);
-            match = expr_evaluate_condition(match,
-                                            ovntrace_is_chassis_resident,
-                                            NULL);
+            match = expr_simplify(match, ovntrace_is_chassis_resident,
+                                  NULL);
         }
 
         struct ovntrace_flow *flow = xzalloc(sizeof *flow);

@@ -129,7 +129,7 @@ main(int argc, char *argv[])
     struct ovsdb_idl *idl;
     struct shash local_options;
 
-    set_program_name(argv[0]);
+    ovn_set_program_name(argv[0]);
     fatal_ignore_sigpipe();
     vlog_set_levels(NULL, VLF_CONSOLE, VLL_WARN);
     vlog_set_levels_from_string_assert("reconnect:warn");
@@ -543,7 +543,7 @@ apply_options_direct(const struct ovs_cmdl_parsed_option *parsed_options,
             break;
 
         case 'V':
-            ovs_print_version(0, 0);
+            ovn_print_version(0, 0);
             printf("DB Schema %s\n", nbrec_get_db_version());
             exit(EXIT_SUCCESS);
 
@@ -680,11 +680,11 @@ Logical router port commands:\n\
   lrp-set-redirect-type PORT TYPE\n\
                             set whether redirected packet to gateway chassis\n\
                             of PORT will be encapsulated or not\n\
-                            ('overlay' or 'vlan')\n\
+                            ('overlay' or 'bridged')\n\
   lrp-get-redirect-type PORT\n\
                             get whether redirected packet to gateway chassis\n\
                             of PORT will be encapsulated or not\n\
-                            ('overlay' or 'vlan')\n\
+                            ('overlay' or 'bridged')\n\
 \n\
 Route commands:\n\
   [--policy=POLICY] [--ecmp] lr-route-add ROUTER PREFIX NEXTHOP [PORT]\n\
@@ -5148,6 +5148,10 @@ print_route(const struct nbrec_logical_router_static_route *route, struct ds *s)
 
     if (route->output_port) {
         ds_put_format(s, " %s", route->output_port);
+    }
+
+    if (smap_get(&route->external_ids, "ic-learned-route")) {
+        ds_put_format(s, " (learned)");
     }
     ds_put_char(s, '\n');
 }

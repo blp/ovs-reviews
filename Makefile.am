@@ -179,6 +179,7 @@ SUFFIXES += .in
 	    -e 's,[@]OVN_RUNDIR[@],$(OVN_RUNDIR),g' \
 	    -e 's,[@]OVSBUILDDIR[@],$(OVSBUILDDIR),g' \
 	    -e 's,[@]VERSION[@],$(VERSION),g' \
+	    -e 's,[@]OVSVERSION[@],$(OVSVERSION),g' \
 	    -e 's,[@]localstatedir[@],$(localstatedir),g' \
 	    -e 's,[@]pkgdatadir[@],$(pkgdatadir),g' \
 	    -e 's,[@]sysconfdir[@],$(sysconfdir),g' \
@@ -225,19 +226,19 @@ dist-hook-git: distfiles
 	  (cd $(srcdir) && git ls-files) | grep -v '\.gitignore$$' | \
 	    grep -v '\.gitattributes$$' | \
 	    LC_ALL=C sort -u > all-gitfiles; \
-	  LC_ALL=C comm -1 -3 all-distfiles all-gitfiles > missing-distfiles; \
+	  LC_ALL=C comm -1 -3 distfiles all-gitfiles > missing-distfiles; \
 	  if test -s missing-distfiles; then \
 	    echo "The following files are in git but not the distribution:"; \
 	    cat missing-distfiles; \
 	    exit 1; \
 	  fi; \
-	  if LC_ALL=C grep '\.gitignore$$' all-distfiles; then \
+	  if LC_ALL=C grep '\.gitignore$$' distfiles; then \
 	    echo "See above for list of files that are distributed but"; \
 	    echo "should not be."; \
 	    exit 1; \
 	  fi \
 	fi
-CLEANFILES += all-distfiles all-gitfiles missing-distfiles
+CLEANFILES += distfiles all-gitfiles missing-distfiles
 # The following is based on commands for the Automake "distdir" target.
 distfiles: Makefile
 	@srcdirstrip=`echo "$(srcdir)" | sed 's/[].[^$$\\*]/\\\\&/g'`; \

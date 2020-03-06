@@ -483,8 +483,10 @@ ovn_logical_flow_hash(const struct uuid *logical_datapath,
 
 /* For a 'key' of the form "IP:port" or just "IP", sets 'port' and
  * 'ip_address'.  The caller must free() the memory allocated for
- * 'ip_address'. */
-void
+ * 'ip_address'.
+ * Returns true if parsing of 'key' was successful, false otherwise.
+ */
+bool
 ip_address_and_port_from_lb_key(const char *key, char **ip_address,
                                 uint16_t *port, int *addr_family)
 {
@@ -493,16 +495,18 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
         VLOG_WARN_RL(&rl, "bad ip address or port for load balancer key %s",
                      key);
-        return;
+        *ip_address = NULL;
+        *port = 0;
+        *addr_family = 0;
+        return false;
     }
 
     struct ds s = DS_EMPTY_INITIALIZER;
     ss_format_address_nobracks(&ss, &s);
     *ip_address = ds_steal_cstr(&s);
-
     *port = ss_get_port(&ss);
-
     *addr_family = ss.ss_family;
+    return true;
 }
 
 #ifdef DDLOG
@@ -590,4 +594,32 @@ char *
 ovn_chassis_redirect_name(const char *port_name)
 {
     return xasprintf("cr-%s", port_name);
+}
+
+bool
+ip46_parse_cidr(const char *str, struct v46_ip *prefix, unsigned int *plen)
+{
+    memset(prefix, 0, sizeof *prefix);
+
+    char *error = ip_parse_cidr(str, &prefix->ipv4, plen);
+    if (!error) {
+        prefix->family = AF_INET;
+        return true;
+    }
+    free(error);
+    error = ipv6_parse_cidr(str, &prefix->ipv6, plen);
+    if (!error) {
+        prefix->family = AF_INET6;
+        return true;
+    }
+    free(error);
+    return false;
+}
+
+bool
+ip46_equals(const struct v46_ip *addr1, const struct v46_ip *addr2)
+{
+    return (addr1->family == addr2->family &&
+            (addr1->family == AF_INET ? addr1->ipv4 == addr2->ipv4 :
+             IN6_ARE_ADDR_EQUAL(&addr1->ipv6, &addr2->ipv6)));
 }
