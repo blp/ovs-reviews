@@ -59,13 +59,22 @@ AC_DEFUN([OVS_CHECK_DDLOG], [
       AC_MSG_ERROR([ddlog library dir "$DDLOGLIBDIR" lacks std.dl])
     fi
 
-    # Check the prerequisites.
-    if !(ddlog --help) >/dev/null 2>&1; then
-      AC_MSG_ERROR([ddlog required for ddlog])
+    AC_ARG_VAR([DDLOG])
+    AC_CHECK_PROGS([DDLOG], [ddlog], [none])
+    if test X"$DDLOG" = X"none"; then
+	AC_MSG_ERROR([ddlog is required to build with DDlog])
     fi
 
-    if !(cargo --version) >/dev/null 2>&1; then
-      AC_MSG_ERROR([Rust required for ddlog])
+    AC_ARG_VAR([CARGO])
+    AC_CHECK_PROGS([CARGO], [cargo], [none])
+    if test X"$CARGO" = X"none"; then
+	AC_MSG_ERROR([cargo is required to build with DDlog])
+    fi
+
+    AC_ARG_VAR([RUSTC])
+    AC_CHECK_PROGS([RUSTC], [rustc], [none])
+    if test X"$RUSTC" = X"none"; then
+	AC_MSG_ERROR([rustc is required to build with DDlog])
     fi
 
     AC_SUBST([DDLOGLIBDIR])

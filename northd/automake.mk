@@ -65,10 +65,11 @@ northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: \
 	northd/OVN_Southbound.dl \
 	lib/libovn.la            \
 	$(OVS_LIBDIR)/libopenvswitch.la
-	$(AM_V_GEN)ddlog -i $< -L $(DDLOGLIBDIR) -L $(builddir)/northd --output-dir $(builddir)/northd
+	$(AM_V_GEN)$(DDLOG) -i $< -L $(DDLOGLIBDIR) -L $(builddir)/northd --output-dir $(builddir)/northd
 	$(AM_V_at)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
 		LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
 		cd northd/ovn_northd_ddlog && \
+		RUSTC=$(RUSTC) \
 		RUSTFLAGS="-L ../../lib/.libs -L $(OVS_LIBDIR)/.libs $(LIBOPENVSWITCH_DEPS) $(LIBOVN_DEPS) \
 		-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)" cargo build --release \
 		$(DDLOG_NORTHD_LIB_ONLY) $(CARGO_VERBOSE)
