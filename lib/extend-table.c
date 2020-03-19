@@ -25,6 +25,8 @@
 
 VLOG_DEFINE_THIS_MODULE(extend_table);
 
+#define free(x) ((void) (0))
+
 static void
 ovn_extend_table_delete_desired(struct ovn_extend_table *table,
                                 struct ovn_extend_table_lflow_to_desired *l);
