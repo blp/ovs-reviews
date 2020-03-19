@@ -289,7 +289,7 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
 
             if (central_ip_address) {
                 /* Gratuitous ARP for centralized NAT rules on distributed gateway
-                 * ports should be restricted to the "redirect-chassis". */
+                 * ports should be restricted to the gateway chassis. */
                 if (has_redirect) {
                     c_addresses = c_addresses ++ " is_chassis_resident(${router.redirect_port_name})"
                 } else ();
@@ -313,7 +313,8 @@ RouterPortRAOptionsComplete(lrp, map_empty()) :-
     not RouterPortRAOptions(lrp, _).
 
 
-function gateway_chassis_uuid_name(lr_uuid: uuid): string = { "gw" ++ uuid2name(lr_uuid) }
+function ha_chassis_group_uuid_name(lr_uuid: uuid): string = { "hacg" ++ uuid2name(lr_uuid) }
+function ha_chassis_uuid_name(chassis_uuid: uuid): string = { "hac" ++ uuid2name(chassis_uuid) }
 
 /*
  * Create derived port for Logical_Router_Ports with non-empty 'gateway_chassis' column.
@@ -323,8 +324,8 @@ function gateway_chassis_uuid_name(lr_uuid: uuid): string = { "gw" ++ uuid2name(
 sb.Out_Port_Binding(.uuid_name          = "cr" ++ uuid2name(lrp._uuid),
                     .logical_port       = chassis_redirect_name(lrp.name),
                     .__type             = "chassisredirect",
-                    .gateway_chassis    = gateway_chassis,
-                    .ha_chassis_group   = set_empty(),
+                    .gateway_chassis    = set_empty(),
+                    .ha_chassis_group   = ha_chassis_group,
                     .virtual_parent     = set_empty(),
                     .options            = map_singleton("distributed-port", lrp.name),
                     .datapath           = uuid2name(lr_uuid),
@@ -334,39 +335,53 @@ sb.Out_Port_Binding(.uuid_name          = "cr" ++ uuid2name(lrp._uuid),
                     .mac                = set_singleton("${lrp.mac} ${set_space_sep(lrp.networks)}"),
                     .nat_addresses      = set_empty(),
                     .external_ids       = lrp.external_ids) :-
-    ChassisRedirectPort(lrp, lr_uuid),
-    var gateway_chassis = if (not set_is_empty(lrp.gateway_chassis)) {
-        set_map_uuid2name(lrp.gateway_chassis)
-    } else {
-        set_singleton(gateway_chassis_uuid_name(lr_uuid))
-    }.
+    DistributedGatewayPort(lrp, lr_uuid),
+    var ha_chassis_group_uuid_name = ha_chassis_group_uuid_name(lr_uuid),
+    var ha_chassis_group = set_singleton(ha_chassis_group_uuid_name).
 
-/* Create sb.Gateway_Chassis for derived ports.
- * - For derived ports with non-empty gateway_chassis, clone nb.Gateway_Chassis to
- *   sb.Gateway_Chassis, replacing chassis_name's with matching sb.Chassis uuid's.
- * - For derived ports with options:redirect-chassis, synthesize a fresh Gateway_Chassis
- */
-sb.Out_Gateway_Chassis(.uuid_name       = uuid2name(gateway_chassis_uuid),
-                       .name            = gw_chassis.name,
-                       .chassis         = set_singleton(chassis_uuid),
-                       .priority        = gw_chassis.priority,
-                       .external_ids    = gw_chassis.external_ids,
-                       .options         = gw_chassis.options) :-
-    ChassisRedirectPort(lrp, lr_uuid),
-    var gateway_chassis_uuid = FlatMap(lrp.gateway_chassis),
-    gw_chassis in nb.Gateway_Chassis(._uuid = gateway_chassis_uuid),
-    sb.Chassis(._uuid = chassis_uuid, .name = gw_chassis.chassis_name).
+/* Referenced chassis.
+ *
+ * These tables track the sb.Chassis that a packet that traverses logical
+ * router 'lr_uuid' can end up at (or start from).  This is used for
+ * sb.Out_HA_Chassis_Group's ref_chassis column.
+ *
+ * RefChassisSet0 has a row for each logical router that actually references a
+ * chassis.  RefChassisSet has a row for every logical router. */
+relation RefChassis(lr_uuid: uuid, chassis_uuid: uuid)
+RefChassis(lr_uuid, chassis_uuid) :-
+    ReachableLogicalRouter(lr_uuid, lr2_uuid),
+    FirstHopLogicalRouter(lr2_uuid, ls_uuid),
+    LogicalSwitchPort(lsp_uuid, ls_uuid),
+    nb.Logical_Switch_Port(._uuid = lsp_uuid, .name = lsp_name),
+    sb.Port_Binding(.logical_port = lsp_name, .chassis = chassis_uuids),
+    var chassis_uuid = FlatMap(chassis_uuids).
+relation RefChassisSet0(lr_uuid: uuid, chassis_uuids: Set<uuid>)
+RefChassisSet0(lr_uuid, chassis_uuids) :-
+    RefChassis(lr_uuid, chassis_uuid),
+    var chassis_uuids = Aggregate((lr_uuid), group2set(chassis_uuid)).
+relation RefChassisSet(lr_uuid: uuid, chassis_uuids: Set<uuid>)
+RefChassisSet(lr_uuid, chassis_uuids) :-
+    RefChassisSet0(lr_uuid, chassis_uuids).
+RefChassisSet(lr_uuid, set_empty()) :-
+    nb.Logical_Router(._uuid = lr_uuid),
+    not RefChassisSet0(lr_uuid, _).
 
-sb.Out_Gateway_Chassis(.uuid_name       = gateway_chassis_uuid_name(lr_uuid),
-                       .name            = "${lrp.name}_${redirect_chassis}",
-                       .chassis         = set_singleton(chassis_uuid),
-                       .priority        = 0,
-                       .external_ids    = lrp.external_ids,
-                       .options         = map_empty()) :-
-    ChassisRedirectPort(lrp, lr_uuid),
-    set_is_empty(lrp.gateway_chassis),
-    Some{var redirect_chassis} = map_get(lrp.options, "redirect-chassis"),
-    sb.Chassis(._uuid = chassis_uuid, .name = redirect_chassis).
+/* HA_Chassis_Group and HA_Chassis. */
+sb.Out_HA_Chassis_Group(uuid_name, name, ha_chassis, ref_chassis, eids) :-
+    HAChassis(lr_uuid, chassis_name, priority, eids),
+    chassis_rec in sb.Chassis(.name = chassis_name),
+    var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
+    var ha_chassis = Aggregate((lr_uuid), group2set(ha_chassis_uuid_name)),
+    var uuid_name = ha_chassis_group_uuid_name(lr_uuid),
+    HAChassisGroup(lr_uuid, name, eids),
+    RefChassisSet(lr_uuid, ref_chassis).
+
+sb.Out_HA_Chassis(ha_chassis_uuid_name, chassis, priority, eids) :-
+    HAChassis(lr_uuid, chassis_name, priority, eids),
+    chassis_rec in sb.Chassis(.name = chassis_name),
+    var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
+    DistributedGatewayPort(dgp_lrp, lr_uuid),
+    var chassis = set_singleton(chassis_rec._uuid).
 
 /* Add allocated qdisc_queue_id and tunnel key to Port_Binding.
  */

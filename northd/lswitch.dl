@@ -417,7 +417,7 @@ SwitchPortAddresses(port, dynamic_address) :-
  * The resulting addresses are used to populate the logical switch’s destination lookup, and also for the
  * logical switch to generate ARP and ND replies.
  *
- * If the connected logical router port has a redirect-chassis specified and  the  logical  router  has  rules
+ * If the connected logical router port is a distributed gateway port and the logical router has rules
  * specified in nat with external_mac, then those addresses are also used to populate the switch’s destination
  * lookup. */
 SwitchPortAddresses(port, addrs) :-

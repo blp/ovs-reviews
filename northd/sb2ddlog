@@ -8,6 +8,8 @@ ovsdb2ddlog -f "$1" \
     -o Datapath_Binding \
     -o Port_Binding \
     -o Gateway_Chassis \
+    -o HA_Chassis \
+    -o HA_Chassis_Group \
     -o Port_Group \
     -o MAC_Binding \
     -o DHCP_Options \
@@ -42,4 +44,5 @@ ovsdb2ddlog -f "$1" \
     -k Logical_Flow.priority \
     -k Logical_Flow.match \
     -k Logical_Flow.actions \
-    -k IP_Multicast.datapath
+    -k IP_Multicast.datapath \
+    -k HA_Chassis_Group.name

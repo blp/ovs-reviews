@@ -69,7 +69,9 @@ static const char *nb_input_relations[] = {
     "Connection",
     "DNS",
     "SSL",
-    "Gateway_Chassis"
+    "Gateway_Chassis",
+    "HA_Chassis",
+    "HA_Chassis_Group"
 };
 
 static const char *sb_input_relations[] = {
@@ -93,8 +95,9 @@ static const char *sb_input_relations[] = {
     "RBAC_Role",
     "RBAC_Permission",
     "Gateway_Chassis",
-    "Gateway_Chassis",
-    "IP_Multicast"
+    "IP_Multicast",
+    "HA_Chassis",
+    "HA_Chassis_Group"
 };
 
 
@@ -884,6 +887,8 @@ get_sb_ops(struct northd_ctx *ctx)
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Role");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Permission");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "IP_Multicast");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
 
     ds_chomp(&ds, ',');
 
