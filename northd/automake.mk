@@ -34,6 +34,7 @@ northd/OVN_Northbound.dl: ovn-nb.ovsschema
 				-o Logical_Switch_Port          \
 				-k Logical_Switch_Port.name     \
 				-o NB_Global                    \
+				--ro NB_Global.name             \
 				--ro NB_Global.nb_cfg           \
 				--ro NB_Global.external_ids     \
 				--ro NB_Global.connections      \
