@@ -592,19 +592,3 @@ AC_DEFUN([OVS_CHECK_DDLOG_FAST_BUILD],
    if $ddlog_fast_build; then
       DDLOG_EXTRA_RUSTFLAGS="-C opt-level=z"
    fi])
-
-dnl Checks for --enable-ddlog-northd-cli and updates DDLOG_NORTHD_LIB_ONLY.
-AC_DEFUN([OVS_CHECK_DDLOG_NORTHD_CLI],
-  [AC_ARG_ENABLE(
-     [ddlog_northd_cli],
-     [AC_HELP_STRING([--enable-ddlog-northd-cli],
-                     [Build ovn_northd_cli, which is useful for debugging])],
-     [case "${enableval}" in
-        (yes) ddlog_northd_cli=true ;;
-        (no)  ddlog_northd_cli=false ;;
-        (*) AC_MSG_ERROR([bad value ${enableval} for --enable-ddlog-northd-cli]) ;;
-      esac],
-     [ddlog_northd_cli=false])
-   if test $ddlog_northd_cli = false; then
-      DDLOG_NORTHD_LIB_ONLY="--lib"
-   fi])

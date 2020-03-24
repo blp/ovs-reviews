@@ -52,27 +52,47 @@ cargo_verbose_ = $(cargo_verbose_$(AM_DEFAULT_VERBOSITY))
 cargo_verbose_0 =
 cargo_verbose_1 = --verbose
 
-northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: \
-	northd/ovn_northd.dl	 \
-	northd/lswitch.dl	 	 \
-	northd/lrouter.dl	 	 \
-	northd/ipam.dl			 \
-	northd/multicast.dl		 \
-	northd/ovn.dl			 \
-	northd/ovn.rs			 \
-	northd/helpers.dl		 \
+DDLOGFLAGS = -L $(DDLOGLIBDIR) -L $(builddir)/northd $(DDLOG_EXTRA_FLAGS)
+
+DDLOG_EXTRA_FLAGS =
+
+RUSTFLAGS = \
+	-L ../../lib/.libs \
+	-L $(OVS_LIBDIR)/.libs \
+	$(LIBOPENVSWITCH_DEPS) \
+	$(LIBOVN_DEPS) \
+	-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)
+
+ddlog_deps = \
+	northd/ovn_northd.dl \
+	northd/lswitch.dl \
+	northd/lrouter.dl \
+	northd/ipam.dl \
+	northd/multicast.dl \
+	northd/ovn.dl \
+	northd/ovn.rs \
+	northd/helpers.dl \
 	northd/OVN_Northbound.dl \
 	northd/OVN_Southbound.dl \
-	lib/libovn.la            \
+	lib/libovn.la \
 	$(OVS_LIBDIR)/libopenvswitch.la
-	$(AM_V_GEN)$(DDLOG) -i $< -L $(DDLOGLIBDIR) -L $(builddir)/northd --output-dir $(builddir)/northd
-	$(AM_V_at)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
-		LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
-		cd northd/ovn_northd_ddlog && \
-		RUSTC=$(RUSTC) \
-		RUSTFLAGS="-L ../../lib/.libs -L $(OVS_LIBDIR)/.libs $(LIBOPENVSWITCH_DEPS) $(LIBOVN_DEPS) \
-		-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)" cargo build --release \
-		$(DDLOG_NORTHD_LIB_ONLY) $(CARGO_VERBOSE)
+build_ddlog = \
+	$(AM_V_GEN)$(DDLOG) -i $< -o $(builddir)/northd $(DDLOGFLAGS) && \
+	LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
+	LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
+	cd northd/ovn_northd_ddlog && \
+	RUSTC='$(RUSTC)' RUSTFLAGS='$(RUSTFLAGS)' \
+	    cargo build --release $(CARGO_VERBOSE)
+
+northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: $(ddlog_deps)
+	$(build_ddlog) --lib
+
+# ovn_northd_cli is useful for debugging, but it doubles build time so
+# it is not compiled by default, so "make" the following target
+# manually when you need it.  See docs/debuggging.md for more
+# information.
+northd/ovn_northd_ddlog/target/release/ovn_northd_cli: $(ddlog_deps)
+	$(build_ddlog) --bin ovn_northd_cli
 
 CLEAN_LOCAL += clean-ddlog
 clean-ddlog:
