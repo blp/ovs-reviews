@@ -47,7 +47,7 @@ There are two additional `configure` options related to DDlog:
 ### Switching between DDlog and C versions of `northd`
 
 If you configured OVS with `--with-ddlog`, two northd executables will be
-generated: `ovn-norhtd` -- the "normal" C implementation of northd, and
+generated: `ovn-northd` -- the "normal" C implementation of northd, and
 `ovn-northd-ddlog` -- the DDlog version.  When using the `ovn-ctl` script to
 start OVN, use the `--ovn-northd-ddlog=yes|no` switch
 to choose between the two implementations (the default is `no`).
