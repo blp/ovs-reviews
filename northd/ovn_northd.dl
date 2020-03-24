@@ -2604,7 +2604,7 @@ for (lsp in nb.Logical_Switch_Port
           * port is a router port. */
          if is_enabled(lsp.enabled) and lsp.__type != "router")
 {
-    for (lps in LogicalPortSwitch(.lport = lsp._uuid)) {
+    for (lps in LogicalSwitchPort(.lport = lsp._uuid)) {
         var lsname = uuid2name(lps.lswitch) in
         var json_key = json_string_escape(lsp.name) in
         {

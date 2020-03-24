@@ -4,9 +4,9 @@ import ovsdb
 import ovn
 import helpers
 
-relation LogicalPortRouter(lport: uuid, lrouter: uuid)
+relation LogicalRouterPort(lport: uuid, lrouter: uuid)
 
-LogicalPortRouter(lport, lrouter) :-
+LogicalRouterPort(lport, lrouter) :-
     nb.Logical_Router(._uuid = lrouter, .ports = ports),
     var lport = FlatMap(ports).
 
@@ -17,7 +17,7 @@ relation ChassisRedirectPort(lrp: nb.Logical_Router_Port, lr_uuid: uuid)
 ChassisRedirectPort(lrp1, lr._uuid) :-
     // For each router, find router ports with non-empty gateway_chassis or a "redirect-chassis" option.
     nb.Logical_Router[lr],
-    LogicalPortRouter(lrp_uuid, lr._uuid),
+    LogicalRouterPort(lrp_uuid, lr._uuid),
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid),
         (not set_is_empty(lrp.gateway_chassis)) or map_contains_key(lrp.options, "redirect-chassis"),
     //&RouterPort(.lrp = lrp, .router = &Router{.lr = lr}),
@@ -219,7 +219,7 @@ relation &RouterPort(
             .mcast_cfg          = mcast_cfg) :-
     nb.Logical_Router_Port[lrp],
     Some{var networks} = extract_lrp_networks(lrp.mac, lrp.networks),
-    LogicalPortRouter(lrp._uuid, lrouter_uuid),
+    LogicalRouterPort(lrp._uuid, lrouter_uuid),
     router in &Router(.lr = nb.Logical_Router{._uuid = lrouter_uuid}),
     RouterPortIsRedirect(lrp._uuid, is_redirect),
     RouterPortPeer(lrp._uuid, peer),

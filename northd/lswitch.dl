@@ -18,9 +18,9 @@ SwitchRouterPeerRef(lsp, None) :-
     not SwitchRouterPeer(lsp, _, _).
 
 /* map logical ports to logical switches */
-relation LogicalPortSwitch(lport: uuid, lswitch: uuid)
+relation LogicalSwitchPort(lport: uuid, lswitch: uuid)
 
-LogicalPortSwitch(lport, lswitch) :-
+LogicalSwitchPort(lport, lswitch) :-
     nb.Logical_Switch(._uuid = lswitch, .ports = ports),
     var lport = FlatMap(ports).
 
@@ -297,7 +297,7 @@ relation &SwitchPort(
             .up                         = up,
             .mcast_cfg                  = mcast_cfg) :-
     nb.Logical_Switch_Port[lsp],
-    LogicalPortSwitch(lsp._uuid, lswitch_uuid),
+    LogicalSwitchPort(lsp._uuid, lswitch_uuid),
     sw in &Switch(.ls = nb.Logical_Switch{._uuid = lswitch_uuid, .other_config = other_config},
                   .subnet = subnet,
                   .ipv6_prefix = ipv6_prefix),
