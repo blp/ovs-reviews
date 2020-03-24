@@ -108,7 +108,7 @@ ovn_init_db () {
     mkdir "$d" || return 1
     : > "$d"/.$1.db.~lock~
     as $as_d ovsdb-tool create "$d"/$1.db "$abs_top_srcdir"/$1.ovsschema
-    as $as_d start_daemon ovsdb-server --remote=punix:"$d"/$1.sock "$d"/$1.db
+    as $as_d start_daemon ovsdb-server -vjsonrpc --remote=punix:"$d"/$1.sock "$d"/$1.db
     local var=`echo $1_db | tr a-z- A-Z_`
     AS_VAR_SET([$var], [unix:"$d"/$1.sock]); export $var
 }
