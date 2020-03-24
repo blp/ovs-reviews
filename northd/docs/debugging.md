@@ -137,15 +137,12 @@ easily tweak the inputs, e.g., to simplify the test scenario.  Second, the
 recorded execution can be easily replayed anywhere without having to reproduce
 your OVN setup.
 
-To enable recording, simply uncomment the following line in
-`ovn-northd-ddlog.c`:
+Use the `--ddlog-record` option to record updates,
+e.g. `--ddlog-record=replay.dat` to record to `replay.dat`.  OVN's built-in
+tests automatically do this.
 
-```
-//#define DDLOG_RECORDING
-```
-
-DDlog should now create a `replay.dat` file, which contains the log of transactions
-in the DDlog command format documented
+The file contains the log of transactions in the DDlog command format
+documented
 [here](https://github.com/vmware/differential-datalog/blob/master/doc/testing/testing.md#command-reference).
 
 To replay the log, you will need the standalone DDlog executable.  The build

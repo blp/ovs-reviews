@@ -130,6 +130,12 @@ ovn_init_ic_db () {
 # against them.
 ovn_start () {
     NORTHD_TYPE=${1:-ovn-northd}
+
+    local northd_args=
+    case $NORTHD_TYPE in
+        ovn-northd) ;;
+        ovn-northd-ddlog) northd_args="--ddlog-record=replay.dat" ;;
+    esac
     AZ=$2
     if test -n "$AZ"; then
         mkdir "$ovs_base"/$AZ
@@ -159,7 +165,7 @@ ovn_start () {
     fi
     echo "starting backup $NORTHD_TYPE"
     mkdir "$ovs_base"/$as_d
-    as $as_d start_daemon $NORTHD_TYPE \
+    as $as_d start_daemon $NORTHD_TYPE $northd_args \
                --ovnnb-db=$ovn_nb_db \
                --ovnsb-db=$ovn_sb_db
 

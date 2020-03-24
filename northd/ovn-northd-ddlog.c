@@ -48,9 +48,6 @@
 
 #include "northd/ovn_northd_ddlog/ddlog.h"
 
-/* Uncomment to record DDlog commands in a file. */
-//#define DDLOG_RECORDING
-
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
 static const char *nb_input_relations[] = {
@@ -102,6 +99,11 @@ static const char *sb_input_relations[] = {
 
 
 static unixctl_cb_func northd_exit;
+
+/* --ddlog-record: The name of a file to which to record DDlog commands for
+ * later replay.  Useful for debugging.  If null (by default), DDlog commands
+ * are not recorded. */
+static const char *record_file;
 
 static const char *ovnnb_db;
 static const char *ovnsb_db;
@@ -1091,8 +1093,10 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         DAEMON_OPTION_ENUMS,
         VLOG_OPTION_ENUMS,
         SSL_OPTION_ENUMS,
+        OPT_DDLOG_RECORD
     };
     static const struct option long_options[] = {
+        {"ddlog-record", required_argument, NULL, OPT_DDLOG_RECORD},
         {"ovnsb-db", required_argument, NULL, 'd'},
         {"ovnnb-db", required_argument, NULL, 'D'},
         {"unixctl", required_argument, NULL, 'u'},
@@ -1118,6 +1122,10 @@ parse_options(int argc OVS_UNUSED, char *argv[] OVS_UNUSED)
         DAEMON_OPTION_HANDLERS;
         VLOG_OPTION_HANDLERS;
         STREAM_SSL_OPTION_HANDLERS;
+
+        case OPT_DDLOG_RECORD:
+            record_file = optarg;
+            break;
 
         case 'd':
             ovnsb_db = optarg;
@@ -1196,19 +1204,18 @@ main(int argc, char *argv[])
         VLOG_ERR("xxx Couldn't create ddlog instance");
     }
 
-#ifdef DDLOG_RECORDING
-    char *replay_file = xasprintf("%s/replay.dat", ovs_logdir());
-    int replay_fd = open(replay_file, O_CREAT | O_WRONLY | O_TRUNC,
-                         S_IRUSR | S_IWUSR);
-    free(replay_file);
-    if (replay_fd < 0) {
-        VLOG_ERR("xxx Couldn't open replay.dat");
-    }
+    int replay_fd = -1;
+    if (record_file) {
+        replay_fd = open(record_file, O_CREAT | O_WRONLY | O_TRUNC, 0666);
+        if (replay_fd < 0) {
+            ovs_fatal(errno, "%s: could not create DDlog record file",
+                record_file);
+        }
 
-    if (ddlog_record_commands(ddlog, replay_fd)) {
-        VLOG_ERR("xxx Couldn't enable DDlog command recording");
+        if (ddlog_record_commands(ddlog, replay_fd)) {
+            ovs_fatal(0, "could not enable DDlog command recording");
+        }
     }
-#endif
 
     struct northd_ctx *nb_ctx = northd_ctx_create(ovnnb_db, "OVN_Northbound",
                                                   ddlog);
@@ -1262,10 +1269,10 @@ main(int argc, char *argv[])
 
     ddlog_stop(ddlog);
 
-#ifdef DDLOG_RECORDING
-    fsync(replay_fd);
-    close(replay_fd);
-#endif
+    if (replay_fd >= 0) {
+        fsync(replay_fd);
+        close(replay_fd);
+    }
 
     unixctl_server_destroy(unixctl);
     service_stop();
