@@ -1017,6 +1017,7 @@ typedef PipelineStage = PORT_SEC_L2
                       | DHCP_RESPONSE
                       | DNS_LOOKUP
                       | DNS_RESPONSE
+		      | EXTERNAL_PORT
                       | L2_LKUP
                       | ADMISSION
                       | IP_INPUT
@@ -1070,7 +1071,8 @@ function stage_id(stage: Stage): (integer, string) =
         (LSwitch, IN,  DHCP_RESPONSE) -> (13, "ls_in_dhcp_response"),
         (LSwitch, IN,  DNS_LOOKUP)    -> (14, "ls_in_dns_lookup"),
         (LSwitch, IN,  DNS_RESPONSE)  -> (15, "ls_in_dns_response"),
-        (LSwitch, IN,  L2_LKUP)       -> (16, "ls_in_l2_lkup"),
+        (LSwitch, IN,  EXTERNAL_PORT) -> (16, "ls_in_external_port"),
+        (LSwitch, IN,  L2_LKUP)       -> (17, "ls_in_l2_lkup"),
 
         /* Logical switch egress stages. */
         (LSwitch, OUT, PRE_LB)        -> (0,  "ls_out_pre_lb"),
@@ -2149,7 +2151,7 @@ for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = (vip_key, vip_val))) {
                   ingress table 1: ingress port security - IP (priority 90 and 80)
                   ingress table 2: ingress port security - ND (priority 90 and 80) */
 for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name, .ps_eth_addresses = ps_eth_addresses)
-     if is_enabled(lsp.enabled)) {
+     if is_enabled(lsp.enabled) and lsp.__type != "external") {
     for (pbinding in sb.OutProxy_Port_Binding(.logical_port = lsp.name)) {
         var __match = if (vec_is_empty(ps_eth_addresses)) {
                 "inport == ${json_name}"
@@ -2611,29 +2613,54 @@ function build_dhcpv6_action(
     }
 }
 
+/*
+ * Ordinarily, returns a match against 'lsp'.
+ *
+ * If 'lsp' is an external port, returns a match against the localnet port on
+ * its switch along with a condition that it only operate if 'lsp' is
+ * chassis-resident.  This makes sense as a condition for sending DHCP replies
+ * to external ports because only one chassis should send such a reply.
+ */
+function match_dhcp_input(lsp: Ref<SwitchPort>): string =
+{
+    if (lsp.lsp.__type == "external") {
+        match(lsp.sw.localnet_port_name) {
+            Some{localnet_port_name} -> return "inport == ${json_string_escape(localnet_port_name)} && is_chassis_resident(${lsp.json_name})",
+            None -> ()
+        }
+    } else ();
+    "inport == ${lsp.json_name}"
+}
 
 /* Logical switch ingress table 12 and 13: DHCP options and response
  * priority 100 flows. */
-for (lsp in nb.Logical_Switch_Port
+for (lsp in &SwitchPort
          /* Don't add the DHCP flows if the port is not enabled or if the
           * port is a router port. */
-         if is_enabled(lsp.enabled) and lsp.__type != "router")
+         if (is_enabled(lsp.lsp.enabled) and lsp.lsp.__type != "router")
+         /* If it's an external port and there is no localnet port
+          * and if it doesn't belong to an HA chassis group ignore it. */
+         and (lsp.lsp.__type != "external"
+              or (lsp.sw.has_localnet_port
+	          and not set_is_empty(lsp.lsp.ha_chassis_group))))
 {
-    for (lps in LogicalSwitchPort(.lport = lsp._uuid)) {
+    for (lps in LogicalSwitchPort(.lport = lsp.lsp._uuid)) {
         var lsname = uuid2name(lps.lswitch) in
-        var json_key = json_string_escape(lsp.name) in
+        var json_key = json_string_escape(lsp.lsp.name) in
         {
             /* DHCPv4 options enabled for this port */
-            Some{var dhcpv4_options_uuid} = set_nth(lsp.dhcpv4_options, 0) in
+            Some{var dhcpv4_options_uuid} = set_nth(lsp.lsp.dhcpv4_options, 0) in
             {
                 for (dhcpv4_options in nb.DHCP_Options(._uuid = dhcpv4_options_uuid)) {
-                    for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp._uuid}}, .ea_s = ea_s, .addr = addr)) {
+                    for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea_s = ea_s, .addr = addr)) {
                         Some{(var options_action, var response_action, var ipv4_addr_match)} =
                             build_dhcpv4_action(json_key, dhcpv4_options, addr.addr) in
                         {
-                            var __match = "inport == ${json_key} && eth.src == ${ea_s} && "
-                                          "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
-                                          "udp.src == 68 && udp.dst == 67" in
+                            var __match =
+                                match_dhcp_input(lsp) ++ " && eth.src == ${ea_s} && "
+                                "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
+                                "udp.src == 68 && udp.dst == 67"
+                            in
                             Flow(.logical_datapath = lsname,
                                  .stage         = switch_stage(IN, DHCP_OPTIONS),
                                  .priority         = 100,
@@ -2649,8 +2676,8 @@ for (lsp in nb.Logical_Switch_Port
                              *  -  When the client wants to renew the IP by
                              *     broadcasting the DHCPREQUEST.
                              */
-                            var __match = "inport == ${json_key} && eth.src == ${ea_s} && "
-                                          "${ipv4_addr_match} && udp.src == 68 && udp.dst == 67" in
+                            var __match = match_dhcp_input(lsp) ++ " && eth.src == ${ea_s} && "
+                                "${ipv4_addr_match} && udp.src == 68 && udp.dst == 67" in
                             Flow(.logical_datapath = lsname,
                                  .stage         = switch_stage(IN, DHCP_OPTIONS),
                                  .priority         = 100,
@@ -2660,9 +2687,9 @@ for (lsp in nb.Logical_Switch_Port
 
                             /* If REGBIT_DHCP_OPTS_RESULT is set, it means the
                              * put_dhcp_opts action  is successful. */
-                            var __match = "inport == ${json_key} && eth.src == ${ea_s} && "
-                                          "ip4 && udp.src == 68 && udp.dst == 67 && " ++
-                                          rEGBIT_DHCP_OPTS_RESULT() in
+                            var __match = match_dhcp_input(lsp) ++ " && eth.src == ${ea_s} && "
+                                "ip4 && udp.src == 68 && udp.dst == 67 && " ++
+                                rEGBIT_DHCP_OPTS_RESULT() in
                             Flow(.logical_datapath = lsname,
                                  .stage         = switch_stage(IN, DHCP_RESPONSE),
                                  .priority         = 100,
@@ -2679,16 +2706,16 @@ for (lsp in nb.Logical_Switch_Port
             };
 
             /* DHCPv6 options enabled for this port */
-            Some{var dhcpv6_options_uuid} = set_nth(lsp.dhcpv6_options, 0) in
+            Some{var dhcpv6_options_uuid} = set_nth(lsp.lsp.dhcpv6_options, 0) in
             {
                 for (dhcpv6_options in nb.DHCP_Options(._uuid = dhcpv6_options_uuid)) {
-                    for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp._uuid}}, .ea_s = ea_s, .addr = addr)) {
+                    for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea_s = ea_s, .addr = addr)) {
                         Some{(var options_action, var response_action)} =
                             build_dhcpv6_action(json_key, dhcpv6_options, addr.addr) in
                         {
-                            var __match = "inport == ${json_key} && eth.src == ${ea_s}"
-                                          " && ip6.dst == ff02::1:2 && udp.src == 546 &&"
-                                          " udp.dst == 547" in
+                            var __match = match_dhcp_input(lsp) ++ " && eth.src == ${ea_s}"
+                                " && ip6.dst == ff02::1:2 && udp.src == 546 &&"
+                                " udp.dst == 547" in
                             {
                                 Flow(.logical_datapath = lsname,
                                      .stage         = switch_stage(IN, DHCP_OPTIONS),
@@ -2757,7 +2784,9 @@ for (LogicalSwitchHasDNSRecords(ls, true))
 /* Ingress table 12 and 13: DHCP options and response, by default goto
  * next. (priority 0).
  * Ingress table 14 and 15: DNS lookup and response, by default goto next.
- * (priority 0).*/
+ * (priority 0).
+ * Ingress table 16 - External port handling, by default goto next.
+ * (priority 0). */
 for (ls in nb.Logical_Switch) {
     var lsname = uuid2name(ls._uuid) in {
         Flow(.logical_datapath = lsname,
@@ -2783,6 +2812,13 @@ for (ls in nb.Logical_Switch) {
 
         Flow(.logical_datapath = lsname,
              .stage         = switch_stage(IN, DNS_RESPONSE),
+             .priority         = 0,
+             .__match          = "1",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+
+        Flow(.logical_datapath = lsname,
+             .stage         = switch_stage(IN, EXTERNAL_PORT),
              .priority         = 0,
              .__match          = "1",
              .actions          = "next;",
@@ -2914,7 +2950,50 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
     }
 }
 
-/* Ingress table 16: Destination lookup, broadcast and multicast handling
+/* Table 16: External port. Drop ARP request for router ips from
+ * external ports  on chassis not binding those ports.
+ * This makes the router pipeline to be run only on the chassis
+ * binding the external ports.
+ *
+ * For an external port X on logical switch LS, if X is not resident on this
+ * chassis, drop ARP requests arriving on localnet ports from X's Ethernet
+ * address, if the ARP request is asking to translate the IP address of a
+ * router port on LS. */
+Flow(.logical_datapath = sp.sw.dpname,
+     .stage            = switch_stage(IN, EXTERNAL_PORT),
+     .priority         = 100,
+     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+                          "eth.src == ${lp_addr.ea_s} && "
+                          "!is_chassis_resident(${sp.json_name}) && "
+                          "arp.tpa == ${rp_addr.addr_s} && arp.op == 1"),
+     .actions          = "drop;",
+     .external_ids     = map_empty()) :-
+    sp in &SwitchPort(),
+    sp.lsp.__type == "external",
+    Some{var localnet_port_name} = sp.sw.localnet_port_name,
+    var lp_addr = FlatMap(sp.static_addresses),
+    rp in &SwitchPort(.sw = sp.sw),
+    rp.lsp.__type == "router",
+    SwitchPortIPv4Address(.port = rp, .addr = rp_addr).
+Flow(.logical_datapath = sp.sw.dpname,
+     .stage            = switch_stage(IN, EXTERNAL_PORT),
+     .priority         = 100,
+     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+                          "eth.src == ${lp_addr.ea_s} && "
+                          "!is_chassis_resident(${sp.json_name}) && "
+                          "nd_ns && ip6.dst == {${rp_addr.addr_s}, ${rp_addr.sn_addr_s}} && "
+                          "nd_target == ${rp_addr.addr_s}"),
+     .actions          = "drop;",
+     .external_ids     = map_empty()) :-
+    sp in &SwitchPort(),
+    sp.lsp.__type == "external",
+    Some{var localnet_port_name} = sp.sw.localnet_port_name,
+    var lp_addr = FlatMap(sp.static_addresses),
+    rp in &SwitchPort(.sw = sp.sw),
+    rp.lsp.__type == "router",
+    SwitchPortIPv6Address(.port = rp, .addr = rp_addr).
+
+/* Ingress table 17: Destination lookup, broadcast and multicast handling
  * (priority 100). */
 for (ls in nb.Logical_Switch) {
     var lsname = uuid2name(ls._uuid) in
@@ -2927,7 +3006,7 @@ for (ls in nb.Logical_Switch) {
          .external_ids     = map_empty())
 }
 
-/* Ingress table 16: Destination lookup, unicast handling (priority 50), */
+/* Ingress table 17: Destination lookup, unicast handling (priority 50), */
 for (SwitchPortStaticAddresses(.port = &SwitchPort{.json_name = json_name, .sw = &sw}, .addrs = addrs)) {
     Flow(.logical_datapath = sw.dpname,
          .stage         = switch_stage(IN, L2_LKUP),
@@ -3016,7 +3095,7 @@ for (&SwitchPort(.lsp = lsp,
                          op->nbsp->name, op->nbsp->addresses[i]);
         }*/
 
-/* Ingress table 16: Destination lookup for unknown MACs (priority 0). */
+/* Ingress table 17: Destination lookup for unknown MACs (priority 0). */
 for (LogicalSwitchUnknownPorts(.ls = ls_uuid)) {
     var lsname = uuid2name(ls_uuid) in
     (var mc_unknown, _) = mC_UNKNOWN() in
@@ -3055,7 +3134,7 @@ for (&Switch(.dpname = dpname)) {
  * Priority 150 rules drop packets to disabled logical ports, so that they
  * don't even receive multicast or broadcast packets. */
 for (&SwitchPort(.sw = &sw, .lsp = lsp, .json_name = json_name, .ps_eth_addresses = ps_eth_addresses)
-     if is_enabled(lsp.enabled)) {
+     if is_enabled(lsp.enabled) and lsp.__type != "external") {
     var __match = if (vec_is_empty(ps_eth_addresses)) {
             "outport == ${json_name}"
         } else {
