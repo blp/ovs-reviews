@@ -62,6 +62,7 @@ static const char *nb_input_relations[] = {
     "Meter",
     "Meter_Band",
     "Logical_Router",
+    "Logical_Router_Policy",
     "Logical_Router_Port",
     "Logical_Router_Static_Route",
     "NAT",

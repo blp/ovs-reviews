@@ -4109,9 +4109,10 @@ ls2_p1_ip=172.16.1.2
 ls3_p1_mac=00:00:00:01:02:05
 
 # Create a drop policy
-ovn-nbctl lr-policy-add R1 10 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" drop
+ovn-nbctl --wait=hv lr-policy-add R1 10 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" drop
 
 # Check logical flow
+ovn-sbctl dump-flows > sbflows
 AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | grep "192.168.1.0" | wc -l], [0], [dnl
 1
 ])
