@@ -1049,6 +1049,7 @@ typedef PipelineStage = PORT_SEC_L2
                       | ND_RA_OPTIONS
                       | ND_RA_RESPONSE
                       | IP_ROUTING
+                      | POLICY
                       | ARP_RESOLVE
                       | GW_REDIRECT
                       | ARP_REQUEST
@@ -1117,9 +1118,10 @@ function stage_id(stage: Stage): (integer, string) =
         (LRouter, IN,  ND_RA_OPTIONS) -> (5,  "lr_in_nd_ra_options"),
         (LRouter, IN,  ND_RA_RESPONSE)-> (6,  "lr_in_nd_ra_response"),
         (LRouter, IN,  IP_ROUTING)    -> (7,  "lr_in_ip_routing"),
-        (LRouter, IN,  ARP_RESOLVE)   -> (8,  "lr_in_arp_resolve"),
-        (LRouter, IN,  GW_REDIRECT)   -> (9,  "lr_in_gw_redirect"),
-        (LRouter, IN,  ARP_REQUEST)   -> (10, "lr_in_arp_request"),
+        (LRouter, IN,  POLICY)        -> (8,  "lr_in_policy"),
+        (LRouter, IN,  ARP_RESOLVE)   -> (9,  "lr_in_arp_resolve"),
+        (LRouter, IN,  GW_REDIRECT)   -> (10,  "lr_in_gw_redirect"),
+        (LRouter, IN,  ARP_REQUEST)   -> (11, "lr_in_arp_request"),
 
         /* Logical router egress stages. */
         (LRouter, OUT, UNDNAT)        -> (0,  "lr_out_undnat"),
@@ -4894,9 +4896,82 @@ for (RouterMcastFloodPorts(&rtr, flood_ports)) {
          .external_ids     = map_empty())
 }
 
+/* Logical router ingress table 8: Policy.
+ *
+ * A packet that arrives at this table is an IP packet that should be
+ * permitted/denied/rerouted to the address in the rule's nexthop.
+ * This table sets outport to the correct out_port,
+ * eth.src to the output port's MAC address,
+ * and '[xx]reg0' to the next-hop IP address (leaving
+ * 'ip[46].dst', the packet’s final destination, unchanged), and
+ * advances to the next table for ARP/ND resolution. */
+for (&Router(.dpname = dpname)) {
+    /* This is a catch-all rule. It has the lowest priority (0)
+     * does a match-all("1") and pass-through (next) */
+    Flow(.logical_datapath = dpname,
+         .stage            = router_stage(IN, POLICY),
+         .priority         = 0,
+         .__match          = "1",
+         .actions          = "next;",
+         .external_ids     = map_empty())
+}
+
+function stage_hint(_uuid: uuid): Map<string,string> = {
+    map_singleton("stage-hint", "${hex(_uuid[127:96])}")
+}
+
+
+/* Convert routing policies to flows. */
+Flow(.logical_datapath = r.dpname,
+     .stage            = router_stage(IN, POLICY),
+     .priority         = policy.priority,
+     .__match          = policy.__match,
+     .actions          = actions,
+     .external_ids     = stage_hint(policy._uuid)) :-
+    r in &Router(),
+    var policy_uuid = FlatMap(r.lr.policies),
+    policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
+    policy.action == "reroute",
+    out_port in &RouterPort(.router = r),
+    Some{var nexthop} = set_nth(policy.nexthop, 0),
+    Some{var lrp_addr_s} = find_lrp_member_ip(out_port.networks, nexthop),
+    /*
+    None:
+    VLOG_WARN_RL(&rl, "lrp_addr not found for routing policy "
+                 " priority %"PRId64" nexthop %s",
+                 rule->priority, rule->nexthop);
+    */
+    var is_ipv4 = string_contains(lrp_addr_s, "."),
+    var xx = if (is_ipv4) { "" } else { "xx" },
+    var actions = ("${xx}reg0 = ${nexthop}; "
+                   "${xx}reg1 = ${lrp_addr_s}; "
+                   "eth.src = ${out_port.networks.ea_s}; "
+                   "output = ${out_port.json_name}; "
+                   "next;").
+Flow(.logical_datapath = r.dpname,
+     .stage            = router_stage(IN, POLICY),
+     .priority         = policy.priority,
+     .__match          = policy.__match,
+     .actions          = "drop;",
+     .external_ids     = stage_hint(policy._uuid)) :-
+    r in &Router(),
+    var policy_uuid = FlatMap(r.lr.policies),
+    policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
+    policy.action == "drop".
+Flow(.logical_datapath = r.dpname,
+     .stage            = router_stage(IN, POLICY),
+     .priority         = policy.priority,
+     .__match          = policy.__match,
+     .actions          = "next;",
+     .external_ids     = stage_hint(policy._uuid)) :-
+    r in &Router(),
+    var policy_uuid = FlatMap(r.lr.policies),
+    policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
+    policy.action == "allow".
+
 /* XXX destination unreachable */
 
-/* Local router ingress table 8: ARP Resolution.
+/* Local router ingress table 9: ARP Resolution.
  *
  * Multicast packets already have the outport set so just advance to next
  * table (priority 500).
@@ -4910,7 +4985,7 @@ for (&Router(.dpname = dpname)) {
          .external_ids     = map_empty())
 }
 
-/* Local router ingress table 8: ARP Resolution.
+/* Local router ingress table 9: ARP Resolution.
  *
  * Any packet that reaches this table is an IP packet whose next-hop IP
  * address is in reg0. (ip4.dst is the final destination.) This table
@@ -5055,7 +5130,7 @@ for (&Router(.dpname = dpname))
 }
 
 
-/* Logical router ingress table 9: Gateway redirect.
+/* Logical router ingress table 10: Gateway redirect.
  *
  * For traffic with outport equal to the l3dgw_port
  * on a distributed router, this table redirects a subset
@@ -5102,7 +5177,7 @@ for (&Router(.dpname = dpname,
          .external_ids     = map_empty())
 }
 
-/* Local router ingress table 10: ARP request.
+/* Local router ingress table 11: ARP request.
  *
  * In the common case where the Ethernet destination has been resolved,
  * this table outputs the packet (priority 0).  Otherwise, it composes
