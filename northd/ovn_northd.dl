@@ -4946,7 +4946,7 @@ Flow(.logical_datapath = r.dpname,
     var actions = ("${xx}reg0 = ${nexthop}; "
                    "${xx}reg1 = ${lrp_addr_s}; "
                    "eth.src = ${out_port.networks.ea_s}; "
-                   "output = ${out_port.json_name}; "
+                   "outport = ${out_port.json_name}; "
                    "next;").
 Flow(.logical_datapath = r.dpname,
      .stage            = router_stage(IN, POLICY),

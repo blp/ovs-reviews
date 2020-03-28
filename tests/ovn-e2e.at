@@ -4185,13 +4185,13 @@ as pbr-hv ovs-appctl -t ovn-controller inject-pkt "$packet"
 sleep 1
 
 echo "southbound flows"
-
-ovn-sbctl dump-flows | grep lr_in_policy
+ovn-sbctl --ovs dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
 echo "ovs flows"
-ovs-ofctl dump-flows br-int
+ovs-ofctl dump-flows br-int > brflows
+AT_CAPTURE_FILE([brflows])
 # Check if packet hit the allow policy
-AT_CHECK([ovs-ofctl dump-flows br-int | \
-    grep "nw_src=192.168.1.0/24,nw_dst=172.16.1.0/24" | \
+AT_CHECK([grep "nw_src=192.168.1.0/24,nw_dst=172.16.1.0/24" brflows | \
     grep "priority=30" | \
     grep "n_packets=1" | wc -l], [0], [dnl
 1
