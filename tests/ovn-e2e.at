@@ -12672,6 +12672,7 @@ logical_port=lr0-public mac="00\:00\:00\:12\:af\:11"
 # Set the gateway mtu to 100. If the packet length is > 100, ovn-controller
 # should send icmp host not reachable with pmtu set to 100.
 ovn-nbctl --wait=hv set logical_router_port lr0-public options:gateway_mtu=100
+ovn-sbctl dump-flows > sbflows
 as hv3 ovs-appctl netdev-dummy/receive hv3-vif1 $arp_reply
 OVS_WAIT_UNTIL([
     test `as hv1 ovs-ofctl dump-flows br-int | grep "check_pkt_larger(100)" | \

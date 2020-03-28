@@ -1048,12 +1048,14 @@ typedef PipelineStage = PORT_SEC_L2
                       | DNAT
                       | ND_RA_OPTIONS
                       | ND_RA_RESPONSE
-                      | IP_ROUTING
-                      | POLICY
-                      | ARP_RESOLVE
-                      | GW_REDIRECT
-                      | ARP_REQUEST
-                      | UNDNAT
+                     | IP_ROUTING
+                     | POLICY
+                     | ARP_RESOLVE
+                     | CHK_PKT_LEN
+                     | LARGER_PKTS
+                     | GW_REDIRECT
+                     | ARP_REQUEST
+                     | UNDNAT
                       | SNAT
                       | EGR_LOOP
                       | DELIVERY
@@ -1117,14 +1119,16 @@ function stage_id(stage: Stage): (integer, string) =
         (LRouter, IN,  DNAT)          -> (4,  "lr_in_dnat"),
         (LRouter, IN,  ND_RA_OPTIONS) -> (5,  "lr_in_nd_ra_options"),
         (LRouter, IN,  ND_RA_RESPONSE)-> (6,  "lr_in_nd_ra_response"),
-        (LRouter, IN,  IP_ROUTING)    -> (7,  "lr_in_ip_routing"),
-        (LRouter, IN,  POLICY)        -> (8,  "lr_in_policy"),
-        (LRouter, IN,  ARP_RESOLVE)   -> (9,  "lr_in_arp_resolve"),
-        (LRouter, IN,  GW_REDIRECT)   -> (10,  "lr_in_gw_redirect"),
-        (LRouter, IN,  ARP_REQUEST)   -> (11, "lr_in_arp_request"),
+       (LRouter, IN,  IP_ROUTING)    -> (7,  "lr_in_ip_routing"),
+       (LRouter, IN,  POLICY)        -> (8,  "lr_in_policy"),
+       (LRouter, IN,  ARP_RESOLVE)   -> (9,  "lr_in_arp_resolve"),
+       (LRouter, IN,  CHK_PKT_LEN)   -> (10, "lr_in_chk_pkt_len"),
+       (LRouter, IN,  LARGER_PKTS)   -> (11, "lr_in_larger_pkts"),
+       (LRouter, IN,  GW_REDIRECT)   -> (12, "lr_in_gw_redirect"),
+       (LRouter, IN,  ARP_REQUEST)   -> (13, "lr_in_arp_request"),
 
-        /* Logical router egress stages. */
-        (LRouter, OUT, UNDNAT)        -> (0,  "lr_out_undnat"),
+       /* Logical router egress stages. */
+       (LRouter, OUT, UNDNAT)        -> (0,  "lr_out_undnat"),
         (LRouter, OUT, SNAT)          -> (1,  "lr_out_snat"),
         (LRouter, OUT, EGR_LOOP)      -> (2,  "lr_out_egr_loop"),
         (LRouter, OUT, DELIVERY)      -> (3,  "lr_out_delivery"),
@@ -1146,9 +1150,11 @@ function rEGBIT_ND_RA_OPTS_RESULT(): string = "reg0[5]"
 function rEGBIT_NAT_REDIRECT()     : string = "reg9[0]"
 /* Indicate that this packet has been recirculated using egress
  * loopback.  This allows certain checks to be bypassed, such as a
- * logical router dropping packets with source IP address equals
- * one of the logical router's own IP addresses. */
+* logical router dropping packets with source IP address equals
+* one of the logical router's own IP addresses. */
 function rEGBIT_EGRESS_LOOPBACK()  : string = "reg9[1]"
+/* Register to store the result of check_pkt_larger action. */
+function rEGBIT_PKT_LARGER()       : string = "reg9[3]"
 
 function mFF_N_LOG_REGS()          : bit<32> = 10
 
@@ -5129,8 +5135,74 @@ for (&Router(.dpname = dpname))
          .external_ids     = map_empty())
 }
 
+/* Local router ingress table CHK_PKT_LEN: Check packet length.
+ *
+ * Any IPv4 packet with outport set to the distributed gateway
+ * router port, check the packet length and store the result in the
+ * 'REGBIT_PKT_LARGER' register bit.
+ *
+ * Local router ingress table LARGER_PKTS: Handle larger packets.
+ *
+ * Any IPv4 packet with outport set to the distributed gateway
+ * router port and the 'REGBIT_PKT_LARGER' register bit is set,
+ * generate ICMPv4 packet with type 3 (Destination Unreachable) and
+ * code 4 (Fragmentation needed).
+ * */
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, CHK_PKT_LEN),
+     .priority         = 0,
+     .__match          = "1",
+     .actions          = "next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LARGER_PKTS),
+     .priority         = 0,
+     .__match          = "1",
+     .actions          = "next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, CHK_PKT_LEN),
+     .priority         = 50,
+     .__match          = "outport == ${l3dgw_port_json_name} && ip4",
+     .actions          = "${rEGBIT_PKT_LARGER()} = check_pkt_larger(${gw_mtu}); "
+                         "next;",
+     .external_ids     = stage_hint(l3dgw_port._uuid)) :-
+    r in &Router(.dpname = dpname),
+    Some{var l3dgw_port} = r.l3dgw_port,
+    var l3dgw_port_json_name = json_string_escape(l3dgw_port.name),
+    r.redirect_port_name != "",
+    var gw_mtu = map_get_int_def(l3dgw_port.options, "gateway_mtu", 0),
+    gw_mtu > 0.
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LARGER_PKTS),
+     .priority         = 50,
+     .__match          = "inport == ${rp.json_name} && outport == ${l3dgw_port_json_name} && "
+                         "ip4 && ${rEGBIT_PKT_LARGER()}",
+     .actions          = "icmp4_error {"
+                         "${rEGBIT_EGRESS_LOOPBACK()} = 1; "
+                         "eth.dst = ${rp.networks.ea_s}; "
+                         "ip4.dst = ip4.src; "
+                         "ip4.src = ${first_ipv4.addr_s}; "
+                         "ip.ttl = 255; "
+                         "icmp4.type = 3; /* Destination Unreachable. */ "
+                         "icmp4.code = 4; /* Frag Needed and DF was Set. */ "
+                         "icmp4.frag_mtu = ${gw_mtu - 64'd18}; "
+                         "next(pipeline=ingress, table=0); "
+                         "};",
+     .external_ids     = stage_hint(rp.lrp._uuid)) :-
+    r in &Router(.dpname = dpname),
+    Some{var l3dgw_port} = r.l3dgw_port,
+    var l3dgw_port_json_name = json_string_escape(l3dgw_port.name),
+    r.redirect_port_name != "",
+    var gw_mtu = map_get_int_def(l3dgw_port.options, "gateway_mtu", 0),
+    gw_mtu > 0,
+    rp in &RouterPort(.router = r),
+    rp.lrp != l3dgw_port,
+    Some{var first_ipv4} = vec_nth(rp.networks.ipv4_addrs, 0).
 
-/* Logical router ingress table 10: Gateway redirect.
+/* Logical router ingress table 12: Gateway redirect.
  *
  * For traffic with outport equal to the l3dgw_port
  * on a distributed router, this table redirects a subset
@@ -5177,7 +5249,7 @@ for (&Router(.dpname = dpname,
          .external_ids     = map_empty())
 }
 
-/* Local router ingress table 11: ARP request.
+/* Local router ingress table 13: ARP request.
  *
  * In the common case where the Ethernet destination has been resolved,
  * this table outputs the packet (priority 0).  Otherwise, it composes
