@@ -4135,10 +4135,10 @@ AT_CHECK([ovs-ofctl dump-flows br-int | \
 # Expected to drop the packet.
 $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" pbr-hv/vif2-tx.pcap > vif2.packets
 rcvd_packet=`cat vif2.packets`
-AT_FAIL_IF([rcvd_packet = ""])
+AT_FAIL_IF([test "$rcvd_packet" != ""])
 
 # Override drop policy with allow
-ovn-nbctl lr-policy-add R1 20 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" allow
+ovn-nbctl --wait=hv lr-policy-add R1 20 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" allow
 
 # Check logical flow
 AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | grep "192.168.1.0" | wc -l], [0], [dnl
@@ -4152,6 +4152,7 @@ packet="inport==\"ls1-lp1\" && eth.src==$ls1_p1_mac && eth.dst==$ls1_ro_mac &&
 as pbr-hv ovs-appctl -t ovn-controller inject-pkt "$packet"
 
 # Check if packet hit the allow policy
+sleep 1
 AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | \
     grep "192.168.1.0" | \
     grep "priority=20" | wc -l], [0], [dnl
@@ -4167,7 +4168,7 @@ echo $expected | ovstest test-ovn expr-to-packets > expected
 OVN_CHECK_PACKETS([pbr-hv/vif2-tx.pcap], [expected])
 
 # Override allow policy with reroute
-ovn-nbctl lr-policy-add R1 30 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" reroute 20.20.1.2
+ovn-nbctl --wait=hv lr-policy-add R1 30 "ip4.src==192.168.1.0/24 && ip4.dst==172.16.1.0/24" reroute 20.20.1.2
 
 # Check logical flow
 AT_CHECK([ovn-sbctl dump-flows | grep lr_in_policy | \
@@ -4181,6 +4182,7 @@ packet="inport==\"ls1-lp1\" && eth.src==$ls1_p1_mac && eth.dst==$ls1_ro_mac &&
        ip4 && ip.ttl==64 && ip4.src==$ls1_p1_ip && ip4.dst==$ls2_p1_ip &&
        udp && udp.src==53 && udp.dst==4369"
 as pbr-hv ovs-appctl -t ovn-controller inject-pkt "$packet"
+sleep 1
 
 echo "southbound flows"
 
