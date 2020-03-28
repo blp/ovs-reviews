@@ -54,7 +54,7 @@ cargo_verbose_1 = --verbose
 
 DDLOGFLAGS = -L $(DDLOGLIBDIR) -L $(builddir)/northd $(DDLOG_EXTRA_FLAGS)
 
-#DDLOG_EXTRA_FLAGS = --output-internal-relations
+DDLOG_EXTRA_FLAGS = --output-internal-relations
 
 RUSTFLAGS = \
 	-L ../../lib/.libs \
@@ -63,7 +63,7 @@ RUSTFLAGS = \
 	$(LIBOVN_DEPS) \
 	-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)
 
-ddlog_deps = \
+ddlog_sources = \
 	northd/ovn_northd.dl \
 	northd/lswitch.dl \
 	northd/lrouter.dl \
@@ -73,26 +73,29 @@ ddlog_deps = \
 	northd/ovn.rs \
 	northd/helpers.dl \
 	northd/OVN_Northbound.dl \
-	northd/OVN_Southbound.dl \
-	lib/libovn.la \
-	$(OVS_LIBDIR)/libopenvswitch.la
-build_ddlog = \
-	$(AM_V_GEN)$(DDLOG) -i $< -o $(builddir)/northd $(DDLOGFLAGS) && \
-	LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
+	northd/OVN_Southbound.dl
+northd/ddlog.stamp: $(ddlog_sources)
+	$(AM_V_GEN)$(DDLOG) -i $< -o $(builddir)/northd $(DDLOGFLAGS)
+	$(AM_V_at)touch $@
+
+NORTHD_LIB = 1
+NORTHD_CLI = 0
+
+ddlog_targets = $(northd_lib_$(NORTHD_LIB)) $(northd_cli_$(NORTHD_CLI))
+northd_lib_1 = northd/ovn_northd_ddlog/target/release/libovn/%_ddlog.a
+northd_cli_1 = northd/ovn_northd_ddlog/target/release/ovn_%_cli
+
+cargo_build = $(cargo_build_$(NORTHD_LIB)$(NORTHD_CLI))
+cargo_build_01 = --bin ovn_northd_cli
+cargo_build_10 = --lib
+cargo_build_11 =
+
+$(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
+	$(AM_V_GEN)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
 	LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
 	cd northd/ovn_northd_ddlog && \
 	RUSTC='$(RUSTC)' RUSTFLAGS='$(RUSTFLAGS)' \
-	    cargo build --release $(CARGO_VERBOSE)
-
-northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a: $(ddlog_deps)
-	$(build_ddlog) --lib
-
-# ovn_northd_cli is useful for debugging, but it doubles build time so
-# it is not compiled by default, so "make" the following target
-# manually when you need it.  See docs/debuggging.md for more
-# information.
-northd/ovn_northd_ddlog/target/release/ovn_northd_cli: $(ddlog_deps)
-	$(build_ddlog) --bin ovn_northd_cli
+	    cargo build --release $(CARGO_VERBOSE) $(cargo_build)
 
 CLEAN_LOCAL += clean-ddlog
 clean-ddlog:

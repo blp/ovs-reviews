@@ -86,7 +86,7 @@ sb.Out_Port_Binding(.uuid_name          = uuid2name(lsp._uuid),
                     .logical_port       = lsp.name,
                     .__type             = lsp.__type,
                     .gateway_chassis    = set_empty(),
-                    .ha_chassis_group   = set_empty(),
+                    .ha_chassis_group   = option2set(sp.ha_chassis_group_uuid_name),
                     .virtual_parent     = set_empty(),
                     .options            = lsp.options,
                     .datapath           = uuid2name(sw.ls._uuid),
@@ -96,7 +96,7 @@ sb.Out_Port_Binding(.uuid_name          = uuid2name(lsp._uuid),
                     .mac                = lsp.addresses,
                     .nat_addresses      = set_empty(),
                     .external_ids       = eids) :-
-    &SwitchPort(.lsp = lsp, .sw = &sw),
+    sp in &SwitchPort(.lsp = lsp, .sw = &sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
     var tag: Set<integer> = match (opt_tag) {
         None -> lsp.tag,
@@ -313,9 +313,6 @@ RouterPortRAOptionsComplete(lrp, map_empty()) :-
     not RouterPortRAOptions(lrp, _).
 
 
-function ha_chassis_group_uuid_name(lr_uuid: uuid): string = { "hacg" ++ uuid2name(lr_uuid) }
-function ha_chassis_uuid_name(chassis_uuid: uuid): string = { "hac" ++ uuid2name(chassis_uuid) }
-
 /*
  * Create derived port for Logical_Router_Ports with non-empty 'gateway_chassis' column.
  */
@@ -368,7 +365,7 @@ RefChassisSet(lr_uuid, set_empty()) :-
 
 /* HA_Chassis_Group and HA_Chassis. */
 sb.Out_HA_Chassis_Group(uuid_name, name, ha_chassis, ref_chassis, eids) :-
-    HAChassis(lr_uuid, chassis_name, priority, eids),
+    HAChassis(lr_uuid, chassis_name, _, _),
     chassis_rec in sb.Chassis(.name = chassis_name),
     var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
     var ha_chassis = Aggregate((lr_uuid), group2set(ha_chassis_uuid_name)),
@@ -383,13 +380,38 @@ sb.Out_HA_Chassis(ha_chassis_uuid_name, chassis, priority, eids) :-
     DistributedGatewayPort(dgp_lrp, lr_uuid),
     var chassis = set_singleton(chassis_rec._uuid).
 
+sb.Out_HA_Chassis(ha_chassis_uuid_name, chassis, priority, eids) :-
+    sp in &SwitchPort(),
+    sp.lsp.__type == "external",
+    var ha_chassis_group_uuid = FlatMap(sp.lsp.ha_chassis_group),
+    ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
+    var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
+    ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid, .priority = priority, .external_ids = eids),
+    chassis_rec in sb.Chassis(.name = ha_chassis.chassis_name),
+    var chassis = set_singleton(chassis_rec._uuid),
+    var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid).
+sb.Out_HA_Chassis_Group(uuid_name, name, ha_chassis, set_empty() /* XXX? */, eids) :-
+    sp in &SwitchPort(),
+    sp.lsp.__type == "external",
+    var ls_uuid = sp.sw.ls._uuid,
+    var ha_chassis_group_uuid = FlatMap(sp.lsp.ha_chassis_group),
+    ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid, .name = name,
+                                            .external_ids = eids),
+    var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
+    ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid),
+    chassis_rec in sb.Chassis(.name = ha_chassis.chassis_name),
+    var chassis = set_singleton(chassis_rec._uuid),
+    var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
+    var ha_chassis = Aggregate((ls_uuid, name, eids), group2set(ha_chassis_uuid_name)),
+    var uuid_name = ha_chassis_group_uuid_name(ls_uuid).
+
 /* Add allocated qdisc_queue_id and tunnel key to Port_Binding.
  */
 sb.OutProxy_Port_Binding(.uuid_name          = pbinding.uuid_name,
                          .logical_port       = pbinding.logical_port,
                          .__type             = pbinding.__type,
                          .gateway_chassis    = pbinding.gateway_chassis,
-                         .ha_chassis_group   = set_empty(),
+                         .ha_chassis_group   = pbinding.ha_chassis_group,
                          .virtual_parent     = set_empty(),
                          .options            = options,
                          .datapath           = pbinding.datapath,
@@ -986,7 +1008,7 @@ nb.Out_Logical_Switch_Port(.uuid_name              = uuid2name(lsp._uuid),
                            .enabled                = lsp.enabled,
                            .dhcpv4_options         = lsp.dhcpv4_options,
                            .dhcpv6_options         = lsp.dhcpv6_options,
-                           .ha_chassis_group       = set_empty(),
+                           .ha_chassis_group       = lsp.ha_chassis_group,
                            .external_ids           = lsp.external_ids) :-
     SwitchPortNewDynamicAddress(&SwitchPort{.lsp = lsp, .up = up}, opt_dyn_addr),
     var dynamic_addresses: Set<string> = match (opt_dyn_addr) {
@@ -1017,7 +1039,7 @@ typedef PipelineStage = PORT_SEC_L2
                       | DHCP_RESPONSE
                       | DNS_LOOKUP
                       | DNS_RESPONSE
-		      | EXTERNAL_PORT
+              | EXTERNAL_PORT
                       | L2_LKUP
                       | ADMISSION
                       | IP_INPUT
@@ -1902,7 +1924,8 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
  * logical ports of the datapath if the CMS has configured DHCPv4 options.
  * */
 for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
-                             .dhcpv4_options = &nb.DHCP_Options{.options = options})) {
+                             .dhcpv4_options = &nb.DHCP_Options{.options = options})
+     if lsp.__type != "external") {
     (Some{var server_id}, Some{var server_mac}, Some{var lease_time}) =
         (map_get(options, "server_id"), map_get(options, "server_mac"), map_get(options, "lease_time")) in
     Flow(.logical_datapath = sw.dpname,
@@ -1916,7 +1939,8 @@ for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
 }
 
 for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
-                             .dhcpv6_options = &nb.DHCP_Options{.options=options} )) {
+                             .dhcpv6_options = &nb.DHCP_Options{.options=options} )
+     if lsp.__type != "external") {
     Some{var server_mac} = map_get(options, "server_id") in
     Some{var ea} = eth_addr_from_string(server_mac) in
     var server_ip = ipv6_string_mapped(in6_generate_lla(ea)) in
@@ -2188,7 +2212,8 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name, .ps_eth_addresse
 */
 for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
      if is_enabled(port.lsp.enabled) and
-        (vec_len(ps.ipv4_addrs) > 64'd0 or vec_len(ps.ipv6_addrs) > 64'd0))
+        (vec_len(ps.ipv4_addrs) > 64'd0 or vec_len(ps.ipv6_addrs) > 64'd0) and
+        port.lsp.__type != "external")
 {
     if (vec_len(ps.ipv4_addrs) > 64'd0) {
         var dhcp_match = "inport == ${port.json_name}"
@@ -2291,7 +2316,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
  *   - Priority 80 flow to drop ARP and IPv6 ND packets.
  */
 for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
-     if is_enabled(port.lsp.enabled))
+     if is_enabled(port.lsp.enabled) and port.lsp.__type != "external")
 {
     var no_ip = vec_is_empty(ps.ipv4_addrs) and vec_is_empty(ps.ipv6_addrs) in
     {
@@ -2392,7 +2417,8 @@ function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
 for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name = json_name},
                            .ea_s = ea_s, .addr = addr)
      if is_enabled(lsp.enabled) and
-        (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport"))
+        (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport") and
+        lsp.__type != "external")
 {
     var __match = "arp.tpa == ${addr.addr_s} && arp.op == 1" in
     var actions = "eth.dst = eth.src; "
@@ -2440,7 +2466,8 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
 for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = &sw},
                            .ea_s = ea_s, .addr = addr)
      if is_enabled(lsp.enabled) and
-        (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport"))
+        (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport") and
+        lsp.__type != "external")
 {
     var __match = "nd_ns && ip6.dst == {${addr.addr_s}, ${addr.sn_addr_s}} && nd.target == ${addr.addr_s}" in
     var actions = "${if (lsp.__type == \"router\") \"nd_na_router\" else \"nd_na\"} { "
@@ -2620,16 +2647,22 @@ function build_dhcpv6_action(
  * its switch along with a condition that it only operate if 'lsp' is
  * chassis-resident.  This makes sense as a condition for sending DHCP replies
  * to external ports because only one chassis should send such a reply.
+ *
+ * Returns a prefix and a suffix string.  There is no reason for this except
+ * that it makes it possible to exactly mimic the format used by ovn-northd.c
+ * so that text-based comparisons do not show differences.
  */
-function match_dhcp_input(lsp: Ref<SwitchPort>): string =
+function match_dhcp_input(lsp: Ref<SwitchPort>): (string, string) =
 {
     if (lsp.lsp.__type == "external") {
         match(lsp.sw.localnet_port_name) {
-            Some{localnet_port_name} -> return "inport == ${json_string_escape(localnet_port_name)} && is_chassis_resident(${lsp.json_name})",
+            Some{localnet_port_name} -> return (
+                "inport == ${json_string_escape(localnet_port_name)} && ",
+                " && is_chassis_resident(${lsp.json_name})"),
             None -> ()
         }
     } else ();
-    "inport == ${lsp.json_name}"
+    ("inport == ${lsp.json_name} && ", "")
 }
 
 /* Logical switch ingress table 12 and 13: DHCP options and response
@@ -2642,11 +2675,12 @@ for (lsp in &SwitchPort
           * and if it doesn't belong to an HA chassis group ignore it. */
          and (lsp.lsp.__type != "external"
               or (lsp.sw.has_localnet_port
-	          and not set_is_empty(lsp.lsp.ha_chassis_group))))
+                  and not set_is_empty(lsp.lsp.ha_chassis_group))))
 {
     for (lps in LogicalSwitchPort(.lport = lsp.lsp._uuid)) {
         var lsname = uuid2name(lps.lswitch) in
         var json_key = json_string_escape(lsp.lsp.name) in
+        (var pfx, var sfx) = match_dhcp_input(lsp) in
         {
             /* DHCPv4 options enabled for this port */
             Some{var dhcpv4_options_uuid} = set_nth(lsp.lsp.dhcpv4_options, 0) in
@@ -2657,9 +2691,9 @@ for (lsp in &SwitchPort
                             build_dhcpv4_action(json_key, dhcpv4_options, addr.addr) in
                         {
                             var __match =
-                                match_dhcp_input(lsp) ++ " && eth.src == ${ea_s} && "
+                                pfx ++ "eth.src == ${ea_s} && "
                                 "ip4.src == 0.0.0.0 && ip4.dst == 255.255.255.255 && "
-                                "udp.src == 68 && udp.dst == 67"
+                                "udp.src == 68 && udp.dst == 67" ++ sfx
                             in
                             Flow(.logical_datapath = lsname,
                                  .stage         = switch_stage(IN, DHCP_OPTIONS),
@@ -2676,8 +2710,8 @@ for (lsp in &SwitchPort
                              *  -  When the client wants to renew the IP by
                              *     broadcasting the DHCPREQUEST.
                              */
-                            var __match = match_dhcp_input(lsp) ++ " && eth.src == ${ea_s} && "
-                                "${ipv4_addr_match} && udp.src == 68 && udp.dst == 67" in
+                            var __match = pfx ++ "eth.src == ${ea_s} && "
+                                "${ipv4_addr_match} && udp.src == 68 && udp.dst == 67" ++ sfx in
                             Flow(.logical_datapath = lsname,
                                  .stage         = switch_stage(IN, DHCP_OPTIONS),
                                  .priority         = 100,
@@ -2687,9 +2721,9 @@ for (lsp in &SwitchPort
 
                             /* If REGBIT_DHCP_OPTS_RESULT is set, it means the
                              * put_dhcp_opts action  is successful. */
-                            var __match = match_dhcp_input(lsp) ++ " && eth.src == ${ea_s} && "
+                            var __match = pfx ++ "eth.src == ${ea_s} && "
                                 "ip4 && udp.src == 68 && udp.dst == 67 && " ++
-                                rEGBIT_DHCP_OPTS_RESULT() in
+                                rEGBIT_DHCP_OPTS_RESULT() ++ sfx in
                             Flow(.logical_datapath = lsname,
                                  .stage         = switch_stage(IN, DHCP_RESPONSE),
                                  .priority         = 100,
@@ -2713,9 +2747,9 @@ for (lsp in &SwitchPort
                         Some{(var options_action, var response_action)} =
                             build_dhcpv6_action(json_key, dhcpv6_options, addr.addr) in
                         {
-                            var __match = match_dhcp_input(lsp) ++ " && eth.src == ${ea_s}"
+                            var __match = pfx ++ "eth.src == ${ea_s}"
                                 " && ip6.dst == ff02::1:2 && udp.src == 546 &&"
-                                " udp.dst == 547" in
+                                " udp.dst == 547" ++ sfx in
                             {
                                 Flow(.logical_datapath = lsname,
                                      .stage         = switch_stage(IN, DHCP_OPTIONS),
@@ -2982,7 +3016,7 @@ Flow(.logical_datapath = sp.sw.dpname,
                           "eth.src == ${lp_addr.ea_s} && "
                           "!is_chassis_resident(${sp.json_name}) && "
                           "nd_ns && ip6.dst == {${rp_addr.addr_s}, ${rp_addr.sn_addr_s}} && "
-                          "nd_target == ${rp_addr.addr_s}"),
+                          "nd.target == ${rp_addr.addr_s}"),
      .actions          = "drop;",
      .external_ids     = map_empty()) :-
     sp in &SwitchPort(),
@@ -3007,7 +3041,9 @@ for (ls in nb.Logical_Switch) {
 }
 
 /* Ingress table 17: Destination lookup, unicast handling (priority 50), */
-for (SwitchPortStaticAddresses(.port = &SwitchPort{.json_name = json_name, .sw = &sw}, .addrs = addrs)) {
+for (SwitchPortStaticAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = &sw},
+                               .addrs = addrs)
+     if lsp.__type != "external") {
     Flow(.logical_datapath = sw.dpname,
          .stage         = switch_stage(IN, L2_LKUP),
          .priority         = 50,
@@ -3016,8 +3052,9 @@ for (SwitchPortStaticAddresses(.port = &SwitchPort{.json_name = json_name, .sw =
          .external_ids     = map_empty())
 }
 
-for (SwitchPortNewDynamicAddress(.port = &SwitchPort{.json_name = json_name, .sw = &sw},
-                                 .address = Some{addrs})) {
+for (SwitchPortNewDynamicAddress(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = &sw},
+                                 .address = Some{addrs})
+     if lsp.__type != "external") {
     Flow(.logical_datapath = sw.dpname,
          .stage         = switch_stage(IN, L2_LKUP),
          .priority         = 50,
@@ -3033,7 +3070,7 @@ for (&SwitchPort(.lsp = lsp,
                                           .is_redirect = is_redirect,
                                           .router = &Router{.lr = lr,
                                                             .redirect_port_name = redirect_port_name}}})
-     if (set_contains(lsp.addresses, "router")))
+     if (set_contains(lsp.addresses, "router") and lsp.__type != "external"))
 {
     Some{var mac} = scan_eth_addr(lrp.mac) in {
         var add_chassis_resident_check =
@@ -3148,7 +3185,8 @@ for (&SwitchPort(.sw = &sw, .lsp = lsp, .json_name = json_name, .ps_eth_addresse
          .external_ids     = map_empty())
 }
 
-for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = &sw) if not is_enabled(lsp.enabled)) {
+for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = &sw)
+     if not is_enabled(lsp.enabled) and lsp.__type != "external") {
     Flow(.logical_datapath = sw.dpname,
          .stage         = switch_stage(OUT, PORT_SEC_L2),
          .priority         = 150,
@@ -3157,8 +3195,10 @@ for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = &sw) if not is_enable
          .external_ids     = map_empty())
 }
 
-for (SwitchPortPSAddresses(.port = &SwitchPort{.json_name = json_name, .sw = &sw}, .ps_addrs = ps)
-     if vec_len(ps.ipv4_addrs) > 64'd0 or vec_len(ps.ipv6_addrs) > 64'd0)
+for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = &sw},
+                           .ps_addrs = ps)
+     if (vec_len(ps.ipv4_addrs) > 64'd0 or vec_len(ps.ipv6_addrs) > 64'd0)
+         and lsp.__type != "external")
 {
     if (vec_len(ps.ipv4_addrs) > 64'd0) {
         var addrs = {

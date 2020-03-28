@@ -156,6 +156,7 @@ ovn_start () {
     echo "starting $NORTHD_TYPE"
     mkdir "$ovs_base"/$as_d
     as $as_d start_daemon $NORTHD_TYPE \
+               -vjsonrpc \
                --ovnnb-db=$ovn_nb_db \
                --ovnsb-db=$ovn_sb_db
 
@@ -166,6 +167,7 @@ ovn_start () {
     echo "starting backup $NORTHD_TYPE"
     mkdir "$ovs_base"/$as_d
     as $as_d start_daemon $NORTHD_TYPE $northd_args \
+               -vjsonrpc \
                --ovnnb-db=$ovn_nb_db \
                --ovnsb-db=$ovn_sb_db
 

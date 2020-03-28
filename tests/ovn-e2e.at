@@ -8922,8 +8922,10 @@ echo "---------------------"
 ovn-sbctl list chassis
 ovn-sbctl list encap
 echo "---------------------"
-echo "------ Gateway_Chassis dump (SBDB) -------"
-ovn-sbctl list Gateway_Chassis
+echo "------ ha_Chassis_Group dump (SBDB) -------"
+ovn-sbctl list HA_Chassis_Group
+echo "------ ha_Chassis dump (SBDB) -------"
+ovn-sbctl list HA_Chassis
 echo "------ Port_Binding chassisredirect -------"
 ovn-sbctl find Port_Binding type=chassisredirect
 echo "-------------------------------------------"
@@ -11674,17 +11676,21 @@ port_binding logical_port=ls1-lp_ext1`
 
 # No DHCPv4/v6 flows for the external port - ls1-lp_ext1 - 10.0.0.6 in hv1 and hv2
 # as no localnet port added to ls1 yet.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+#
+# This used to be specific to a particular OpenFlow table, but that can
+# easily shift around as OVN evolves, so it's been removed to avoid
+# gratuitous breakage.
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | wc -l], [0], [0
 ])
@@ -11706,38 +11712,40 @@ logical_port=ls1-lp_ext1`
     test "$chassis" = "$hv1_uuid"])
 
 # There should be DHCPv4/v6 OF flows for the ls1-lp_ext1 port in hv1
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+(ovn-sbctl dump-flows lr0; ovn-sbctl dump-flows ls1) > sbflows
+as hv1 ovs-ofctl dump-flows br-int > brintflows
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.06" | grep reg14=0x$ln_public_key | \
 wc -l], [0], [3
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | \
 grep reg14=0x$ln_public_key | wc -l], [0], [1
 ])
 
 # There should be no DHCPv4/v6 flows for ls1-lp_ext1 on hv2
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | wc -l], [0], [0
 ])
 
 # No DHCPv4/v6 flows for the external port - ls1-lp_ext2 - 10.0.0.7 in hv1 and
 # hv2 as requested-chassis option is not set.
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.07" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.07" | wc -l], [0], [0
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.07" | wc -l], [0], [0
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.07" | wc -l], [0], [0
 ])
@@ -11979,21 +11987,21 @@ logical_port=ls1-lp_ext1`
     test "$chassis" = "$hv2_uuid"])
 
 # There should be OF flows for DHCP4/v6 for the ls1-lp_ext1 port in hv2
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.06" | grep reg14=0x$ln_public_key | \
 wc -l], [0], [3
 ])
-AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | \
 grep reg14=0x$ln_public_key | wc -l], [0], [1
 ])
 
 # There should be no DHCPv4/v6 flows for ls1-lp_ext1 on hv1
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep "0a.00.00.06" | wc -l], [0], [0
 ])
-AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | grep table=22 | \
+AT_CHECK([as hv1 ovs-ofctl dump-flows br-int | \
 grep controller | grep tp_src=546 | grep \
 "ae.70.00.00.00.00.00.00.00.00.00.00.00.00.00.06" | \
 grep reg14=0x$ln_public_key | wc -l], [0], [0

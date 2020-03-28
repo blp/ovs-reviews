@@ -141,7 +141,7 @@ relation &Switch(
         .has_stateful_acl  = has_stateful_acl,
         .has_dns_records   = has_dns_records,
         .has_localnet_port = has_localnet_port,
-	.localnet_port_name = localnet_port_name,
+        .localnet_port_name = localnet_port_name,
         .subnet            = subnet,
         .ipv6_prefix       = ipv6_prefix,
         .mcast_cfg         = mcast_cfg) :-
@@ -151,7 +151,7 @@ relation &Switch(
     LogicalSwitchLocalnetPort(ls._uuid, localnet_port_name),
     var has_localnet_port = match (localnet_port_name) {
         Some{_} -> true,
-	None -> false
+        None -> false
     },
     mcast_cfg in &McastSwitchCfg(.datapath = ls._uuid),
     var subnet: Option<(ovs_be32, ovs_be32, bit<32>, bit<32>)> =
@@ -256,6 +256,21 @@ SwitchPortUp(lsp, up) :-
     not sb.Port_Binding(.logical_port = lsp_name),
     var up = __type == "router".
 
+relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, ha_chassis_group_uuid_name: string)
+SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid_name) :-
+    lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
+    lsp.__type == "external",
+    var ha_chassis_group_uuid = FlatMap(lsp.ha_chassis_group),
+    ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
+    LogicalSwitchPort(.lport = lsp_uuid, .lswitch = ls_uuid),
+    var ha_chassis_group_uuid_name = ha_chassis_group_uuid_name(ls_uuid).
+relation SwitchPortHAChassisGroup(lsp_uuid: uuid, ha_chassis_group_uuid_name: Option<string>)
+SwitchPortHAChassisGroup(lsp_uuid, Some{ha_chassis_group_uuid_name}) :-
+    SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid_name).
+SwitchPortHAChassisGroup(lsp_uuid, None) :-
+    lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
+    not SwitchPortHAChassisGroup0(lsp_uuid, _).
+
 /* SwitchPort relation collects all attributes of a logical switch port
  * - `peer` - peer router port, if any
  * - `static_dynamic_mac` - port has a "dynamic" address that contains a static MAC,
@@ -266,6 +281,7 @@ SwitchPortUp(lsp, up) :-
  * - `needs_dynamic_macaddress`  - port requires a dynamically allocated MAC address
  * - `needs_dynamic_tag`         - port requires a dynamically allocated tag
  * - `up`                        - true if the port is bound to a chassis or has type ""
+ * - 'ha_chassis_group_uuid_name' - uuid_name of sb.HA_Chassis_Group, only for "external" ports
  */
 relation &SwitchPort(
     lsp:                        nb.Logical_Switch_Port,
@@ -284,7 +300,8 @@ relation &SwitchPort(
     needs_dynamic_ipv6address:  bool,
     needs_dynamic_tag:          bool,
     up:                         bool,
-    mcast_cfg:                  Ref<McastPortCfg>
+    mcast_cfg:                  Ref<McastPortCfg>,
+    ha_chassis_group_uuid_name: Option<string>
 )
 
 &SwitchPort(.lsp                        = lsp,
@@ -303,7 +320,8 @@ relation &SwitchPort(
             .needs_dynamic_ipv6address  = needs_dynamic_ipv6address,
             .needs_dynamic_tag          = needs_dynamic_tag,
             .up                         = up,
-            .mcast_cfg                  = mcast_cfg) :-
+            .mcast_cfg                  = mcast_cfg,
+            .ha_chassis_group_uuid_name = ha_chassis_group_uuid_name) :-
     nb.Logical_Switch_Port[lsp],
     LogicalSwitchPort(lsp._uuid, lswitch_uuid),
     sw in &Switch(.ls = nb.Logical_Switch{._uuid = lswitch_uuid, .other_config = other_config},
@@ -390,7 +408,9 @@ relation &SwitchPort(
     },
     /* Port needs dynamic tag if it has a parent and its `tag_request` is 0. */
     var needs_dynamic_tag = is_some(parent_name) and
-                            set_nth(lsp.tag_request, 0) == Some{0: integer}.
+                            set_nth(lsp.tag_request, 0) == Some{0: integer},
+    SwitchPortHAChassisGroup(.lsp_uuid = lsp._uuid,
+                             .ha_chassis_group_uuid_name = ha_chassis_group_uuid_name).
 
 /* Switch port port security addresses */
 relation SwitchPortPSAddresses(port:     Ref<SwitchPort>,
