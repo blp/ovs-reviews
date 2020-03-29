@@ -4287,9 +4287,11 @@ for (&Router(.dpname = dpname,
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
+		    var priority = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1) in
+		    var centralized_boost = if (mac == None) {64'd128} else {64'd0} in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(OUT, SNAT),
-                         .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
+                         .priority         = priority + centralized_boost,
                          .__match          = __match,
                          .actions          = actions,
                          .external_ids     = map_empty())
