@@ -154,7 +154,7 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
             }
         }
     },
-    var nat_addresses: Set<string> = {
+    var base_nat_addresses: Set<string> = {
         match (map_get(lsp.options, "nat-addresses")) {
             None -> { set_empty() },
             Some{"router"} -> {
@@ -176,7 +176,34 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
                 } else { set_empty() }
             }
         }
-    }.
+    },
+    /* Add the router mac and IPv4 addresses to
+     * Port_Binding.nat_addresses so that GARP is sent for these
+     * IPs by the ovn-controller on which the distributed gateway
+     * router port resides if:
+     *
+     * 1. The peer has 'reside-on-gateway-chassis' set and the
+     *    the logical router datapath has distributed router port.
+     *
+     * 2. The peer is distributed gateway router port.
+     *
+     * 3. The peer's router is a gateway router and the port has a localnet
+     *    port.
+     *
+     * Note: Port_Binding.nat_addresses column is also used for
+     * sending the GARPs for the router port IPs.
+     * */
+    var garp_nat_addresses: Set<string> = match (
+        (map_get_bool_def(rport.lrp.options, "reside-on-redirect-chassis",
+	                  false)
+         and is_some(l3dgw_port)) or
+	Some{rport.lrp} == l3dgw_port or
+	(is_some(map_get(rport.lrp.options, "chassis")) and
+	 sw.has_localnet_port)) {
+        false -> set_empty(),
+        true -> set_singleton(get_garp_nat_addresses(rport))
+    },
+    var nat_addresses = set_union(base_nat_addresses, garp_nat_addresses).
 
 /* Case 3: Port_Binding per logical router port */
 sb.Out_Port_Binding(.uuid_name          = uuid_name,
@@ -270,9 +297,21 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                                 }
                             } else {
                                 /* Centralized NAT rule, either on gateway router or distributed
-                                 * router. */
-                                c_addresses = c_addresses ++ " ${nat.external_ip}";
-                                central_ip_address = true
+                                 * router.
+				 * Check if external_ip is same as router ip. If so, then there
+				 * is no need to add this to the nat_addresses. The router IPs
+				 * will be added separately. */
+				var is_router_ip = false;
+				for (ipv4 in rport.networks.ipv4_addrs) {
+				    if (nat.external_ip == ipv4.addr_s) {
+                                        is_router_ip = true;
+					break
+			            }
+				};
+				if (not is_router_ip) {
+				    c_addresses = c_addresses ++ " ${nat.external_ip}";
+				    central_ip_address = true
+				}
                             }
                         } else ()
                     }
@@ -299,6 +338,19 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
             addresses
         }
     }
+}
+
+function get_garp_nat_addresses(rport: RouterPort): string = {
+    var garp_info: Vec<string> = vec_empty();
+    vec_push(garp_info, rport.networks.ea_s);
+    for (ipv4_addr in rport.networks.ipv4_addrs) {
+        vec_push(garp_info, ipv4_addr.addr_s)
+    };
+    if (rport.router.redirect_port_name != "") {
+        vec_push(garp_info,
+	         "is_chassis_resident(${rport.router.redirect_port_name})")
+    };
+    string_join(garp_info, " ")
 }
 
 /* Extra options computed for router ports by the logical flow generation code */
