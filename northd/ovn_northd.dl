@@ -195,11 +195,11 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
      * */
     var garp_nat_addresses: Set<string> = match (
         (map_get_bool_def(rport.lrp.options, "reside-on-redirect-chassis",
-	                  false)
+                          false)
          and is_some(l3dgw_port)) or
-	Some{rport.lrp} == l3dgw_port or
-	(is_some(map_get(rport.lrp.options, "chassis")) and
-	 sw.has_localnet_port)) {
+        Some{rport.lrp} == l3dgw_port or
+        (is_some(map_get(rport.lrp.options, "chassis")) and
+         sw.has_localnet_port)) {
         false -> set_empty(),
         true -> set_singleton(get_garp_nat_addresses(rport))
     },
@@ -298,20 +298,20 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                             } else {
                                 /* Centralized NAT rule, either on gateway router or distributed
                                  * router.
-				 * Check if external_ip is same as router ip. If so, then there
-				 * is no need to add this to the nat_addresses. The router IPs
-				 * will be added separately. */
-				var is_router_ip = false;
-				for (ipv4 in rport.networks.ipv4_addrs) {
-				    if (nat.external_ip == ipv4.addr_s) {
+                                 * Check if external_ip is same as router ip. If so, then there
+                                 * is no need to add this to the nat_addresses. The router IPs
+                                 * will be added separately. */
+                                var is_router_ip = false;
+                                for (ipv4 in rport.networks.ipv4_addrs) {
+                                    if (nat.external_ip == ipv4.addr_s) {
                                         is_router_ip = true;
-					break
-			            }
-				};
-				if (not is_router_ip) {
-				    c_addresses = c_addresses ++ " ${nat.external_ip}";
-				    central_ip_address = true
-				}
+                                        break
+                                    }
+                                };
+                                if (not is_router_ip) {
+                                    c_addresses = c_addresses ++ " ${nat.external_ip}";
+                                    central_ip_address = true
+                                }
                             }
                         } else ()
                     }
@@ -348,7 +348,7 @@ function get_garp_nat_addresses(rport: RouterPort): string = {
     };
     if (rport.router.redirect_port_name != "") {
         vec_push(garp_info,
-	         "is_chassis_resident(${rport.router.redirect_port_name})")
+                 "is_chassis_resident(${rport.router.redirect_port_name})")
     };
     string_join(garp_info, " ")
 }
@@ -4287,8 +4287,8 @@ for (&Router(.dpname = dpname,
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
-		    var priority = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1) in
-		    var centralized_boost = if (mac == None) {64'd128} else {64'd0} in
+                    var priority = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1) in
+                    var centralized_boost = if (mac == None) {64'd128} else {64'd0} in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(OUT, SNAT),
                          .priority         = priority + centralized_boost,
