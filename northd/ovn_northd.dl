@@ -1532,6 +1532,14 @@ for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = (vip_key, vip_val))) {
 /* 'REGBIT_CONNTRACK_DEFRAG' is set to let the pre-stateful table send
  * packet to conntrack for defragmentation. */
 
+function make_ip_dst_match(ip_address: string, addr_family: bit<32>): string = {
+    if (addr_family == aF_INET()) {
+        "ip4.dst == ${ip_address}"
+    } else {
+        "ip6.dst == ${ip_address}"
+    }
+}
+
 for (SwitchLBVIP(.sw = &sw, .vip = vip)) {
     (var k, _) = vip in
     /* Ignore L4 port information in the key because fragmented packets
@@ -1539,18 +1547,37 @@ for (SwitchLBVIP(.sw = &sw, .vip = vip)) {
      * the packet through ct() action to de-fragment. In stateful
      * table, we will eventually look at L4 information. */
     Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(k) in
-    var __match = if (addr_family == aF_INET()) {
-           "ip && ip4.dst == ${ip_address}"
-        } else {
-           "ip && ip6.dst == ${ip_address}"
-        } in
+    var ip_dst_match = make_ip_dst_match(ip_address, addr_family) in
     Flow(.logical_datapath = sw.dpname,
          .stage         = switch_stage(IN, PRE_LB),
          .priority         = 100,
-         .__match          = __match,
+         .__match          = "ip && " ++ ip_dst_match,
          .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
          .external_ids     = map_empty())
 }
+
+/* ControllerEventEn has exactly one row, either 'true' to enable controller
+ * events or 'false' to disable them. */
+relation ControllerEventEn(enable: bool)
+ControllerEventEn(map_get_bool_def(options, "controller-event", false)) :-
+    nb.NB_Global(.options = options).
+ControllerEventEn(false) :- Unit(), not nb.NB_Global().
+
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, PRE_LB),
+     .priority         = 120,
+     .__match          = ip_dst_match ++ port_match,
+     .actions          = "trigger_event(event = \"empty_lb_backends\", "
+                         "vip = \"${k}\", protocol = \"${protocol}\", "
+                         "load_balancer = \"${lb._uuid}\");",
+     .external_ids     = stage_hint(lb._uuid)) :-
+    SwitchLBVIP(.sw = &sw, .lb = lb, .vip = vip),
+    (var k, var v) = vip,
+    v == "",
+    Some{var protocol} = set_nth(lb.protocol, 0),
+    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(k),
+    var ip_dst_match = make_ip_dst_match(ip_address, addr_family) ++ " && ${protocol}",
+    var port_match = if (port != 0) { " && ${protocol} == ${port}" } else { "" }.
 
 for (SwitchHasLBVIP(&sw)) {
     Flow(.logical_datapath = sw.dpname,

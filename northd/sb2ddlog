@@ -19,6 +19,7 @@ ovsdb2ddlog -f "$1" \
     -o RBAC_Role \
     -o RBAC_Permission \
     -o IP_Multicast \
+    -o Controller_Event \
     -p Datapath_Binding \
     -p Port_Binding \
     -p Multicast_Group \

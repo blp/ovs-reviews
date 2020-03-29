@@ -98,7 +98,8 @@ static const char *sb_input_relations[] = {
     "Gateway_Chassis",
     "IP_Multicast",
     "HA_Chassis",
-    "HA_Chassis_Group"
+    "HA_Chassis_Group",
+    "Controller_Event",
 };
 
 
@@ -890,6 +891,7 @@ get_sb_ops(struct northd_ctx *ctx)
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "IP_Multicast");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Controller_Event");
 
     ds_chomp(&ds, ',');
 
