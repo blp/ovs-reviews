@@ -1100,6 +1100,8 @@ typedef PipelineStage = PORT_SEC_L2
               | EXTERNAL_PORT
                       | L2_LKUP
                       | ADMISSION
+                      | LOOKUP_NEIGHBOR
+                      | LEARN_NEIGHBOR
                       | IP_INPUT
                       | DEFRAG
                       | UNSNAT
@@ -1171,19 +1173,21 @@ function stage_id(stage: Stage): (integer, string) =
 
         /* Logical router ingress stages. */
         (LRouter, IN,  ADMISSION)     -> (0,  "lr_in_admission"),
-        (LRouter, IN,  IP_INPUT)      -> (1,  "lr_in_ip_input"),
-        (LRouter, IN,  DEFRAG)        -> (2,  "lr_in_defrag"),
-        (LRouter, IN,  UNSNAT)        -> (3,  "lr_in_unsnat"),
-        (LRouter, IN,  DNAT)          -> (4,  "lr_in_dnat"),
-        (LRouter, IN,  ND_RA_OPTIONS) -> (5,  "lr_in_nd_ra_options"),
-        (LRouter, IN,  ND_RA_RESPONSE)-> (6,  "lr_in_nd_ra_response"),
-       (LRouter, IN,  IP_ROUTING)    -> (7,  "lr_in_ip_routing"),
-       (LRouter, IN,  POLICY)        -> (8,  "lr_in_policy"),
-       (LRouter, IN,  ARP_RESOLVE)   -> (9,  "lr_in_arp_resolve"),
-       (LRouter, IN,  CHK_PKT_LEN)   -> (10, "lr_in_chk_pkt_len"),
-       (LRouter, IN,  LARGER_PKTS)   -> (11, "lr_in_larger_pkts"),
-       (LRouter, IN,  GW_REDIRECT)   -> (12, "lr_in_gw_redirect"),
-       (LRouter, IN,  ARP_REQUEST)   -> (13, "lr_in_arp_request"),
+        (LRouter, IN,  LOOKUP_NEIGHBOR) -> (1, "lr_in_lookup_neighbor"),
+        (LRouter, IN,  LEARN_NEIGHBOR) -> (2, "lr_in_learn_neighbor"),
+        (LRouter, IN,  IP_INPUT)      -> (3,  "lr_in_ip_input"),
+        (LRouter, IN,  DEFRAG)        -> (4,  "lr_in_defrag"),
+        (LRouter, IN,  UNSNAT)        -> (5,  "lr_in_unsnat"),
+        (LRouter, IN,  DNAT)          -> (6,  "lr_in_dnat"),
+        (LRouter, IN,  ND_RA_OPTIONS) -> (7,  "lr_in_nd_ra_options"),
+        (LRouter, IN,  ND_RA_RESPONSE)-> (8,  "lr_in_nd_ra_response"),
+       (LRouter, IN,  IP_ROUTING)    -> (9,  "lr_in_ip_routing"),
+       (LRouter, IN,  POLICY)        -> (10,  "lr_in_policy"),
+       (LRouter, IN,  ARP_RESOLVE)   -> (11,  "lr_in_arp_resolve"),
+       (LRouter, IN,  CHK_PKT_LEN)   -> (12, "lr_in_chk_pkt_len"),
+       (LRouter, IN,  LARGER_PKTS)   -> (13, "lr_in_larger_pkts"),
+       (LRouter, IN,  GW_REDIRECT)   -> (14, "lr_in_gw_redirect"),
+       (LRouter, IN,  ARP_REQUEST)   -> (15, "lr_in_arp_request"),
 
        /* Logical router egress stages. */
        (LRouter, OUT, UNDNAT)        -> (0,  "lr_out_undnat"),
@@ -1213,6 +1217,8 @@ function rEGBIT_NAT_REDIRECT()     : string = "reg9[0]"
 function rEGBIT_EGRESS_LOOPBACK()  : string = "reg9[1]"
 /* Register to store the result of check_pkt_larger action. */
 function rEGBIT_PKT_LARGER()       : string = "reg9[3]"
+function rEGBIT_LOOKUP_NEIGHBOR_RESULT() : string = "reg9[4]"
+function rEGBIT_SKIP_LOOKUP_NEIGHBOR() : string = "reg9[5]"
 
 function mFF_N_LOG_REGS()          : bit<32> = 10
 
@@ -3398,7 +3404,127 @@ for (&RouterPort(.lrp = lrp,
 }
 
 
-/* Logical router ingress table 1: IP Input. */
+/* Logical router ingress table 1: LOOKUP_NEIGHBOR and
+ * table 2: LEARN_NEIGHBOR. */
+/* Learn MAC bindings from ARP/IPv6 ND.
+ *
+ * For ARP packets, table LOOKUP_NEIGHBOR does a lookup for the
+ * (arp.spa, arp.sha) in the mac binding table using the 'lookup_arp'
+ * action and stores the result in REGBIT_LOOKUP_NEIGHBOR_RESULT bit.
+ *
+ * For IPv6 ND NA packets, table LOOKUP_NEIGHBOR does a lookup
+ * for the (nd.target, nd.tll) in the mac binding table using the
+ * 'lookup_nd' action and stores the result in
+ * REGBIT_LOOKUP_NEIGHBOR_RESULT bit.
+ *
+ * For IPv6 ND NS packets, table LOOKUP_NEIGHBOR does a lookup
+ * for the (ip6.src, nd.sll) in the mac binding table using the
+ * 'lookup_nd' action and stores the result in
+ * REGBIT_LOOKUP_NEIGHBOR_RESULT bit.
+ *
+ * Table LEARN_NEIGHBOR learns the mac-binding using the action
+ * - 'put_arp/put_nd' only if REGBIT_LOOKUP_NEIGHBOR_RESULT bit
+ * is not set.
+ *
+ * */
+
+/* Flows for LOOKUP_NEIGHBOR. */
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LOOKUP_NEIGHBOR),
+     .priority         = 100,
+     .__match          = "arp.op == 2",
+     .actions          = rEGBIT_LOOKUP_NEIGHBOR_RESULT() ++ " = "
+                         "lookup_arp(inport, arp.spa, arp.sha); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LOOKUP_NEIGHBOR),
+     .priority         = 100,
+     .__match          = "nd_na",
+     .actions          = rEGBIT_LOOKUP_NEIGHBOR_RESULT() ++ " = "
+                         "lookup_nd(inport, nd.target, nd.tll); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LOOKUP_NEIGHBOR),
+     .priority         = 100,
+     .__match          = "nd_ns",
+     .actions          = rEGBIT_LOOKUP_NEIGHBOR_RESULT() ++ " = "
+                         "lookup_nd(inport, ip6.src, nd.sll); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+/* For other packet types, we can skip neighbor learning.
+ * So set REGBIT_SKIP_LOOKUP_NEIGHBOR to 1. */
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LOOKUP_NEIGHBOR),
+     .priority         = 0,
+     .__match          = "1",
+     .actions          = rEGBIT_SKIP_LOOKUP_NEIGHBOR() ++ " = 1; next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+
+/* Flows for LEARN_NEIGHBOR. */
+/* Skip Neighbor learning if not required. */
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LEARN_NEIGHBOR),
+     .priority         = 100,
+     .__match          = rEGBIT_SKIP_LOOKUP_NEIGHBOR() ++ " == 1 || " ++
+                         rEGBIT_LOOKUP_NEIGHBOR_RESULT() ++ " == 1",
+     .actions          = "next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LEARN_NEIGHBOR),
+     .priority         = 90,
+     .__match          = "arp",
+     .actions          = "put_arp(inport, arp.spa, arp.sha); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LEARN_NEIGHBOR),
+     .priority         = 90,
+     .__match          = "arp",
+     .actions          = "put_arp(inport, arp.spa, arp.sha); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LEARN_NEIGHBOR),
+     .priority         = 90,
+     .__match          = "nd_na",
+     .actions          = "put_nd(inport, nd.target, nd.tll); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, LEARN_NEIGHBOR),
+     .priority         = 90,
+     .__match          = "nd_ns",
+     .actions          = "put_nd(inport, ip6.src, nd.sll); next;",
+     .external_ids     = map_empty()) :-
+    &Router(.dpname = dpname).
+
+/* Check if we need to learn mac-binding from ARP requests. */
+Flow(.logical_datapath = router.dpname,
+     .stage            = router_stage(IN, LOOKUP_NEIGHBOR),
+     .priority         = 100,
+     .__match          = __match,
+     .actions          = rEGBIT_LOOKUP_NEIGHBOR_RESULT() ++ " = " ++
+                         "lookup_arp(inport, arp.spa, arp.sha); next;",
+     .external_ids     = stage_hint(rp.lrp._uuid)) :-
+    rp in &RouterPort(.networks = networks, .router = router),
+    var address = FlatMap(networks.ipv4_addrs),
+    var is_l3dgw_port = match (router.l3dgw_port) {
+        Some{l3dgw_lrp} -> l3dgw_lrp._uuid == rp.lrp._uuid,
+        None -> false
+    },
+    var has_redirect_port = router.redirect_port_name != "",
+    var __match = "inport == ${rp.json_name} && " ++
+                  "arp.spa == ${address.network_s}/${address.plen} && " ++
+                  "arp.op == 1" ++
+                  if (is_l3dgw_port and has_redirect_port) {
+                      " && is_chassis_resident(${router.redirect_port_name})"
+                  } else { "" }.
+
+/* Logical router ingress table 3: IP Input. */
 for (&Router(.dpname = dpname, .mcast_cfg = &mcast_cfg)) {
     /* L3 admission control: drop multicast and broadcast source, localhost
      * source or destination, and zero network source or destination
@@ -3424,13 +3550,16 @@ for (&Router(.dpname = dpname, .mcast_cfg = &mcast_cfg)) {
          .actions          = "${mcast_action}",
          .external_ids     = map_empty());
 
-    /* ARP reply handling.  Use ARP replies to populate the logical
-     * router's ARP table. */
+   /* Drop ARP packets (priority 85). ARP request packets for router's own
+    * IPs are handled with priority-90 flows.
+    * Drop IPv6 ND packets (priority 85). ND NA packets for router's own
+    * IPs are handled with priority-90 flows.
+    */
     Flow(.logical_datapath = dpname,
          .stage         = router_stage(IN, IP_INPUT),
-         .priority         = 90,
-         .__match          = "arp.op == 2",
-         .actions          = "put_arp(inport, arp.spa, arp.sha);",
+         .priority         = 85,
+         .__match          = "arp || nd",
+         .actions          = "drop;",
          .external_ids     = map_empty());
 
     /* Drop Ethernet local broadcast.  By definition this traffic should
@@ -3450,25 +3579,6 @@ for (&Router(.dpname = dpname, .mcast_cfg = &mcast_cfg)) {
         .__match          = "ip4 && ip.ttl == {0, 1}",
         .actions          = "drop;",
         .external_ids     = map_empty());
-
-    /* ND advertisement handling.  Use advertisements to populate
-     * the logical router's ARP/ND table. */
-    Flow(.logical_datapath = dpname,
-         .stage         = router_stage(IN, IP_INPUT),
-         .priority         = 90,
-         .__match          = "nd_na",
-         .actions          = "put_nd(inport, nd.target, nd.tll);",
-         .external_ids     = map_empty());
-
-    /* Lean from neighbor solicitations that were not directed at
-     * us.  (A priority-90 flow will respond to requests to us and
-     * learn the sender's mac address. */
-    Flow(.logical_datapath = dpname,
-         .stage         = router_stage(IN, IP_INPUT),
-         .priority         = 80,
-         .__match          = "nd_ns",
-         .actions          = "put_nd(inport, ip6.src, nd.sll);",
-         .external_ids     = map_empty());
 
     /* Pass other traffic not already handled to the next table for
      * routing. */
@@ -3571,7 +3681,7 @@ function get_force_snat_ip(lr: nb.Logical_Router, key_type: string): Option<(str
     }
 }
 
-/* Logical router ingress table 1: IP Input for IPv4. */
+/* Logical router ingress table 3: IP Input for IPv4. */
 for (&RouterPort(.router = &router, .networks = networks)
      if (not vec_is_empty(networks.ipv4_addrs)))
 {
@@ -3642,7 +3752,6 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
                 " && is_chassis_resident(${router.redirect_port_name})"
             } else "" in
         var actions =
-            "put_arp(inport, arp.spa, arp.sha); "
             "eth.dst = eth.src; "
             "eth.src = ${networks.ea_s}; "
             "arp.op = 2; /* ARP reply */ "
@@ -3659,21 +3768,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
              .__match          = __match,
              .actions          = actions,
              .external_ids     = map_empty())
-    };
-
-    /* Learn from ARP requests that were not directed at us. A typical
-     * use case is GARP request handling.  (A priority-90 flow will
-     * respond to request to us and learn the sender's mac address.) */
-    var __match =
-        "inport == ${json_name} && arp.spa == ${addr.network_s}/${addr.plen}"
-        " && arp.op == 1" ++
-        if is_redirect " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})" else "" in
-    Flow(.logical_datapath = router.dpname,
-         .stage         = router_stage(IN, IP_INPUT),
-         .priority         = 80,
-         .__match          = __match,
-         .actions          = "put_arp(inport, arp.spa, arp.sha);",
-         .external_ids     = map_empty())
+    }
 }
 
 for (&RouterPort(.lrp = lrp,
@@ -3881,7 +3976,7 @@ for (&RouterPort(.lrp = lrp,
     }
 }
 
-/* Logical router ingress table 1: IP Input for IPv6. */
+/* Logical router ingress table 3: IP Input for IPv6. */
 for (&RouterPort(.router = &router, .networks = networks)
      if (not vec_is_empty(networks.ipv6_addrs)))
 {
@@ -3948,8 +4043,7 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.lrp = lrp,
              * from different chassis. */
             " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})"
         } else { "" } in
-    var actions = "put_nd(inport, ip6.src, nd.sll); "
-                  "nd_na_router { "
+    var actions = "nd_na_router { "
                   "eth.src = ${networks.ea_s}; "
                   "ip6.src = ${addr.addr_s}; "
                   "nd.target = ${addr.addr_s}; "
@@ -4737,7 +4831,7 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
     options
 }
 
-/* Logical router ingress table 5 and 6: IPv6 Router Adv (RA) options and
+/* Logical router ingress table 7 and 8: IPv6 Router Adv (RA) options and
  * response. */
 // FIXME: do these rules apply to derived ports?
 for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_empty()},
@@ -4815,7 +4909,7 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_e
 }
 
 
-/* Logical router ingress table 5, 6: RS responder, by default goto next.
+/* Logical router ingress table 7, 8: RS responder, by default goto next.
  * (priority 0)*/
 for (&Router(.dpname = dpname))
 {
@@ -4900,7 +4994,7 @@ for (Route(.port_name   = port_name,
          .external_ids     = map_empty())
 }
 
-/* Logical router ingress table 7: IP Routing.
+/* Logical router ingress table 9: IP Routing.
  *
  * A packet that arrives at this table is an IP packet that should be
  * routed to the address in 'ip[46].dst'. This table sets outport to
@@ -4996,7 +5090,7 @@ for (RouterMcastFloodPorts(&rtr, flood_ports)) {
          .external_ids     = map_empty())
 }
 
-/* Logical router ingress table 8: Policy.
+/* Logical router ingress table 10: Policy.
  *
  * A packet that arrives at this table is an IP packet that should be
  * permitted/denied/rerouted to the address in the rule's nexthop.
@@ -5364,7 +5458,7 @@ Flow(.logical_datapath = dpname,
     rp.lrp != l3dgw_port,
     Some{var first_ipv4} = vec_nth(rp.networks.ipv4_addrs, 0).
 
-/* Logical router ingress table 12: Gateway redirect.
+/* Logical router ingress table 14: Gateway redirect.
  *
  * For traffic with outport equal to the l3dgw_port
  * on a distributed router, this table redirects a subset
