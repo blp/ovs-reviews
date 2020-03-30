@@ -372,7 +372,7 @@ sb.Out_Port_Binding(.uuid_name          = "cr" ++ uuid2name(lrp._uuid),
                     .__type             = "chassisredirect",
                     .gateway_chassis    = set_empty(),
                     .ha_chassis_group   = ha_chassis_group,
-                    .options            = map_singleton("distributed-port", lrp.name),
+                    .options            = options,
                     .datapath           = uuid2name(lr_uuid),
                     .tunnel_key         = 0,
                     .parent_port        = set_empty(),
@@ -382,7 +382,12 @@ sb.Out_Port_Binding(.uuid_name          = "cr" ++ uuid2name(lrp._uuid),
                     .external_ids       = lrp.external_ids) :-
     DistributedGatewayPort(lrp, lr_uuid),
     var ha_chassis_group_uuid_name = ha_chassis_group_uuid_name(lr_uuid),
-    var ha_chassis_group = set_singleton(ha_chassis_group_uuid_name).
+    var ha_chassis_group = set_singleton(ha_chassis_group_uuid_name),
+    var redirect_type: Map<string,string> = match (map_get(lrp.options, "redirect-type")) {
+        Some{var value} -> map_singleton("redirect-type", value),
+        _ -> map_empty()
+    },
+    var options = map_insert_imm(redirect_type, "distributed-port", lrp.name).
 
 /* Referenced chassis.
  *
@@ -5142,6 +5147,23 @@ for (&RouterPort(.peer = PeerRouter{peer_port, _},
         }
     }
 }
+
+/* Packet is on a non gateway chassis and
+ * has an unresolved ARP on a network behind gateway
+ * chassis attached router port. Since, redirect type
+ * is "bridged", instead of calling "get_arp"
+ * on this node, we will redirect the packet to gateway
+ * chassis, by setting destination mac router port mac.*/
+Flow(.logical_datapath = router.dpname,
+     .stage            = router_stage(IN, ARP_RESOLVE),
+     .priority         = 50,
+     .__match          = "outport == ${rp.json_name} && "
+                         "!is_chassis_resident(${router.redirect_port_name})",
+     .actions          = "eth.dst = ${rp.networks.ea_s}; next;",
+     .external_ids     = stage_hint(lrp._uuid)) :-
+    rp in &RouterPort(.lrp = lrp, .router = router),
+    router.redirect_port_name != "",
+    Some{"bridged"} = map_get(lrp.options, "redirect-type").
 
 
 /* This is a logical switch port that backs a VM or a container.
