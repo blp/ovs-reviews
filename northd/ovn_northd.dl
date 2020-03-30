@@ -5767,8 +5767,9 @@ MulticastGroupTunKeyAllocation(group, tunkey) :-
  *
  * Queue ID may also need to be deallocated if port loses QoS attributes
  *
- * This logic only applies to ports with chassis attribute, i.e., they must be
- * in sb.Port_Binding.
+ * This logic applies mainly to sb.Port_Binding records bound to a chassis
+ * (i.e. with the chassis column nonempty) but "localnet" ports can also
+ * have a queue ID.  For those we use the port's own UUID as the chassis UUID.
  */
 
 function port_has_qos_params(opts: Map<string, string>): bool = {
@@ -5782,10 +5783,18 @@ relation PortRequiresQID(port: string, chassis: uuid)
 
 PortRequiresQID(pb.uuid_name, chassis) :-
     sb.Out_Port_Binding[pb],
+    pb.__type != "localnet",
     port_has_qos_params(pb.options),
     sb.UUIDMap_Port_Binding(pb.uuid_name, Left{uuid}),
     sb.Port_Binding(._uuid = uuid, .chassis = chassis_set),
     Some{var chassis} = set_nth(chassis_set, 0).
+PortRequiresQID(pb.uuid_name, chassis) :-
+    sb.Out_Port_Binding[pb],
+    pb.__type == "localnet",
+    port_has_qos_params(pb.options),
+    sb.UUIDMap_Port_Binding(pb.uuid_name, Left{uuid}),
+    sb.Port_Binding(._uuid = uuid),
+    var chassis = uuid.
 
 relation AggPortRequiresQID(chassis: uuid, ports: Vec<string>)
 
@@ -5797,13 +5806,22 @@ relation AllocatedQIDs(chassis: uuid, allocated_ids: Map<string, integer>)
 
 AllocatedQIDs(chassis, allocated_ids) :-
     sb.Port_Binding[pb],
+    pb.__type != "localnet",
     Some{var chassis} = set_nth(pb.chassis, 0),
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
     Some{var qid: bit<64>} = parse_dec_u64(qid_str),
     sb.UUIDMap_Port_Binding(port, Left{pb._uuid}),
     var allocated_ids = Aggregate((chassis), group2map((port, qid))).
+AllocatedQIDs(chassis, allocated_ids) :-
+    sb.Port_Binding[pb],
+    pb.__type == "localnet",
+    var chassis = pb._uuid,
+    Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
+    Some{var qid: bit<64>} = parse_dec_u64(qid_str),
+    sb.UUIDMap_Port_Binding(port, Left{pb._uuid}),
+    var allocated_ids = Aggregate((chassis), group2map((port, qid))).
 
-// allocate queueue IDs to ports
+// allocate queue IDs to ports
 relation QueueIDAllocation(port: string, qids: Option<integer>)
 
 // None for ports that do not require a queue
