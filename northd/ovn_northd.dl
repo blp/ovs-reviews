@@ -2491,7 +2491,7 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name)
 }
 
 function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
-    set_nth(lsp.up, 0) != Some{false}
+    set_nth(lsp.up, 0) == Some{true}
 }
 
 /* Ingress table 11: ARP/ND responder, reply for known IPs.
