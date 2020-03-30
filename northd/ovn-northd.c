@@ -9885,8 +9885,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
                     }
                 }
             }
-        } else if (op->od->n_router_ports && strcmp(op->nbsp->type, "router")
-                   && !strcmp(op->nbsp->type, "virtual")) {
+        } else if (op->od->n_router_ports && !strcmp(op->nbsp->type, "virtual")) {
             /* This is a virtual port. Add ARP replies for the virtual ip with
              * the mac of the present active virtual parent.
              * If the logical port doesn't have virtual parent set in
