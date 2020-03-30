@@ -3274,20 +3274,26 @@ for (&Switch(.dpname = dpname)) {
  *
  * Priority 150 rules drop packets to disabled logical ports, so that they
  * don't even receive multicast or broadcast packets. */
-for (&SwitchPort(.sw = &sw, .lsp = lsp, .json_name = json_name, .ps_eth_addresses = ps_eth_addresses)
-     if is_enabled(lsp.enabled) and lsp.__type != "external") {
+Flow(.logical_datapath = sw.dpname,
+     .stage         = switch_stage(OUT, PORT_SEC_L2),
+     .priority         = 50,
+     .__match          = __match,
+     .actions          = queue_action ++ "output;",
+     .external_ids     = map_empty()) :-
+    &SwitchPort(.sw = &sw, .lsp = lsp, .json_name = json_name, .ps_eth_addresses = ps_eth_addresses),
+    is_enabled(lsp.enabled),
+    lsp.__type != "external",
     var __match = if (vec_is_empty(ps_eth_addresses)) {
             "outport == ${json_name}"
         } else {
             "outport == ${json_name} && eth.dst == {${vec_space_sep(ps_eth_addresses)}}"
-        } in
-    Flow(.logical_datapath = sw.dpname,
-         .stage         = switch_stage(OUT, PORT_SEC_L2),
-         .priority         = 50,
-         .__match          = __match,
-         .actions          = "output;",
-         .external_ids     = map_empty())
-}
+        },
+    pbinding in sb.OutProxy_Port_Binding(.logical_port = lsp.name),
+    var queue_action = match ((lsp.__type,
+                               map_get(pbinding.options, "qdisc_queue_id"))) {
+        ("localnet", Some{queue_id}) -> "set_queue(${queue_id});",
+        _ -> ""
+    }.
 
 for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = &sw)
      if not is_enabled(lsp.enabled) and lsp.__type != "external") {
