@@ -24,6 +24,7 @@ ovsdb2ddlog -f "$1" \
     -p Port_Binding \
     -p Multicast_Group \
     --ro Port_Binding.chassis \
+    --ro Port_Binding.virtual_parent \
     --ro Port_Binding.encap \
     --ro IP_Multicast.seq_no \
     --ro SB_Global.ssl \

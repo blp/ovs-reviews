@@ -87,7 +87,6 @@ sb.Out_Port_Binding(.uuid_name          = uuid2name(lsp._uuid),
                     .__type             = lsp.__type,
                     .gateway_chassis    = set_empty(),
                     .ha_chassis_group   = option2set(sp.ha_chassis_group_uuid_name),
-                    .virtual_parent     = set_empty(),
                     .options            = lsp.options,
                     .datapath           = uuid2name(sw.ls._uuid),
                     .tunnel_key         = 0,
@@ -119,7 +118,6 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
                     .__type             = __type,
                     .gateway_chassis    = set_empty(),
                     .ha_chassis_group   = set_empty(),
-                    .virtual_parent     = set_empty(),
                     .options            = options,
                     .datapath           = uuid2name(sw.ls._uuid),
                     .tunnel_key         = 0,
@@ -211,7 +209,6 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
                     .__type             = __type,
                     .gateway_chassis    = set_empty(),
                     .ha_chassis_group   = set_empty(),
-                    .virtual_parent     = set_empty(),
                     .options            = map_union(map_union(options1, options2), extra_options),
                     .datapath           = uuid2name(router.lr._uuid),
                     .tunnel_key         = 0,
@@ -375,7 +372,6 @@ sb.Out_Port_Binding(.uuid_name          = "cr" ++ uuid2name(lrp._uuid),
                     .__type             = "chassisredirect",
                     .gateway_chassis    = set_empty(),
                     .ha_chassis_group   = ha_chassis_group,
-                    .virtual_parent     = set_empty(),
                     .options            = map_singleton("distributed-port", lrp.name),
                     .datapath           = uuid2name(lr_uuid),
                     .tunnel_key         = 0,
@@ -464,7 +460,6 @@ sb.OutProxy_Port_Binding(.uuid_name          = pbinding.uuid_name,
                          .__type             = pbinding.__type,
                          .gateway_chassis    = pbinding.gateway_chassis,
                          .ha_chassis_group   = pbinding.ha_chassis_group,
-                         .virtual_parent     = set_empty(),
                          .options            = options,
                          .datapath           = pbinding.datapath,
                          .tunnel_key         = tunkey,
@@ -2501,6 +2496,29 @@ function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
 
 /* Ingress table 11: ARP/ND responder, reply for known IPs.
  * (priority 50). */
+/* Handle
+ *  - GARPs for virtual ip which belongs to a logical port
+ *    of type 'virtual' and bind that port.
+ *
+ *  - ARP reply from the virtual ip which belongs to a logical
+ *    port of type 'virtual' and bind that port.
+ * */
+ Flow(.logical_datapath = sp.sw.dpname,
+      .stage            = switch_stage(IN, ARP_ND_RSP),
+      .priority         = 100,
+      .__match          = "inport == ${vp.json_name} && "
+                          "((arp.op == 1 && arp.spa == ${virtual_ip} && arp.tpa == ${virtual_ip}) || "
+                          "(arp.op == 2 && arp.spa == ${virtual_ip}))",
+      .actions          = "bind_vport(${sp.json_name}, inport); next;",
+      .external_ids     = map_empty()) :-
+    sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
+    Some{var virtual_ip} = map_get(lsp.options, "virtual-ip"),
+    Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
+    Some{var ip} = ip_parse(virtual_ip),
+    var vparent = FlatMap(string_split(virtual_parents, ",")),
+    vp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = vparent}),
+    vp.sw == sp.sw.
+
 /*
  * Add ARP/ND reply flows if either the
  *  - port is up or
@@ -2511,7 +2529,7 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
                            .ea_s = ea_s, .addr = addr)
      if is_enabled(lsp.enabled) and
         (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport") and
-        lsp.__type != "external")
+        lsp.__type != "external" and lsp.__type != "virtual")
 {
     var __match = "arp.tpa == ${addr.addr_s} && arp.op == 1" in
     var actions = "eth.dst = eth.src; "
@@ -2560,7 +2578,7 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
                            .ea_s = ea_s, .addr = addr)
      if is_enabled(lsp.enabled) and
         (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport") and
-        lsp.__type != "external")
+        lsp.__type != "external" and lsp.__type != "virtual")
 {
     var __match = "nd_ns && ip6.dst == {${addr.addr_s}, ${addr.sn_addr_s}} && nd.target == ${addr.addr_s}" in
     var actions = "${if (lsp.__type == \"router\") \"nd_na_router\" else \"nd_na\"} { "
@@ -5135,7 +5153,7 @@ for (SwitchPortIPv4Address(
         .port = &SwitchPort{.lsp = lsp, .sw = &sw},
         .ea_s = ea_s,
         .addr = addr)
-     if lsp.__type != "router" and is_enabled(lsp.enabled))
+     if lsp.__type != "router" and lsp.__type != "virtual" and is_enabled(lsp.enabled))
 {
     for (&SwitchPort(.sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}},
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
@@ -5154,7 +5172,7 @@ for (SwitchPortIPv6Address(
         .port = &SwitchPort{.lsp = lsp, .sw = &sw},
         .ea_s = ea_s,
         .addr = addr)
-     if lsp.__type != "router" and is_enabled(lsp.enabled))
+     if lsp.__type != "router" and lsp.__type != "virtual" and is_enabled(lsp.enabled))
 {
     for (&SwitchPort(.sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}},
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
@@ -5169,6 +5187,57 @@ for (SwitchPortIPv6Address(
     }
 }
 
+/* True if 's' is an empty set or a set that contains just an empty string,
+ * false otherwise.
+ *
+ * This is meant for sets of 0 or 1 elements, like the OVSDB integration
+ * with DDlog uses. */
+function is_empty_set_or_string(s: Set<string>): bool = {
+    match (set_nth(s, 0)) {
+        None -> true,
+        Some{""} -> true,
+        _ -> false
+    }
+}
+
+/* This is a virtual port. Add ARP replies for the virtual ip with
+ * the mac of the present active virtual parent.
+ * If the logical port doesn't have virtual parent set in
+ * Port_Binding table, then add the flow to set eth.dst to
+ * 00:00:00:00:00:00 and advance to next table so that ARP is
+ * resolved by router pipeline using the arp{} action.
+ * The MAC_Binding entry for the virtual ip might be invalid. */
+Flow(.logical_datapath = peer.router.dpname,
+     .stage            = router_stage(IN, ARP_RESOLVE),
+     .priority         = 100,
+     .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
+     .actions          = "eth.dst = 00:00:00:00:00:00; next;",
+     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+    sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
+    Some{var virtual_ip} = map_get(lsp.options, "virtual-ip"),
+    Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
+    Some{var ip} = ip_parse(virtual_ip),
+    pb in sb.Port_Binding(.logical_port = sp.lsp.name),
+    is_empty_set_or_string(pb.virtual_parent) or set_is_empty(pb.chassis),
+    sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
+    Some{_} = find_lrp_member_ip(peer.networks, virtual_ip).
+Flow(.logical_datapath = peer.router.dpname,
+     .stage            = router_stage(IN, ARP_RESOLVE),
+     .priority         = 100,
+     .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
+     .actions          = "eth.dst = ${address.ea_s}; next;",
+     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+    sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
+    Some{var virtual_ip} = map_get(lsp.options, "virtual-ip"),
+    Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
+    Some{var ip} = ip_parse(virtual_ip),
+    pb in sb.Port_Binding(.logical_port = sp.lsp.name),
+    not (is_empty_set_or_string(pb.virtual_parent) or set_is_empty(pb.chassis)),
+    Some{var virtual_parent} = set_nth(pb.virtual_parent, 0),
+    vp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = virtual_parent}),
+    var address = FlatMap(vp.static_addresses),
+    sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
+    Some{_} = find_lrp_member_ip(peer.networks, virtual_ip).
 
 /* This is a logical switch port that connects to a router. */
 
