@@ -1,4 +1,5 @@
 import OVN_Northbound as nb
+import OVN_Southbound as sb
 import ovsdb
 import ovn
 
@@ -18,9 +19,17 @@ relation &QoSRef[nb.QoS]
 relation &LoadBalancerRef[nb.Load_Balancer]
 &LoadBalancerRef[lb] :- nb.Load_Balancer[lb].
 
+/* LoadBalancerHealthCheckRef: reference to nb.Load_Balancer_Health_Check */
+relation &LoadBalancerHealthCheckRef[nb.Load_Balancer_Health_Check]
+&LoadBalancerHealthCheckRef[lbhc] :- nb.Load_Balancer_Health_Check[lbhc].
+
 /* NATRef: reference to nb.NAT*/
 relation &NATRef[nb.NAT]
 &NATRef[nat] :- nb.NAT[nat].
+
+/* ServiceMonitor: reference to sb.Service_Monitor */
+relation &ServiceMonitorRef[sb.Service_Monitor]
+&ServiceMonitorRef[sm] :- sb.Service_Monitor[sm].
 
 /* Switch-to-router logical port connections */
 relation SwitchRouterPeer(lsp: uuid, lsp_name: string, lrp: uuid)

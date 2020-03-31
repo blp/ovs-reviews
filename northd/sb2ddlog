@@ -20,6 +20,7 @@ ovsdb2ddlog -f "$1" \
     -o RBAC_Permission \
     -o IP_Multicast \
     -o Controller_Event \
+    -o Service_Monitor \
     -p Datapath_Binding \
     -p Port_Binding \
     -p Multicast_Group \
@@ -30,6 +31,7 @@ ovsdb2ddlog -f "$1" \
     --ro SB_Global.ssl \
     --ro SB_Global.connections \
     --ro SB_Global.external_ids \
+    --ro Service_Monitor.status \
     -k Multicast_Group.datapath \
     -k Multicast_Group.name \
     -k Multicast_Group.tunnel_key \

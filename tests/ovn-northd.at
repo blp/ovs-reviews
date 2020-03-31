@@ -1013,7 +1013,7 @@ AT_CHECK([ovn-sbctl dump-flows R1 | grep ip6.src=| wc -l], [0], [2
 AT_CLEANUP
 
 AT_SETUP([ovn -- check Load balancer health check and Service Monitor sync])
-ovn_start
+ovn_start ovn-northd-ddlog
 
 ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
 

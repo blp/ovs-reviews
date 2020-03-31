@@ -72,7 +72,8 @@ static const char *nb_input_relations[] = {
     "SSL",
     "Gateway_Chassis",
     "HA_Chassis",
-    "HA_Chassis_Group"
+    "HA_Chassis_Group",
+    "Load_Balancer_Health_Check",
 };
 
 static const char *sb_input_relations[] = {
@@ -100,6 +101,7 @@ static const char *sb_input_relations[] = {
     "HA_Chassis",
     "HA_Chassis_Group",
     "Controller_Event",
+    "Service_Monitor",
 };
 
 
@@ -892,6 +894,7 @@ get_sb_ops(struct northd_ctx *ctx)
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Controller_Event");
+    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Service_Monitor");
 
     ds_chomp(&ds, ',');
 

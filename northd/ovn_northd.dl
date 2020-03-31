@@ -1456,6 +1456,22 @@ for (&Switch(.dpname = dpname)) {
          .actions          = "next;",
          .external_ids     = map_empty());
 
+    /* Do not send service monitor packets to conntrack. */
+    for (SvcMonitorMac(svc_monitor_mac)) {
+        Flow(.logical_datapath = dpname,
+             .stage            = switch_stage(IN, PRE_LB),
+             .priority         = 110,
+             .__match          = "eth.src == ${svc_monitor_mac}",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .stage            = switch_stage(OUT, PRE_LB),
+             .priority         = 110,
+             .__match          = "eth.src == ${svc_monitor_mac}",
+             .actions          = "next;",
+             .external_ids     = map_empty())
+    };
+
     /* Allow all packets to go to next tables by default. */
     Flow(.logical_datapath = dpname,
          .stage         = switch_stage(IN, PRE_LB),
@@ -2218,37 +2234,71 @@ for (&Switch(.dpname = dpname)) {
  * a higher priority rule for load balancing below also commits the
  * connection, so it is okay if we do not hit the above match on
  * REGBIT_CONNTRACK_COMMIT. */
-for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = vip, .backends = backends)) {
-    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
-
-    /* New connections in Ingress table. */
-    var __match = if (addr_family == aF_INET()) {
-            "ct.new && ip4.dst == ${ip_address}"
+function get_match_for_lb_key(ip_address: string,
+                              port: bit<16>,
+                              addr_family: bit<32>,
+                              protocol: Set<string>): string = {
+    var port_match = if (port != 0) {
+        var proto = if (set_nth(protocol, 0) == Some{"udp"}) {
+            "udp"
         } else {
-            "ct.new && ip6.dst == ${ip_address}"
-        } in
-    if (port != 0) {
-        var __match2 = __match ++
-            if (set_nth(lb.protocol, 0) == Some{"udp"}) {
-                " && udp.dst == ${port}"
-            } else {
-                " && tcp.dst == ${port}"
-            } in
-        Flow(.logical_datapath = sw.dpname,
-             .stage         = switch_stage(IN, STATEFUL),
-             .priority         = 120,
-             .__match          = __match2,
-             .actions          = "ct_lb(${backends});",
-             .external_ids     = map_empty())
+            "tcp"
+        };
+        " && ${proto}.dst == ${port}"
     } else {
-        Flow(.logical_datapath = sw.dpname,
-             .stage         = switch_stage(IN, STATEFUL),
-             .priority         = 110,
-             .__match          = __match,
-             .actions          = "ct_lb(${backends});",
-             .external_ids     = map_empty())
-    }
+        ""
+    };
+
+    var ipX = if (addr_family == aF_INET()) { "ip4" } else { "ip6" };
+    var ip_match = "${ipX}.dst == ${ip_address}";
+
+    ip_match ++ port_match    
 }
+/* New connections in Ingress table. */
+/*
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, STATEFUL),
+     .priority         = if (port != 0) { 120 } else { 110 },
+     .__match          = "ct.new && " ++ lb_key_match,
+     .actions          = "ct_lb(${backends});",
+     .external_ids     = map_empty()) :-
+    SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = vip, .backends = backends),
+    not SwitchLBServiceMonitor(.lb = &lb),
+    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip),
+    var lb_key_match = get_match_for_lb_key(ip_address, port, addr_family, lb.protocol).
+*/
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, STATEFUL),
+     .priority         = priority,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sw in &Switch(),
+    LBVIPBackend[lbvipbackend],
+    var lbvip = lbvipbackend.lbvip,
+    var lb = lbvip.lb,
+    set_contains(sw.ls.load_balancer, lb._uuid),
+    bs in &LBVIPBackendStatus(.port = lbvipbackend.port,
+                              .ip = lbvipbackend.ip,
+                              .protocol = default_protocol(lb.protocol),
+                              .logical_port = lbvipbackend.sp.lsp.name),
+    var bses = Aggregate((sw, lbvip, lb), group2set(bs)),
+    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol),
+    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var up_backends = {
+        var up_backends: Set<string> = set_empty();
+        for (bs in bses) {
+            if (bs.up) {
+                set_insert(up_backends, "${bs.ip}:${bs.port}")
+            }
+        };
+        up_backends
+    },
+    var actions = if (set_is_empty(up_backends)) {
+        "drop;"
+    } else {
+        "ct_lb(" ++ string_join(set2vec(up_backends), ",") ++ ");"
+    }.
 
 
 /* Logical switch ingress table 0: ingress port security - L2 (priority 50)
@@ -2613,6 +2663,27 @@ for (ls in nb.Logical_Switch) {
              .external_ids     = map_empty())
     }
 }
+
+/* Ingress table 11: ARP/ND responder for service monitor source ip.
+ * (priority 110)*/
+Flow(.logical_datapath = lbvipbackend.sp.sw.dpname,
+     .stage            = switch_stage(IN, ARP_ND_RSP),
+     .priority         = 110,
+     .__match          = "arp.tpa == ${svc_mon_src_ip} && arp.op == 1",
+     .actions          = "eth.dst = eth.src; "
+                         "eth.src = ${svc_monitor_mac}; "
+                         "arp.op = 2; /* ARP reply */ "
+                         "arp.tha = arp.sha; "
+                         "arp.sha = ${svc_monitor_mac}; "
+                         "arp.tpa = arp.spa; "
+                         "arp.spa = ${svc_mon_src_ip}; "
+                         "outport = inport; "
+                         "flags.loopback = 1; "
+                         "output;",
+     .external_ids     = map_empty()) :-
+    LBVIPBackend[lbvipbackend],
+    var svc_mon_src_ip = lbvipbackend.svc_mon_src_ip,
+    SvcMonitorMac(svc_monitor_mac).
 
 function build_dhcpv4_action(
     lsp_json_key: string,
@@ -6072,3 +6143,19 @@ sb.Out_IP_Multicast(.datapath = uuid2name(cfg.datapath),
                     .query_interval = set_singleton(cfg.query_interval),
                     .query_max_resp = set_singleton(cfg.query_max_resp)) :-
     &McastSwitchCfg[cfg].
+
+
+sb.Out_Service_Monitor(.ip = lbvipbackend.ip,
+                       .protocol = protocol,
+                       .port = lbvipbackend.port as integer,
+                       .logical_port = lbvipbackend.sp.lsp.name,
+                       .src_mac = eth_addr2string(svc_monitor_mac),
+                       .src_ip = lbvipbackend.svc_mon_src_ip,
+                       .options = lbhc.options,
+                       .external_ids = map_empty()) :-
+    SvcMonitorMac(svc_monitor_mac),
+    LBVIPBackend[lbvipbackend],
+    LoadBalancerHealthCheckRef[lbhc],
+    set_contains(lbvipbackend.lbvip.lb.health_check, lbhc._uuid),
+    lbhc.vip == lbvipbackend.lbvip.vip_key,
+    var protocol = set_singleton(default_protocol(lbvipbackend.lbvip.lb.protocol)).

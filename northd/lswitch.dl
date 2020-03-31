@@ -199,6 +199,85 @@ SwitchLBVIP(sw, lb, vip, backends) :-
 relation SwitchHasLBVIP(sw: Ref<Switch>)
 SwitchHasLBVIP(sw) :- SwitchLBVIP(.sw = sw).
 
+relation &LBVIP(
+    lb: Ref<nb.Load_Balancer>,
+    vip_key: string,
+    vip_addr: string,
+    vip_port: bit<16>,
+    addr_family: bit<32>,
+    backend_ips: string)
+
+&LBVIP(.lb = lb,
+       .vip_key = vip_key,
+       .vip_addr = vip_addr,
+       .vip_port = vip_port,
+       .addr_family = addr_family,
+       .backend_ips = backend_ips) :-
+    LoadBalancerRef[lb],
+    var vip = FlatMap(lb.vips),
+    (var vip_key, var backend_ips) = vip,
+    Some{(var vip_addr, var vip_port, var addr_family)} = ip_address_and_port_from_lb_key(vip_key).
+
+relation &LBVIPBackend(
+    lbvip: Ref<LBVIP>,
+    ip: string,
+    port: bit<16>,
+    addr_family: bit<32>,
+    sp: Ref<SwitchPort>,
+    svc_mon_src_ip: string)
+
+&LBVIPBackend(.lbvip = lbvip,
+              .ip = ip,
+              .port = port,
+              .addr_family = addr_family,
+              .sp = sp,
+              .svc_mon_src_ip = svc_mon_src_ip) :-
+    LBVIP[lbvip],
+    var backend = FlatMap(string_split(lbvip.backend_ips, ",")),
+    Some{(var ip, var port, var addr_family)} = ip_address_and_port_from_lb_key(backend),
+    Some{var s} = map_get(lbvip.lb.ip_port_mappings, ip),
+    var ip_port_mapping_tokens = string_split(s, ":"),
+    vec_len(ip_port_mapping_tokens) == 64'd2,
+    Some{var port_name} = vec_nth(ip_port_mapping_tokens, 0),
+    sp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = port_name}),
+    Some{var svc_mon_src_ip} = vec_nth(ip_port_mapping_tokens, 1).
+
+function is_online(status: Set<string>): bool = {
+    match (set_nth(status, 0)) {
+        Some{s} -> s == "online",
+        _ -> true
+    }
+}
+function default_protocol(protocol: Set<string>): string = {
+    match (set_nth(protocol, 0)) {
+        Some{x} -> x,
+        None -> "tcp"
+    }
+}
+relation &LBVIPBackendStatus(
+    port: bit<16>,
+    ip: string,
+    protocol: string,
+    logical_port: string,
+    up: bool)
+&LBVIPBackendStatus(port, ip, protocol, logical_port, up) :-
+    sm in sb.Service_Monitor(),
+    var port = sm.port as bit<16>,
+    var ip = sm.ip,
+    var protocol = default_protocol(sm.protocol),
+    var logical_port = sm.logical_port,
+    var up = is_online(sm.status).
+&LBVIPBackendStatus(port, ip, protocol, logical_port, true) :-
+    LBVIPBackend[lbvipbackend],
+    var port = lbvipbackend.port as bit<16>,
+    var ip = lbvipbackend.ip,
+    var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
+    var logical_port = lbvipbackend.sp.lsp.name,
+    not sb.Service_Monitor(.port = port as bit<64>,
+                           .ip = ip,
+                           .protocol = set_singleton(protocol),
+                           .logical_port = logical_port).
+
 /* SwitchPortDHCPv4Options: many-to-one relation between logical switches and DHCPv4 options */
 relation SwitchPortDHCPv4Options(
     port: Ref<SwitchPort>,
