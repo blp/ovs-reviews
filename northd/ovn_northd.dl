@@ -238,20 +238,27 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
         eids
     }.
 
-function get_router_load_balancer_ips(router: Router): Set<string> =
+function get_router_load_balancer_ips(router: Router) :
+    (Set<string>, Set<string>) =
 {
-    var all_ips: Set<string> = set_empty();
+    var all_ips_v4: Set<string> = set_empty();
+    var all_ips_v6: Set<string> = set_empty();
     for (lb in router.lbs) {
         for (vip in deref(lb).vips) {
             (var vip_key, _) = vip;
             /* node->key contains IP:port or just IP. */
             match (ip_address_and_port_from_lb_key(vip_key)) {
                 None -> (),
-                Some{(ip_address, _, _)} -> set_insert(all_ips, ip_address)
+                Some{(ip_address, _, addr_family)}
+                    -> if (addr_family == aF_INET()) {
+                           set_insert(all_ips_v4, ip_address)
+                       } else {
+                           set_insert(all_ips_v6, ip_address)
+                       }
             }
         }
     };
-    all_ips
+    (all_ips_v4, all_ips_v6)
 }
 
 /* Returns an array of strings, each consisting of a MAC address followed
@@ -316,9 +323,9 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
             };
 
             /* A set to hold all load-balancer vips. */
-            var all_ips: Set<string> = get_router_load_balancer_ips(router);
+            (var all_ips_v4, var all_ips_v6) = get_router_load_balancer_ips(router);
 
-            for (ip_address in all_ips) {
+            for (ip_address in set_union(all_ips_v4, all_ips_v6)) {
                 c_addresses = c_addresses ++ " ${ip_address}";
                 central_ip_address = true
             };
@@ -1219,6 +1226,8 @@ function rEGBIT_EGRESS_LOOPBACK()  : string = "reg9[1]"
 function rEGBIT_PKT_LARGER()       : string = "reg9[3]"
 function rEGBIT_LOOKUP_NEIGHBOR_RESULT() : string = "reg9[4]"
 function rEGBIT_SKIP_LOOKUP_NEIGHBOR() : string = "reg9[5]"
+
+function fLAGBIT_NOT_VXLAN() : string = "flags[1] == 0"
 
 function mFF_N_LOG_REGS()          : bit<32> = 10
 
@@ -3155,6 +3164,91 @@ for (SwitchPortStaticAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json
          .actions          = "outport = ${json_name}; output;",
          .external_ids     = map_empty())
 }
+
+/*
+ * Ingress table 17: Flows that flood self originated ARP/ND packets in the
+ * switching domain.
+ */
+ /* Self originated (G)ARP requests/ND need to be flooded as usual.
+  * Determine that packets are self originated by also matching on
+  * source MAC. Matching on ingress port is not reliable in case this
+  * is a VLAN-backed network.
+  * Priority: 80.
+  */
+
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, L2_LKUP),
+     .priority         = 80,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
+    is_enabled(rp.lrp.enabled),
+    var eth_src_vec = {
+        var eth_src_vec = vec_singleton(rp.networks.ea_s);
+        for (nat in rp.router.nats) {
+            for (mac in nat.external_mac) {
+                vec_push(eth_src_vec, mac)
+            }
+        };
+        eth_src_vec
+    },
+    var eth_src = "{ " ++ string_join(eth_src_vec, ", ") ++ " }",
+    var __match = "eth.src == ${eth_src} && (arp.op == 1 || nd_ns)",
+    var actions = "outport = \"${mC_FLOOD().0}\"; output;".
+
+/* Forward ARP requests for owned IP addresses (L3, VIP, NAT) only to this
+ * router port.
+ * Priority: 75.
+ */
+function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = {
+    (var all_ips_v4, var all_ips_v6)
+        = get_router_load_balancer_ips(deref(rp.router));
+    for (a in rp.networks.ipv4_addrs) {
+        set_insert(all_ips_v4, a.addr_s)
+    };
+    for (a in rp.networks.ipv6_addrs) {
+        set_insert(all_ips_v6, a.addr_s)
+    };
+    for (nat in rp.router.nats) {
+        if (nat.__type != "snat") {
+            match (ip_parse_masked(nat.external_ip)) {
+                Left{_} -> set_insert(all_ips_v6, nat.external_ip),
+                Right{_} -> set_insert(all_ips_v4, nat.external_ip)
+            }
+        }
+    };
+    (all_ips_v4, all_ips_v6)
+}
+/* Packets received from VXLAN tunnels have already been through the
+ * router pipeline so we should skip them. Normally this is done by the
+ * multicast_group implementation (VXLAN packets skip table 32 which
+ * delivers to patch ports) but we're bypassing multicast_groups.
+ */
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, L2_LKUP),
+     .priority         = 75,
+     .__match          = fLAGBIT_NOT_VXLAN() ++
+                         " && arp.op == 1 && arp.tpa == { " ++
+                         string_join(set2vec(all_ips_v4), ", ") ++ " }",
+     .actions          = "outport = ${sp.json_name}; output;",
+     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+    sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
+    is_enabled(rp.lrp.enabled),
+    (var all_ips_v4, _) = get_arp_forward_ips(rp),
+    not set_is_empty(all_ips_v4).
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, L2_LKUP),
+     .priority         = 75,
+     .__match          = fLAGBIT_NOT_VXLAN() ++
+                         " && nd_ns && nd.target == { " ++
+                         string_join(set2vec(all_ips_v6), ", ") ++ " }",
+     .actions          = "outport = ${sp.json_name}; output;",
+     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+    sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
+    is_enabled(rp.lrp.enabled),
+    (_, var all_ips_v6) = get_arp_forward_ips(rp),
+    not set_is_empty(all_ips_v6).
 
 for (SwitchPortNewDynamicAddress(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = &sw},
                                  .address = Some{addrs})

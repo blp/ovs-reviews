@@ -16591,6 +16591,7 @@ ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.111 42.42.42.1
 ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::111 42::1
 ovn-nbctl lr-nat-add rtr2 dnat_and_snat 10.0.0.222 42.42.42.2
 ovn-nbctl lr-nat-add rtr2 dnat_and_snat 10::222 42::2
+ovn-nbctl --wait=hv sync
 
 # Inject ARP request for first router owned NAT address.
 send_arp_request 1 1 ${src_mac} $(ip_to_hex 10 0 0 254) $(ip_to_hex 10 0 0 111)
