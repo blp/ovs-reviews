@@ -142,6 +142,7 @@ DistributedGatewayPort(lrp, lr_uuid) :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
     var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
     set_size(lrps) == 64'd1,
+    Some{var lrp_uuid} = set_nth(lrps, 0),
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid).
 
 /* HAChassis is an abstraction over nb.Gateway_Chassis and nb.HA_Chassis, which
