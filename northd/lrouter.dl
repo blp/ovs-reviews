@@ -295,11 +295,16 @@ RouterLB(router, lb) :-
     var lb = FlatMap(lbs).
 
 /* Load balancer VIPs associated with routers */
-relation RouterLBVIP(router: Ref<Router>, lb: Ref<nb.Load_Balancer>, vip: (string, string))
+relation RouterLBVIP(
+    router: Ref<Router>,
+    lb: Ref<nb.Load_Balancer>,
+    vip: string,
+    backends: string)
 
-RouterLBVIP(router, lb, vip) :-
+RouterLBVIP(router, lb, vip, backends) :-
     RouterLB(router, lb@(&nb.Load_Balancer{.vips = vips})),
-    var vip = FlatMap(vips).
+    var kv = FlatMap(vips),
+    (var vip, var backends) = kv.
 
 /* Router-to-router logical port connections */
 relation RouterRouterPeer(rport1: uuid, rport2: uuid, rport2_name: string)

@@ -131,6 +131,10 @@ extern function eth_addr_to_uint64(ea: eth_addr): bit<64>
 extern function eth_addr_from_uint64(x: bit<64>): eth_addr
 extern function eth_addr_mark_random(ea: eth_addr): eth_addr
 
+function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
+    eth_addr_to_uint64(eth_addr_mark_random(eth_addr_from_uint64(hash64(seed ++ variant))))
+}
+
 /*
  * C functions imported from <arpa/inet.h>
  */

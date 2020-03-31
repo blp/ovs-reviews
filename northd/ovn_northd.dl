@@ -244,10 +244,10 @@ function get_router_load_balancer_ips(router: Router) :
     var all_ips_v4: Set<string> = set_empty();
     var all_ips_v6: Set<string> = set_empty();
     for (lb in router.lbs) {
-        for (vip in deref(lb).vips) {
-            (var vip_key, _) = vip;
+        for (kv in deref(lb).vips) {
+            (var vip, _) = kv;
             /* node->key contains IP:port or just IP. */
-            match (ip_address_and_port_from_lb_key(vip_key)) {
+            match (ip_address_and_port_from_lb_key(vip)) {
                 None -> (),
                 Some{(ip_address, _, addr_family)}
                     -> if (addr_family == aF_INET()) {
@@ -1543,11 +1543,11 @@ Flow(.logical_datapath = sw.dpname,
      .actions          = __action,
      .external_ids     = map_empty()) :-
     ControllerEventEn(true),
-    SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = (vip_key, vip_val)),
-    vip_val == "",
+    SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = vip, .backends = backends),
+    backends == "",
     HasEventElbMeter(has_elb_meter),
     Some {(var __match, var __action)} = build_empty_lb_event_flow(
-        vip_key, lb, has_elb_meter).
+        vip, lb, has_elb_meter).
 
 /* 'REGBIT_CONNTRACK_DEFRAG' is set to let the pre-stateful table send
  * packet to conntrack for defragmentation. */
@@ -1561,12 +1561,11 @@ function make_ip_dst_match(ip_address: string, addr_family: bit<32>): string = {
 }
 
 for (SwitchLBVIP(.sw = &sw, .vip = vip)) {
-    (var k, _) = vip in
     /* Ignore L4 port information in the key because fragmented packets
      * may not have L4 information.  The pre-stateful table will send
      * the packet through ct() action to de-fragment. In stateful
      * table, we will eventually look at L4 information. */
-    Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(k) in
+    Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
     var ip_dst_match = make_ip_dst_match(ip_address, addr_family) in
     Flow(.logical_datapath = sw.dpname,
          .stage         = switch_stage(IN, PRE_LB),
@@ -2228,8 +2227,8 @@ for (&Switch(.dpname = dpname)) {
  * a higher priority rule for load balancing below also commits the
  * connection, so it is okay if we do not hit the above match on
  * REGBIT_CONNTRACK_COMMIT. */
-for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = (vip_key, vip_val))) {
-    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip_key) in
+for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = vip, .backends = backends)) {
+    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
 
     /* New connections in Ingress table. */
     var __match = if (addr_family == aF_INET()) {
@@ -2248,14 +2247,14 @@ for (SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = (vip_key, vip_val))) {
              .stage         = switch_stage(IN, STATEFUL),
              .priority         = 120,
              .__match          = __match2,
-             .actions          = "ct_lb(${vip_val});",
+             .actions          = "ct_lb(${backends});",
              .external_ids     = map_empty())
     } else {
         Flow(.logical_datapath = sw.dpname,
              .stage         = switch_stage(IN, STATEFUL),
              .priority         = 110,
              .__match          = __match,
-             .actions          = "ct_lb(${vip_val});",
+             .actions          = "ct_lb(${backends});",
              .external_ids     = map_empty())
     }
 }
@@ -3877,8 +3876,8 @@ for (&RouterPort(.lrp = lrp,
                  .networks = networks,
                  .is_redirect = is_redirect))
 {
-    for (RouterLBVIP(.router = &Router{.lr = nb.Logical_Router{._uuid= lr._uuid}}, .vip = (vip_key, _))) {
-        Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(vip_key) in
+    for (RouterLBVIP(.router = &Router{.lr = nb.Logical_Router{._uuid= lr._uuid}}, .vip = vip)) {
+        Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
         var __match = if (addr_family == aF_INET()) {
                "inport == ${json_name} && arp.tpa == ${ip_address} && arp.op == 1"
             } else {
@@ -4744,14 +4743,15 @@ for (RouterLBVIP(
                           .redirect_port_name = redirect_port_name,
                           .is_gateway = is_gateway},
         .lb = &lb,
-        .vip = (vip_key, vip_value))
+        .vip = vip,
+        .backends = backends)
      if is_some(l3dgw_port) or is_gateway)
 {
-    if (vip_value == "") {
+    if (backends == "") {
         for (ControllerEventEn(true)) {
             for (HasEventElbMeter(has_elb_meter)) {
                 Some {(var __match, var __action)} =
-                    build_empty_lb_event_flow(vip_key, lb, has_elb_meter) in
+                    build_empty_lb_event_flow(vip, lb, has_elb_meter) in
                 Flow(.logical_datapath = dpname,
                      .stage            = router_stage(IN, DNAT),
                      .priority         = 130,
@@ -4764,8 +4764,8 @@ for (RouterLBVIP(
 
     /* A set to hold all ips that need defragmentation and tracking. */
 
-    /* vip_key contains IP:port or just IP. */
-    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip_key) in {
+    /* vip contains IP:port or just IP. */
+    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip) in {
         /* If there are any load balancing rules, we should send
          * the packet to conntrack for defragmentation and
          * tracking.  This helps with two things.
@@ -4828,8 +4828,8 @@ for (RouterLBVIP(
             var new_match = "ct.new && " ++ __match in
             var actions =
                 match (lb_force_snat_ip) {
-                    Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_lb(${vip_value});",
-                    None -> "ct_lb(${vip_value});"
+                    Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_lb(${backends});",
+                    None -> "ct_lb(${backends});"
                 } in
             Flow(.logical_datapath = dpname,
                  .stage         = router_stage(IN, DNAT),
@@ -4859,7 +4859,7 @@ for (RouterLBVIP(
              */
             var conds = {
                 var conds: Vec<string> = vec_empty();
-                for (ip_str in string_split(vip_value, ",")) {
+                for (ip_str in string_split(backends, ",")) {
                     match (ip_address_and_port_from_lb_key(ip_str)) {
                         None -> () /* FIXME: put a break here */,
                         Some{(ip_address_, port_, addr_family_)} -> vec_push(conds,

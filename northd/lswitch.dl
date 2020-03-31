@@ -189,11 +189,12 @@ SwitchLB(sw, lb) :-
     lb in &LoadBalancerRef[nb.Load_Balancer{._uuid = lb_id}].
 
 /* Load balancer VIPs associated with switch */
-relation SwitchLBVIP(sw: Ref<Switch>, lb: Ref<nb.Load_Balancer>, vip: (string, string))
+relation SwitchLBVIP(sw: Ref<Switch>, lb: Ref<nb.Load_Balancer>, vip: string, backends: string)
 
-SwitchLBVIP(sw, lb, vip) :-
+SwitchLBVIP(sw, lb, vip, backends) :-
     SwitchLB(sw, lb@(&nb.Load_Balancer{.vips = vips})),
-    var vip = FlatMap(vips).
+    var kv = FlatMap(vips),
+    (var vip, var backends) = kv.
 
 relation SwitchHasLBVIP(sw: Ref<Switch>)
 SwitchHasLBVIP(sw) :- SwitchLBVIP(.sw = sw).
@@ -477,3 +478,34 @@ relation SwitchPortIPv6Address(port:   Ref<SwitchPort>,
 SwitchPortIPv6Address(port, ea_s, addr) :-
     SwitchPortAddresses(port, LPortAddress{.ea_s = ea_s, .ipv6_addrs = addrs}),
     var addr = FlatMap(addrs).
+
+/* Service monitoring. */
+
+/* MAC allocated for service monitor usage. Just one mac is allocated
+ * for this purpose and ovn-controller's on each chassis will make use
+ * of this mac when sending out the packets to monitor the services
+ * defined in Service_Monitor Southbound table. Since these packets
+ * all locally handled, having just one mac is good enough. */
+function get_svc_monitor_mac(options: Map<string,string>, uuid: uuid)
+    : eth_addr =
+{
+    var existing_mac: Option<eth_addr> = match (
+        map_get(options, "svc_monitor_mac"))
+    {
+        Some{mac} -> scan_eth_addr(mac),
+        None -> None
+    };
+    match (existing_mac) {
+        Some{mac} -> mac,
+        None -> eth_addr_from_uint64(pseudorandom_mac(uuid, 16'h5678))
+    }
+}
+function put_svc_monitor_mac(options: Map<string,string>,
+                             svc_monitor_mac: eth_addr) : Map<string,string> =
+{
+    map_insert_imm(options, "svc_monitor_mac", eth_addr2string(svc_monitor_mac))
+}
+relation SvcMonitorMac(mac: eth_addr)
+SvcMonitorMac(get_svc_monitor_mac(options, uuid)) :-
+    nb.NB_Global(._uuid = uuid, .options = options).
+
