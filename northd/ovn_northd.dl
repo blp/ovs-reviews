@@ -4876,7 +4876,7 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
 
     match (map_get(port.lrp.ipv6_ra_configs, "rdnss")) {
         Some{value} -> map_insert(options, "ipv6_ra_rdnss", value),
-	_ -> ()
+        _ -> ()
     };
 
     match (map_get(port.lrp.ipv6_ra_configs, "dnssl")) {
