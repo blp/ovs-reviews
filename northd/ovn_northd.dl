@@ -4186,6 +4186,10 @@ for (&Router(.lr = lr, .dpname = dpname)) {
          .external_ids     = map_empty())
 }
 
+function lrouter_nat_is_stateless(nat: nb.NAT): bool = {
+    Some{"true"} == map_get(nat.options, "stateless")
+}
+
 /* NAT rules are only valid on Gateway routers and routers with
  * l3dgw_port (router has a port with "redirect-chassis"
  * specified). */
@@ -4209,6 +4213,8 @@ for (&Router(.dpname = dpname,
                 } else { true }
             }
         } in
+        var is_v6 = false in
+        var ipX = if (is_v6) { "ip6" } else { "ip4" } in
         /* Check the validity of nat->logical_ip. 'logical_ip' can
          * be a subnet when the type is "snat". */
         (var mask, true) = match ((ip_parse_masked(nat.logical_ip), nat.__type)) {
@@ -4245,6 +4251,8 @@ for (&Router(.dpname = dpname,
                     _ -> { Some{ None } }
                 }
             } else { Some{ None } } in
+        var stateless = (lrouter_nat_is_stateless(nat)
+                         and nat.__type == "dnat_and_snat") in
         {
             /* Ingress UNSNAT table: It is for already established connections'
              * reverse traffic. i.e., SNAT has already been done in egress
@@ -4258,12 +4266,17 @@ for (&Router(.dpname = dpname,
             if (nat.__type == "snat" or nat.__type == "dnat_and_snat") {
                 if (l3dgw_port == None) {
                     /* Gateway router. */
+                    var actions = if (stateless) {
+                        "${ipX}.dst=${nat.logical_ip}; next;"
+                    } else {
+                        "ct_snat;"
+                    } in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(IN, UNSNAT),
                          .priority         = 90,
                          .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                         .actions          = "ct_snat;",
-                         .external_ids     = map_empty())
+                         .actions          = actions,
+                         .external_ids     = stage_hint(nat._uuid))
                 };
                 Some{var gwport} = l3dgw_port in {
                     /* Distributed router. */
@@ -4277,12 +4290,17 @@ for (&Router(.dpname = dpname,
                              * programmed on the "redirect-chassis". */
                             " && is_chassis_resident(${redirect_port_name})"
                         } else { "" } in
+                    var actions = if (stateless) {
+                        "${ipX}.dst=${nat.logical_ip}; next;"
+                    } else {
+                        "ct_snat;"
+                    } in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(IN, UNSNAT),
                          .priority         = 100,
                          .__match          = __match,
-                         .actions          = "ct_snat;",
-                         .external_ids     = map_empty());
+                         .actions          = actions,
+                         .external_ids     = stage_hint(nat._uuid));
 
                     /* Traffic received on other router ports must be
                      * redirected to the central instance of the l3dgw_port
@@ -4292,7 +4310,7 @@ for (&Router(.dpname = dpname,
                          .priority         = 50,
                          .__match          = "ip && ip4.dst == ${nat.external_ip}",
                          .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
-                         .external_ids     = map_empty())
+                         .external_ids     = stage_hint(nat._uuid))
                 }
             };
 
@@ -4305,19 +4323,24 @@ for (&Router(.dpname = dpname,
                     /* Packet when it goes from the initiator to destination.
                      * We need to set flags.loopback because the router can
                      * send the packet back through the same interface. */
-                    var actions = if (is_some(get_force_snat_ip(lr, "dnat"))) {
-                                      /* Indicate to the future tables that a DNAT has taken
-                                       * place and a force SNAT needs to be done in the
-                                       * Egress SNAT table. */
-                                      "flags.force_snat_for_dnat = 1; "
-                                  } else { "" } ++
-                                  "flags.loopback = 1; ct_dnat(${nat.logical_ip});" in
+                    var flag_action =
+                        if (is_some(get_force_snat_ip(lr, "dnat"))) {
+                            /* Indicate to the future tables that a DNAT has taken
+                             * place and a force SNAT needs to be done in the
+                             * Egress SNAT table. */
+                            "flags.force_snat_for_dnat = 1; "
+                        } else { "" } in
+                    var nat_actions = if (stateless) {
+                        "${ipX}.dst=${nat.logical_ip}; next;"
+                    } else {
+                        "flags.loopback = 1; ct_dnat(${nat.logical_ip});"
+                    } in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(IN, DNAT),
                          .priority         = 100,
                          .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                         .actions          = actions,
-                         .external_ids     = map_empty())
+                         .actions          = flag_action ++ nat_actions,
+                         .external_ids     = stage_hint(nat._uuid))
                 };
 
                 Some{var gwport} = l3dgw_port in {
@@ -4331,12 +4354,17 @@ for (&Router(.dpname = dpname,
                              * programmed on the "redirect-chassis". */
                             " && is_chassis_resident(${redirect_port_name})"
                         } else { "" } in
+                    var actions = if (stateless) {
+                        "${ipX}.dst=${nat.logical_ip}; next;"
+                    } else {
+                        "ct_dnat(${nat.logical_ip});"
+                    } in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(IN, DNAT),
                          .priority         = 100,
                          .__match          = __match,
-                         .actions          = "ct_dnat(${nat.logical_ip});",
-                         .external_ids     = map_empty());
+                         .actions          = actions,
+                         .external_ids     = stage_hint(nat._uuid));
 
                     /* Traffic received on other router ports must be
                      * redirected to the central instance of the l3dgw_port
@@ -4346,7 +4374,7 @@ for (&Router(.dpname = dpname,
                          .priority         = 50,
                          .__match          = "ip && ip4.dst == ${nat.external_ip}",
                          .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
-                         .external_ids     = map_empty())
+                         .external_ids     = stage_hint(nat._uuid))
                 }
             };
 
@@ -4372,13 +4400,18 @@ for (&Router(.dpname = dpname,
                     match (mac) {
                         Some{mac_addr} -> "eth.src = ${mac_addr}; ",
                         None -> ""
-                    } ++ "ct_dnat;" in
+                    } ++
+                    if (stateless) {
+                        "${ipX}.src=${nat.external_ip}; next;"
+                    } else {
+                        "ct_dnat;"
+                    } in
                 Flow(.logical_datapath = dpname,
                      .stage         = router_stage(OUT, UNDNAT),
                      .priority         = 100,
                      .__match          = __match,
                      .actions          = actions,
-                     .external_ids     = map_empty())
+                     .external_ids     = stage_hint(nat._uuid))
             };
 
             /* Egress SNAT table: Packets enter the egress pipeline with
@@ -4391,12 +4424,17 @@ for (&Router(.dpname = dpname,
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
+                    var actions = if (stateless) {
+                        "${ipX}.src=${nat.external_ip}; next;"
+                    } else {
+                        "ct_snat(${nat.external_ip});"
+                    } in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(OUT, SNAT),
                          .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
                          .__match          = "ip && ip4.src == ${nat.logical_ip}",
-                         .actions          = "ct_snat(${nat.external_ip});",
-                         .external_ids     = map_empty())
+                         .actions          = actions,
+                         .external_ids     = stage_hint(nat._uuid))
                 };
 
                 Some{var gwport} = l3dgw_port in
@@ -4414,8 +4452,11 @@ for (&Router(.dpname = dpname,
                         match (mac) {
                             Some{mac_addr} -> "eth.src = ${mac_addr}; ",
                             _ -> ""
-                        } ++
-                        "ct_snat(${nat.external_ip});" in
+                        } ++ if (stateless) {
+                            "${ipX}.src=${nat.external_ip}; next;"
+                        } else {
+                            "ct_snat(${nat.external_ip});"
+                        } in
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
@@ -4426,7 +4467,7 @@ for (&Router(.dpname = dpname,
                          .priority         = priority + centralized_boost,
                          .__match          = __match,
                          .actions          = actions,
-                         .external_ids     = map_empty())
+                         .external_ids     = stage_hint(nat._uuid))
                 }
             };
 
@@ -4446,7 +4487,7 @@ for (&Router(.dpname = dpname,
                  .priority         = 50,
                  .__match          = __match,
                  .actions          = "next;",
-                 .external_ids     = map_empty());
+                 .external_ids     = stage_hint(nat._uuid));
 
             /* Ingress Gateway Redirect Table: For NAT on a distributed
              * router, add flows that are specific to a NAT rule.  These
@@ -4461,7 +4502,7 @@ for (&Router(.dpname = dpname,
                  .priority         = 100,
                  .__match          = __match,
                  .actions          = "next;",
-                 .external_ids     = map_empty());
+                 .external_ids     = stage_hint(nat._uuid));
 
             /* Egress Loopback table: For NAT on a distributed router.
              * If packets in the egress pipeline on the distributed
@@ -4490,7 +4531,7 @@ for (&Router(.dpname = dpname,
                  .priority         = 100,
                  .__match          = __match,
                  .actions          = actions,
-                 .external_ids     = map_empty())
+                 .external_ids     = stage_hint(nat._uuid))
         }
     };
 

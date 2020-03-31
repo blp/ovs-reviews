@@ -16185,17 +16185,14 @@ test_ip vif11 f00000000011 000001010203 $sip $dip vif-north
 OVN_CHECK_PACKETS_REMOVE_BROADCAST([hv4/vif-north-tx.pcap], [vif-north.expected])
 
 # Confirm that NATing happened without connection tracker
-
-AT_CHECK([ovn-sbctl dump-flows router | grep ct_snat | wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows router | grep ct_dnat | wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows router | grep ip4.dst=| wc -l], [0], [2
-])
-
-AT_CHECK([ovn-sbctl dump-flows router | grep ip4.src=| wc -l], [0], [2
+ovn-sbctl dump-flows router > sbflows
+AT_CAPTURE_FILE([sbflows])
+AT_CHECK([for regex in ct_snat ct_dnat ip4.dst= ip4.src=; do
+  grep -c "$regex" sbflows;
+done], [0], [0
+0
+2
+2
 ])
 
 echo "----------- Post Traffic hv1 dump -----------"
