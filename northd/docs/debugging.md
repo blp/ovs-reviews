@@ -154,7 +154,7 @@ documented
 To replay the log, you will need the standalone DDlog executable.  The build
 system is setup to not compile this program by default, as it nearly doubles
 the, already annoyingly long, Rust compilation time.  To build it, run `make
-ovn/northd/ovn_northd_ddlog/target/release/ovn_northd_cli`.
+NORTHD_CLI=1`.
 
 You can modify the log before replaying it, e.g., adding `dump <table>`
 commands to dump the contents of relations at various points during execution.
@@ -168,6 +168,13 @@ the output of DDlog to `replay.dump`.
 
 ```
 ovn/northd/ovn_northd_ddlog/target/release/ovn_northd_cli -w 1 --no-print < tests/testsuite.dir/2709/northd/replay.dat > replay.dump
+```
+
+Or, to dump table contents following the run, without having to edit
+`replay.dat`:
+
+```
+(cat tests/testsuite.dir/2709/northd/replay.dat; echo 'dump;') | ovn/northd/ovn_northd_ddlog/target/release/ovn_northd_cli -w 1 --no-print > replay.dump
 ```
 
 ## Debugging panics
