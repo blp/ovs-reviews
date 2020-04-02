@@ -1054,8 +1054,9 @@ service_monitor | sed '/^$/d' | wc -l`])
 
 ovn-nbctl --wait=sb ls-lb-add sw0 lb1
 
-ovn-sbctl dump-flows sw0 | grep ct_lb | grep priority=120 > lflows.txt
-AT_CHECK([cat lflows.txt], [0], [dnl
+ovn-sbctl dump-flows sw0 > lflows.txt
+AT_CAPTURE_FILE([lflows.txt])
+AT_CHECK([grep ct_lb lflows.txt | grep priority=120], [0], [dnl
   table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(ct_lb(10.0.0.3:80,20.0.0.3:80);)
 ])
 
@@ -1063,8 +1064,8 @@ AT_CHECK([cat lflows.txt], [0], [dnl
 ovn-nbctl --wait=sb clear load_balancer . health_check
 OVS_WAIT_UNTIL([test 0 = `ovn-sbctl list service_monitor |  wc -l`])
 
-ovn-sbctl dump-flows sw0 | grep ct_lb | grep priority=120 > lflows.txt
-AT_CHECK([cat lflows.txt], [0], [dnl
+ovn-sbctl dump-flows sw0 > lflows.txt
+AT_CHECK([grep ct_lb lflows.txt | grep priority=120], [0], [dnl
   table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(ct_lb(10.0.0.3:80,20.0.0.3:80);)
 ])
 
@@ -1164,8 +1165,8 @@ service_monitor logical_port=sw0-p1 | sed '/^$/d' | wc -l`])
 OVS_WAIT_UNTIL([test 1 = `ovn-sbctl --bare --columns _uuid find \
 service_monitor port=1000 | sed '/^$/d' | wc -l`])
 
-ovn-sbctl dump-flows sw0 | grep ct_lb | grep priority=120 > lflows.txt
-AT_CHECK([cat lflows.txt], [0], [dnl
+ovn-sbctl dump-flows sw0 > lflows.txt
+AT_CHECK([grep ct_lb lflows.txt | grep priority=120], [0], [dnl
   table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(ct_lb(10.0.0.3:80);)
   table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.40 && tcp.dst == 1000), action=(ct_lb(10.0.0.3:1000);)
 ])
