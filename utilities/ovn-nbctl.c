@@ -5826,6 +5826,9 @@ static const struct ctl_table_class tables[NBREC_N_TABLES] = {
 
     [NBREC_TABLE_HA_CHASSIS_GROUP].row_ids[0]
     = {&nbrec_ha_chassis_group_col_name, NULL, NULL},
+
+    [NBREC_TABLE_LOAD_BALANCER].row_ids[0]
+    = {&nbrec_load_balancer_col_name, NULL, NULL},
 };
 
 static char *
