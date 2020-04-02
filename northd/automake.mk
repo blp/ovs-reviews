@@ -19,8 +19,6 @@ EXTRA_DIST += \
 	northd/nb2ddlog northd/sb2ddlog
 
 if DDLOG
-BUILT_SOURCES += northd/ovn_northd_ddlog/ddlog.h
-
 bin_PROGRAMS += northd/ovn-northd-ddlog
 northd_ovn_northd_ddlog_SOURCES = \
 	northd/ovn-northd-ddlog.c \
@@ -41,11 +39,7 @@ northd/OVN_Southbound.dl: ovn-sb.ovsschema northd/sb2ddlog
 
 CLEANFILES += northd/OVN_Northbound.dl northd/OVN_Southbound.dl
 
-northd/ovn_northd_ddlog/ddlog.h: \
-	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a
-
-northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la: \
-	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a
+northd/ovn_northd_ddlog/ddlog.h: northd/ddlog.stamp
 
 CARGO_VERBOSE = $(cargo_verbose_$(V))
 cargo_verbose_ = $(cargo_verbose_$(AM_DEFAULT_VERBOSITY))
@@ -54,7 +48,7 @@ cargo_verbose_1 = --verbose
 
 DDLOGFLAGS = -L $(DDLOGLIBDIR) -L $(builddir)/northd $(DDLOG_EXTRA_FLAGS)
 
-DDLOG_EXTRA_FLAGS = --output-internal-relations
+DDLOG_EXTRA_FLAGS = --output-internal-relations --output-input-relations=In_
 
 RUSTFLAGS = \
 	-L ../../lib/.libs \
@@ -82,7 +76,7 @@ NORTHD_LIB = 1
 NORTHD_CLI = 0
 
 ddlog_targets = $(northd_lib_$(NORTHD_LIB)) $(northd_cli_$(NORTHD_CLI))
-northd_lib_1 = northd/ovn_northd_ddlog/target/release/libovn/libovn_%_ddlog.a
+northd_lib_1 = northd/ovn_northd_ddlog/target/release/libovn_%_ddlog.la
 northd_cli_1 = northd/ovn_northd_ddlog/target/release/ovn_%_cli
 
 cargo_build = $(cargo_build_$(NORTHD_LIB)$(NORTHD_CLI))
@@ -105,5 +99,6 @@ CLEANFILES += \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
 	northd/ovn_northd_ddlog/ddlog.h \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a \
-	northd/ovn_northd_ddlog/target/release/ovn_northd_cli
+	northd/ovn_northd_ddlog/target/release/ovn_northd_cli \
+	northd/ddlog.stamp
 endif
