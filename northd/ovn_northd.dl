@@ -525,14 +525,14 @@ nb.Out_NB_Global(.sb_cfg        = sb_cfg,
     var options0 = put_mac_prefix(nbg.options, mac_prefix),
     var options = put_svc_monitor_mac(options0, svc_monitor_mac).
 
-nb.Out_NB_Global(.sb_cfg        = nbg.sb_cfg,
+nb.Out_NB_Global(.sb_cfg        = sb_cfg,
                  .hv_cfg        = hv_cfg,
                  .ipsec         = nbg.ipsec,
                  .options       = options) :-
     nbg in nb.NB_Global(),
     sb.SB_Global(.nb_cfg = sb_cfg),
     sb.Chassis(.nb_cfg = chassis_cfg),
-    var hv_cfg = Aggregate((nbg), group_min(chassis_cfg)),
+    var hv_cfg = Aggregate((nbg, sb_cfg), group_min(chassis_cfg)),
     MacPrefix(mac_prefix),
     SvcMonitorMac(svc_monitor_mac),
     var options0 = put_mac_prefix(nbg.options, mac_prefix),
