@@ -3943,7 +3943,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
 }
 
 for (&RouterPort(.lrp = lrp,
-                 .router = &Router{.lr = lr, .dpname = dpname},
+                 .router = router@&Router{.lr = lr, .dpname = dpname},
                  .json_name = json_name,
                  .networks = networks,
                  .is_redirect = is_redirect))
@@ -3954,6 +3954,11 @@ for (&RouterPort(.lrp = lrp,
                "inport == ${json_name} && arp.tpa == ${ip_address} && arp.op == 1"
             } else {
                "inport == ${json_name} && nd_ns && nd.target == ${ip_address}"
+            } ++
+            if (is_redirect) {
+                " && is_chassis_resident(${router.redirect_port_name})"
+            } else {
+                ""
             } in
         var actions = if (addr_family == aF_INET()) {
             "eth.dst = eth.src; "
