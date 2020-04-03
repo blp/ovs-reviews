@@ -4347,6 +4347,16 @@ for (&Router(.lr = lr, .dpname = dpname)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
+         .external_ids     = map_empty());
+
+    /* Send the IPv6 NS packets to next table. When ovn-controller
+     * generates IPv6 NS (for the action - nd_ns{}), the injected
+     * packet would go through conntrack - which is not required. */
+    Flow(.logical_datapath = dpname,
+         .stage            = router_stage(OUT, SNAT),
+         .priority         = 120,
+         .__match          = "nd_ns",
+         .actions          = "next;",
          .external_ids     = map_empty())
 }
 
