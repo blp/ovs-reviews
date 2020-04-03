@@ -10102,42 +10102,42 @@ ra_test() {
     rm -f expected
 }
 
-# Baseline test with no MTU
+echo "Baseline test with no MTU"
 ra_test 0 00 0 0 0 c0 40 aef00000000000000000000000000000
 
-# Now make sure an MTU option makes it
+echo "Now make sure an MTU option makes it"
 ovn-nbctl --wait=hv set Logical_Router_Port ro-sw ipv6_ra_configs:mtu=1500
 ra_test 000005dc 00 0 0 0 c0 40 aef00000000000000000000000000000
 
-# Now test for multiple network prefixes
+echo "Now test for multiple network prefixes"
 ovn-nbctl --wait=hv set Logical_Router_port ro-sw networks='aef0\:\:1/64 fd0f\:\:1/48'
 ra_test 000005dc 00 0 0 0 c0 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
 
-# Test PRF for default gw
+echo "Test PRF for default gw"
 ovn-nbctl --wait=hv set Logical_Router_port ro-sw ipv6_ra_configs:router_preference="LOW"
 ra_test 000005dc 18 0 0 0 c0 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
 
-# Now test for RDNSS
+echo "Now test for RDNSS"
 ovn-nbctl --wait=hv set Logical_Router_port ro-sw ipv6_ra_configs:rdnss='aef0::11'
 dns_addr=aef00000000000000000000000000011
 ra_test 000005dc 18 $dns_addr 0 0 c0 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
 
-# Now test for DNSSL
+echo "Now test for DNSSL"
 ovn-nbctl --wait=hv set Logical_Router_port ro-sw ipv6_ra_configs:dnssl="aa.bb.cc"
 ovn-nbctl --wait=hv set Logical_Router_port ro-sw ipv6_ra_configs:router_preference="HIGH"
 dnssl=02616102626202636300000000000000
 ra_test 000005dc 08 $dns_addr $dnssl 0 c0 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
 
-# Now test Route Info option
+echo "Now test Route Info option"
 ovn-nbctl --wait=hv set Logical_Router_port ro-sw ipv6_ra_configs:route_info="HIGH-aef1::11/48,LOW-aef2::11/96"
 route_info=18023008ffffffffaef100000000000018036018ffffffffaef20000000000000000000000000000
 ra_test 000005dc 08 $dns_addr $dnssl $route_info c0 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
-
-## Test a different address mode now
+exit 0
+echo "Test a different address mode now"
 ovn-nbctl --wait=hv set Logical_Router_Port ro-sw ipv6_ra_configs:address_mode=dhcpv6_stateful
 ra_test 000005dc 88 $dns_addr $dnssl $route_info 80 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
 
-# And the other address mode
+echo "And the other address mode"
 ovn-nbctl --wait=hv set Logical_Router_Port ro-sw ipv6_ra_configs:address_mode=dhcpv6_stateless
 ra_test 000005dc 48 $dns_addr $dnssl $route_info c0 40 aef00000000000000000000000000000 30 fd0f0000000000000000000000000000
 
@@ -10149,7 +10149,7 @@ AT_KEYWORDS([acl-reject])
 AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
 ovn_start NORTHD_TYPE
 
-# test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
+ test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
 #
 # Causes a packet to be received on INPORT of the hypervisor HV. The packet is an IPv4 packet with
 # ETH_SRC, ETH_DST, IPV4_SRC, IPV4_DST, IP_CHKSUM as specified.

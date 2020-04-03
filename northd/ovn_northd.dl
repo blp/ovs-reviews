@@ -5096,6 +5096,18 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
     };
 
     map_insert(options, "ipv6_ra_src_eth", port.networks.ea_s);
+
+    var prf = match (map_get(port.lrp.ipv6_ra_configs, "router_preference")) {
+        Some{prf} -> if (prf == "HIGH" or prf == "LOW") prf else "MEDIUM",
+        _ -> "MEDIUM"
+    };
+    map_insert(options, "ipv6_ra_prf", prf);
+
+    match (map_get(port.lrp.ipv6_ra_configs, "route_info")) {
+        Some{s} -> map_insert(options, "ipv6_ra_route_info", s),
+        _ -> ()
+    };
+
     options
 }
 
