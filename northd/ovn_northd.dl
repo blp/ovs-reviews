@@ -1955,12 +1955,12 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
              * deletion.  There is no need to commit here, so we can just
              * proceed to the next table. We use this to ensure that this
              * connection is still allowed by the currently defined
-             * policy. */
+             * policy. Match untracked packets too. */
             Flow(.logical_datapath = dpname,
                  .stage         = stage,
                  .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                 .__match          = "!ct.new && ct.est && !ct.rpl"
-                                     " && ct_label.blocked == 0 && (${acl.__match})",
+                 .__match          = "(!ct.trk || (!ct.new && ct.est && !ct.rpl"
+                                     " && ct_label.blocked == 0)) && (${acl.__match})",
                  .actions          = "${build_acl_log(acl)}next;",
                  .external_ids     = stage_hint)
         }
@@ -1970,9 +1970,10 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
          * depending on whether the connection was previously committed
          * to the connection tracker with ct_commit. */
         if (has_stateful) {
-            /* If the packet is not part of an established connection, then
-             * we can simply reject/drop it. */
-            var __match = "(!ct.est || (ct.est && ct_label.blocked == 1))" in
+            /* If the packet is not tracked or not part of an established
+             * connection, then we can simply reject/drop it. */
+            var __match = "(!ct.trk || !ct.est"
+                          " || (ct.est && ct_label.blocked == 1))" in
             if (acl.action == "reject") {
                 Reject(dpname, pipeline, stage, acl, __match, "")
             } else {

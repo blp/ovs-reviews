@@ -11158,11 +11158,9 @@ for sf in 0 1; do
     done
 done
 
-# Clean up the ACL
-ovn-nbctl acl-del lsw0
-
 # dump information and flows with counters
-ovn-sbctl dump-flows -- list multicast_group
+ovn-sbctl dump-flows -- list multicast_group > sbflows
+AT_CAPTURE_FILE([sbflows])
 
 echo "------ hv1 dump ------"
 as hv1 ovs-vsctl show
