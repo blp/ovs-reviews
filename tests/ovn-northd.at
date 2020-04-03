@@ -1201,7 +1201,6 @@ ovn-nbctl -- --id=@hc create Load_Balancer_Health_Check vip="10.0.0.10\:80" -- a
 
 ovn-nbctl ls-lb-add sw0 lb2
 ovn-nbctl ls-lb-add sw1 lb2
-ovn-nbctl lr-lb-add lr0 lb2
 
 OVS_WAIT_UNTIL([test 5 = `ovn-sbctl --bare --columns _uuid find \
 service_monitor | sed '/^$/d' | wc -l`])
