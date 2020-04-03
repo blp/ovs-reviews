@@ -1034,6 +1034,14 @@ sb.Out_RBAC_Permission (
         }
 ).
 
+sb.Out_RBAC_Permission (
+    .uuid_name      = "u39231c7e_4bf1_41d0_ada4_1d8a319c0da3",
+    .table          = "Service_Monitor",
+    .authorization  = set_singleton(""),
+    .insert_delete  = false,
+    .update         = set_singleton("status")
+).
+
 /*
  * RBAC_Role: fixed
  */
@@ -2255,18 +2263,6 @@ function get_match_for_lb_key(ip_address: string,
     ip_match ++ port_match    
 }
 /* New connections in Ingress table. */
-/*
-Flow(.logical_datapath = sw.dpname,
-     .stage            = switch_stage(IN, STATEFUL),
-     .priority         = if (port != 0) { 120 } else { 110 },
-     .__match          = "ct.new && " ++ lb_key_match,
-     .actions          = "ct_lb(${backends});",
-     .external_ids     = map_empty()) :-
-    SwitchLBVIP(.sw = &sw, .lb = &lb, .vip = vip, .backends = backends),
-    not SwitchLBServiceMonitor(.lb = &lb),
-    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip),
-    var lb_key_match = get_match_for_lb_key(ip_address, port, addr_family, lb.protocol).
-*/
 Flow(.logical_datapath = sw.dpname,
      .stage            = switch_stage(IN, STATEFUL),
      .priority         = priority,
