@@ -223,14 +223,14 @@ relation &LBVIPBackend(
     ip: string,
     port: bit<16>,
     addr_family: bit<32>,
-    sp: Ref<SwitchPort>,
+    port_name: string,		// Might name a switch or router port.
     svc_mon_src_ip: string)
 
 &LBVIPBackend(.lbvip = lbvip,
               .ip = ip,
               .port = port,
               .addr_family = addr_family,
-              .sp = sp,
+              .port_name = port_name,
               .svc_mon_src_ip = svc_mon_src_ip) :-
     LBVIP[lbvip],
     var backend = FlatMap(string_split(lbvip.backend_ips, ",")),
@@ -239,7 +239,6 @@ relation &LBVIPBackend(
     var ip_port_mapping_tokens = string_split(s, ":"),
     vec_len(ip_port_mapping_tokens) == 64'd2,
     Some{var port_name} = vec_nth(ip_port_mapping_tokens, 0),
-    sp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = port_name}),
     Some{var svc_mon_src_ip} = vec_nth(ip_port_mapping_tokens, 1).
 
 function is_online(status: Set<string>): bool = {
@@ -272,7 +271,7 @@ relation &LBVIPBackendStatus(
     var port = lbvipbackend.port as bit<16>,
     var ip = lbvipbackend.ip,
     var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
-    var logical_port = lbvipbackend.sp.lsp.name,
+    var logical_port = lbvipbackend.port_name,
     not sb.Service_Monitor(.port = port as bit<64>,
                            .ip = ip,
                            .protocol = set_singleton(protocol),
