@@ -3030,6 +3030,15 @@ for (ls in nb.Logical_Switch) {
     }
 }
 
+Flow(.logical_datapath = sw.dpname,
+     .stage = switch_stage(IN, L2_LKUP),
+     .priority = 110,
+     .__match = "eth.dst == ${svc_monitor_mac}",
+     .actions = "handle_svc_check(inport);",
+     .external_ids = map_empty()) :-
+    SvcMonitorMac(svc_monitor_mac),
+    sw in &Switch().
+
 for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
         if (mcast_cfg.enabled)) {
     for (SwitchMcastFloodRelayPorts(sw, relay_ports)) {
