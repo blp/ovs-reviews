@@ -16254,14 +16254,13 @@ ovs-vsctl -- add-port br-int hv2-vif1 -- \
     options:rxq_pcap=hv2/vif1-rx.pcap \
     ofport-request=1
 
+set -x
+
 ovn-nbctl ls-add sw0
 
 ovn-nbctl lsp-add sw0 sw0-p1
 ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3"
 ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3"
-
-ovn-nbctl lsp-set-addresses sw0-p2 "50:54:00:00:00:04 10.0.0.4"
-ovn-nbctl lsp-set-port-security sw0-p2 "50:54:00:00:00:04 10.0.0.4"
 
 # Create the second logical switch with one port
 ovn-nbctl ls-add sw1
@@ -16285,7 +16284,7 @@ ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
 
 ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
 
-ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
+ovn-nbctl -vjsonrpc --wait=sb set load_balancer . ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
 ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:20.0.0.3=sw1-p1:20.0.0.2
 
 ovn-nbctl --wait=sb -- --id=@hc create \

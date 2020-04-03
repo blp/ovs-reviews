@@ -4891,20 +4891,6 @@ for (RouterLBVIP(
             } in
         var lb_force_snat_ip = get_force_snat_ip(lr, "lb") in
         {
-            /* A match and actions for new connections. */
-            var new_match = "ct.new && " ++ __match in
-            var actions =
-                match (lb_force_snat_ip) {
-                    Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_lb(${backends});",
-                    None -> "ct_lb(${backends});"
-                } in
-            Flow(.logical_datapath = dpname,
-                 .stage         = router_stage(IN, DNAT),
-                 .priority         = prio,
-                 .__match          = new_match,
-                 .actions          = actions,
-                 .external_ids     = map_empty());
-
             /* A match and actions for established connections. */
             var est_match = "ct.est && " ++ __match in
             var actions =
@@ -4964,6 +4950,41 @@ for (RouterLBVIP(
         }
     }
 }
+
+/* Higher priority rules are added for load-balancing in DNAT
+ * table.  For every match (on a VIP[:port]), we add two flows
+ * via add_router_lb_flow().  One flow is for specific matching
+ * on ct.new with an action of "ct_lb($targets);".  The other
+ * flow is for ct.est with an action of "ct_dnat;". */
+Flow(.logical_datapath = dpname,
+     .stage            = router_stage(IN, DNAT),
+     .priority         = prio,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    RouterLBVIP(.router = &Router{.dpname = dpname,
+				  .lr = lr,
+				  .l3dgw_port = l3dgw_port,
+				  .redirect_port_name = redirect_port_name,
+				  .is_gateway = is_gateway},
+		.lb = &lb,
+		.vip = vip,
+		.backends = backends),
+    is_some(l3dgw_port) or is_gateway,
+    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip),
+    var prio = if (port != 0) { 64'd120 } else { 64'd110 },
+    var __match = "ct.new && " ++ get_match_for_lb_key(ip_address, port, addr_family, lb.protocol) ++
+	match (l3dgw_port) {
+	    Some{gwport} -> " && is_chassis_resident(${redirect_port_name})",
+	    _ -> ""
+	},
+    var lb_force_snat_ip = get_force_snat_ip(lr, "lb"),
+    var actions =
+	match (lb_force_snat_ip) {
+	    Some{snat_ip} -> "flags.force_snat_for_lb = 1; ct_lb(${backends});",
+	    None -> "ct_lb(${backends});"
+	}.
+
 
 /* Defaults based on MaxRtrInterval and MinRtrInterval from RFC 4861 section
  * 6.2.1
