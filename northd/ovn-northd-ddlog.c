@@ -104,8 +104,15 @@ static const char *sb_input_relations[] = {
     "Service_Monitor",
 };
 
+struct northd_status {
+    bool had_lock;
+    bool paused;
+};
 
 static unixctl_cb_func ovn_northd_exit;
+static unixctl_cb_func ovn_northd_pause;
+static unixctl_cb_func ovn_northd_resume;
+static unixctl_cb_func ovn_northd_is_paused;
 static unixctl_cb_func ovn_northd_status;
 
 /* --ddlog-record: The name of a file to which to record DDlog commands for
@@ -1206,10 +1213,17 @@ main(int argc, char *argv[])
     if (retval) {
         exit(EXIT_FAILURE);
     }
-    unixctl_command_register("exit", "", 0, 0, ovn_northd_exit, &exiting);
 
-    bool had_lock = false;
-    unixctl_command_register("status", "", 0, 0, ovn_northd_status, &had_lock);
+    struct northd_status status = {
+        .had_lock = false,
+        .paused = false,
+    };
+    unixctl_command_register("exit", "", 0, 0, ovn_northd_exit, &exiting);
+    unixctl_command_register("pause", "", 0, 0, ovn_northd_pause, &status);
+    unixctl_command_register("resume", "", 0, 0, ovn_northd_resume, &status);
+    unixctl_command_register("is-paused", "", 0, 0, ovn_northd_is_paused,
+                             &status);
+    unixctl_command_register("status", "", 0, 0, ovn_northd_status, &status);
 
     daemonize_complete();
 
@@ -1246,14 +1260,14 @@ main(int argc, char *argv[])
     exiting = false;
     while (!exiting) {
         /* xxx Test that failover actually works. */
-        if (!had_lock && northd_has_lock(sb_ctx)) {
+        if (!status.had_lock && northd_has_lock(sb_ctx)) {
             VLOG_INFO("ovn-northd lock acquired. "
                       "This ovn-northd instance is now active.");
-            had_lock = true;
-        } else if (had_lock && !northd_has_lock(sb_ctx)) {
+            status.had_lock = true;
+        } else if (status.had_lock && !northd_has_lock(sb_ctx)) {
             VLOG_INFO("ovn-northd lock lost. "
                       "This ovn-northd instance is now on standby.");
-            had_lock = false;
+            status.had_lock = false;
         }
 
         bool run_deltas = (northd_has_lock(sb_ctx) &&
@@ -1306,15 +1320,40 @@ ovn_northd_exit(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 ovn_northd_status(struct unixctl_conn *conn, int argc OVS_UNUSED,
-                  const char *argv[] OVS_UNUSED, void *had_lock_)
+                  const char *argv[] OVS_UNUSED, void *status_)
 {
-    bool *had_lock = had_lock_;
+    const struct northd_status *status = status_;
     /*
      * Use a labelled formatted output so we can add more to the status command
      * later without breaking any consuming scripts
      */
     struct ds s = DS_EMPTY_INITIALIZER;
-    ds_put_format(&s, "Status: %s\n", *had_lock ? "active" : "standby");
+    ds_put_format(&s, "Status: %s\n",
+                  status->paused ? "paused"
+                  : status->had_lock ? "active"
+                  : "standby");
     unixctl_command_reply(conn, ds_cstr(&s));
     ds_destroy(&s);
+}
+
+static void
+ovn_northd_pause(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                 const char *argv[] OVS_UNUSED, void *status_ OVS_UNUSED)
+{
+    unixctl_command_reply(conn, NULL); /* XXX */
+}
+
+static void
+ovn_northd_resume(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                  const char *argv[] OVS_UNUSED, void *status_ OVS_UNUSED)
+{
+    unixctl_command_reply(conn, NULL); /* XXX */
+}
+
+static void
+ovn_northd_is_paused(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                     const char *argv[] OVS_UNUSED, void *status_)
+{
+    const struct northd_status *status = status_;
+    unixctl_command_reply(conn, status->paused ? "true" : "false");
 }
