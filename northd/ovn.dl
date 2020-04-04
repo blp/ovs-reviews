@@ -79,6 +79,44 @@ function lport_addresses2string(addr: lport_addresses): string = {
     string_join(addrs, " ")
 }
 
+typedef v46_ip = IPv4 { ipv4: bit<32> } | IPv6 { ipv6: in6_addr }
+
+function ip46_parse_cidr(s: string) : Option<(v46_ip, bit<32>)> = {
+    match (ip_parse_cidr(s)) {
+        Right{(ipv4, plen)} -> return Some{(IPv4{ipv4}, plen)},
+        _ -> ()
+    };
+    match (ipv6_parse_cidr(s)) {
+        Right{(ipv6, plen)} -> return Some{(IPv6{ipv6}, plen)},
+        _ -> ()
+    };
+    None
+}
+function ip46_parse(s: string) : Option<v46_ip> = {
+    match (ip_parse(s)) {
+        Some{ipv4} -> return Some{IPv4{ipv4}},
+        _ -> ()
+    };
+    match (ipv6_parse(s)) {
+        Some{ipv6} -> return Some{IPv6{ipv6}},
+        _ -> ()
+    };
+    None
+}
+function v46_ip2string(ip46: v46_ip) : string = {
+    match (ip46) {
+        IPv4{ipv4} -> ip_fmt(ipv4),
+        IPv6{ipv6} -> inet6_ntop(ipv6)
+    }
+}
+
+function ip46_get_network(ip46: v46_ip, plen: bit<32>) : v46_ip {
+    match (ip46) {
+        IPv4{ipv4} -> IPv4{ipv4 & be32_prefix_mask(plen)},
+        IPv6{ipv6} -> IPv6{ipv6_addr_bitand(ipv6, ipv6_create_mask(plen))}
+    }
+}
+
 /* Standard libc address family values */
 /* FIXME: sparse/sys/socket.h defines different AF constants. Do we have to support that? */
 function aF_INET(): bit<32> = 2

@@ -5221,63 +5221,57 @@ for (&Router(.dpname = dpname))
  * There routes get converted into logical flows by
  * the following rule.
  */
-relation Route(port_name:   string,
-               networks:    lport_addresses,
-               router:      Ref<Router>,
-               addr_s:      string,
-               network_s:   string,
-               plen:        bit<32>,
-               gateway:     Option<string>,
-               policy:      Option<string>)
+relation Route(key:         route_key,       // matching criteria
+               port:        Ref<RouterPort>, // output port
+               src_ip:      v46_ip,          // source IP address for output
+               gateway:     Option<v46_ip>) // next hop (unless being delivered)
 
-for (Route(.port_name   = port_name,
-           .networks    = networks,
-           .router      = &router,
-           .addr_s      = addr_s,
-           .network_s   = network_s,
-           .plen        = plen,
-           .gateway     = gateway,
-           .policy      = policy))
+/*
+relation Route(port_name:   string,           // port.json_name
+               networks:    lport_addresses,  // port.networks
+               router:      Ref<Router>,      // port.router
+               addr_s:      string,           // router port source IP address for nexthop
+               network_s:   string,           // key.ip_prefix
+               plen:        bit<32>,          // key.plen
+               gateway:     Option<string>,   // route.nexthop
+               policy:      Option<string>)   // key.policy
+*/
+for (Route(.port        = port,
+           .key         = key,
+           .src_ip      = src_ip,
+           .gateway     = gateway))
 {
-    var is_ipv4 = if string_contains(network_s, ".") true else false in
-    (var dir, var priority) =
-        if (policy == Some{"src-ip"}) {
-            ("src", plen * 32'd2)
-        } else {
-            ("dst", (plen * 32'd2) + 32'd1)
-        } in
+    (var ipx, var xx) = match (key.ip_prefix) {
+        IPv4{_} -> ("ip4", ""),
+        IPv6{_} -> ("ip6", "xx")
+    } in
+    (var dir, var priority) = match (key.policy) {
+        SrcIp -> ("src", key.plen * 32'd2),
+        DstIp -> ("dst", (key.plen * 32'd2) + 32'd1)
+    } in
+    var network = ip46_get_network(key.ip_prefix, key.plen) in
     /* IPv6 link-local addresses must be scoped to the local router port. */
-    var __match =
-        if (not is_ipv4) {
-            match (ipv6_parse(network_s)) {
-                Some{network} -> {
-                    if (in6_is_lla(network)) {
-                        "inport == ${port_name} && "
-                    } else ""
-                },
-                None -> {
-                    abort("invalid IPv6 address ${network_s}");
-                    ""
-                }
-            }
-        } else { "" } ++
-        "ip${if is_ipv4 \"4\" else \"6\"}.${dir} == ${network_s}/${plen}" in
+    var __match = match (key.ip_prefix) {
+        IPv6{prefix} -> if (in6_is_lla(prefix)) {
+                             "inport == ${port.json_name} && "
+                         } else "",
+        _ -> ""
+    } ++ "${ipx}.${dir} == ${network}/${key.plen}" in
+    var nexthop = match (gateway) {
+        Some{gw} -> "${gw}",
+        None     -> "${ipx}.dst"
+    } in
     var actions =
-        "ip.ttl--; ${if is_ipv4 \"\" else \"xx\"}reg0 = " ++
-        match (gateway) {
-            Some{gw} -> gw,
-            None     -> "ip${if is_ipv4 \"4\" else \"6\"}.dst"
-        } ++
-        "; "
-        "${if is_ipv4 \"\" else \"xx\"}reg1 = ${addr_s}; "
-        "eth.src = ${networks.ea_s}; "
-        "outport = ${port_name}; "
+        "ip.ttl--; ${xx}reg0 = ${nexthop}; "
+        "${xx}reg1 = ${src_ip}; "
+        "eth.src = ${port.networks.ea_s}; "
+        "outport = ${port.json_name}; "
         "flags.loopback = 1; "
         "next;" in
     /* The priority here is calculated to implement longest-prefix-match
      * routing. */
-    Flow(.logical_datapath = router.dpname,
-         .stage         = router_stage(IN, IP_ROUTING),
+    Flow(.logical_datapath = port.router.dpname,
+         .stage            = router_stage(IN, IP_ROUTING),
          .priority         = 32'd0 ++ priority,
          .__match          = __match,
          .actions          = actions,
@@ -5292,49 +5286,24 @@ for (Route(.port_name   = port_name,
  * address, and '[xx]reg0' to the next-hop IP address (leaving
  * 'ip[46].dst', the packet’s final destination, unchanged), and
  * advances to the next table for ARP/ND resolution. */
-for (RouterPortNetworksIPv4Addr(.port = &port@RouterPort{.router = &router}, .addr = addr))
-{
-    Route(port.json_name, port.networks, port.router,
-          addr.addr_s, addr.network_s, addr.plen, None, None)//;
-    /* create identical route for redirect port */
-    // FIXME: is this correct?
-    /*if (port.is_redirect) {
-        Route(router.redirect_port_name, port.networks, port.router,
-              addr.addr_s, addr.network_s, addr.plen, None, None)
-    }*/
-}
+Route(key, port, src_ip, None) :-
+    RouterPortNetworksIPv4Addr(.port = port, .addr = addr),
+    var key = RouteKey{DstIp, IPv4{addr.addr}, addr.plen},
+    var src_ip = IPv4{addr.addr}.
 
-for (RouterPortNetworksIPv6Addr(.port = &port@RouterPort{.router = &router}, .addr = addr))
-{
-    Route(port.json_name, port.networks, port.router,
-          addr.addr_s, addr.network_s, addr.plen, None, None)//;
-    /* create identical route for redirect port */
-    /*if (port.is_redirect) {
-        Route(router.redirect_port_name, port.networks, port.router,
-              addr.addr_s, addr.network_s, addr.plen, None, None)
-    }*/
-}
+Route(key, port, src_ip, None) :-
+    RouterPortNetworksIPv6Addr(.port = port, .addr = addr),
+    var key = RouteKey{DstIp, IPv6{addr.addr}, addr.plen},
+    var src_ip = IPv6{addr.addr}.
 
 /* Convert the static routes to flows. */
 for (RouterStaticRoute(.router      = &router,
-                       .route       = &route,
-                       .output_port = &out_port,
-                       .lrp_addr_s  = lrp_addr_s))
+                       .key         = key,
+                       .dsts        = dsts))
 {
-    var policy =
-        match (set_nth(route.lrsr.policy, 0)) {
-            Some{policy} -> policy,
-            None -> "dst-ip"
-        } in
-    {
-        Route(out_port.json_name, out_port.networks, out_port.router,
-              lrp_addr_s, route.prefix_s, route.plen,
-              Some{route.lrsr.nexthop}, Some{policy})//;
-        /*if (out_port.is_redirect) {
-            Route(router.redirect_port_name, out_port.networks, out_port.router,
-                  lrp_addr_s, route.prefix_s, route.plen,
-                  Some{route.lrsr.nexthop}, Some{policy})
-        }*/
+    if (set_size(dsts) == 64'd1) {
+        Some{var dst} = set_nth(dsts, 0) in
+        Route(key, dst.port, dst.src_ip, Some{dst.nexthop})
     }
 }
 
@@ -5417,18 +5386,18 @@ Flow(.logical_datapath = r.dpname,
     policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "reroute",
     out_port in &RouterPort(.router = r),
-    Some{var nexthop} = set_nth(policy.nexthop, 0),
-    Some{var lrp_addr_s} = find_lrp_member_ip(out_port.networks, nexthop),
+    Some{var nexthop_s} = set_nth(policy.nexthop, 0),
+    Some{var nexthop} = ip46_parse(nexthop_s),
+    Some{var src_ip} = find_lrp_member_ip(out_port.networks, nexthop),
     /*
     None:
     VLOG_WARN_RL(&rl, "lrp_addr not found for routing policy "
                  " priority %"PRId64" nexthop %s",
                  rule->priority, rule->nexthop);
     */
-    var is_ipv4 = string_contains(lrp_addr_s, "."),
-    var xx = if (is_ipv4) { "" } else { "xx" },
+    var xx = match (src_ip) { IPv4{_} -> "", IPv6{_} -> "xx" },
     var actions = ("${xx}reg0 = ${nexthop}; "
-                   "${xx}reg1 = ${lrp_addr_s}; "
+                   "${xx}reg1 = ${src_ip}; "
                    "eth.src = ${out_port.networks.ea_s}; "
                    "outport = ${out_port.json_name}; "
                    "next;").
@@ -5548,7 +5517,7 @@ for (SwitchPortIPv4Address(
     for (&SwitchPort(.sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}},
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
     {
-        Some{_} = find_lrp_member_ip(peer.networks, addr.addr_s) in
+        Some{_} = find_lrp_member_ip(peer.networks, IPv4{addr.addr}) in
         Flow(.logical_datapath = peer_router.dpname,
              .stage         = router_stage(IN, ARP_RESOLVE),
              .priority         = 100,
@@ -5567,7 +5536,7 @@ for (SwitchPortIPv6Address(
     for (&SwitchPort(.sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}},
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
     {
-        Some{_} = find_lrp_member_ip(peer.networks, addr.addr_s) in
+        Some{_} = find_lrp_member_ip(peer.networks, IPv6{addr.addr}) in
         Flow(.logical_datapath = peer_router.dpname,
              .stage         = router_stage(IN, ARP_RESOLVE),
              .priority         = 100,
@@ -5604,13 +5573,13 @@ Flow(.logical_datapath = peer.router.dpname,
      .actions          = "eth.dst = 00:00:00:00:00:00; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
-    Some{var virtual_ip} = map_get(lsp.options, "virtual-ip"),
+    Some{var virtual_ip_s} = map_get(lsp.options, "virtual-ip"),
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
-    Some{var ip} = ip_parse(virtual_ip),
+    Some{var virtual_ip} = ip_parse(virtual_ip_s),
     pb in sb.Port_Binding(.logical_port = sp.lsp.name),
     is_empty_set_or_string(pb.virtual_parent) or set_is_empty(pb.chassis),
     sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
-    Some{_} = find_lrp_member_ip(peer.networks, virtual_ip).
+    Some{_} = find_lrp_member_ip(peer.networks, IPv4{virtual_ip}).
 Flow(.logical_datapath = peer.router.dpname,
      .stage            = router_stage(IN, ARP_RESOLVE),
      .priority         = 100,
@@ -5618,16 +5587,16 @@ Flow(.logical_datapath = peer.router.dpname,
      .actions          = "eth.dst = ${address.ea_s}; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
-    Some{var virtual_ip} = map_get(lsp.options, "virtual-ip"),
+    Some{var virtual_ip_s} = map_get(lsp.options, "virtual-ip"),
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
-    Some{var ip} = ip_parse(virtual_ip),
+    Some{var virtual_ip} = ip_parse(virtual_ip_s),
     pb in sb.Port_Binding(.logical_port = sp.lsp.name),
     not (is_empty_set_or_string(pb.virtual_parent) or set_is_empty(pb.chassis)),
     Some{var virtual_parent} = set_nth(pb.virtual_parent, 0),
     vp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = virtual_parent}),
     var address = FlatMap(vp.static_addresses),
     sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
-    Some{_} = find_lrp_member_ip(peer.networks, virtual_ip).
+    Some{_} = find_lrp_member_ip(peer.networks, IPv4{virtual_ip}).
 
 /* This is a logical switch port that connects to a router. */
 
@@ -5800,31 +5769,26 @@ for (&Router(.dpname = dpname,
  * In the common case where the Ethernet destination has been resolved,
  * this table outputs the packet (priority 0).  Otherwise, it composes
  * and sends an ARP/IPv6 NA request (priority 100). */
-
-for (RouterStaticRoute(.router      = &router,
-                       .route       = &route,
-                       .output_port = &out_port,
-                       .lrp_addr_s  = lrp_addr_s))
-{
-    Right{(var gw_ip6, 128)} = ipv6_parse_cidr(route.lrsr.nexthop) in
+Flow(.logical_datapath = router.dpname,
+     .stage            = router_stage(IN, ARP_REQUEST),
+     .priority         = 200,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    rsr in RouterStaticRoute(.router = &router),
+    var dst = FlatMap(rsr.dsts),
+    IPv6{var gw_ip6} = dst.nexthop,
     var __match = "eth.dst == 00:00:00:00:00:00 && "
-                  "ip6 && xxreg0 == ${route.lrsr.nexthop}" in
-    var sn_addr = in6_addr_solicited_node(gw_ip6) in
-    var eth_dst = ipv6_multicast_to_ethernet(sn_addr) in
-    var sn_addr_s = ipv6_string_mapped(sn_addr) in
+                  "ip6 && xxreg0 == ${dst.nexthop}",
+    var sn_addr = in6_addr_solicited_node(gw_ip6),
+    var eth_dst = ipv6_multicast_to_ethernet(sn_addr),
+    var sn_addr_s = ipv6_string_mapped(sn_addr),
     var actions = "nd_ns { "
                   "eth.dst = ${eth_dst}; "
                   "ip6.dst = ${sn_addr_s}; "
-                  "nd.target = ${route.lrsr.nexthop}; "
+                  "nd.target = ${dst.nexthop}; "
                   "output; "
-                  "};" in
-    Flow(.logical_datapath = router.dpname,
-         .stage         = router_stage(IN, ARP_REQUEST),
-         .priority         = 200,
-         .__match          = __match,
-         .actions          = actions,
-         .external_ids     = map_empty())
-}
+                  "};".
 
 for (&Router(.dpname = dpname))
 {

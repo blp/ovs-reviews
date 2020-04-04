@@ -381,200 +381,164 @@ RouterPortNetworksIPv6Addr(port, addr) :-
     port in &RouterPort(.networks = networks),
     var addr = FlatMap(networks.ipv6_addrs).
 
-/* StaticRoute: collects attributes of a static route */
+/* StaticRoute: Collects and parses attributes of a static route. */
+typedef route_policy = SrcIp | DstIp
+function route_policy_from_string(s: Option<string>): route_policy = {
+    match (s) {
+        Some{"src-ip"} -> SrcIp,
+        _ -> DstIp
+    }
+}
+function route_policy2string(policy: route_policy): string = {
+    match (policy) {
+        SrcIp -> "src-ip",
+        DstIp -> "dst-ip"
+    }
+}
+
+typedef route_key = RouteKey {
+    policy: route_policy,
+    ip_prefix: v46_ip,
+    plen: bit<32>
+}
+
 relation &StaticRoute(lrsr: nb.Logical_Router_Static_Route,
-                      is_ipv4: bool,
-                      prefix_s: string,
-                      plen: bit<32>)
+                      key: route_key,
+                      nexthop: v46_ip,
+                      output_port: Option<string>)
 
-&StaticRoute(.lrsr      = lrsr,
-             .is_ipv4   = is_ipv4,
-             .prefix_s  = prefix_s,
-             .plen      = plen) :-
+&StaticRoute(.lrsr        = lrsr,
+             .key         = RouteKey{policy, ip_prefix, plen},
+             .nexthop     = nexthop,
+             .output_port = output_port) :-
     lrsr in nb.Logical_Router_Static_Route(),
-    /* Verify that the next hop is an IP address with an all-ones mask. */
-    Some{var is_ipv4: bool} =
-        match (ip_parse_cidr(lrsr.nexthop)) {
-            Left{/*error*/} -> {
-                match (ipv6_parse_cidr(lrsr.nexthop)) {
-                    Left{/*error*/} -> {
-                        warn("bad next hop ip address ${lrsr.nexthop}");
-                        None
-                    },
-                    Right{(ip6, plen)} -> {
-                        if (plen != 128) {
-                            warn("bad next hop mask ${lrsr.nexthop}");
-                            None
-                        } else { Some{false} }
-                    }
-                }
-            },
-            Right{(var nexthop, var plen)} -> {
-                if (plen != 32) {
-                    warn("bad next hop mask ${lrsr.nexthop}");
-                    None
-                } else { Some{true} }
-            }
-        },
-    Some{(var prefix_s: string, var plen: bit<32>)} =
-        if (is_ipv4) {
-            /* Verify that ip prefix is a valid IPv4 address. */
-            match (ip_parse_cidr(lrsr.ip_prefix)) {
-                Left{/*error*/} -> {
-                    warn("bad 'ip_prefix' in static routes ${lrsr.ip_prefix}");
-                    None
-                },
-                Right{(prefix, plen)} -> {
-                    Some{("${ip_fmt(prefix & be32_prefix_mask(plen))}", plen)}
-                }
-            }
-        } else {
-            /* Verify that ip prefix is a valid IPv6 address. */
-            match (ipv6_parse_cidr(lrsr.ip_prefix)) {
-                Left{/*error*/} -> {
-                    warn("bad 'ip_prefix' in static routes ${lrsr.ip_prefix}");
-                    None
-                },
-                Right{(prefix, plen)} -> {
-                    var pref = inet6_ntop(ipv6_addr_bitand(prefix, ipv6_create_mask(plen)));
-                    Some{(pref, plen)}
-                }
-            }
-        }.
+    var policy = route_policy_from_string(set_nth(lrsr.policy, 0)),
+    Some{(var nexthop, var nexthop_plen)} = ip46_parse_cidr(lrsr.nexthop),
+    match (nexthop) {
+        IPv4{_} -> nexthop_plen == 32,
+        IPv6{_} -> nexthop_plen == 128
+    },
+    Some{(var ip_prefix, var plen)} = ip46_parse_cidr(lrsr.ip_prefix),
+    match ((nexthop, ip_prefix)) {
+        (IPv4{_}, IPv4{_}) -> true,
+        (IPv6{_}, IPv6{_}) -> true,
+        _ -> false
+    },
+    var output_port = set_nth(lrsr.output_port, 0).
 
-/* Returns a string of the IP address of the router port 'op' that
- * overlaps with 'ip_s".  If one is not found, returns None. */
-function find_lrp_member_ip(networks: lport_addresses, ip_s: string): Option<string> =
+/* Returns the IP address of the router port 'op' that
+ * overlaps with 'ip'.  If one is not found, returns None. */
+function find_lrp_member_ip(networks: lport_addresses, ip: v46_ip): Option<v46_ip> =
 {
-    var is_ipv4 = string_contains(ip_s, ".");
-
-    if (is_ipv4) {
-        match (ip_parse(ip_s)) {
-            None -> {
-                warn("bad ip address ${ip_s}");
-                None
-            },
-            Some{ip} -> {
-                var res: Option<string> = None;
-                for (na in networks.ipv4_addrs) {
-                    if (((na.network ^ ip) & na.mask) == 0) {
-                        /* There should be only 1 interface that matches the
-                         * supplied IP.  Otherwise, it's a configuration error,
-                         * because subnets of a router's interfaces should NOT
-                         * overlap. */
-                        // FIXME: should be return Some{na.addr_s}
-                        res = Some{na.addr_s}
-                    } else ()
-                };
-                res
-            }
-        }
-    } else {
-        match (ipv6_parse(ip_s)) {
-            None -> {
-                warn("bad ipv6 address ${ip_s}");
-                None
-            },
-            Some{ip6} -> {
-                var res: Option<string> = None;
-                for (na in networks.ipv6_addrs) {
-                    var xor_addr = ipv6_addr_bitxor(na.network, ip6);
-                    var and_addr = ipv6_addr_bitand(xor_addr, na.mask);
-                    if (ipv6_is_zero(and_addr)) {
-                        /* There should be only 1 interface that matches the
-                         * supplied IP.  Otherwise, it's a configuration error,
-                         * because subnets of a router's interfaces should NOT
-                         * overlap. */
-                        res = Some{na.addr_s}
-                    } else ()
-                };
-                res
-            }
+    match (ip) {
+        IPv4{ip4} -> {
+            for (na in networks.ipv4_addrs) {
+                if (((na.network ^ ip4) & na.mask) == 0) {
+                    /* There should be only 1 interface that matches the
+                     * supplied IP.  Otherwise, it's a configuration error,
+                     * because subnets of a router's interfaces should NOT
+                     * overlap. */
+                    return Some{IPv4{na.addr}}
+                }
+            };
+            return None
+        },
+        IPv6{ip6} -> {
+            for (na in networks.ipv6_addrs) {
+                var xor_addr = ipv6_addr_bitxor(na.network, ip6);
+                var and_addr = ipv6_addr_bitand(xor_addr, na.mask);
+                if (ipv6_is_zero(and_addr)) {
+                    /* There should be only 1 interface that matches the
+                     * supplied IP.  Otherwise, it's a configuration error,
+                     * because subnets of a router's interfaces should NOT
+                     * overlap. */
+                    return Some{IPv6{na.addr}}
+                }
+            };
+            return None
         }
     }
 }
 
 
-/* RouterStaticRoute: many-to-many relation between logical routers and static routes
- */
-relation RouterStaticRoute(
-    router      : Ref<Router>,
-    route       : Ref<StaticRoute>,
-    output_port : Ref<RouterPort>,
-    lrp_addr_s  : string)
-
 /* Step 1: compute router-route pairs */
 relation RouterStaticRoute_(
-    router  : Ref<Router>,
-    route   : Ref<StaticRoute>)
+    router      : Ref<Router>,
+    key         : route_key,
+    nexthop     : v46_ip,
+    output_port : Option<string>)
 
-RouterStaticRoute_(router, route) :-
+RouterStaticRoute_(.router = router,
+                   .key = route.key,
+                   .nexthop = route.nexthop,
+                   .output_port = route.output_port) :-
     router in &Router(.lr = nb.Logical_Router{.static_routes = routes}),
     var route_id = FlatMap(routes),
     route in &StaticRoute(.lrsr = nb.Logical_Router_Static_Route{._uuid = route_id}).
 
 /* Step-2: compute output_port for each pair */
-RouterStaticRoute(ref_router, ref_route, output_port, lrp_addr_s) :-
-    RouterStaticRoute_(.router = ref_router@(&router),
-                       .route = ref_route@(&route)),
-    route.lrsr.output_port == set_empty(),
+typedef route_dst = RouteDst {
+    nexthop: v46_ip,
+    src_ip: v46_ip,
+    port: Ref<RouterPort>
+}
+
+relation RouterStaticRoute(
+    router      : Ref<Router>,
+    key         : route_key,
+    dsts        : Set<route_dst>)
+
+RouterStaticRoute(router, key, dsts) :-
+    RouterStaticRoute_(.router = router,
+                       .key = key,
+                       .nexthop = nexthop,
+                       .output_port = None),
     /* output_port is not specified, find the
      * router port matching the next hop. */
     port in &RouterPort(.router = &Router{.lr = nb.Logical_Router{._uuid = router.lr._uuid}},
                         .networks = networks),
-    Some{var lrp_addr_s} = find_lrp_member_ip(networks, route.lrsr.nexthop),
-    var router_id = router.lr._uuid,
-    var route_id = route.lrsr._uuid,
-    /* pick one */
-    var result = Aggregate((router_id, route_id),
-                           group_first((ref_router, ref_route, port, lrp_addr_s))),
-    (var ref_router, var ref_route, var output_port, var lrp_addr_s) = result.
+    Some{var src_ip} = find_lrp_member_ip(networks, nexthop),
+    var dst = RouteDst{nexthop, src_ip, port},
+    var dsts = Aggregate((router, key), group2set(dst)).
 
-RouterStaticRoute(ref_router, ref_route, port, lrp_addr_s) :-
-    RouterStaticRoute_(.router = ref_router@(&router),
-                       .route = ref_route@(&route)),
-    Some{var oport} = set_nth(route.lrsr.output_port, 0),
+RouterStaticRoute(router, key, dsts) :-
+    RouterStaticRoute_(.router = router,
+                       .key = key,
+                       .nexthop = nexthop,
+                       .output_port = Some{oport}),
     /* output_port specified */
     port in &RouterPort(.lrp = nb.Logical_Router_Port{.name = oport},
                         .networks = networks),
-    Some{var lrp_addr_s: string} =
-        match (find_lrp_member_ip(networks, route.lrsr.nexthop)) {
-            Some{lrp_addr_s} -> Some{lrp_addr_s},
-            None -> {
-                /* There are no IP networks configured on the router's port via
-                 * which 'route->nexthop' is theoretically reachable.  But since
-                 * 'out_port' has been specified, we honor it by trying to reach
-                 * 'route->nexthop' via the first IP address of 'out_port'.
-                 * (There are cases, e.g in GCE, where each VM gets a /32 IP
-                 * address and the default gateway is still reachable from it.) */
-                if (route.is_ipv4) {
-                    match (vec_nth(networks.ipv4_addrs, 0)) {
-                        Some{addr} -> Some{addr.addr_s},
-                        None       -> {
-                            warn("No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
-                            None
-                        }
+    Some{var src_ip: v46_ip} = match (find_lrp_member_ip(networks, nexthop)) {
+        Some{src_ip} -> Some{src_ip},
+        None -> {
+            /* There are no IP networks configured on the router's port via
+             * which 'route->nexthop' is theoretically reachable.  But since
+             * 'out_port' has been specified, we honor it by trying to reach
+             * 'route->nexthop' via the first IP address of 'out_port'.
+             * (There are cases, e.g in GCE, where each VM gets a /32 IP
+             * address and the default gateway is still reachable from it.) */
+             match (key.ip_prefix) {
+                IPv4{_} -> match (vec_nth(networks.ipv4_addrs, 0)) {
+                    Some{addr} -> Some{IPv4{addr.addr}},
+                    None       -> {
+                        warn("No path for static route ${key.ip_prefix}; next hop ${nexthop}");
+                        None
                     }
-                } else {
-                    match (vec_nth(networks.ipv6_addrs, 0)) {
-                        Some{addr} -> Some{addr.addr_s},
-                        None       -> {
-                            warn("No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
-                            None
-                        }
+                },
+                IPv6{_} -> match (vec_nth(networks.ipv6_addrs, 0)) {
+                    Some{addr} -> Some{IPv6{addr.addr}},
+                    None       -> {
+                        warn("No path for static route ${key.ip_prefix}; next hop ${nexthop}");
+                        None
                     }
                 }
             }
-        }.
+        }
+    },
+    var dsts = set_singleton(RouteDst{nexthop, src_ip, port}).
 
-relation DevNull()
-
-/* This rule generates warning messages without creating any entries */
-DevNull() :-
-    RouterStaticRoute_(.router = &router, .route = &route),
-    not RouterStaticRoute(.router = &Router{.lr = nb.Logical_Router{._uuid = router.lr._uuid}},
-                          .route = &StaticRoute{.lrsr = nb.Logical_Router_Static_Route{._uuid = route.lrsr._uuid}}),
-    {
-        warn("No path for static route ${route.lrsr.ip_prefix}; next hop ${route.lrsr.nexthop}");
-        false
-    }.
+Warning(message) :-
+    RouterStaticRoute_(.router = router, .key = key, .nexthop = nexthop),
+    not RouterStaticRoute(.router = router, .key = key),
+    var message = "No path for ${key.policy} static route ${key.ip_prefix}/${key.plen} with next hop ${nexthop}".
