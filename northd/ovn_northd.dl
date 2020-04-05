@@ -1115,6 +1115,7 @@ typedef PipelineStage = PORT_SEC_L2
                       | ND_RA_OPTIONS
                       | ND_RA_RESPONSE
                      | IP_ROUTING
+                     | IP_ROUTING_ECMP
                      | POLICY
                      | ARP_RESOLVE
                      | CHK_PKT_LEN
@@ -1188,12 +1189,13 @@ function stage_id(stage: Stage): (integer, string) =
         (LRouter, IN,  ND_RA_OPTIONS) -> (7,  "lr_in_nd_ra_options"),
         (LRouter, IN,  ND_RA_RESPONSE)-> (8,  "lr_in_nd_ra_response"),
        (LRouter, IN,  IP_ROUTING)    -> (9,  "lr_in_ip_routing"),
-       (LRouter, IN,  POLICY)        -> (10,  "lr_in_policy"),
-       (LRouter, IN,  ARP_RESOLVE)   -> (11,  "lr_in_arp_resolve"),
-       (LRouter, IN,  CHK_PKT_LEN)   -> (12, "lr_in_chk_pkt_len"),
-       (LRouter, IN,  LARGER_PKTS)   -> (13, "lr_in_larger_pkts"),
-       (LRouter, IN,  GW_REDIRECT)   -> (14, "lr_in_gw_redirect"),
-       (LRouter, IN,  ARP_REQUEST)   -> (15, "lr_in_arp_request"),
+       (LRouter, IN,  IP_ROUTING_ECMP) -> (10,  "lr_in_ip_routing_ecmp"),
+       (LRouter, IN,  POLICY)        -> (11,  "lr_in_policy"),
+       (LRouter, IN,  ARP_RESOLVE)   -> (12,  "lr_in_arp_resolve"),
+       (LRouter, IN,  CHK_PKT_LEN)   -> (13, "lr_in_chk_pkt_len"),
+       (LRouter, IN,  LARGER_PKTS)   -> (14, "lr_in_larger_pkts"),
+       (LRouter, IN,  GW_REDIRECT)   -> (15, "lr_in_gw_redirect"),
+       (LRouter, IN,  ARP_REQUEST)   -> (16, "lr_in_arp_request"),
 
        /* Logical router egress stages. */
        (LRouter, OUT, UNDNAT)        -> (0,  "lr_out_undnat"),
@@ -1225,6 +1227,9 @@ function rEGBIT_EGRESS_LOOPBACK()  : string = "reg9[1]"
 function rEGBIT_PKT_LARGER()       : string = "reg9[3]"
 function rEGBIT_LOOKUP_NEIGHBOR_RESULT() : string = "reg9[4]"
 function rEGBIT_SKIP_LOOKUP_NEIGHBOR() : string = "reg9[5]"
+/* Register for ECMP bucket selection. */
+function rEG_ECMP_GROUP_ID()  : string = "reg8[0..15]"
+function rEG_ECMP_MEMBER_ID() : string = "reg8[16..31]"
 
 function fLAGBIT_NOT_VXLAN() : string = "flags[1] == 0"
 
@@ -5226,16 +5231,23 @@ relation Route(key:         route_key,       // matching criteria
                src_ip:      v46_ip,          // source IP address for output
                gateway:     Option<v46_ip>) // next hop (unless being delivered)
 
-/*
-relation Route(port_name:   string,           // port.json_name
-               networks:    lport_addresses,  // port.networks
-               router:      Ref<Router>,      // port.router
-               addr_s:      string,           // router port source IP address for nexthop
-               network_s:   string,           // key.ip_prefix
-               plen:        bit<32>,          // key.plen
-               gateway:     Option<string>,   // route.nexthop
-               policy:      Option<string>)   // key.policy
-*/
+function build_route_match(key: route_key) : (string, bit<32>) =
+{
+    (var ipx) = match (key.ip_prefix) {
+        IPv4{_} -> "ip4",
+        IPv6{_} -> "ip6"
+    };
+
+    (var dir, var priority) = match (key.policy) {
+        SrcIp -> ("src", key.plen * 32'd2),
+        DstIp -> ("dst", (key.plen * 32'd2) + 32'd1)
+    };
+
+    var network = ip46_get_network(key.ip_prefix, key.plen);
+    var __match = "${ipx}.${dir} == ${network}/${key.plen}";
+
+    (__match, priority)
+}
 for (Route(.port        = port,
            .key         = key,
            .src_ip      = src_ip,
@@ -5245,18 +5257,15 @@ for (Route(.port        = port,
         IPv4{_} -> ("ip4", ""),
         IPv6{_} -> ("ip6", "xx")
     } in
-    (var dir, var priority) = match (key.policy) {
-        SrcIp -> ("src", key.plen * 32'd2),
-        DstIp -> ("dst", (key.plen * 32'd2) + 32'd1)
-    } in
-    var network = ip46_get_network(key.ip_prefix, key.plen) in
     /* IPv6 link-local addresses must be scoped to the local router port. */
-    var __match = match (key.ip_prefix) {
+    var inport_match = match (key.ip_prefix) {
         IPv6{prefix} -> if (in6_is_lla(prefix)) {
-                             "inport == ${port.json_name} && "
-                         } else "",
+                            "inport == ${port.json_name} && "
+                        } else "",
         _ -> ""
-    } ++ "${ipx}.${dir} == ${network}/${key.plen}" in
+    } in
+    (var ip_match, var priority) = build_route_match(key) in
+    var __match = inport_match ++ ip_match in
     var nexthop = match (gateway) {
         Some{gw} -> "${gw}",
         None     -> "${ipx}.dst"
@@ -5278,14 +5287,21 @@ for (Route(.port        = port,
          .external_ids     = map_empty())
 }
 
-/* Logical router ingress table IP_ROUTING: IP Routing.
+/* Logical router ingress table IP_ROUTING & IP_ROUTING_ECMP: IP Routing.
  *
  * A packet that arrives at this table is an IP packet that should be
- * routed to the address in 'ip[46].dst'. This table sets outport to
- * the correct output port, eth.src to the output port's MAC
- * address, and '[xx]reg0' to the next-hop IP address (leaving
- * 'ip[46].dst', the packet’s final destination, unchanged), and
- * advances to the next table for ARP/ND resolution. */
+ * routed to the address in 'ip[46].dst'.
+ *
+ * For regular routes without ECMP, table IP_ROUTING sets outport to the
+ * correct output port, eth.src to the output port's MAC address, and
+ * '[xx]reg0' to the next-hop IP address (leaving 'ip[46].dst', the
+ * packet’s final destination, unchanged), and advances to the next table.
+ *
+ * For ECMP routes, i.e. multiple routes with same policy and prefix, table
+ * IP_ROUTING remembers ECMP group id and selects a member id, and advances
+ * to table IP_ROUTING_ECMP, which sets outport, eth.src and '[xx]reg0' for
+ * the selected ECMP member.
+ * */
 Route(key, port, src_ip, None) :-
     RouterPortNetworksIPv4Addr(.port = port, .addr = addr),
     var key = RouteKey{DstIp, IPv4{addr.addr}, addr.plen},
@@ -5296,16 +5312,83 @@ Route(key, port, src_ip, None) :-
     var key = RouteKey{DstIp, IPv6{addr.addr}, addr.plen},
     var src_ip = IPv6{addr.addr}.
 
+Flow(.logical_datapath = r.dpname,
+     .stage            = router_stage(IN, IP_ROUTING_ECMP),
+     .priority         = 150,
+     .__match          = rEG_ECMP_GROUP_ID() ++ "== 0",
+     .actions          = "next;",
+     .external_ids     = map_empty()) :-
+    r in &Router().
+
 /* Convert the static routes to flows. */
-for (RouterStaticRoute(.router      = &router,
-                       .key         = key,
-                       .dsts        = dsts))
-{
-    if (set_size(dsts) == 64'd1) {
-        Some{var dst} = set_nth(dsts, 0) in
-        Route(key, dst.port, dst.src_ip, Some{dst.nexthop})
-    }
+Route(key, dst.port, dst.src_ip, Some{dst.nexthop}) :-
+    RouterStaticRoute(.router = &router, .key = key, .dsts = dsts),
+    set_size(dsts) == 64'd1,
+    Some{var dst} = set_nth(dsts, 0).
+
+/* Return a vector of pairs (1, set[0]), ... (n, set[n - 1]). */
+function numbered_vec(set: Set<'A>) : Vec<(bit<16>, 'A)> = {
+    var vec: Vec<(bit<16>, 'A)> = vec_with_capacity(set_size(set));
+    var i = 16'd1;
+    for (x in set) {
+        vec_push(vec, (i, x));
+        i = i + 1
+    };
+    vec
 }
+
+relation EcmpGroup(
+    group_id: bit<16>,
+    router: Ref<Router>,
+    key: route_key,
+    dsts: Set<route_dst>)
+
+EcmpGroup(group_id, router, key, dsts) :-
+    RouterStaticRoute(.router = router, .key = key, .dsts = dsts),
+    set_size(dsts) > 64'd1,
+    var groups = Aggregate((), group2set((router, key, dsts))),
+    var group_id_and_group = FlatMap(numbered_vec(groups)),
+    (var group_id, (var router, var key, var dsts)) = group_id_and_group.
+
+Flow(.logical_datapath = router.dpname,
+     .stage            = router_stage(IN, IP_ROUTING),
+     .priority         = priority as integer,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    EcmpGroup(group_id, router, key, dsts),
+    (var __match, var priority) = build_route_match(key),
+    var all_member_ids = {
+        var member_ids: Vec<string> = vec_with_capacity(set_size(dsts));
+        for (i in range(64'd1, set_size(dsts), 64'd1)) {
+            vec_push(member_ids, "${i}")
+        };
+        string_join(member_ids, ", ")
+    },
+    var actions =
+        "ip.ttl--; "
+        "flags.loopback = 1; "
+        "${rEG_ECMP_GROUP_ID()} = ${group_id}; " /* XXX */
+        "${rEG_ECMP_MEMBER_ID()} = select(${all_member_ids});".
+        
+Flow(.logical_datapath = router.dpname,
+     .stage            = router_stage(IN, IP_ROUTING_ECMP),
+     .priority         = 100,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    EcmpGroup(group_id, router, key, dsts),
+    var member_id_and_dst = FlatMap(numbered_vec(dsts)),
+    (var member_id, var dst) = member_id_and_dst,
+    var xx = match (dst.nexthop) { IPv4{_} -> "", IPv6{_} -> "xx" },
+    var __match = "${rEG_ECMP_GROUP_ID()} == ${group_id} && "
+                  "${rEG_ECMP_MEMBER_ID()} == ${member_id}",
+    var actions = "${xx}reg0 = ${dst.nexthop}; "
+                  "${xx}reg1 = ${dst.src_ip}; "
+                  "eth.src = ${dst.port.networks.ea_s}; "
+                  "outport = ${dst.port.json_name}; "
+                  "next;".
+    
 
 /* IP Multicast lookup. Here we set the output port, adjust TTL and advance
  * to next table (priority 500).

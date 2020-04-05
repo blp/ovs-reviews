@@ -16903,6 +16903,9 @@ ovs-vsctl -- add-port br-int hv1-vif3 -- \
 # wait for earlier changes to take effect
 AT_CHECK([ovn-nbctl --timeout=3 --wait=hv sync], [0], [ignore])
 
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
+
 for i in $(seq 5001 5010); do
     packet="inport==\"lsp11\" && eth.src==f0:00:00:00:01:11 && eth.dst==00:00:00:01:01:01 &&
             ip4 && ip.ttl==64 && ip4.src==192.168.1.11 && ip4.dst==10.0.0.123 &&
