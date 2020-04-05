@@ -1401,6 +1401,7 @@ test_ip() {
 # SHA and REPLY_HA are each 12 hex digits.
 # SPA and TPA are each 8 hex digits.
 test_arp() {
+    echo "$0 $@"
     local inport=$1 sha=$2 spa=$3 tpa=$4 flood=$5 reply_ha=$6
     local request=ffffffffffff${sha}08060001080006040001${sha}${spa}ffffffffffff${tpa}
     hv=hv`vif_to_hv $inport`
@@ -1433,11 +1434,15 @@ test_arp() {
     fi
 }
 
-as hv1 ovs-vsctl --columns=name,ofport list interface
-as hv1 ovn-sbctl list port_binding
-as hv1 ovn-sbctl list datapath_binding
-as hv1 ovn-sbctl dump-flows
-as hv1 ovs-ofctl dump-flows br-int
+as hv1 ovs-vsctl --columns=name,ofport list interface > interfaces
+(as hv1 ovn-sbctl list port_binding
+ as hv1 ovn-sbctl list datapath_binding) > bindings
+as hv1 ovn-sbctl dump-flows > sbflows
+as hv1 ovs-ofctl dump-flows br-int > offlows
+AT_CAPTURE_FILE([interfaces])
+AT_CAPTURE_FILE([bindings])
+AT_CAPTURE_FILE([sbflows])
+AT_CAPTURE_FILE([offlows])
 
 # Send IP packets between all pairs of source and destination ports:
 #
