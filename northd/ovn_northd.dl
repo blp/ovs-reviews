@@ -3125,7 +3125,7 @@ for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
                     Flow(.logical_datapath = dpname,
                          .stage            = switch_stage(IN, L2_LKUP),
                          .priority         = 85,
-                         .__match          = "ip4 && ip4.dst == 224.0.0.0/24",
+                         .__match          = "ip4.mcast && ip4.dst == 224.0.0.0/24",
                          .actions          = "outport = \"${flood}\"; output;",
                          .external_ids     = map_empty());
 
