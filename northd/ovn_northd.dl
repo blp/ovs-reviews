@@ -1266,6 +1266,45 @@ sb.Out_Logical_Flow(.logical_datapath = f.logical_datapath,
     Flow[f],
     (var table_id, var table_name) = stage_id(f.stage).
 
+/* Logical flows for forwarding groups. */
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, ARP_ND_RSP),
+     .priority         = 50,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sw in &Switch(),
+    var fg_uuid = FlatMap(sw.ls.forwarding_groups),
+    fg in nb.Forwarding_Group(._uuid = fg_uuid),
+    not set_is_empty(fg.child_port),
+    var __match = "arp.tpa == ${fg.vip} && arp.op == 1",
+    var actions = "eth.dst = eth.src; "
+                  "eth.src = ${fg.vmac}; "
+                  "arp.op = 2; /* ARP reply */ "
+                  "arp.tha = arp.sha; "
+                  "arp.sha = ${fg.vmac}; "
+                  "arp.tpa = arp.spa; "
+                  "arp.spa = ${fg.vip}; "
+                  "outport = inport; "
+                  "flags.loopback = 1; "
+                  "output;".
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, L2_LKUP),
+     .priority         = 50,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sw in &Switch(),
+    var fg_uuid = FlatMap(sw.ls.forwarding_groups),
+    fg in nb.Forwarding_Group(._uuid = fg_uuid),
+    not set_is_empty(fg.child_port),
+    var __match = "eth.dst == ${fg.vmac}",
+    var actions = "fwd_group(" ++
+                  if (fg.liveness) { "liveness=\"true\"," } else { "" } ++
+                  "childports=\"" ++
+                  string_join(set2vec(fg.child_port), "\", \"") ++
+                  "\");".
+
 /* Logical switch ingress table PORT_SEC_L2: admission control framework
  * (priority 100) */
 for (&Switch(.dpname = dpname)) {
