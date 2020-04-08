@@ -1053,6 +1053,7 @@ sb.Out_RBAC_Role (
             map_insert(m, "Encap"       , "u94bec860_431e_4d95_82e7_3b75d8997241");
             map_insert(m, "Port_Binding", "ud8ceff1a_2b11_48bd_802f_4a991aa4e908");
             map_insert(m, "MAC_Binding" , "u6ffdc696_8bfb_4d82_b620_a00d39270b2f");
+            map_insert(m, "Service_Monitor" , "u39231c7e_4bf1_41d0_ada4_1d8a319c0da3");
             m
         }
 ).
@@ -1949,6 +1950,23 @@ for (&Switch(.ls = ls,
              .priority         = 34000,
              .__match          = "udp.src == 53",
              .actions          = if has_stateful "ct_commit; next;" else "next;",
+             .external_ids     = map_empty())
+    };
+
+    for (SvcMonitorMac(svc_monitor_mac)) {
+        /* Add a 34000 priority flow to advance the service monitor reply
+         * packets to skip applying ingress ACLs. */
+        Flow(.logical_datapath = dpname,
+             .stage            = switch_stage(IN, ACL),
+             .priority         = 34000,
+             .__match          = "eth.dst == ${svc_monitor_mac}",
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .stage            = switch_stage(OUT, ACL),
+             .priority         = 34000,
+             .__match          = "eth.src == ${svc_monitor_mac}",
+             .actions          = "next;",
              .external_ids     = map_empty())
     }
 }
