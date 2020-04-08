@@ -15,6 +15,7 @@
 
 import OVN_Northbound as nb
 import OVN_Southbound as sb
+import ovn
 import ovsdb
 import helpers
 import lswitch
@@ -234,6 +235,13 @@ relation IgmpRouterGroupPort(
 IgmpRouterGroupPort(address, rtr_port.router, rtr_port.lrp._uuid) :-
     SwitchMcastFloodRelayPorts(switch, sw_flood_ports),
     IgmpSwitchMulticastGroup(address, switch, _),
+    /* For IPv6 only relay routable multicast groups
+     * (RFC 4291 2.7).
+     */
+    match (ipv6_parse(address)) {
+        Some{ipv6} -> ipv6_is_routable_multicast(ipv6),
+        None -> true
+    },
     var flood_port = FlatMap(sw_flood_ports),
     &SwitchPort(.lsp = nb.Logical_Switch_Port{._uuid = flood_port},
                 .peer = Some{&rtr_port}).

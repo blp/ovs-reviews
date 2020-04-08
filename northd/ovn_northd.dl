@@ -1505,18 +1505,21 @@ for (&Switch(.dpname = dpname, .has_stateful_acl = true)) {
 /* Pre-LB */
 for (&Switch(.dpname = dpname)) {
     /* Do not send ND packets to conntrack */
-    Flow(.logical_datapath = dpname,
-         .stage         = switch_stage(IN, PRE_LB),
-         .priority         = 110,
-         .__match          = "nd || nd_rs || nd_ra",
-         .actions          = "next;",
-         .external_ids     = map_empty());
-    Flow(.logical_datapath = dpname,
-         .stage         = switch_stage(OUT, PRE_LB),
-         .priority         = 110,
-         .__match          = "nd || nd_rs || nd_ra",
-         .actions          = "next;",
-         .external_ids     = map_empty());
+    var __match = "nd || nd_rs || nd_ra || icmp4.type == 3 ||"
+                  "icmp6.type == 1 || (tcp && tcp.flags == 20)" in {
+        Flow(.logical_datapath = dpname,
+             .stage         = switch_stage(IN, PRE_LB),
+             .priority         = 110,
+             .__match          = __match,
+             .actions          = "next;",
+             .external_ids     = map_empty());
+        Flow(.logical_datapath = dpname,
+             .stage         = switch_stage(OUT, PRE_LB),
+             .priority         = 110,
+             .__match          = __match,
+             .actions          = "next;",
+             .external_ids     = map_empty())
+    };
 
     /* Do not send service monitor packets to conntrack. */
     for (SvcMonitorMac(svc_monitor_mac)) {
@@ -3144,6 +3147,14 @@ for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
                          .actions          = "${igmp_act}",
                          .external_ids     = map_empty());
 
+                    /* Punt MLD traffic to controller. */
+                    Flow(.logical_datapath = dpname,
+                         .stage            = switch_stage(IN, L2_LKUP),
+                         .priority         = 100,
+                         .__match          = "mldv1 || mldv2",
+                         .actions          = "${igmp_act}",
+                         .external_ids     = map_empty());
+
                     /* Flood all IP multicast traffic destined to 224.0.0.X to
                      * all ports - RFC 4541, section 2.1.2, item 2.
                      */
@@ -3152,6 +3163,17 @@ for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
                          .stage            = switch_stage(IN, L2_LKUP),
                          .priority         = 85,
                          .__match          = "ip4.mcast && ip4.dst == 224.0.0.0/24",
+                         .actions          = "outport = \"${flood}\"; output;",
+                         .external_ids     = map_empty());
+
+                    /* Flood all IPv6 multicast traffic destined to reserved
+                     * multicast IPs (RFC 4291, 2.7.1).
+                     */
+                    (var flood, _) = mC_FLOOD() in
+                    Flow(.logical_datapath = dpname,
+                         .stage            = switch_stage(IN, L2_LKUP),
+                         .priority         = 85,
+                         .__match          = "ip6.mcast_flood",
                          .actions          = "outport = \"${flood}\"; output;",
                          .external_ids     = map_empty());
 
@@ -3190,7 +3212,7 @@ for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
                         Flow(.logical_datapath = dpname,
                              .stage            = switch_stage(IN, L2_LKUP),
                              .priority         = 80,
-                             .__match          = "ip4 && ip4.mcast",
+                             .__match          = "ip4.mcast || ip6.mcast",
                              .actions          =
                                 "${relay_act}${static_act}${drop_act}",
                              .external_ids     = map_empty())
@@ -3201,7 +3223,7 @@ for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
     }
 }
 
-/* Ingress table L2_LKUP: Add IP multicast flows learnt from IGMP (priority
+/* Ingress table L2_LKUP: Add IP multicast flows learnt from IGMP/MLD (priority
  * 90). */
 for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
     for (SwitchMcastFloodRelayPorts(&sw, relay_ports)) {
@@ -3229,11 +3251,14 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
                     ""
                 }
             } in
+            var ipX = match (ipv6_parse(address)) {
+                Some{ipv6} -> "ip6",
+                _ -> "ip4"
+            } in
             Flow(.logical_datapath = sw.dpname,
                  .stage            = switch_stage(IN, L2_LKUP),
                  .priority         = 90,
-                 .__match          =
-                    "eth.mcast && ip4 && ip4.dst == ${address}",
+                 .__match          = "eth.mcast && ${ipX} && ${ipX}.dst == ${address}",
                  .actions          =
                     "${relay_act} ${static_act} outport = \"${address}\"; "
                     "output;",
@@ -3786,12 +3811,24 @@ for (&Router(.dpname = dpname, .mcast_cfg = &mcast_cfg)) {
          .actions          = "drop;",
          .external_ids     = map_empty());
 
-    /* Allow multicast if relay enabled (priority 95). */
+    /* Priority-90 flows reply to ARP requests and ND packets. */
+
+    /* Allow IPv6 multicast traffic that's supposed to reach the
+     * router pipeline (e.g., neighbor solicitations).
+     */
+    Flow(.logical_datapath = dpname,
+         .stage            = router_stage(IN, IP_INPUT),
+         .priority         = 87,
+         .__match          = "ip6.mcast_flood",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+
+    /* Allow multicast if relay enabled (priority 86). */
     var mcast_action = { if (mcast_cfg.relay) { "next;" } else { "drop;" } } in
     Flow(.logical_datapath = dpname,
          .stage            = router_stage(IN, IP_INPUT),
-         .priority         = 95,
-         .__match          = "ip4.mcast",
+         .priority         = 86,
+         .__match          = "ip4.mcast || ip6.mcast",
          .actions          = "${mcast_action}",
          .external_ids     = map_empty());
 
@@ -4262,16 +4299,6 @@ for (&RouterPort(.router = &router, .networks = networks)
     //     * port, so no need to program flows for that port. */
     //    continue;
     //}
-    /* L3 admission control: drop packets that originate from an
-     * IPv6 address owned by the router (priority 100). */
-    var __match = "ip6.src == " ++
-                   format_v6_networks(networks) in
-    Flow(.logical_datapath = router.dpname,
-         .stage         = router_stage(IN, IP_INPUT),
-         .priority         = 100,
-         .__match          = __match,
-         .actions          = "drop;",
-         .external_ids     = map_empty());
 
     /* ICMPv6 echo reply.  These flows reply to echo requests
      * received for the router's IP address. */
@@ -4287,16 +4314,6 @@ for (&RouterPort(.router = &router, .networks = networks)
          "icmp6.type = 129; "
          "flags.loopback = 1; "
          "next; ",
-         .external_ids     = map_empty());
-
-    /* Drop IPv6 traffic to this router. */
-    var __match = "ip6.dst == " ++
-                  format_v6_networks(networks) in
-    Flow(.logical_datapath = router.dpname,
-         .stage         = router_stage(IN, IP_INPUT),
-         .priority         = 60,
-         .__match          = __match,
-         .actions          = "drop;",
          .external_ids     = map_empty())
 }
 
@@ -4482,7 +4499,7 @@ for (&Router(.dpname = dpname,
      if is_some(l3dgw_port) or is_gateway)
 {
     for (LogicalRouterNAT(.lr = lr._uuid, .nat = &nat)) {
-        Some{var external_ip} = ip46_parse(nat.external_ip) in 
+        Some{var external_ip} = ip46_parse(nat.external_ip) in
         (var is_v6, var ipX) = match (external_ip) {
             IPv4{_} -> (false, "ip4"),
             IPv6{_} -> (true, "ip6")
@@ -5487,10 +5504,14 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
                 ""
             }
         } in
+        var ipX = match (ipv6_parse(address)) {
+            Some{ipv6} -> "ip6",
+            _ -> "ip4"
+        } in
         Flow(.logical_datapath = rtr.dpname,
              .stage            = router_stage(IN, IP_ROUTING),
              .priority         = 500,
-             .__match          = "ip4 && ip4.dst == ${address}",
+             .__match          = "${ipX} && ${ipX}.dst == ${address}",
              .actions          =
                 "${static_act} outport = \"${address}\"; ip.ttl--; next;",
              .external_ids     = map_empty())
@@ -5500,12 +5521,13 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
 /* If needed, flood unregistered multicast on statically configured ports.
  * Priority 450.
  */
-for (RouterMcastFloodPorts(&rtr, flood_ports)) {
+for (RouterMcastFloodPorts(&rtr, flood_ports)
+     if rtr.mcast_cfg.relay) {
     (var mc_static, _) = mC_STATIC() in
     Flow(.logical_datapath = rtr.dpname,
          .stage            = router_stage(IN, IP_ROUTING),
          .priority         = 450,
-         .__match          = "ip4.mcast",
+         .__match          = "ip4.mcast || ip6.mcast",
          .actions          =
             "clone { outport = \"${mc_static}\"; ip.ttl--; next;};",
          .external_ids     = map_empty())
@@ -5595,7 +5617,7 @@ for (&Router(.dpname = dpname)) {
     Flow(.logical_datapath = dpname,
          .stage            = router_stage(IN, ARP_RESOLVE),
          .priority         = 500,
-         .__match          = "ip4.mcast",
+         .__match          = "ip4.mcast || ip6.mcast",
          .actions          = "next;",
          .external_ids     = map_empty())
 }
@@ -6004,7 +6026,8 @@ for (&RouterPort(.lrp = lrp,
         Flow(.logical_datapath = dpname,
              .stage            = router_stage(OUT, DELIVERY),
              .priority         = 110,
-             .__match          = "ip4.mcast && outport == ${json_name}",
+             .__match          = "(ip4.mcast || ip6.mcast) && "
+                                 "outport == ${json_name}",
              .actions          = "eth.src = ${lrp_networks.ea_s}; output;",
              .external_ids     = map_empty())
     };
