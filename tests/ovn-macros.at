@@ -312,7 +312,7 @@ m4_define([OVN_POPULATE_ARP], [AT_CHECK(ovn_populate_arp__, [0], [ignore])])
 m4_divert_text([PREPARE_TESTS],
   [ovn_check_packets__ () {
      echo
-     echo "checking packets in $1 against $2:"
+     echo "$3: checking packets in $1 against $2:"
      rcv_pcap=$1
      rcv_text=`echo "$rcv_pcap.packets" | sed 's/\.pcap//'`
      exp_text=$2
@@ -326,7 +326,7 @@ m4_divert_text([PREPARE_TESTS],
    }
 ])
 m4_define([OVN_CHECK_PACKETS],
-  [ovn_check_packets__ "$1" "$2"
+  [ovn_check_packets__ "$1" "$2" "__file__:__line__"
    AT_CHECK([sort $rcv_text], [0], [expout])])
 
 m4_define([OVN_CHECK_PACKETS_REMOVE_BROADCAST],
