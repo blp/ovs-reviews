@@ -313,6 +313,14 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                                     }
                                 };
                                 if (not is_router_ip) {
+                                    for (ipv6 in rport.networks.ipv6_addrs) {
+                                        if (nat.external_ip == ipv6.addr_s) {
+                                            is_router_ip = true;
+                                            break
+                                        }
+                                    }
+                                };
+                                if (not is_router_ip) {
                                     c_addresses = c_addresses ++ " ${nat.external_ip}";
                                     central_ip_address = true
                                 }
@@ -3895,24 +3903,14 @@ AddChassisResidentCheck(lrp, false) :-
     not AddChassisResidentCheck_(lrp, _).
 
 
-function get_force_snat_ip(lr: nb.Logical_Router, key_type: string): Option<(string, ovs_be32)> =
+function get_force_snat_ip(lr: nb.Logical_Router, key_type: string): Option<(string, v46_ip)> =
 {
     match (map_get(lr.options, key_type ++ "_force_snat_ip")) {
         None -> None,
-        Some{ip_address} -> {
-            match (ip_parse_masked(ip_address)) {
-                Left{err} -> {
-                    warn("bad ip ${ip_address} in options of router ${uuid2str(lr._uuid)}");
-                    None
-                },
-                Right{(ip, mask)} -> {
-                    if (mask != 32'hffffffff) {
-                        warn("bad ip ${ip_address} in options of router ${uuid2str(lr._uuid)}");
-                        None
-                    } else {
-                        Some{(ip_address, ip)}
-                    }
-                }
+        Some{s} -> {
+            match (ip46_parse(s)) {
+                Some{ip} -> Some{(s, ip)},
+                None -> None
             }
         }
     }
@@ -4057,22 +4055,34 @@ for (&RouterPort(.lrp = lrp,
     };
 
     for (LogicalRouterNAT(lr._uuid, &nat) if nat.__type != "snat") {
-        Some{var ip} = match (ip_parse(nat.external_ip)) {
+        Some{var ip} = match (ip46_parse(nat.external_ip)) {
             Some{ip} -> { Some{ip} },
             None -> {
                 warn("bad ip address ${nat.external_ip} in nat configuration "
                      "for router ${uuid2str(lr._uuid)}");
-                None: Option<ovs_be32>
+                None: Option<v46_ip>
             }
         } in
-        /* ARP handling for external IP addresses.
+        /* ARP / ND handling for external IP addresses.
          *
          * DNAT IP addresses are external IP addresses that need ARP
          * handling. */
-        var __match = "inport == ${json_name} && arp.tpa == ${ip_fmt(ip)} && arp.op == 1" in
-        var actions = "eth.dst = eth.src; "
-                      "arp.op = 2; /* ARP reply */ "
-                      "arp.tha = arp.sha; " in
+        var __match = "inport == ${json_name} && " ++ match (ip) {
+            IPv4{ipv4} -> "arp.tpa == ${ipv4} && arp.op == 1",
+            IPv6{ipv6} -> {
+                var sn_addr = in6_addr_solicited_node(ipv6);
+                "nd_ns && ip6.dst == {${ipv6}, ${sn_addr}} && nd.target == ${ipv6}"
+            }
+        } in
+        var actions = "eth.dst = eth.src; " ++ match (ip) {
+            IPv4{_} -> "arp.op = 2; /* ARP reply */ "
+                       "arp.tha = arp.sha; ",
+            IPv6{_} -> "nd_na { "
+        } in
+        var arp_sha = match (ip) {
+            IPv4{_} -> "arp.sha",
+            IPv6{_} -> "nd.tll"
+        } in
         (var __match2, var actions2) = if is_redirect {
             match ((set_nth(nat.external_mac, 0), set_nth(nat.logical_port, 0))) {
                 (Some{external_mac}, Some{logical_port}) -> {
@@ -4084,12 +4094,12 @@ for (&RouterPort(.lrp = lrp,
                              * resident, so that upstream MAC learning points to the
                              * correct chassis.  Also need to avoid generation of
                              * multiple ARP responses from different chassis. */
-                            ( __match ++ " && is_chassis_resident(\"${logical_port}\")"
-                            , actions ++ "eth.src = ${mac}; arp.sha = ${mac}; ")
+                            (" && is_chassis_resident(\"${logical_port}\")",
+                             "eth.src = ${mac}; ${arp_sha} = ${mac}; ")
                         },
                         None -> {
-                            ( __match ++ " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})"
-                            , actions ++ "eth.src = ${networks.ea_s}; arp.sha = ${networks.ea_s}; ")
+                            ( " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})"
+                            , "eth.src = ${networks.ea_s}; ${arp_sha} = ${networks.ea_s}; ")
                         }
                     }
                 },
@@ -4099,21 +4109,25 @@ for (&RouterPort(.lrp = lrp,
                      * upstream MAC learning points to the "redirect-chassis".
                      * Also need to avoid generation of multiple ARP responses
                      * from different chassis. */
-                    ( __match ++ " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})"
-                    , actions ++ "eth.src = ${networks.ea_s}; arp.sha = ${networks.ea_s}; ")
+                    ( " && is_chassis_resident(${json_string_escape(chassis_redirect_name(lrp.name))})"
+                    , "eth.src = ${networks.ea_s}; ${arp_sha} = ${networks.ea_s}; ")
                 }
             }
         } else {
-            ( __match
-            , actions ++ "eth.src = ${networks.ea_s}; arp.sha = ${networks.ea_s}; ")
+            ( ""
+            , "eth.src = ${networks.ea_s}; ${arp_sha} = ${networks.ea_s}; ")
+        } in
+        var actions3 = match (ip) {
+            IPv4{ipv4} -> "arp.tpa = arp.spa; "
+                          "arp.spa = ${ipv4}; ",
+            IPv6{ipv6} -> "ip6.src = ${ipv6}; "
+                          "nd.target = ${ipv6}; "
         } in
         Flow(.logical_datapath = dpname,
              .stage         = router_stage(IN, IP_INPUT),
              .priority         = 90,
-             .__match          = __match2,
-             .actions          = actions2                    ++
-                                "arp.tpa = arp.spa; "
-                                "arp.spa = ${ip_fmt(ip)}; "
+             .__match          = __match ++ __match2,
+             .actions          = actions ++ actions2 ++ actions3 ++
                                 "outport = ${json_name}; "
                                 "flags.loopback = 1; "
                                 "output;",
@@ -4176,12 +4190,12 @@ for (&RouterPort(.lrp = lrp,
     /* A gateway router can have 2 SNAT IP addresses to force DNATed and
      * LBed traffic respectively to be SNATed.  In addition, there can be
      * a number of SNAT rules in the NAT table. */
-    var snat_ips: Set<ovs_be32> = {
-        var snat_ips: Set<ovs_be32> = set_empty();
+    var snat_ips: Set<v46_ip> = {
+        var snat_ips: Set<v46_ip> = set_empty();
         for (nat in nats) {
             if (deref(nat).__type == "snat") {
                 var ip = deref(nat).external_ip;
-                match (ip_parse(ip)) {
+                match (ip46_parse(ip)) {
                     Some{snat_ip} -> set_insert(snat_ips, snat_ip),
                     None -> warn("bad ip address ${ip} in nat configuration "
                                  "for router ${uuid2str(lr._uuid)}")
@@ -4198,17 +4212,38 @@ for (&RouterPort(.lrp = lrp,
         };
         snat_ips
     } in
-    var ips = {
-        var ips: Vec<string> = vec_empty();
+    var ip4s = {
+        var ip4s: Vec<string> = vec_empty();
         for (ip in networks.ipv4_addrs) {
-            if (not set_contains(snat_ips, ip.addr)) {
-                vec_push(ips, ip.addr_s)
-            } else ()
+            /* Packets to SNAT IPs should not be dropped. */
+            if (not set_contains(snat_ips, IPv4{ip.addr})) {
+                vec_push(ip4s, ip.addr_s)
+            }
         };
-        ips
+        if (not vec_is_empty(ip4s)) {
+            set_singleton("ip4.dst == {" ++ string_join(ip4s, ", ") ++ "}")
+        } else {
+            set_empty(): Set<string>
+        }
     } in
-    var __match = "ip4.dst == {" ++ string_join(ips, ", ") ++ "}" in
-    if (not vec_is_empty(ips)) {
+    var ip6s = {
+        var ip6s: Vec<string> = vec_empty();
+        for (ip in networks.ipv6_addrs) {
+            /* Packets to SNAT IPs should not be dropped. */
+            if (not set_contains(snat_ips, IPv6{ip.addr})) {
+                vec_push(ip6s, ip.addr_s)
+            }
+        };
+        if (not vec_is_empty(ip6s)) {
+            set_singleton("ip6.dst == {" ++ string_join(ip6s, ", ") ++ "}")
+        } else {
+            set_empty(): Set<string>
+        }
+    } in
+    var ips = set_union(ip4s, ip6s) in
+    if (not set_is_empty(ips)) {
+        /* Drop IP traffic to this router. */
+        var __match = string_join(set2vec(ips), " || ") in
         Flow(.logical_datapath = dpname,
              .stage         = router_stage(IN, IP_INPUT),
              .priority         = 60,
@@ -4447,38 +4482,21 @@ for (&Router(.dpname = dpname,
      if is_some(l3dgw_port) or is_gateway)
 {
     for (LogicalRouterNAT(.lr = lr._uuid, .nat = &nat)) {
-        true == match (ip_parse_masked(nat.external_ip)) {
-            Left{err} -> {
-                warn("bad external ip ${nat.external_ip} for nat");
-                false
-            },
-            Right{(_, mask)} -> {
-                if (mask != 32'hffffffff) {
-                    warn("bad external ip ${nat.external_ip} for nat");
-                    false
-                } else { true }
-            }
+        Some{var external_ip} = ip46_parse(nat.external_ip) in 
+        (var is_v6, var ipX) = match (external_ip) {
+            IPv4{_} -> (false, "ip4"),
+            IPv6{_} -> (true, "ip6")
         } in
-        var is_v6 = false in
-        var ipX = if (is_v6) { "ip6" } else { "ip4" } in
         /* Check the validity of nat->logical_ip. 'logical_ip' can
          * be a subnet when the type is "snat". */
-        (var mask, true) = match ((ip_parse_masked(nat.logical_ip), nat.__type)) {
-            (Left{err}, "snat") -> {
-                warn("bad ip network or ip ${nat.logical_ip} for snat in router ${uuid2str(lr._uuid)}");
-                (32'd0, false)
-            },
-            (Right{(_, mask)}, "snat") -> (mask, true),
-            (Left{err}, _) -> {
+        Some{(_, var mask)} = ip46_parse_masked(nat.logical_ip) in
+        true == match ((ip46_is_all_ones(mask), nat.__type)) {
+            (_, "snat") -> true,
+            (false, _) -> {
                 warn("bad ip ${nat.logical_ip} for dnat in router ${uuid2str(lr._uuid)}");
-                (32'd0, false)
+                false
             },
-            (Right{(_, mask)}, _) -> {
-                if (mask != 32'hffffffff) {
-                    warn("bad ip ${nat.logical_ip} for dnat in router ${uuid2str(lr._uuid)}");
-                    (32'd0, false)
-                } else { (mask, true) }
-            }
+            _ -> true
         } in
         /* For distributed router NAT, determine whether this NAT rule
          * satisfies the conditions for distributed NAT processing. */
@@ -4675,9 +4693,10 @@ for (&Router(.dpname = dpname,
                     } else {
                         "ct_snat(${nat.external_ip});"
                     } in
+                    Some{var plen} = ip46_count_cidr_bits(mask) in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(OUT, SNAT),
-                         .priority         = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1),
+                         .priority         = plen as bit<64> + 64'd1,
                          .__match          = "ip && ip4.src == ${nat.logical_ip}",
                          .actions          = actions,
                          .external_ids     = stage_hint(nat._uuid))
@@ -4706,7 +4725,8 @@ for (&Router(.dpname = dpname,
                     /* The priority here is calculated such that the
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
-                    var priority = 56'd0 ++ (count_1bits(32'd0 ++ ntohl(mask)) + 8'd1) in
+                    Some{var plen} = ip46_count_cidr_bits(mask) in
+                    var priority = (plen as bit<64>) + 64'd1 in
                     var centralized_boost = if (mac == None) {64'd128} else {64'd0} in
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(OUT, SNAT),
