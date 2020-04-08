@@ -5348,7 +5348,9 @@ for (Route(.port        = port,
         None     -> "${ipx}.dst"
     } in
     var actions =
-        "ip.ttl--; ${xx}reg0 = ${nexthop}; "
+        "ip.ttl--; "
+        "${rEG_ECMP_GROUP_ID()} = 0; "
+        "${xx}reg0 = ${nexthop}; "
         "${xx}reg1 = ${src_ip}; "
         "eth.src = ${port.networks.ea_s}; "
         "outport = ${port.json_name}; "
@@ -5392,7 +5394,7 @@ Route(key, port, src_ip, None) :-
 Flow(.logical_datapath = r.dpname,
      .stage            = router_stage(IN, IP_ROUTING_ECMP),
      .priority         = 150,
-     .__match          = rEG_ECMP_GROUP_ID() ++ "== 0",
+     .__match          = "${rEG_ECMP_GROUP_ID()} == 0",
      .actions          = "next;",
      .external_ids     = map_empty()) :-
     r in &Router().
