@@ -170,6 +170,15 @@ pub fn ovn_ipv6_mask_is_any(mask: &ovn_in6_addr) -> bool {
     *mask == ovn_in6addr_any
 }
 
+pub fn ovn_ipv6_count_cidr_bits(ip6: &ovn_in6_addr) -> std_Option<u8> {
+    unsafe {
+        match (ovn_ipv6_is_cidr(ip6)) {
+            true => std_Option::std_Some{x: ipv6_count_cidr_bits(ip6 as *const ovn_in6_addr) as u8},
+            false => std_Option::std_None
+        }
+    }
+}
+
 pub fn ovn_json_string_escape(s: &String) -> String {
     let mut ds = ovs_ds::new();
     unsafe {
@@ -280,6 +289,16 @@ pub fn ovn_ipv6_is_zero(a: &ovn_in6_addr) -> bool
     unsafe{ipv6_is_zero(a as *const ovn_in6_addr)}
 }
 
+pub fn ovn_ipv6_is_routable_multicast(a: &ovn_in6_addr) -> bool
+{
+    unsafe{ipv6_addr_is_routable_multicast(a as *const ovn_in6_addr)}
+}
+
+pub fn ovn_ipv6_is_cidr(a: &ovn_in6_addr) -> bool
+{
+    unsafe{ipv6_is_cidr(a as *const ovn_in6_addr)}
+}
+
 pub fn ovn_ipv6_multicast_to_ethernet(ip6: &ovn_in6_addr) -> ovn_eth_addr
 {
     let mut eth: ovn_eth_addr = Default::default();
@@ -329,6 +348,15 @@ pub fn ovn_ip_parse(s: &String) -> std_Option<ovn_ovs_be32>
             std_Option::std_Some{x:ip}
         } else {
             std_Option::std_None
+        }
+    }
+}
+
+pub fn ovn_ip_count_cidr_bits(address: &ovn_ovs_be32) -> std_Option<u8> {
+    unsafe {
+        match (ovn_ip_is_cidr(address)) {
+            true => std_Option::std_Some{x: ip_count_cidr_bits(*address) as u8},
+            false => std_Option::std_None
         }
     }
 }
@@ -655,6 +683,7 @@ extern "C" {
     fn split_addresses(addresses: *const raw::c_char, ip4_addrs: *mut ovs_svec, ipv6_addrs: *mut ovs_svec);
     fn ip_address_and_port_from_lb_key(key: *const raw::c_char, ip_address: *mut *mut raw::c_char,
                                 port: *mut libc::uint16_t, addr_family: *mut raw::c_int);
+    fn ipv6_addr_is_routable_multicast(ip: *const ovn_in6_addr) -> bool;
 }
 
 /* functions imported from libopenvswitch */
@@ -666,6 +695,8 @@ extern "C" {
     fn ipv6_parse_cidr(s: *const raw::c_char, ip: *mut ovn_in6_addr, plen: *mut raw::c_uint) -> *mut raw::c_char;
     fn ipv6_parse(s: *const raw::c_char, ip: *mut ovn_in6_addr) -> bool;
     fn ipv6_mask_is_any(mask: *const ovn_in6_addr) -> bool;
+    fn ipv6_count_cidr_bits(mask: *const ovn_in6_addr) -> raw::c_int;
+    fn ipv6_is_cidr(mask: *const ovn_in6_addr) -> bool;
     fn ipv6_addr_bitxor(a: *const ovn_in6_addr, b: *const ovn_in6_addr) -> ovn_in6_addr;
     fn ipv6_addr_bitand(a: *const ovn_in6_addr, b: *const ovn_in6_addr) -> ovn_in6_addr;
     fn ipv6_create_mask(mask: raw::c_uint) -> ovn_in6_addr;
@@ -674,6 +705,7 @@ extern "C" {
     fn ip_parse_masked(s: *const raw::c_char, ip: *mut ovn_ovs_be32, mask: *mut ovn_ovs_be32) -> *mut raw::c_char;
     fn ip_parse_cidr(s: *const raw::c_char, ip: *mut ovn_ovs_be32, plen: *mut raw::c_uint) -> *mut raw::c_char;
     fn ip_parse(s: *const raw::c_char, ip: *mut ovn_ovs_be32) -> bool;
+    fn ip_count_cidr_bits(mask: ovn_ovs_be32) -> raw::c_int;
     fn eth_addr_from_string(s: *const raw::c_char, ea: *mut ovn_eth_addr) -> bool;
     fn eth_addr_to_uint64(ea: ovn_eth_addr) -> libc::uint64_t;
     fn eth_addr_from_uint64(x: libc::uint64_t, ea: *mut ovn_eth_addr);
