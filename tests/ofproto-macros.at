@@ -99,6 +99,7 @@ sim_add () {
 
    # Start ovs-vswitchd
    as $1 start_daemon ovs-vswitchd --enable-dummy=system -vvconn -vofproto_dpif -vunixctl
+   as $1 ovs-appctl vlog/disable-rate-limit vconn
 }
 
 # "as $1" sets the OVS_*DIR environment variables to point to $ovs_base/$1.
