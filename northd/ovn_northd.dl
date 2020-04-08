@@ -3387,7 +3387,7 @@ Flow(.logical_datapath = sw.dpname,
      .priority         = 75,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && nd_ns && nd.target == { " ++
-                         string_join(set2vec(all_ips_v6), ", ") ++ " }",
+                         string_join(set2vec(all_ips_v6), ", ") ++ "}",
      .actions          = "outport = ${sp.json_name}; output;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
@@ -3777,7 +3777,7 @@ for (&Router(.dpname = dpname, .mcast_cfg = &mcast_cfg)) {
     Flow(.logical_datapath = dpname,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 100,
-         .__match          = "ip4.src_mcast || "
+         .__match          = "ip4.src_mcast ||"
          "ip4.src == 255.255.255.255 || "
          "ip4.src == 127.0.0.0/8 || "
          "ip4.dst == 127.0.0.0/8 || "
