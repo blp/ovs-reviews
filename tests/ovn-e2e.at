@@ -1,10 +1,10 @@
-AT_BANNER([OVN end-to-end tests (NORTHD_TYPE)])
+AT_BANNER([OVN end-to-end tests])
 
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
-AT_SETUP([ovn -- 3 HVs, 1 LS, 3 lports/HV -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 3 HVs, 1 LS, 3 lports/HV])
 AT_KEYWORDS([ovnarp])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Create hypervisors hv[123].
 # Add vif1[123] to hv1, vif2[123] to hv2, vif3[123] to hv3.
@@ -293,13 +293,14 @@ done
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
 # 2 hypervisors, one logical switch, 2 logical ports per hypervisor
 # logical ports bound to chassis encap-ip.
-AT_SETUP([ovn -- 2 HVs, 1 LS, 2 lports/HV -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 1 LS, 2 lports/HV])
 AT_KEYWORDS([ovnarp])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Create hypervisors hv[12].
 # Add vif1[12] to hv1, vif2[12] to hv2
@@ -473,10 +474,11 @@ done
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- trace 1 LS, 3 LSPs -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- trace 1 LS, 3 LSPs])
+ovn_start
 
 # Create a logical switch and some logical ports.
 # Turn on port security on all lports except ls1.
@@ -693,13 +695,14 @@ for s in 1 2 3; do
 done
 
 AT_CLEANUP
+])
 
 # 2 hypervisors, 4 logical ports per HV
 # 2 locally attached networks (one flat, one vlan tagged over same device)
 # 2 ports per HV on each network
-AT_SETUP([ovn -- 2 HVs, 4 lports/HV, localnet ports -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 4 lports/HV, localnet ports])
+ovn_start
 
 # In this test cases we create 3 switches, all connected to same
 # physical network (through br-phys on each HV). Each switch has
@@ -889,11 +892,12 @@ done
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- vtep: 3 HVs, 1 VIFs/HV, 1 GW, 1 LS])
 AT_KEYWORDS([vtep])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Configure the Northbound database
 ovn-nbctl ls-add lsw0
@@ -1091,11 +1095,12 @@ OVN_CLEANUP([hv1],[hv2],[vtep])
 OVN_CLEANUP_VSWITCH([hv3])
 
 AT_CLEANUP
+])
 
 # Similar test to "hardware GW"
-AT_SETUP([ovn -- 3 HVs, 1 VIFs/HV, 1 software GW, 1 LS -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 3 HVs, 1 VIFs/HV, 1 software GW, 1 LS])
+ovn_start
 
 # Configure the Northbound database
 ovn-nbctl ls-add lsw0
@@ -1240,11 +1245,12 @@ for i in 1 2 3; do
     OVN_CHECK_PACKETS([hv$i/vif$i-tx.pcap], [$i.expected])
 done
 AT_CLEANUP
+])
 
 # 3 hypervisors, 3 logical switches with 3 logical ports each, 1 logical router
-AT_SETUP([ovn -- 3 HVs, 3 LS, 3 lports/LS, 1 LR -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 3 HVs, 3 LS, 3 lports/LS, 1 LR])
+ovn_start
 
 # Logical network:
 #
@@ -1659,10 +1665,11 @@ AT_CHECK_UNQUOTED([sort < mac_bindings], [0], [`sort < mac_bindings.expected`
 OVN_CLEANUP([hv1], [hv2], [hv3])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- IP relocation using GARP request -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- IP relocation using GARP request])
+ovn_start
 
 # Logical network:
 #
@@ -1861,11 +1868,12 @@ done
 OVN_CLEANUP([hv1], [hv2])
 
 AT_CLEANUP
+])
 
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
-AT_SETUP([ovn -- portsecurity : 3 HVs, 1 LS, 3 lports/HV -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- portsecurity : 3 HVs, 1 LS, 3 lports/HV])
+ovn_start
 
 # Create hypervisors hv[123].
 # Add vif1[123] to hv1, vif2[123] to hv2, vif3[123] to hv3.
@@ -2239,10 +2247,11 @@ done
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 2 LS, 1 lport/LS, 2 peer LRs -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 2 LS, 1 lport/LS, 2 peer LRs])
+ovn_start
 
 # Logical network:
 # Two LRs - R1 and R2 that are connected to each other as peers in 20.0.0.0/24
@@ -2384,12 +2393,13 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- 1 HV, 1 LS, 2 lport/LS, 1 LR -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 1 HV, 1 LS, 2 lport/LS, 1 LR])
 AT_KEYWORDS([router-admin-state])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR - R1 has switch ls1 with two subnets attached to it (191.168.1.0/24
@@ -2496,12 +2506,13 @@ OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- 1 HV, 2 LSs, 1 lport/LS, 1 LR -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 1 HV, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([router-admin-state])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR - R1 has switch ls1 (191.168.1.0/24) connected to it,
@@ -2613,10 +2624,11 @@ OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 3 LS, 1 lport/LS, 2 peer LRs, static routes -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 3 LS, 1 lport/LS, 2 peer LRs, static routes])
+ovn_start
 
 # Logical network:
 # Two LRs - R1 and R2 that are connected to each other as peers in 20.0.0.0/24
@@ -2766,10 +2778,11 @@ OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- send gratuitous arp on localnet -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- send gratuitous arp on localnet])
+ovn_start
 ovn-nbctl ls-add lsw0
 net_add n1
 sim_add hv
@@ -2820,10 +2833,11 @@ AT_CHECK([ovn-nbctl lsp-del ln_port])
 OVN_CLEANUP([hv])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 3 LRs connected via LS, static routes -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 3 LRs connected via LS, static routes])
+ovn_start
 
 # Logical network:
 # Three LRs - R1, R2 and R3 that are connected to each other via LS "join"
@@ -2997,10 +3011,11 @@ OVN_CHECK_PACKETS([hv1/vif2-tx.pcap], [expected])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- dhcpv4 : 1 HV, 2 LS, 2 LSPs/LS -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- dhcpv4 : 1 HV, 2 LS, 2 LSPs/LS])
+ovn_start
 
 ovn-nbctl ls-add ls1
 
@@ -3430,10 +3445,11 @@ OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [1.expected])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- dhcpv6 : 1 HV, 2 LS, 5 LSPs -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- dhcpv6 : 1 HV, 2 LS, 5 LSPs])
+ovn_start
 
 ovn-nbctl ls-add ls1
 ovn-nbctl lsp-add ls1 ls1-lp1 \
@@ -3702,10 +3718,11 @@ AT_CHECK([cat 5.packets | cut -c 1-120,125- ], [0], [expout])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 2 LRs connected via LS, gateway router -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 2 LRs connected via LS, gateway router])
+ovn_start
 
 # Logical network:
 # Two LRs - R1 and R2 that are connected to each other via LS "join"
@@ -3878,11 +3895,12 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- icmp_reply: 1 HVs, 2 LSs, 1 lport/LS, 1 LR -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- icmp_reply: 1 HVs, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([router-icmp-reply])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR - R1 has switch ls1 (191.168.1.0/24) connected to it,
@@ -4024,11 +4042,12 @@ done
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- policy-based routing: 1 HVs, 2 LSs, 1 lport/LS, 1 LR -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- policy-based routing: 1 HVs, 2 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([policy-based-routing])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR - R1 has switch ls1 (191.168.1.0/24) connected to it,
@@ -4213,11 +4232,12 @@ OVN_CHECK_PACKETS([pbr-hv/vif3-tx.pcap], [3.expected])
 
 OVN_CLEANUP([pbr-hv])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- policy-based routing IPv6: 1 HVs, 3 LSs, 1 lport/LS, 1 LR -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- policy-based routing IPv6: 1 HVs, 3 LSs, 1 lport/LS, 1 LR])
 AT_KEYWORDS([policy-based-routing])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR - R1 has switch ls1 (191.168.1.0/24) connected to it,
@@ -4399,13 +4419,14 @@ OVN_CHECK_PACKETS([pbr-hv/vif3-tx.pcap], [3.expected])
 
 OVN_CLEANUP([pbr-hv])
 AT_CLEANUP
+])
 
 # 1 hypervisor, 1 port
 # make sure that the port state is properly set to up and back down
 # when created and deleted.
-AT_SETUP([ovn -- port state up and down -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- port state up and down])
+ovn_start
 
 ovn-nbctl ls-add ls1
 ovn-nbctl lsp-add ls1 lp1
@@ -4425,14 +4446,15 @@ OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp1` = xdown])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
 # 1 hypervisor, 1 port
 # make sure that the OF rules created to support a datapath are added/cleared
 # when logical switch is created and removed.
-AT_SETUP([ovn -- datapath rules added/removed -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- datapath rules added/removed])
 AT_KEYWORDS([cleanup])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 sim_add hv1
@@ -4493,10 +4515,11 @@ test_datapath_in_of_rules 0 "after lport+ls removal"
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- nd_na  -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- nd_na ])
+ovn_start
 
 #TODO: since patch port for IPv6 logical router port is not ready not,
 #  so we are not going to test vifs on different lswitches cases. Try
@@ -4565,10 +4588,11 @@ done
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- address sets modification/removal smoke test -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- address sets modification/removal smoke test])
+ovn_start
 
 net_add n1
 
@@ -4593,10 +4617,11 @@ AT_CHECK([ovs-appctl -t ovn-controller version], [0], [ignore])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ipam -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ipam])
+ovn_start
 
 # Add a port to a switch that does not have a subnet set, then set the
 # subnet which should result in an address being allocated for the port.
@@ -5005,10 +5030,11 @@ as northd-backup
 OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ipam connectivity -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ipam connectivity])
+ovn_start
 
 ovn-nbctl lr-add R1
 
@@ -5134,11 +5160,12 @@ AT_CHECK([cat received2.packets], [0], [expout])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ovs-vswitchd restart -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ovs-vswitchd restart])
 AT_KEYWORDS([vswitchd])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 ovn-nbctl ls-add ls1
 
@@ -5229,10 +5256,11 @@ OVS_WAIT_UNTIL([
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- send arp for nexthop -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- send arp for nexthop])
+ovn_start
 
 # Topology: Two LSs - ls1 and ls2 are connected via router r0
 
@@ -5339,10 +5367,11 @@ cat packets
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- send gratuitous arp for nat ips in localnet -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- send gratuitous arp for nat ips in localnet])
+ovn_start
 # Create logical switch
 ovn-nbctl ls-add ls0
 # Create gateway router
@@ -5391,10 +5420,11 @@ AT_CHECK([sort packets], [0], [expout])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- send gratuitous arp with nat-addresses router in localnet -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- send gratuitous arp with nat-addresses router in localnet])
+ovn_start
 # Create logical switch
 ovn-nbctl ls-add ls0
 # Create gateway router
@@ -5458,10 +5488,11 @@ AT_CHECK([sort packets], [0], [expout])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- delete mac bindings -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- delete mac bindings])
+ovn_start
 net_add n1
 sim_add hv1
 as hv1
@@ -5490,10 +5521,11 @@ OVS_WAIT_UNTIL([test `ovn-sbctl find MAC_Binding | wc -l` = 0])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- conntrack zone allocation -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- conntrack zone allocation])
+ovn_start
 
 # Logical network:
 # 2 logical switches "foo" (192.168.1.0/24) and "bar" (172.16.1.0/24)
@@ -5544,10 +5576,11 @@ OVS_WAIT_UNTIL([test `ovs-ofctl dump-flows br-int table=0 | grep REG13 | wc -l` 
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- tag allocation -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- tag allocation])
+ovn_start
 
 AT_CHECK([ovn-nbctl ls-add ls0])
 AT_CHECK([ovn-nbctl lsp-add ls0 parent1])
@@ -5661,10 +5694,11 @@ AT_CHECK([ovn-nbctl lsp-get-tag local1 | stableid --strict no_name], [0], [50
 ])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- lsp deletion and broadcast-flow deletion on localnet -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- lsp deletion and broadcast-flow deletion on localnet])
+ovn_start
 ovn-nbctl ls-add lsw0
 net_add n1
 for i in 1 2; do
@@ -5731,12 +5765,13 @@ OVS_WAIT_UNTIL([test `ovs-vsctl show | grep "Port patch-br-int-to-ln_port" | wc 
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- ACL logging -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACL logging])
 AT_KEYWORDS([ovn])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 
@@ -5838,12 +5873,13 @@ name="reject-flow", verdict=reject, severity=alert: tcp,vlan_tci=0x0000,dl_src=f
 
 OVN_CLEANUP([hv])
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- ACL rate-limited logging -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACL rate-limited logging])
 AT_KEYWORDS([ovn])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 
@@ -5926,12 +5962,13 @@ AT_CHECK([ test $n_acl1 -gt $n_acl2 ], [0], [])
 
 OVN_CLEANUP([hv])
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- same meter used by multiple logical flows -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- same meter used by multiple logical flows])
 AT_KEYWORDS([ovn])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 
@@ -5982,12 +6019,13 @@ AT_CHECK([ovs-ofctl -O OpenFlow13 dump-meters br-int | grep meter], [1])
 
 OVN_CLEANUP([hv])
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- DSCP marking and meter check -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- DSCP marking and meter check])
 AT_KEYWORDS([ovn])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 ovn-nbctl ls-add lsw0
 ovn-nbctl --wait=sb lsp-add lsw0 lp1
@@ -6111,8 +6149,10 @@ AT_CHECK([as hv ovs-ofctl dump-meters br-int -O OpenFlow13 | grep rate=11123 | w
 
 OVN_CLEANUP([hv])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- read-only sb db:ptcp access -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- read-only sb db:ptcp access])
 
 : > .$1.db.~lock~
 ovsdb-tool create ovn-sb.db "$abs_top_srcdir"/ovn-sb.ovsschema
@@ -6146,8 +6186,10 @@ AT_CHECK([ovn-sbctl --db=tcp:127.0.0.1:$TCP_PORT chassis-add ch vxlan 1.2.4.8], 
 
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- read-only sb db:pssl access -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- read-only sb db:pssl access])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
 PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[       '\"
@@ -6202,8 +6244,10 @@ AT_CHECK([ovn-sbctl --db=ssl:127.0.0.1:$TCP_PORT \
 
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- nb connection/ssl commands -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- nb connection/ssl commands])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
 PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[       '\"
@@ -6253,8 +6297,10 @@ AT_CHECK([ovn-nbctl --db=ssl:127.0.0.1:$TCP_PORT \
 
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- sb connection/ssl commands -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- sb connection/ssl commands])
 AT_SKIP_IF([test "$HAVE_OPENSSL" = no])
 PKIDIR="$(cd $abs_top_builddir/tests && pwd)"
 AT_SKIP_IF([expr "$PKIDIR" : ".*[       '\"
@@ -6304,10 +6350,11 @@ AT_CHECK([ovn-sbctl --db=ssl:127.0.0.1:$TCP_PORT \
 
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- nested containers -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- nested containers])
+ovn_start
 
 # Physical network:
 # 2 HVs. HV1 has 2 VMs - "VM1" and "bar3". HV2 has 1 VM - "VM2"
@@ -6510,10 +6557,11 @@ OVN_CHECK_PACKETS([hv1/vm1-tx.pcap], [expected1])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 3 HVs, 3 LRs connected via LS, source IP based routes -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 3 HVs, 3 LRs connected via LS, source IP based routes])
+ovn_start
 
 # Logical network:
 # Three LRs - R1, R2 and R3 that are connected to each other via LS "join"
@@ -6711,10 +6759,11 @@ OVN_CHECK_PACKETS([hv3/vif1-tx.pcap], [expected])
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- dns lookup : 1 HV, 2 LS, 2 LSPs/LS -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- dns lookup : 1 HV, 2 LS, 2 LSPs/LS])
+ovn_start
 
 ovn-nbctl ls-add ls1
 
@@ -7125,10 +7174,11 @@ rm -f 2.expected
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 4 HV, 1 LS, 1 LR, packet test with HA distributed router gateway port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 4 HV, 1 LS, 1 LR, packet test with HA distributed router gateway port])
+ovn_start
 
 net_add n1
 
@@ -7352,10 +7402,11 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 OVN_CLEANUP([hv1],[gw1],[ext1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 4 HV, 3 LS, 2 LR, packet test with HA distributed router gateway port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 4 HV, 3 LS, 2 LR, packet test with HA distributed router gateway port])
+ovn_start
 
 net_add n1
 
@@ -7571,10 +7622,11 @@ test_ip_packet gw2 gw1
 
 OVN_CLEANUP([hv1],[gw1],[gw2],[ext1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 1 LR with distributed router gateway port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 1 LR with distributed router gateway port])
+ovn_start
 
 # Logical network:
 # One LR R1 that has switches foo (192.168.1.0/24) and
@@ -7912,10 +7964,11 @@ AT_CHECK([ovn-sbctl find Port_Binding logical_port=cr-alice | wc -l], [0], [0
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- send gratuitous arp for NAT rules on distributed router -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- send gratuitous arp for NAT rules on distributed router])
+ovn_start
 # Create logical switches
 ovn-nbctl ls-add ls0
 ovn-nbctl ls-add ls1
@@ -8051,13 +8104,14 @@ AT_CHECK([cat exp], [0], [expout])
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
 # VLAN traffic for external network redirected through distributed router
 # gateway port should use vlans(i.e input network vlan tag) across hypervisors
 # instead of tunneling.
-AT_SETUP([ovn -- vlan traffic for external network with distributed router gateway port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- vlan traffic for external network with distributed router gateway port])
+ovn_start
 
 # Logical network:
 # # One LR R1 that has switches foo (192.168.1.0/24) and
@@ -8372,11 +8426,12 @@ AT_CHECK([cat empty], [0], [])
 
 OVN_CLEANUP([hv1],[hv2],[hv3], [hv4])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- IPv6 ND Router Solicitation responder -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- IPv6 ND Router Solicitation responder])
 AT_KEYWORDS([ovn-nd_ra])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # In this test case we create 1 lswitch with 3 VIF ports attached,
 # and a lrouter connected to the lswitch.
@@ -8621,10 +8676,11 @@ AT_CHECK([cat 1.packets], [0], [])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- /32 router IP address -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- /32 router IP address])
+ovn_start
 
 # Logical network:
 # 2 LS 'foo' and 'alice' connected via router R1.
@@ -8719,10 +8775,11 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 1 lport/HV, localport ports -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 1 lport/HV, localport ports])
+ovn_start
 
 ovn-nbctl ls-add ls1
 
@@ -8841,10 +8898,11 @@ done
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 1 LR with HA distributed router gateway port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 1 LR with HA distributed router gateway port])
+ovn_start
 
 net_add n1
 
@@ -9398,10 +9456,11 @@ logical_port=cr-outside | grep $gw1_chassis | wc -l], [0],[[1
 OVN_CLEANUP([gw1],[gw2],[hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- send gratuitous ARP for NAT rules on HA distributed router -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- send gratuitous ARP for NAT rules on HA distributed router])
+ovn_start
 ovn-nbctl ls-add ls0
 ovn-nbctl ls-add ls1
 ovn-nbctl create Logical_Router name=lr0
@@ -9569,10 +9628,11 @@ AT_CHECK([grep $garp hv2_br_phys_tx | sort], [0], [])
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ensure one gw controller restart in HA doesn't bounce the master -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ensure one gw controller restart in HA doesn't bounce the master])
+ovn_start
 
 net_add n1
 
@@ -9665,11 +9725,12 @@ OVS_WAIT_UNTIL(
 OVN_CLEANUP([gw1],[gw2],[hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- IPv6 Neighbor Solicitation for unknown MAC -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- IPv6 Neighbor Solicitation for unknown MAC])
 AT_KEYWORDS([ovn-nd_ns for unknown mac])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 ovn-nbctl ls-add sw0_ip6
 ovn-nbctl lsp-add sw0_ip6 sw0_ip6-port1
@@ -9840,10 +9901,11 @@ AT_CHECK([cat 2.packets | cut -c 117-], [0], [expout])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- options:requested-chassis for logical port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- options:requested-chassis for logical port])
+ovn_start
 
 net_add n1
 
@@ -9920,11 +9982,12 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- options:requested-chassis with hostname -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- options:requested-chassis with hostname])
 
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 ovn-nbctl ls-add ls0
 ovn-nbctl lsp-add ls0 lsp0
@@ -9959,10 +10022,11 @@ AT_CHECK([as hv1 ovs-ofctl dump-flows br-int table=65 | grep output], [1], [])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- IPv6 periodic RA -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- IPv6 periodic RA])
+ovn_start
 
 # This test sets up two hypervisors.
 # hv1 and hv2 run ovn-controllers, and
@@ -10148,11 +10212,12 @@ ra_test 000005dc 48 $dns_addr $dnssl $route_info c0 40 aef0000000000000000000000
 
 OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ACL reject rule test -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACL reject rule test])
 AT_KEYWORDS([acl-reject])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
  test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
 #
@@ -10290,11 +10355,12 @@ done
 
 OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Port Groups -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Port Groups])
 AT_KEYWORDS([ovnpg])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 #
@@ -10516,11 +10582,12 @@ done
 # Gracefully terminate daemons
 OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ACLs on Port Groups -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACLs on Port Groups])
 AT_KEYWORDS([ovnpg_acl])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 #
@@ -10769,10 +10836,11 @@ done
 # Gracefully terminate daemons
 OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Address Set generation from Port Groups (static addressing) -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Address Set generation from Port Groups (static addressing)])
+ovn_start
 
 ovn-nbctl ls-add ls1
 
@@ -10820,10 +10888,11 @@ AT_CHECK([ovn-sbctl get Address_Set pg1_ip6 addresses],
 ])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Address Set generation from Port Groups (dynamic addressing) -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Address Set generation from Port Groups (dynamic addressing)])
+ovn_start
 
 ovn-nbctl ls-add ls1
 ovn-nbctl ls-add ls2
@@ -10882,10 +10951,11 @@ AT_CHECK([ovn-sbctl get Address_Set pg1_ip6 addresses],
 ])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ACL conjunction -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ACL conjunction])
+ovn_start
 
 ovn-nbctl ls-add ls1
 
@@ -11007,11 +11077,12 @@ $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif2-tx.pcap > 2.packets
 AT_CHECK([cat 2.packets], [0], [])
 
 AT_CLEANUP
+])
 
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
-AT_SETUP([ovn -- L2 Drop and Allow ACL w/ Stateful ACL -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- L2 Drop and Allow ACL w/ Stateful ACL])
+ovn_start
 
 # Create hypervisors hv[123].
 # Add vif11 to hv1, vif21 to hv2, vif31 to hv3.
@@ -11211,11 +11282,12 @@ AT_CHECK([test $hv2_allow_acl_hit = 6])
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- TTL exceeded -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- TTL exceeded])
 AT_KEYWORDS([ttl-exceeded])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IPV4_ROUTER IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
 #
@@ -11308,11 +11380,12 @@ OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- router port unreachable -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- router port unreachable])
 AT_KEYWORDS([router-port-unreachable])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_ROUTER L4_PROTCOL IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM EXP_ICMP_CODE
 #
@@ -11458,10 +11531,11 @@ OVN_CHECK_PACKETS([hv2/vif2-tx.pcap], [vif2.expected])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ovn-controller exit -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ovn-controller exit])
+ovn_start
 # Logical network:
 # One Logical Router: ro, with two logical switches sw1 and sw2.
 # sw1 is for subnet 10.0.0.0/8
@@ -11549,10 +11623,11 @@ as hv2 start_daemon ovn-controller
 
 OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- external logical port -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- external logical port])
+ovn_start
 
 net_add n1
 sim_add hv1
@@ -12290,11 +12365,12 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 OVN_CLEANUP([hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Address Set Incremental Processing -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Address Set Incremental Processing])
 AT_KEYWORDS([ovn_as_inc])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 sim_add hv1
@@ -12369,10 +12445,11 @@ done
 # Gracefully terminate daemons
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ovn-controller restart -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ovn-controller restart])
+ovn_start
 
 # Logical network:
 # One Logical Router: ro, with two logical switches sw1 and sw2.
@@ -12465,10 +12542,11 @@ OVN_CLEANUP([hv1],[hv2])
 
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ovn-nbctl duplicate addresses -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ovn-nbctl duplicate addresses])
+ovn_start
 
 # Set up a switch with some switch ports of varying address types
 ovn-nbctl ls-add sw1
@@ -12522,11 +12600,12 @@ AT_CHECK([ovn-nbctl lsp-set-addresses sw2-p1 "00:00:00:00:00:04 192.168.0.3"])
 AT_CHECK([ovn-nbctl lsp-set-addresses sw2-p1 "00:00:00:00:00:04 aef0::1"])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- router - check packet length - icmp defrag -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- router - check packet length - icmp defrag])
 AT_KEYWORDS([check packet length])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 ovn-nbctl ls-add sw0
 ovn-nbctl lsp-add sw0 sw0-port1
@@ -12698,11 +12777,12 @@ icmp_reply_expected=0
 test_ip_packet_larger $icmp_reply_expected
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- IP packet buffering -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- IP packet buffering])
 AT_KEYWORDS([ip-buffering])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR lr0 that has switches sw0 (192.168.1.0/24) and
@@ -12844,10 +12924,11 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1],[hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- neighbor update on same HV -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- neighbor update on same HV])
+ovn_start
 
 # Logical network:
 # A public switch (pub) with a localnet port connected to two LRs (lr0 and lr1)
@@ -12944,10 +13025,11 @@ AT_CHECK([sort hv1/br-phys-tx4.pcap], [0], [expout])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ipam to non-ipam -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ipam to non-ipam])
+ovn_start
 
 ovn-nbctl --wait=hv set NB_Global . options:mac_prefix="0a:00:00:00:00:00"
 ovn-nbctl ls-add sw0
@@ -12965,10 +13047,11 @@ ovn-nbctl get Logical-Switch-Port p0 dynamic_addresses
 AT_CHECK([ovn-nbctl get Logical-Switch-Port p0 dynamic_addresses], [0], [[[]]
 ])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ipam router ports -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ipam router ports])
+ovn_start
 
 ovn-nbctl ls-add sw
 ovn-nbctl set logical_switch sw other-config:subnet=192.168.1.0/24
@@ -12987,10 +13070,11 @@ ovn-nbctl list logical_switch_port
 ovn-nbctl list logical_router_port
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- test transport zones -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- test transport zones])
+ovn_start
 
 net_add n1
 for i in 1 2 3 4 5; do
@@ -13151,10 +13235,11 @@ ovn-hv4-0
 
 OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR chassis mac -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR chassis mac])
+ovn_start
 
 
 # In this test cases we create 2 switches, all connected to same
@@ -13357,11 +13442,12 @@ OVN_CHECK_PACKETS([hv2/vif22-tx.pcap], [vif22.expected])
 OVN_CLEANUP([hv1],[hv2])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- virtual ports -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- virtual ports])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 send_garp() {
     local hv=$1 inport=$2 eth_src=$3 eth_dst=$4 spa=$5 tpa=$6
@@ -13655,12 +13741,13 @@ AT_CHECK([cat lflows.txt], [0], [dnl
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
 # Run ovn-nbctl in daemon mode, change to a backup database and verify that
 # an insert operation is not allowed.
-AT_SETUP([ovn -- can't write to a backup database server instance -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- can't write to a backup database server instance])
+ovn_start
 on_exit 'kill $(cat ovn-nbctl.pid)'
 export OVN_NB_DAEMON=$(ovn-nbctl --pidfile --detach)
 
@@ -13677,11 +13764,12 @@ AT_CHECK([ovn-nbctl ls-add sw1], [1], [ignore],
 ])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- controller event -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- controller event])
 AT_KEYWORDS([ovn_controller_event])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Create hypervisors hv[12].
 # Add vif1[12] to hv1, vif2[12] to hv2
@@ -13786,10 +13874,11 @@ AT_CHECK([ovn-sbctl get controller_event $uuid event_info:vip], [0], [dnl
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- IGMP snoop/querier/relay -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- IGMP snoop/querier/relay])
+ovn_start
 
 # Logical network:
 # Three logical switches (sw1-sw3) connected to a logical router (rtr).
@@ -14380,10 +14469,11 @@ OVN_CHECK_PACKETS([hv2/vif4-tx.pcap], [expected_empty])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- MLD snoop/querier/relay -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- MLD snoop/querier/relay])
+ovn_start
 
 # Logical network:
 # Three logical switches (sw1-sw3) connected to a logical router (rtr).
@@ -14997,10 +15087,11 @@ OVN_CHECK_PACKETS([hv2/vif4-tx.pcap], [expected_empty])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- unixctl socket -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- unixctl socket])
+ovn_start
 
 sockfile="$at_group_dir/my_sock.ctl"
 
@@ -15017,11 +15108,12 @@ on_exit 'kill $(cat ovn-nbctl.pid)'
 AT_CHECK([ovn-nbctl -u $sockfile show])
 
 AT_CLEANUP
+])
 
 
-AT_SETUP([ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR N-S ARP handling -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR N-S ARP handling])
+ovn_start
 
 # In this test cases we create 3 switches, all connected to same
 # physical network (through br-phys on each HV). LS1 and LS2 have
@@ -15322,10 +15414,11 @@ as hv4 ovs-appctl fdb/show br-phys
 OVN_CLEANUP([hv1],[hv2],[hv3],[hv4])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR N-S Ping -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 2 HVs, 2 lports/HV, localnet ports, DVR N-S Ping])
+ovn_start
 
 # In this test cases we create 3 switches, all connected to same
 # physical network (through br-phys on each HV). LS1 and LS2 have
@@ -15627,11 +15720,12 @@ as hv4 ovs-appctl fdb/show br-phys
 OVN_CLEANUP([hv1],[hv2],[hv3],[hv4])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ARP lookup before learning -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ARP lookup before learning])
 AT_KEYWORDS([virtual ports])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 send_garp() {
     local hv=$1 inport=$2 eth_src=$3 eth_dst=$4 spa=$5 tpa=$6
@@ -15849,10 +15943,11 @@ AT_CHECK([test 4 = `cat hv1/ovn-controller.log | grep NXT_PACKET_IN2 | wc -l`])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- 1 HVs, 1 lport/HV, localnet ports, RARP -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- 1 HVs, 1 lport/HV, localnet ports, RARP])
+ovn_start
 
 # In this test case we create 1 switch and bring up a VIF on it.
 # Logical switch will have a localnet port also.
@@ -15916,10 +16011,11 @@ grep 101 | wc -l`])
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Stateless Floating IP -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Stateless Floating IP])
+ovn_start
 
 # In this test cases we create 3 switches, all connected to same
 # physical network (through br-phys on each HV). LS1 and LS2 have
@@ -16224,11 +16320,12 @@ as hv4 ovs-appctl fdb/show br-phys
 
 OVN_CLEANUP([hv1],[hv2],[hv3],[hv4])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Load balancer health checks -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Load balancer health checks])
 AT_KEYWORDS([lb])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 
@@ -16371,10 +16468,11 @@ AT_CHECK([cat lflows.txt], [0], [dnl
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ARP/ND request broadcast limiting -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ARP/ND request broadcast limiting])
+ovn_start
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
@@ -16651,11 +16749,12 @@ OVS_WAIT_UNTIL([
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- trace when flow cookie updated -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- trace when flow cookie updated])
 AT_KEYWORDS([cookie])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 net_add n1
 sim_add hv1
@@ -16687,14 +16786,15 @@ AT_CHECK([ovn-trace --ovs lsw0 'inport == "lp1" && eth.type == 0x1234' | grep "d
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- interconnection -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- interconnection])
 ovn_init_ic_db
 n_az=5
 n_ts=5
 for i in `seq 1 $n_az`; do
-        ovn_start NORTHD_TYPE az$i
+        ovn_start az$i
 done
 
 net_add n1
@@ -16833,10 +16933,11 @@ done
 OVN_CLEANUP_IC
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- ECMP static routes -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ECMP static routes])
+ovn_start
 
 # Logical network:
 # ls1 (192.168.1.0/24) - lr1 - ls2 (192.168.2.0/24)
@@ -16937,11 +17038,12 @@ done
 OVN_CLEANUP([hv1])
 
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- forwarding group: 3 HVs, 1 LR, 2 LS -- NORTHD_TYPE])
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- forwarding group: 3 HVs, 1 LR, 2 LS])
 AT_KEYWORDS([forwarding-group])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+ovn_start
 
 # Logical network:
 # One LR - R1 has a logical switch ls1 and ls2 connected to it.
@@ -17062,10 +17164,11 @@ AT_CHECK([as hv1 ovs-ofctl -O OpenFlow13 dump-groups br-int | \
 
 OVN_CLEANUP([hv1], [hv2], [hv3])
 AT_CLEANUP
+])
 
-AT_SETUP([ovn -- Load Balancer LS hairpin -- NORTHD_TYPE])
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test $TEST_DDLOG = no])
-ovn_start NORTHD_TYPE
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- Load Balancer LS hairpin])
+ovn_start
 
 reset_pcap_file() {
     local iface=$1
@@ -17222,3 +17325,4 @@ OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [expected])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
+])

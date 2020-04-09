@@ -1,5 +1,7 @@
 AT_BANNER([OVN northd])
-AT_SETUP([ovn -- check   from NBDB to SBDB])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- check from NBDB to SBDB])
 ovn_start
 
 ovn-nbctl create Logical_Router name=R1
@@ -148,7 +150,9 @@ AT_CHECK([ovn-sbctl list ha_chassis_group | wc -l], [0], [0
 ])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check up state of VIF LSP])
 ovn_start
 
@@ -162,7 +166,9 @@ ovn-sbctl lsp-bind S1-vm1 hv1
 OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up S1-vm1` = xup])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check up state of router LSP linked to a distributed LR])
 ovn_start
 
@@ -177,7 +183,9 @@ ovn-nbctl --wait=sb lsp-set-options S1-R1 router-port=R1-S1
 AT_CHECK([test x`ovn-nbctl lsp-get-up S1-R1` = xup])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check up state of router LSP linked to a gateway LR])
 ovn_start
 
@@ -196,7 +204,9 @@ ovn-sbctl lsp-bind S1-R1 gw1
 AT_CHECK([test x`ovn-nbctl lsp-get-up S1-R1` = xup])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check up state of router LSP linked to an LRP with set Gateway Chassis])
 ovn_start
 
@@ -214,7 +224,9 @@ ovn-nbctl --wait=sb lsp-set-options S1-R1 router-port=R1-S1
 AT_CHECK([test x`ovn-nbctl lsp-get-up S1-R1` = xup])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check IPv6 RA config propagation to SBDB])
 ovn_start
 
@@ -324,7 +336,9 @@ AT_CHECK_UNQUOTED([ovn-sbctl get Port_Binding ${uuid} options:ipv6_ra_prefixes],
 ])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- test unixctl])
 ovn_init_db ovn-sb; ovn-sbctl init
 ovn_init_db ovn-nb; ovn-nbctl init
@@ -363,7 +377,9 @@ as northd
 OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check HA_Chassis_Group propagation from NBDB to SBDB])
 ovn_start
 
@@ -829,7 +845,9 @@ as northd
 OVS_APP_EXIT_AND_WAIT([ovn-northd])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- ovn-northd pause and resume])
 ovn_start
 
@@ -888,7 +906,9 @@ OVS_WAIT_UNTIL([
     test 0 = $?])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check Redirect Chassis propagation from NB to SB])
 ovn_start
 
@@ -917,7 +937,9 @@ OVS_WAIT_UNTIL([ovn-sbctl get Port_Binding ${uuid} options:redirect-type], [0], 
 ])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check stateless dnat_and_snat rule])
 ovn_start
 
@@ -1011,7 +1033,9 @@ AT_CHECK([ovn-sbctl dump-flows R1 | grep ip6.src=| wc -l], [0], [2
 ])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check Load balancer health check and Service Monitor sync])
 ovn_start ovn-northd-ddlog
 
@@ -1225,7 +1249,9 @@ ovn-nbctl --wait=sb lb-del lb2
 OVS_WAIT_UNTIL([test 0 = `ovn-sbctl list service_monitor |  wc -l`])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([requested-tnl-key])
 AT_KEYWORDS([requested tnl tunnel key keys])
 ovn_start
@@ -1271,3 +1297,4 @@ AT_CHECK(
 get_tunnel_keys
 AT_CHECK([test $ls2 = 3])
 AT_CLEANUP
+])

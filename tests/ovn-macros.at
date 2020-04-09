@@ -122,21 +122,19 @@ ovn_init_ic_db () {
     ovn_init_db ovn-ic-sb
 }
 
-# ovn_start [NORTHD_TYPE [AZ]]
+# ovn_start [AZ]
 #
 # Creates and initializes ovn-sb and ovn-nb databases and starts their
 # ovsdb-server instance, sets appropriate environment variables so that
 # ovn-sbctl and ovn-nbctl use them by default, and starts ovn-northd running
 # against them.
 ovn_start () {
-    NORTHD_TYPE=${1:-ovn-northd}
-
     local northd_args=
-    case $NORTHD_TYPE in
+    case ${NORTHD_TYPE:=ovn-northd} in
         ovn-northd) ;;
         ovn-northd-ddlog) northd_args="--ddlog-record=replay.dat" ;;
     esac
-    AZ=$2
+    AZ=$1
     if test -n "$AZ"; then
         mkdir "$ovs_base"/$AZ
     fi
@@ -343,4 +341,11 @@ m4_define([OVN_CHECK_PACKETS_REMOVE_BROADCAST],
       test $rcv_n -ge $exp_n])
    sort $exp_text > expout
  }
+])
+
+m4_define([OVN_FOR_EACH_NORTHD], [dnl
+m4_define([NORTHD_TYPE], [ovn-northd])
+$1
+m4_define([NORTHD_TYPE], [ovn-northd-ddlog])
+$1
 ])
