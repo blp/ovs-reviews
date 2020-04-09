@@ -36,6 +36,10 @@ sb.Out_Datapath_Binding(uuid2name(uuid), 0, external_ids) :-
             None -> (),
             Some{nnn} -> map_insert(eids, "name2", nnn)
         };
+        match (map_get(ids, "interconn-ts")) {
+            None -> (),
+            Some{value} -> map_insert(eids, "interconn-ts", value)
+        };
         eids
     }.
 
@@ -6051,31 +6055,70 @@ for (&RouterPort(.lrp = lrp,
  * each Logical_Switch and Logical_Router.
  */
 
+function get_dp_tunkey(map: Map<string,string>, key: string): Option<integer> {
+    match (map_get(map, key)) {
+        Some{value} -> match (str_to_int(value, 10)) {
+                           Some{x} -> if (x > 0 and x < (2<<24)) {
+                                          Some{x}
+                                      } else {
+                                          None
+                                      },
+                           _ -> None
+                       },
+        _ -> None
+    }
+}
+
+// Tunnel keys requested by datapaths.
+relation RequestedTunKey(datapath: string, tunkey: integer)
+RequestedTunKey(uuid2name(uuid), tunkey) :-
+    ls in nb.Logical_Switch(._uuid = uuid),
+    Some{var tunkey} = get_dp_tunkey(ls.other_config, "requested-tnl-key").
+RequestedTunKey(uuid2name(uuid), tunkey) :-
+    lr in nb.Logical_Router(._uuid = uuid),
+    Some{var tunkey} = get_dp_tunkey(lr.options, "requested-tnl-key").
+Warning(message) :-
+    RequestedTunKey(datapath, tunkey),
+    var count = Aggregate((tunkey), group_count(datapath)),
+    count > 1,
+    var message = "${count} logical switches or routers request "
+                  "datapath tunnel key ${tunkey}".
+
+// Assign tunnel keys:
+// - First priority to requested tunnel keys.
+// - Second priority to already assigned tunnel keys.
+// In either case, make an arbitrary choice in case of conflicts within a
+// priority level.
+relation AssignedTunKey(datapath: string, tunkey: integer)
+AssignedTunKey(datapath, tunkey) :-
+    RequestedTunKey(datapath, tunkey),
+    var datapath = Aggregate((tunkey), group_first(datapath)).
+AssignedTunKey(datapath, tunkey) :-
+    sb.UUIDMap_Datapath_Binding(.uuid_name = datapath, .id = Left{uuid}),
+    sb.Datapath_Binding(._uuid = uuid, .tunnel_key = tunkey),
+    not RequestedTunKey(_, tunkey),
+    not RequestedTunKey(datapath, _),
+    var datapath = Aggregate((tunkey), group_first(datapath)).
+
 // all tunnel keys already in use in the Realized table
 relation AllocatedTunKeys(keys: Set<integer>)
-
 AllocatedTunKeys(keys) :-
-    sb.Datapath_Binding(.tunnel_key = tunkey),
+    AssignedTunKey(.tunkey = tunkey),
     var keys = Aggregate((), group2set(tunkey)).
 
 // Datapath_Binding's not yet in the Realized table
 relation NotYetAllocatedTunKeys(datapaths: Vec<string>)
 
 NotYetAllocatedTunKeys(datapaths) :-
-    sb.UUIDMap_Datapath_Binding(.uuid_name = datapath,
-                                .id = Right{_}),
+    sb.UUIDMap_Datapath_Binding(.uuid_name = datapath),
     datapath != "",
+    not AssignedTunKey(datapath, _),
     var datapaths = Aggregate((), group2vec(datapath)).
 
 // Perform the allocation
 relation TunKeyAllocation(datapath: string, tunkey: integer)
 
-// transfer existing allocations from the realized table
-TunKeyAllocation(datapath, tunkey) :-
-     sb.UUIDMap_Datapath_Binding(.uuid_name = datapath,
-                                 .id = Left{uuid}),
-     sb.Datapath_Binding(._uuid = uuid,
-                         .tunnel_key = tunkey).
+TunKeyAllocation(datapath, tunkey) :- AssignedTunKey(datapath, tunkey).
 
 // Case 1: AllocatedTunKeys relation is not empty (i.e., contains
 // a single record that stores a set of allocated keys)
