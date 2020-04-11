@@ -6142,32 +6142,80 @@ TunKeyAllocation(datapath, tunkey) :-
  * Port IDs in a per-datapath space in the range 1...2**15-1
  */
 
+function get_port_tunkey(map: Map<string,string>, key: string): Option<integer> {
+    match (map_get(map, key)) {
+        Some{value} -> match (str_to_int(value, 10)) {
+                           Some{x} -> if (x > 0 and x < (2<<15)) {
+                                          Some{x}
+                                      } else {
+                                          None
+                                      },
+                           _ -> None
+                       },
+        _ -> None
+    }
+}
+
+// Tunnel keys requested by port bindings.
+relation RequestedPortTunKey(datapath: string, port: string, tunkey: integer)
+RequestedPortTunKey(datapath, port, tunkey) :-
+    sp in &SwitchPort(),
+    var datapath = uuid2name(sp.sw.ls._uuid),
+    var port = uuid2name(sp.lsp._uuid),
+    Some{var tunkey} = get_port_tunkey(sp.lsp.options, "requested-tnl-key").
+RequestedPortTunKey(datapath, port, tunkey) :-
+    rp in &RouterPort(),
+    var datapath = uuid2name(rp.router.lr._uuid),
+    var port = uuid2name(rp.lrp._uuid),
+    Some{var tunkey} = get_port_tunkey(rp.lrp.options, "requested-tnl-key").
+Warning(message) :-
+    RequestedPortTunKey(datapath, port, tunkey),
+    var count = Aggregate((datapath, tunkey), group_count(port)),
+    count > 1,
+    var message = "${count} logical ports in the same datapath "
+                  "request port tunnel key ${tunkey}".
+
+// Assign tunnel keys:
+// - First priority to requested tunnel keys.
+// - Second priority to already assigned tunnel keys.
+// In either case, make an arbitrary choice in case of conflicts within a
+// priority level.
+relation AssignedPortTunKey(datapath: string, port: string, tunkey: integer)
+AssignedPortTunKey(datapath, port, tunkey) :-
+    RequestedPortTunKey(datapath, port, tunkey),
+    var port = Aggregate((datapath, tunkey), group_first(port)).
+AssignedPortTunKey(datapath, port, tunkey) :-
+    sb.UUIDMap_Port_Binding(.uuid_name = port, .id = Left{port_uuid}),
+    sb.Port_Binding(._uuid = port_uuid,
+                    .datapath = datapath_uuid,
+                    .tunnel_key = tunkey),
+    sb.UUIDMap_Datapath_Binding(.uuid_name = datapath,
+                                .id = Left{datapath_uuid}),
+    not RequestedPortTunKey(datapath, _, tunkey),
+    not RequestedPortTunKey(datapath, port, _),
+    var port = Aggregate((datapath, tunkey), group_first(port)).
+
 // all tunnel keys already in use in the Realized table
 relation AllocatedPortTunKeys(datapath: string, keys: Set<integer>)
 
-AllocatedPortTunKeys(datapath_name, keys) :-
-    sb.Port_Binding(.datapath = datapath_uuid, .tunnel_key = tunkey),
-    sb.UUIDMap_Datapath_Binding(datapath_name, Left{datapath_uuid}),
-    var keys = Aggregate((datapath_name), group2set(tunkey)).
+AllocatedPortTunKeys(datapath, keys) :-
+    AssignedPortTunKey(datapath, port, tunkey),
+    var keys = Aggregate((datapath), group2set(tunkey)).
 
 // Port_Binding's not yet in the Realized table
 relation NotYetAllocatedPortTunKeys(datapath: string, all_logical_ids: Vec<string>)
 
 NotYetAllocatedPortTunKeys(datapath, all_names) :-
     sb.Out_Port_Binding(.uuid_name = uuid_name, .datapath = datapath),
-    sb.UUIDMap_Port_Binding(.uuid_name = uuid_name,
-                            .id = Right{_}),
+    sb.UUIDMap_Port_Binding(.uuid_name = uuid_name),
+    not AssignedPortTunKey(datapath, uuid_name, _),
     var all_names = Aggregate((datapath), group2vec(uuid_name)).
 
 // Perform the allocation
 relation PortTunKeyAllocation(port: string, tunkey: integer)
 
 // transfer existing allocations from the realized table
-PortTunKeyAllocation(port, tunkey) :-
-     sb.UUIDMap_Port_Binding(.uuid_name = port,
-                             .id = Left{uuid}),
-     sb.Port_Binding(._uuid = uuid,
-                     .tunnel_key = tunkey).
+PortTunKeyAllocation(port, tunkey) :- AssignedPortTunKey(_, port, tunkey).
 
 // Case 1: AllocatedPortTunKeys(datapath) is not empty (i.e., contains
 // a single record that stores a set of allocated keys)
