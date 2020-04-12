@@ -17284,6 +17284,9 @@ send_ipv4_pkt hv1 hv1-vif1 000000000001 000000000100 \
     ${tcp_payload} ${hp_tcp_payload} \
     expected
 
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
+
 # Check that traffic is hairpinned.
 OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [expected])
 

@@ -1112,6 +1112,8 @@ typedef PipelineStage = PORT_SEC_L2
                       | QOS_METER
                       | LB
                       | STATEFUL
+                      | PRE_HAIRPIN
+                      | HAIRPIN
                       | ARP_ND_RSP
                       | DHCP_OPTIONS
                       | DHCP_RESPONSE
@@ -1172,13 +1174,15 @@ function stage_id(stage: Stage): (integer, string) =
         (LSwitch, IN,  QOS_METER)     -> (8,  "ls_in_qos_meter"),
         (LSwitch, IN,  LB)            -> (9,  "ls_in_lb"),
         (LSwitch, IN,  STATEFUL)      -> (10, "ls_in_stateful"),
-        (LSwitch, IN,  ARP_ND_RSP)    -> (11, "ls_in_arp_rsp"),
-        (LSwitch, IN,  DHCP_OPTIONS)  -> (12, "ls_in_dhcp_options"),
-        (LSwitch, IN,  DHCP_RESPONSE) -> (13, "ls_in_dhcp_response"),
-        (LSwitch, IN,  DNS_LOOKUP)    -> (14, "ls_in_dns_lookup"),
-        (LSwitch, IN,  DNS_RESPONSE)  -> (15, "ls_in_dns_response"),
-        (LSwitch, IN,  EXTERNAL_PORT) -> (16, "ls_in_external_port"),
-        (LSwitch, IN,  L2_LKUP)       -> (17, "ls_in_l2_lkup"),
+        (LSwitch, IN,  PRE_HAIRPIN)   -> (11, "ls_in_pre_hairpin"),
+        (LSwitch, IN,  HAIRPIN)       -> (12, "ls_in_hairpin"),
+        (LSwitch, IN,  ARP_ND_RSP)    -> (13, "ls_in_arp_rsp"),
+        (LSwitch, IN,  DHCP_OPTIONS)  -> (14, "ls_in_dhcp_options"),
+        (LSwitch, IN,  DHCP_RESPONSE) -> (15, "ls_in_dhcp_response"),
+        (LSwitch, IN,  DNS_LOOKUP)    -> (16, "ls_in_dns_lookup"),
+        (LSwitch, IN,  DNS_RESPONSE)  -> (17, "ls_in_dns_response"),
+        (LSwitch, IN,  EXTERNAL_PORT) -> (18, "ls_in_external_port"),
+        (LSwitch, IN,  L2_LKUP)       -> (19, "ls_in_l2_lkup"),
 
         /* Logical switch egress stages. */
         (LSwitch, OUT, PRE_LB)        -> (0,  "ls_out_pre_lb"),
@@ -1229,6 +1233,7 @@ function rEGBIT_CONNTRACK_NAT()    : string = "reg0[2]"
 function rEGBIT_DHCP_OPTS_RESULT() : string = "reg0[3]"
 function rEGBIT_DNS_LOOKUP_RESULT(): string = "reg0[4]"
 function rEGBIT_ND_RA_OPTS_RESULT(): string = "reg0[5]"
+function rEGBIT_HAIRPIN()          : string = "reg0[6]"
 
 /* Register definitions for switches and routers. */
 function rEGBIT_NAT_REDIRECT()     : string = "reg9[0]"
@@ -2393,6 +2398,106 @@ Flow(.logical_datapath = sw.dpname,
     var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, false),
     var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
     var actions = "ct_lb(${lbvip.backend_ips});".
+
+/* Also install flows that allow hairpinning of traffic (i.e., if
+ * a load balancer VIP is DNAT-ed to a backend that happens to be
+ * the source of the traffic).
+ */
+
+function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
+                           l4_dir: string, l3_dst: string): string = {
+    var lbvip = lbvipbackend.lbvip;
+    var lb = lbvip.lb;
+    var ipX = if (lbvip.addr_family == aF_INET()) {
+        "ip4"
+    } else {
+        "ip6"
+    };
+    var proto = if (set_nth(lb.protocol, 0) == Some{"udp"}) {
+        "udp"
+    } else {
+        "tcp"
+    };
+    var proto_match = if (lbvip.vip_port != 0) {
+        " && ${proto} && ${proto}.${l4_dir} == ${lbvipbackend.port}"
+    } else {
+        ""
+    };
+    "${ipX}.src == ${lbvipbackend.ip} && "
+    "${ipX}.dst == ${l3_dst}" ++ proto_match
+ }
+
+/* Ingress Pre-Hairpin table.
+ * - Priority 2: SNAT load balanced traffic that needs to be hairpinned.
+ * - Priority 1: unSNAT replies to hairpinned load balanced traffic.
+ */
+/* Packets that after load balancing have equal source and
+ * destination IPs should be hairpinned. SNAT them so that the reply
+ * traffic is directed also through OVN.
+ */
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, PRE_HAIRPIN),
+     .priority         = 2,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sw in &Switch(),
+    LBVIPBackend[lbvipbackend],
+    var lbvip = lbvipbackend.lbvip,
+    var lb = lbvip.lb,
+    set_contains(sw.ls.load_balancer, lb._uuid),
+    var __match = get_hairpin_match(lbvipbackend, "dst", lbvipbackend.ip),
+    var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat(${lbvip.vip_addr});".
+/* If the packets are replies for hairpinned traffic, UNSNAT them. */
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, PRE_HAIRPIN),
+     .priority         = 1,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sw in &Switch(),
+    LBVIPBackend[lbvipbackend],
+    var lbvip = lbvipbackend.lbvip,
+    var lb = lbvip.lb,
+    set_contains(sw.ls.load_balancer, lb._uuid),
+    var __match = get_hairpin_match(lbvipbackend, "src", lbvip.vip_addr),
+    var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat;".
+
+
+/* Ingress Pre-Hairpin table (Priority 0). Packets that don't need
+ * hairpinning should continue processing.
+ */
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, PRE_HAIRPIN),
+     .priority         = 0,
+     .__match          = "1",
+     .actions          = "next;",
+     .external_ids     = map_empty()) :-
+    sw in &Switch().
+
+/* Ingress Hairpin table.
+ * - Priority 0: Packets that don't need hairpinning should continue
+ *   processing.
+ * - Priority 1: Packets that were SNAT-ed for hairpinning should be
+ *   looped back (i.e., swap ETH addresses and send back on inport).
+ */
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, HAIRPIN),
+     .priority         = 1,
+     .__match          = "${rEGBIT_HAIRPIN()} == 1",
+     .actions          = "eth.dst <-> eth.src;"
+                         "outport = inport;"
+                         "flags.loopback = 1;"
+                         "output;",
+     .external_ids     = map_empty()) :-
+    sw in &Switch().
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, HAIRPIN),
+     .priority         = 0,
+     .__match          = "1",
+     .actions          = "next;",
+     .external_ids     = map_empty()) :-
+    sw in &Switch().
 
 
 /* Logical switch ingress table PORT_SEC_L2: ingress port security - L2 (priority 50)
