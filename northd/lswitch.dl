@@ -218,28 +218,43 @@ relation &LBVIP(
     (var vip_key, var backend_ips) = vip,
     Some{(var vip_addr, var vip_port, var addr_family)} = ip_address_and_port_from_lb_key(vip_key).
 
+typedef svc_monitor = SvcMonitor{
+    port_name: string,          // Might name a switch or router port.
+    src_ip: string
+}
+
 relation &LBVIPBackend(
     lbvip: Ref<LBVIP>,
     ip: string,
     port: bit<16>,
     addr_family: bit<32>,
-    port_name: string,		// Might name a switch or router port.
-    svc_mon_src_ip: string)
+    svc_monitor: Option<svc_monitor>)
+
+function parse_ip_port_mapping(value: Option<string>): Option<svc_monitor> {
+    var strs: Vec<string> = match (value) {
+        Some{s} -> string_split(s, ":"),
+        None -> return None
+    };
+
+    if (vec_len(strs) != 64'd2) {
+        return None
+    };
+
+    match ((vec_nth(strs, 0), vec_nth(strs, 1))) {
+        (Some{port_name}, Some{src_ip}) -> Some{SvcMonitor{port_name, src_ip}},
+        _ -> None
+    }
+}
 
 &LBVIPBackend(.lbvip = lbvip,
               .ip = ip,
               .port = port,
               .addr_family = addr_family,
-              .port_name = port_name,
-              .svc_mon_src_ip = svc_mon_src_ip) :-
+              .svc_monitor = svc_monitor) :-
     LBVIP[lbvip],
     var backend = FlatMap(string_split(lbvip.backend_ips, ",")),
     Some{(var ip, var port, var addr_family)} = ip_address_and_port_from_lb_key(backend),
-    Some{var s} = map_get(lbvip.lb.ip_port_mappings, ip),
-    var ip_port_mapping_tokens = string_split(s, ":"),
-    vec_len(ip_port_mapping_tokens) == 64'd2,
-    Some{var port_name} = vec_nth(ip_port_mapping_tokens, 0),
-    Some{var svc_mon_src_ip} = vec_nth(ip_port_mapping_tokens, 1).
+    (var svc_monitor) = parse_ip_port_mapping(map_get(lbvip.lb.ip_port_mappings, ip)).
 
 function is_online(status: Set<string>): bool = {
     match (set_nth(status, 0)) {
@@ -271,7 +286,8 @@ relation &LBVIPBackendStatus(
     var port = lbvipbackend.port as bit<16>,
     var ip = lbvipbackend.ip,
     var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
-    var logical_port = lbvipbackend.port_name,
+    Some{var svc_monitor} = lbvipbackend.svc_monitor,
+    var logical_port = svc_monitor.port_name,
     not sb.Service_Monitor(.port = port as bit<64>,
                            .ip = ip,
                            .protocol = set_singleton(protocol),

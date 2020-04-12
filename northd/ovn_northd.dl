@@ -2353,13 +2353,14 @@ Flow(.logical_datapath = sw.dpname,
      .external_ids     = map_empty()) :-
     sw in &Switch(),
     LBVIPBackend[lbvipbackend],
+    Some{var svc_monitor} = lbvipbackend.svc_monitor,
     var lbvip = lbvipbackend.lbvip,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
     bs in &LBVIPBackendStatus(.port = lbvipbackend.port,
                               .ip = lbvipbackend.ip,
                               .protocol = default_protocol(lb.protocol),
-                              .logical_port = lbvipbackend.port_name),
+                              .logical_port = svc_monitor.port_name),
     var bses = Aggregate((sw, lbvip, lb), group2set(bs)),
     var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, false),
     var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
@@ -2377,6 +2378,21 @@ Flow(.logical_datapath = sw.dpname,
     } else {
         "ct_lb(" ++ string_join(set2vec(up_backends), ",") ++ ");"
     }.
+Flow(.logical_datapath = sw.dpname,
+     .stage            = switch_stage(IN, STATEFUL),
+     .priority         = priority,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    sw in &Switch(),
+    LBVIPBackend[lbvipbackend],
+    None = lbvipbackend.svc_monitor,
+    var lbvip = lbvipbackend.lbvip,
+    var lb = lbvip.lb,
+    set_contains(sw.ls.load_balancer, lb._uuid),
+    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, false),
+    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var actions = "ct_lb(${lbvip.backend_ips});".
 
 
 /* Logical switch ingress table PORT_SEC_L2: ingress port security - L2 (priority 50)
@@ -2760,9 +2776,10 @@ Flow(.logical_datapath = sp.sw.dpname,
                          "output;",
      .external_ids     = map_empty()) :-
     LBVIPBackend[lbvipbackend],
+    Some{var svc_monitor} = lbvipbackend.svc_monitor,
     sp in &SwitchPort(
-        .lsp = nb.Logical_Switch_Port{.name = lbvipbackend.port_name}),
-    var svc_mon_src_ip = lbvipbackend.svc_mon_src_ip,
+        .lsp = nb.Logical_Switch_Port{.name = svc_monitor.port_name}),
+    var svc_mon_src_ip = svc_monitor.src_ip,
     SvcMonitorMac(svc_monitor_mac).
 
 function build_dhcpv4_action(
@@ -5093,13 +5110,14 @@ Flow(.logical_datapath = r.dpname,
     r in &Router(),
     is_some(r.l3dgw_port) or r.is_gateway,
     LBVIPBackend[lbvipbackend],
+    Some{var svc_monitor} = lbvipbackend.svc_monitor,
     var lbvip = lbvipbackend.lbvip,
     var lb = lbvip.lb,
     set_contains(r.lr.load_balancer, lb._uuid),
     bs in &LBVIPBackendStatus(.port = lbvipbackend.port,
                               .ip = lbvipbackend.ip,
                               .protocol = default_protocol(lb.protocol),
-                              .logical_port = lbvipbackend.port_name),
+                              .logical_port = svc_monitor.port_name),
     var bses = Aggregate((r, lbvip, lb), group2set(bs)),
     var __match
         = "ct.new && " ++
@@ -5127,6 +5145,28 @@ Flow(.logical_datapath = r.dpname,
         } ++
         "ct_lb(" ++ string_join(set2vec(up_backends), ",") ++ ");"
     }.
+Flow(.logical_datapath = r.dpname,
+     .stage            = router_stage(IN, DNAT),
+     .priority         = priority,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = map_empty()) :-
+    r in &Router(),
+    is_some(r.l3dgw_port) or r.is_gateway,
+    LBVIPBackend[lbvipbackend],
+    None = lbvipbackend.svc_monitor,
+    var lbvip = lbvipbackend.lbvip,
+    var lb = lbvip.lb,
+    set_contains(r.lr.load_balancer, lb._uuid),
+    var __match
+        = "ct.new && " ++
+          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, true) ++
+          match (r.l3dgw_port) {
+              Some{gwport} -> " && is_chassis_resident(${r.redirect_port_name})",
+              _ -> ""
+          },
+    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var actions = "ct_lb$({lbvip.backend_ips});".
 
 
 /* Defaults based on MaxRtrInterval and MinRtrInterval from RFC 4861 section
@@ -6466,13 +6506,14 @@ sb.Out_IP_Multicast(.datapath = uuid2name(cfg.datapath),
 sb.Out_Service_Monitor(.ip = lbvipbackend.ip,
                        .protocol = protocol,
                        .port = lbvipbackend.port as integer,
-                       .logical_port = lbvipbackend.port_name,
+                       .logical_port = svc_monitor.port_name,
                        .src_mac = eth_addr2string(svc_monitor_mac),
-                       .src_ip = lbvipbackend.svc_mon_src_ip,
+                       .src_ip = svc_monitor.src_ip,
                        .options = lbhc.options,
                        .external_ids = map_empty()) :-
     SvcMonitorMac(svc_monitor_mac),
     LBVIPBackend[lbvipbackend],
+    Some{var svc_monitor} = lbvipbackend.svc_monitor,
     LoadBalancerHealthCheckRef[lbhc],
     set_contains(lbvipbackend.lbvip.lb.health_check, lbhc._uuid),
     lbhc.vip == lbvipbackend.lbvip.vip_key,
