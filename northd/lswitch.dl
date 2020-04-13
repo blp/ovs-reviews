@@ -136,6 +136,17 @@ relation &Switch(
     mcast_cfg:         Ref<McastSwitchCfg>
 )
 
+function ipv6_parse_prefix(s: string): Option<in6_addr> {
+    if (string_contains(s, "/")) {
+        match (ipv6_parse_cidr(s)) {
+            Right{(addr, 64)} -> Some{addr},
+            _ -> None
+        }
+    } else {
+        ipv6_parse(s)
+    }
+}
+
 &Switch(.ls                = ls,
         .dpname            = uuid2name(ls._uuid),
         .has_stateful_acl  = has_stateful_acl,
@@ -177,7 +188,7 @@ relation &Switch(
     var ipv6_prefix: Option<in6_addr> =
         match (map_get(ls.other_config, "ipv6_prefix")) {
             None -> None,
-            Some{prefix} -> ipv6_parse(prefix)
+            Some{prefix} -> ipv6_parse_prefix(prefix)
         }.
 
 /* SwitchLB: many-to-many relation between logical switches and nb.LB */
