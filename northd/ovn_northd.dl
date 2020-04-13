@@ -1236,16 +1236,16 @@ function rEGBIT_ND_RA_OPTS_RESULT(): string = "reg0[5]"
 function rEGBIT_HAIRPIN()          : string = "reg0[6]"
 
 /* Register definitions for switches and routers. */
-function rEGBIT_NAT_REDIRECT()     : string = "reg9[0]"
+
 /* Indicate that this packet has been recirculated using egress
  * loopback.  This allows certain checks to be bypassed, such as a
 * logical router dropping packets with source IP address equals
 * one of the logical router's own IP addresses. */
-function rEGBIT_EGRESS_LOOPBACK()  : string = "reg9[1]"
+function rEGBIT_EGRESS_LOOPBACK()  : string = "reg9[0]"
 /* Register to store the result of check_pkt_larger action. */
-function rEGBIT_PKT_LARGER()       : string = "reg9[3]"
-function rEGBIT_LOOKUP_NEIGHBOR_RESULT() : string = "reg9[4]"
-function rEGBIT_SKIP_LOOKUP_NEIGHBOR() : string = "reg9[5]"
+function rEGBIT_PKT_LARGER()       : string = "reg9[1]"
+function rEGBIT_LOOKUP_NEIGHBOR_RESULT() : string = "reg9[2]"
+function rEGBIT_SKIP_LOOKUP_NEIGHBOR() : string = "reg9[3]"
 /* Register for ECMP bucket selection. */
 function rEG_ECMP_GROUP_ID()  : string = "reg8[0..15]"
 function rEG_ECMP_MEMBER_ID() : string = "reg8[16..31]"
@@ -4708,16 +4708,6 @@ for (&Router(.dpname = dpname,
                          .priority         = 100,
                          .__match          = __match,
                          .actions          = actions,
-                         .external_ids     = stage_hint(nat._uuid));
-
-                    /* Traffic received on other router ports must be
-                     * redirected to the central instance of the l3dgw_port
-                     * for NAT processing. */
-                    Flow(.logical_datapath = dpname,
-                         .stage         = router_stage(IN, UNSNAT),
-                         .priority         = 50,
-                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                         .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
                          .external_ids     = stage_hint(nat._uuid))
                 }
             };
@@ -4772,17 +4762,36 @@ for (&Router(.dpname = dpname,
                          .priority         = 100,
                          .__match          = __match,
                          .actions          = actions,
-                         .external_ids     = stage_hint(nat._uuid));
-
-                    /* Traffic received on other router ports must be
-                     * redirected to the central instance of the l3dgw_port
-                     * for NAT processing. */
-                    Flow(.logical_datapath = dpname,
-                         .stage         = router_stage(IN, DNAT),
-                         .priority         = 50,
-                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
-                         .actions          = "${rEGBIT_NAT_REDIRECT()} = 1; next;",
                          .external_ids     = stage_hint(nat._uuid))
+                };
+
+                /* ARP resolve for NAT IPs. */
+                Some{var gwport} = l3dgw_port in {
+                var gwport_name = json_string_escape(gwport.name) in {
+                    if (nat.__type == "snat") {
+                        var __match = "inport == ${gwport_name} && "
+                                      "${ipX}.src == ${nat.external_ip}" in
+                        Flow(.logical_datapath = dpname,
+                             .stage            = router_stage(IN, IP_INPUT),
+                             .priority         = 120,
+                             .__match          = __match,
+                             .actions          = "next;",
+                             .external_ids     = stage_hint(nat._uuid))
+                    };
+
+                    var __match = "outport == ${gwport_name} && "
+                                  "${xx}reg0 == ${nat.external_ip}" in
+                    var dst_mac = match (mac) {
+                        Some{value} -> "${value}",
+                        None -> gwport.mac
+                    } in
+                    Flow(.logical_datapath = dpname,
+                         .stage            = router_stage(IN, ARP_RESOLVE),
+                         .priority         = 100,
+                         .__match          = __match,
+                         .actions          = "eth.dst = ${dst_mac}; next;",
+                         .external_ids     = stage_hint(nat._uuid))
+                    }
                 }
             };
 
@@ -5018,47 +5027,6 @@ for (&Router(.dpname = dpname,
              .priority         = 50,
              .__match          = "ip",
              .actions          = "flags.loopback = 1; ct_dnat;",
-             .external_ids     = map_empty())
-    } else {
-        /* For NAT on a distributed router, add flows to Ingress
-         * IP Routing table, Ingress ARP Resolution table, and
-         * Ingress Gateway Redirect Table that are not specific to a
-         * NAT rule. */
-
-        /* The highest priority IN_IP_ROUTING rule matches packets
-         * with REGBIT_NAT_REDIRECT (set in DNAT or UNSNAT stages),
-         * with action "ip.ttl--; next;".  The IN_GW_REDIRECT table
-         * will take care of setting the outport. */
-        Flow(.logical_datapath = dpname,
-             .stage         = router_stage(IN, IP_ROUTING),
-             .priority         = 300,
-             .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
-             .actions          = "ip.ttl--; next;",
-             .external_ids     = map_empty());
-
-        /* The highest priority IN_ARP_RESOLVE rule matches packets
-         * with REGBIT_NAT_REDIRECT (set in DNAT or UNSNAT stages),
-         * then sets eth.dst to the distributed gateway port's
-         * ethernet address. */
-        Some{var gwport} = l3dgw_port in
-        for (&RouterPort(.lrp = nb.Logical_Router_Port{._uuid = gwport._uuid}, .networks = networks)) {
-            Flow(.logical_datapath = dpname,
-                 .stage         = router_stage(IN, ARP_RESOLVE),
-                 .priority         = 200,
-                 .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
-                 .actions          = "eth.dst = ${networks.ea_s}; next;",
-                 .external_ids     = map_empty())
-        };
-
-        /* The highest priority IN_GW_REDIRECT rule redirects packets
-         * with REGBIT_NAT_REDIRECT (set in DNAT or UNSNAT stages) to
-         * the central instance of the l3dgw_port for NAT processing. */
-        Some{var gwport} = l3dgw_port in
-        Flow(.logical_datapath = dpname,
-             .stage         = router_stage(IN, GW_REDIRECT),
-             .priority         = 200,
-             .__match          = "${rEGBIT_NAT_REDIRECT()} == 1",
-             .actions          = "outport = ${redirect_port_name}; next;",
              .external_ids     = map_empty())
     }
 }
