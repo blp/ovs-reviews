@@ -4627,9 +4627,9 @@ for (&Router(.dpname = dpname,
 {
     for (LogicalRouterNAT(.lr = lr._uuid, .nat = &nat)) {
         Some{var external_ip} = ip46_parse(nat.external_ip) in
-        (var is_v6, var ipX) = match (external_ip) {
-            IPv4{_} -> (false, "ip4"),
-            IPv6{_} -> (true, "ip6")
+        (var is_v6, var ipX, var xx) = match (external_ip) {
+            IPv4{_} -> (false, "ip4", ""),
+            IPv6{_} -> (true, "ip6", "xx")
         } in
         /* Check the validity of nat->logical_ip. 'logical_ip' can
          * be a subnet when the type is "snat". */
@@ -4682,7 +4682,7 @@ for (&Router(.dpname = dpname,
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(IN, UNSNAT),
                          .priority         = 90,
-                         .__match          = "ip && ip4.dst == ${nat.external_ip}",
+                         .__match          = "ip && ${ipX}.dst == ${nat.external_ip}",
                          .actions          = actions,
                          .external_ids     = stage_hint(nat._uuid))
                 };
@@ -4691,7 +4691,7 @@ for (&Router(.dpname = dpname,
 
                     /* Traffic received on l3dgw_port is subject to NAT. */
                     var __match =
-                        "ip && ip4.dst == ${nat.external_ip}"
+                        "ip && ${ipX}.dst == ${nat.external_ip}"
                         " && inport == ${json_string_escape(gwport.name)}" ++
                         if (mac == None) {
                             /* Flows for NAT rules that are centralized are only
@@ -4755,7 +4755,7 @@ for (&Router(.dpname = dpname,
                     /* Distributed router. */
                     /* Traffic received on l3dgw_port is subject to NAT. */
                     var __match =
-                        "ip && ip4.dst == ${nat.external_ip}"
+                        "ip && ${ipX}.dst == ${nat.external_ip}"
                         " && inport == ${json_string_escape(gwport.name)}" ++
                         if (mac == None) {
                             /* Flows for NAT rules that are centralized are only
@@ -4797,7 +4797,7 @@ for (&Router(.dpname = dpname,
             if ((nat.__type == "dnat" or nat.__type == "dnat_and_snat")) {
                 Some{var gwport} = l3dgw_port in
                 var __match =
-                    "ip && ip4.src == ${nat.logical_ip}"
+                    "ip && ${ipX}.src == ${nat.logical_ip}"
                     " && outport == ${json_string_escape(gwport.name)}" ++
                     if (mac == None) {
                         /* Flows for NAT rules that are centralized are only
@@ -4841,7 +4841,7 @@ for (&Router(.dpname = dpname,
                     Flow(.logical_datapath = dpname,
                          .stage         = router_stage(OUT, SNAT),
                          .priority         = plen as bit<64> + 64'd1,
-                         .__match          = "ip && ip4.src == ${nat.logical_ip}",
+                         .__match          = "ip && ${ipX}.src == ${nat.logical_ip}",
                          .actions          = actions,
                          .external_ids     = stage_hint(nat._uuid))
                 };
@@ -4850,7 +4850,7 @@ for (&Router(.dpname = dpname,
                 {
                     /* Distributed router. */
                     var __match =
-                        "ip && ip4.src == ${nat.logical_ip}"
+                        "ip && ${ipX}.src == ${nat.logical_ip}"
                         " && outport == ${json_string_escape(gwport.name)}" ++
                         if (mac == None) {
                             /* Flows for NAT rules that are centralized are only
@@ -4906,7 +4906,7 @@ for (&Router(.dpname = dpname,
             Some{var mac_addr} = mac in
             Some{var gwport} = l3dgw_port in
             var __match =
-                "ip4.src == ${nat.logical_ip} && outport == ${json_string_escape(gwport.name)}" in
+                "${ipX}.src == ${nat.logical_ip} && outport == ${json_string_escape(gwport.name)}" in
             Flow(.logical_datapath = dpname,
                  .stage         = router_stage(IN, GW_REDIRECT),
                  .priority         = 100,
@@ -4921,7 +4921,11 @@ for (&Router(.dpname = dpname,
              * ingress pipeline with inport = outport. */
             Some{var gwport} = l3dgw_port in
             /* Distributed router. */
-            var __match = "ip4.dst == ${nat.external_ip} && outport == ${json_string_escape(gwport.name)}" in
+            Some{var port} = match (mac) {
+                Some{_} -> set_nth(nat.logical_port, 0),
+                None -> Some{redirect_port_name}
+            } in
+            var __match = "${ipX}.dst == ${nat.external_ip} && outport == ${json_string_escape(gwport.name)} && is_chassis_resident(${json_string_escape(port)})" in
             var regs = {
                 var regs: Vec<string> = vec_empty();
                 for (j in range(32'd0, mFF_N_LOG_REGS()-32'd1, 32'd1)) {
@@ -4946,15 +4950,19 @@ for (&Router(.dpname = dpname,
     };
 
     /* Handle force SNAT options set in the gateway router. */
-    Some{(var dnat_force_snat_ip, _)} = get_force_snat_ip(lr, "dnat") in
+    Some{(_, var dnat_force_snat_ip)} = get_force_snat_ip(lr, "dnat") in
     if (l3dgw_port == None) {
         /* If a packet with destination IP address as that of the
          * gateway router (as set in options:dnat_force_snat_ip) is seen,
          * UNSNAT it. */
+        var ipX = match (dnat_force_snat_ip) {
+            IPv4{_} -> "ip4",
+            IPv6{_} -> "ip6"
+        } in
         Flow(.logical_datapath = dpname,
              .stage         = router_stage(IN, UNSNAT),
              .priority         = 110,
-             .__match          = "ip && ip4.dst == ${dnat_force_snat_ip}",
+             .__match          = "ip && ${ipX}.dst == ${dnat_force_snat_ip}",
              .actions          = "ct_snat;",
              .external_ids     = map_empty());
 
@@ -4969,15 +4977,19 @@ for (&Router(.dpname = dpname,
              .external_ids     = map_empty())
     };
 
-    Some{(var lb_force_snat_ip, _)} = get_force_snat_ip(lr, "lb") in
+    Some{(_, var lb_force_snat_ip)} = get_force_snat_ip(lr, "lb") in
     if (l3dgw_port == None) {
         /* If a packet with destination IP address as that of the
          * gateway router (as set in options:lb_force_snat_ip) is seen,
          * UNSNAT it. */
+        var ipX = match (lb_force_snat_ip) {
+            IPv4{_} -> "ip4",
+            IPv6{_} -> "ip6"
+        } in
         Flow(.logical_datapath = dpname,
              .stage         = router_stage(IN, UNSNAT),
              .priority         = 100,
-             .__match          = "ip && ip4.dst == ${lb_force_snat_ip}",
+             .__match          = "ip && ${ipX}.dst == ${lb_force_snat_ip}",
              .actions          = "ct_snat;",
              .external_ids     = map_empty());
 
