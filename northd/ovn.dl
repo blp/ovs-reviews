@@ -24,6 +24,10 @@ function ip_is_cidr(netmask: ovs_be32): bool = {
     (x & (x + 1)) == 0
 }
 
+function ip_is_local_multicast(ip: ovs_be32): bool {
+    (ip & htonl(32'hffffff00)) == htonl(32'he0000000)
+}
+
 /*
  * parse IPv4 address list of the form:
  * "10.0.0.4 10.0.0.10 10.0.0.20..10.0.0.50 10.0.0.100..10.0.0.110"
@@ -183,6 +187,7 @@ extern function ipv6_create_mask(mask: bit<32>): in6_addr
 extern function ipv6_is_zero(a: in6_addr): bool
 extern function ipv6_is_v4mapped(a: in6_addr): bool
 extern function ipv6_is_routable_multicast(a: in6_addr): bool
+extern function ipv6_is_all_hosts(a: in6_addr): bool
 extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
 extern function ipv6_is_cidr(ip6: in6_addr): bool
 extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>

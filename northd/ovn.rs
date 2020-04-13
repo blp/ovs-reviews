@@ -109,6 +109,9 @@ pub struct ovn_in6_addr {
 }
 
 pub const ovn_in6addr_any: ovn_in6_addr = ovn_in6_addr{x: [0; IN6_ADDR_SIZE]};
+pub const ovn_in6addr_all_hosts: ovn_in6_addr = ovn_in6_addr{x: [
+    0xff,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01 ]};
 
 impl FromRecord for ovn_in6_addr {
     fn from_record(val: &record::Record) -> Result<Self, String> {
@@ -292,6 +295,11 @@ pub fn ovn_ipv6_is_zero(a: &ovn_in6_addr) -> bool
 pub fn ovn_ipv6_is_routable_multicast(a: &ovn_in6_addr) -> bool
 {
     unsafe{ipv6_addr_is_routable_multicast(a as *const ovn_in6_addr)}
+}
+
+pub fn ovn_ipv6_is_all_hosts(a: &ovn_in6_addr) -> bool
+{
+    return *a == ovn_in6addr_all_hosts;
 }
 
 pub fn ovn_ipv6_is_cidr(a: &ovn_in6_addr) -> bool

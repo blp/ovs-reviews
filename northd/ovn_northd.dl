@@ -3353,7 +3353,18 @@ for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
 /* Ingress table L2_LKUP: Add IP multicast flows learnt from IGMP/MLD (priority
  * 90). */
 for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
-    for (SwitchMcastFloodRelayPorts(&sw, relay_ports)) {
+    /* RFC 4541, section 2.1.2, item 2: Skip groups in the 224.0.0.X
+     * range.
+     *
+     * RFC 4291, section 2.7.1: Skip groups that correspond to all
+     * hosts.
+     */
+    (var skip_address, var ipX) = match (ip46_parse(address)) {
+        Some{IPv4{ipv4}} -> (ip_is_local_multicast(ipv4), "ip4"),
+        Some{IPv6{ipv6}} -> (ipv6_is_all_hosts(ipv6), "ip6"),
+        _ -> (true, "")
+    } in
+    for (SwitchMcastFloodRelayPorts(&sw, relay_ports) if not skip_address) {
         for (SwitchMcastFloodPorts(&sw, flood_ports)) {
             var flood_relay = not set_is_empty(relay_ports) in
             var flood_static = not set_is_empty(flood_ports) in
@@ -3377,10 +3388,6 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
                 } else {
                     ""
                 }
-            } in
-            var ipX = match (ipv6_parse(address)) {
-                Some{ipv6} -> "ip6",
-                _ -> "ip4"
             } in
             Flow(.logical_datapath = sw.dpname,
                  .stage            = switch_stage(IN, L2_LKUP),
