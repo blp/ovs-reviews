@@ -571,6 +571,10 @@ for (nb_as in nb.Address_Set) {
                        .addresses = nb_as.addresses)
 }
 
+sb.Out_Address_Set(.name = "svc_monitor_mac",
+                   .addresses = set_singleton("${svc_monitor_mac}")) :-
+    SvcMonitorMac(svc_monitor_mac).
+
 sb.Out_Address_Set(as_name, set_unions(pg_ip4addrs)) :-
     nb.Port_Group(.ports = pg_ports, .name = pg_name),
     var as_name = pg_name ++ "_ip4",
@@ -1532,20 +1536,18 @@ for (&Switch(.dpname = dpname)) {
     };
 
     /* Do not send service monitor packets to conntrack. */
-    for (SvcMonitorMac(svc_monitor_mac)) {
-        Flow(.logical_datapath = dpname,
-             .stage            = switch_stage(IN, PRE_LB),
-             .priority         = 110,
-             .__match          = "eth.src == ${svc_monitor_mac}",
-             .actions          = "next;",
-             .external_ids     = map_empty());
-        Flow(.logical_datapath = dpname,
-             .stage            = switch_stage(OUT, PRE_LB),
-             .priority         = 110,
-             .__match          = "eth.src == ${svc_monitor_mac}",
-             .actions          = "next;",
-             .external_ids     = map_empty())
-    };
+    Flow(.logical_datapath = dpname,
+         .stage            = switch_stage(IN, PRE_LB),
+         .priority         = 110,
+         .__match          = "eth.src == $svc_monitor_mac",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .stage            = switch_stage(OUT, PRE_LB),
+         .priority         = 110,
+         .__match          = "eth.src == $svc_monitor_mac",
+         .actions          = "next;",
+         .external_ids     = map_empty());
 
     /* Allow all packets to go to next tables by default. */
     Flow(.logical_datapath = dpname,
@@ -1974,22 +1976,20 @@ for (&Switch(.ls = ls,
              .external_ids     = map_empty())
     };
 
-    for (SvcMonitorMac(svc_monitor_mac)) {
-        /* Add a 34000 priority flow to advance the service monitor reply
-         * packets to skip applying ingress ACLs. */
-        Flow(.logical_datapath = dpname,
-             .stage            = switch_stage(IN, ACL),
-             .priority         = 34000,
-             .__match          = "eth.dst == ${svc_monitor_mac}",
-             .actions          = "next;",
-             .external_ids     = map_empty());
-        Flow(.logical_datapath = dpname,
-             .stage            = switch_stage(OUT, ACL),
-             .priority         = 34000,
-             .__match          = "eth.src == ${svc_monitor_mac}",
-             .actions          = "next;",
-             .external_ids     = map_empty())
-    }
+    /* Add a 34000 priority flow to advance the service monitor reply
+     * packets to skip applying ingress ACLs. */
+    Flow(.logical_datapath = dpname,
+         .stage            = switch_stage(IN, ACL),
+         .priority         = 34000,
+         .__match          = "eth.dst == $svc_monitor_mac",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = dpname,
+         .stage            = switch_stage(OUT, ACL),
+         .priority         = 34000,
+         .__match          = "eth.src == $svc_monitor_mac",
+         .actions          = "next;",
+         .external_ids     = map_empty())
 }
 
 /* Ingress or Egress ACL Table (Various priorities). */
@@ -3241,10 +3241,9 @@ for (ls in nb.Logical_Switch) {
 Flow(.logical_datapath = sw.dpname,
      .stage = switch_stage(IN, L2_LKUP),
      .priority = 110,
-     .__match = "eth.dst == ${svc_monitor_mac}",
+     .__match = "eth.dst == $svc_monitor_mac",
      .actions = "handle_svc_check(inport);",
      .external_ids = map_empty()) :-
-    SvcMonitorMac(svc_monitor_mac),
     sw in &Switch().
 
 for (sw in &Switch(.dpname = dpname, .mcast_cfg = &mcast_cfg)
