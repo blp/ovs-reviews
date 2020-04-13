@@ -1479,14 +1479,14 @@ for (&Switch(.ls = ls, .dpname = dpname, .has_stateful_acl = true)) {
          .stage         = switch_stage(IN, PRE_ACL),
          .priority         = 110,
          .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                             "icmp6.type == 1 || (tcp && tcp.flags == 4)",
+                             "icmp6.type == 1 || (tcp && tcp.flags == 20)",
          .actions          = "next;",
          .external_ids     = map_empty());
     Flow(.logical_datapath = dpname,
          .stage         = switch_stage(OUT, PRE_ACL),
          .priority         = 110,
          .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                             "icmp6.type == 1 || (tcp && tcp.flags == 4)",
+                             "icmp6.type == 1 || (tcp && tcp.flags == 20)",
          .actions          = "next;",
          .external_ids     = map_empty());
 
