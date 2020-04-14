@@ -365,19 +365,6 @@ SwitchPortAllocatedMACDynAddress(lsport, dyn_addr) :-
         // removing the old address.
         // FIXME: OVN allocates MAC addresses by seeding them with IPv4 address.
         // Implement a custom allocation function that simulates this behavior.
-        var used_addrs_strs: Vec<string> = vec_empty();
-        for (addr in used_addrs) {
-            vec_push(used_addrs_strs, "${addr}")
-        };
-        var need_addrs_strs: Vec<string> = vec_empty();
-        for (need in need_addr) {
-            (var uuid, var hint) = need;
-            var h = match (hint) {
-                None -> "",
-                Some{h} -> "${h}"
-            };
-            vec_push(need_addrs_strs, "${uuid2str(uuid)}(${h})")
-        };
         var res = allocate_with_hint(used_addrs, need_addr, mac_prefix + 64'd1, mac_prefix + mAC_ADDR_SPACE() - 64'd1);
         var res_strs: Vec<string> = vec_empty();
         for (x in res) {
