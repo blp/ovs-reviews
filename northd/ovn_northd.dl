@@ -1733,7 +1733,7 @@ function build_acl_log(acl: nb.ACL): string =
         };
         match (set_nth(acl.meter, 0)) {
             None -> (),
-            Some{meter} -> vec_push(strs, "meter=${meter}")
+            Some{meter} -> vec_push(strs, "meter=${json_string_escape(meter)}")
         };
         "log(${string_join(strs, \", \")}); "
     }
