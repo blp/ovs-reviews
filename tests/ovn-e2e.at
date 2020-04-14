@@ -11216,6 +11216,10 @@ for sf in 0 1; do
         # allow rule is still effective..
         ovn-nbctl --wait=hv acl-add lsw0 from-lport 2000  "inport == lp31 && ip" allow-related
     fi
+    # dump information and flows with counters
+    ovn-sbctl dump-flows -- list multicast_group > sbflows$sf
+    AT_CAPTURE_FILE([sbflows0])
+    AT_CAPTURE_FILE([sbflows1])
     for is in 1 2 3; do
         s=${is}1
         for id in 1 2 3; do
@@ -11240,50 +11244,48 @@ for sf in 0 1; do
     done
 done
 
-# dump information and flows with counters
-ovn-sbctl dump-flows -- list multicast_group > sbflows
-AT_CAPTURE_FILE([sbflows])
-
-echo "------ hv1 dump ------"
-as hv1 ovs-vsctl show
-as hv1 ovs-ofctl -O OpenFlow13 dump-flows br-int
-
-echo "------ hv2 dump ------"
-as hv2 ovs-vsctl show
-as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int
-
-echo "------ hv3 dump ------"
-as hv3 ovs-vsctl show
-as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int
+as hv1 ovs-ofctl -O OpenFlow13 dump-flows br-int > offlows1
+as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int > offlows2
+as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int > offlows3
 
 # Now check the packets actually received against the ones expected.
-for i in 1 2 3; do
-    OVN_CHECK_PACKETS([hv$i/vif${i}1-tx.pcap], [${i}1.expected])
-done
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+check_packets() {
+    > expected
+    > received
+    for i in 1 2 3; do
+        echo "--- hv$i vif${i}1" | tee -a expected >> received
+        sort ${i}1.expected >> expected
+        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv$i/vif${i}1-tx.pcap | sort >> received
+        echo | tee -a expected >> received
+    done
 
-# need to verify the log for ACL hit as well, since in the allow case
-# (unlike the drop case) it is tricky to pass just with the expected;
-# since with the stateful rule the packet will still get by (default
-# rule) even if it doesn't hit the allow rule.
-# The hit count for the ACL is 6 (1 unicast + 2 non-unicast) * 2
-# (with/without stateful rule) for hv1 and hv2, each.
+    # need to verify the log for ACL hit as well, since in the allow case
+    # (unlike the drop case) it is tricky to pass just with the expected;
+    # since with the stateful rule the packet will still get by (default
+    # rule) even if it doesn't hit the allow rule.
+    # The hit count for the ACL is 6 (1 unicast + 2 non-unicast) * 2
+    # (with/without stateful rule) for hv1 and hv2, each.
+    cat >>expected <<EOF
+--- acl logging
+hv1_drop hit 6
+hv2_drop hit 6
+hv1_allow hit 6
+hv2_allow hit 6
+EOF
 
-hv1_drop_acl_hit=`grep acl_log hv1/ovn-controller.log | grep "|INFO|name=\"drop-acl\"" | wc -l`
-hv2_drop_acl_hit=`grep acl_log hv2/ovn-controller.log | grep "|INFO|name=\"drop-acl\"" | wc -l`
+cat >>received <<EOF
+--- acl logging
+hv1_drop hit `grep -c 'acl_log.*|INFO|name="drop-acl"' hv1/ovn-controller.log`
+hv2_drop hit `grep -c 'acl_log.*|INFO|name="drop-acl"' hv2/ovn-controller.log`
+hv1_allow hit `grep -c 'acl_log.*|INFO|name="allow-acl"' hv1/ovn-controller.log`
+hv2_allow hit `grep -c 'acl_log.*|INFO|name="allow-acl"' hv2/ovn-controller.log`
+EOF
 
-hv1_allow_acl_hit=`grep acl_log hv1/ovn-controller.log | grep "|INFO|name=\"allow-acl\"" | wc -l`
-hv2_allow_acl_hit=`grep acl_log hv2/ovn-controller.log | grep "|INFO|name=\"allow-acl\"" | wc -l`
-
-echo "hv1_drop hit $hv1_drop_acl_hit"
-echo "hv2_drop hit $hv2_drop_acl_hit"
-echo "hv1_allow hit $hv1_allow_acl_hit"
-echo "hv2_allow hit $hv2_allow_acl_hit"
-
-AT_CHECK([test $hv1_drop_acl_hit = 6])
-AT_CHECK([test $hv2_drop_acl_hit = 6])
-
-AT_CHECK([test $hv1_allow_acl_hit = 6])
-AT_CHECK([test $hv2_allow_acl_hit = 6])
+    $at_diff expected received >/dev/null
+}
+OVS_WAIT_UNTIL([check_packets], [$at_diff -F'^---' expected received])
 
 OVN_CLEANUP([hv1],[hv2],[hv3])
 
