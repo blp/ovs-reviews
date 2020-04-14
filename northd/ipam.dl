@@ -11,6 +11,7 @@
 import OVN_Northbound as nb
 import ovsdb
 import allocate
+import helpers
 import ovn
 import ovn_northd
 import lswitch
@@ -21,6 +22,51 @@ function mAC_ADDR_SPACE(): bit<64>  = 64'hffffff
 /*
  * IPv4 dynamic address allocation.
  */
+
+/*
+ * The fixed portions of a request for a dynamic LSP address.
+ */
+typedef dynamic_address_request = DynamicAddressRequest{
+    mac: Option<eth_addr>,
+    ip4: Option<ovs_be32>,
+    ip6: Option<in6_addr>
+}
+function parse_dynamic_address_request(s: string): Option<dynamic_address_request> {
+    var tokens = string_split(s, " ");
+    var n = vec_len(tokens);
+    if (n < 1 or n > 3) {
+        return None
+    };
+
+    var t0 = vec_nth_def(tokens, 0, "");
+    var t1 = vec_nth_def(tokens, 1, "");
+    var t2 = vec_nth_def(tokens, 2, "");
+    if (t0 == "dynamic") {
+        if (n == 1) {
+            Some{DynamicAddressRequest{None, None, None}}
+        } else if (n == 2) {
+            match (ip46_parse(t1)) {
+                Some{IPv4{ipv4}} -> Some{DynamicAddressRequest{None, Some{ipv4}, None}},
+                Some{IPv6{ipv6}} -> Some{DynamicAddressRequest{None, None, Some{ipv6}}},
+                _ -> None
+            }
+        } else if (n == 3) {
+            match ((ip_parse(t1), ipv6_parse(t2))) {
+                (Some{ipv4}, Some{ipv6}) -> Some{DynamicAddressRequest{None, Some{ipv4}, Some{ipv6}}},
+                _ -> None
+            }
+        } else {
+            None
+        }
+    } else if (n == 2 and t1 == "dynamic") {
+        match (eth_addr_from_string(t0)) {
+            Some{mac} -> Some{DynamicAddressRequest{Some{mac}, None, None}},
+            _ -> None
+        }
+    } else {
+        None
+    }
+}
 
 /* SwitchIPv4ReservedAddress - keeps track of statically reserved IPv4 addresses
  * for each switch whose subnet option is set, including:
@@ -119,7 +165,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
 /* Add reserved address group (5) */
 SwitchIPv4ReservedAddress(.lswitch = sw.ls._uuid,
                           .addr    = ntohl(ip_addr)) :-
-    &SwitchPort(.sw = &sw, .lsp = lsp, .static_dynamic_ip = Some{ip_addr}).
+    &SwitchPort(.sw = &sw, .lsp = lsp, .static_dynamic_ipv4 = Some{ip_addr}).
 
 /* Aggregate all reserved addresses for each switch. */
 relation SwitchIPv4ReservedAddresses(lswitch: uuid, addrs: Set<bit<32>>)
@@ -212,10 +258,10 @@ relation SwitchPortNewIPv4DynAddress(lsport: uuid, dyn_addr: Option<ovs_be32>)
 SwitchPortNewIPv4DynAddress(lsp._uuid, ip_addr) :-
     &SwitchPort(.sw = &sw,
                 .needs_dynamic_ipv4address = false,
-                .static_dynamic_ip = static_dynamic_ip,
+                .static_dynamic_ipv4 = static_dynamic_ipv4,
                 .lsp = lsp),
     var ip_addr: Option<ovs_be32> = {
-        match (static_dynamic_ip) {
+        match (static_dynamic_ipv4) {
             None -> { None },
             Some{addr} -> {
                 match (sw.subnet) {
@@ -289,7 +335,7 @@ ReservedMACAddress(.addr = eth_addr_to_uint64(lport_addrs.ea)) :-
     SwitchPortStaticAddresses(.addrs = lport_addrs).
 
 /* Add reserved address group (2). */
-ReservedMACAddress(.addr = mac_addr) :-
+ReservedMACAddress(.addr = eth_addr_to_uint64(mac_addr)) :-
     &SwitchPort(.lsp = lsp, .static_dynamic_mac = Some{mac_addr}).
 
 /* Add reserved address group (3). */
@@ -393,7 +439,7 @@ SwitchPortNewMACDynAddress(lsp._uuid, mac_addr) :-
         Some{addr} -> {
             if (is_some(sw.subnet) or is_some(sw.ipv6_prefix) or
                 map_get(sw.ls.other_config, "mac_only") == Some{"true"}) {
-                Some{eth_addr_from_uint64(addr)}
+                Some{addr}
             } else {
                 None
             }
@@ -424,19 +470,15 @@ SwitchPortNewDynamicAddress(port, None) :-
 SwitchPortNewDynamicAddress(port, lport_address) :-
     port in &SwitchPort(.lsp = lsp,
                         .sw = &sw,
-                        .needs_dynamic_ipv6address = needs_dynamic_ipv6address),
+                        .needs_dynamic_ipv6address = needs_dynamic_ipv6address,
+                        .static_dynamic_ipv6 = static_dynamic_ipv6),
     SwitchPortNewMACDynAddress(lsp._uuid, Some{mac_addr}),
     SwitchPortNewIPv4DynAddress(lsp._uuid, opt_ip4_addr),
-    var ip6_addr =
-        if needs_dynamic_ipv6address {
-            match (sw.ipv6_prefix) {
-                None -> {
-                    abort("needs_dynamic_ipv6address is true, but IPv6 prefix is undefined in port ${uuid2str(lsp._uuid)}");
-                    ""
-                },
-                Some{prefix} -> " ${inet6_ntop(in6_generate_eui64(mac_addr, prefix))}"
-            }
-        } else { "" },
+    var ip6_addr = match ((static_dynamic_ipv6, needs_dynamic_ipv6address, sw.ipv6_prefix)) {
+        (Some{ipv6}, _, _) -> " ${ipv6}",
+        (_, true, Some{prefix}) -> " ${in6_generate_eui64(mac_addr, prefix)}",
+        _ -> ""
+    },
     var ip4_addr = match (opt_ip4_addr) {
                         None -> "",
                         Some{ip4} -> " ${ip_fmt(ip4)}"

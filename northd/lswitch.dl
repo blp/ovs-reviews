@@ -381,7 +381,7 @@ SwitchPortHAChassisGroup(lsp_uuid, None) :-
  * - `peer` - peer router port, if any
  * - `static_dynamic_mac` - port has a "dynamic" address that contains a static MAC,
  *    e.g., "80:fa:5b:06:72:b7 dynamic"
- * - `static_dynamic_ip` - port has a "dynamic" address that contains a static IP,
+ * - `static_dynamic_ipv4`, `static_dynamic_ipv6` - port has a "dynamic" address that contains a static IP,
  *    e.g., "dynamic 192.168.1.2"
  * - `needs_dynamic_ipv4address` - port requires a dynamically allocated IPv4 address
  * - `needs_dynamic_macaddress`  - port requires a dynamically allocated MAC address
@@ -396,8 +396,9 @@ relation &SwitchPort(
     peer:                       Option<Ref<RouterPort>>,
     static_addresses:           Vec<lport_addresses>,
     dynamic_address:            Option<lport_addresses>,
-    static_dynamic_mac:         Option<bit<64>>,
-    static_dynamic_ip:          Option<ovs_be32>,
+    static_dynamic_mac:         Option<eth_addr>,
+    static_dynamic_ipv4:        Option<ovs_be32>,
+    static_dynamic_ipv6:        Option<in6_addr>,
     ps_addresses:               Vec<lport_addresses>,
     ps_eth_addresses:           Vec<string>,
     parent_name:                Option<string>,
@@ -417,7 +418,8 @@ relation &SwitchPort(
             .static_addresses           = static_addresses,
             .dynamic_address            = dynamic_address,
             .static_dynamic_mac         = static_dynamic_mac,
-            .static_dynamic_ip          = static_dynamic_ip,
+            .static_dynamic_ipv4        = static_dynamic_ipv4,
+            .static_dynamic_ipv6        = static_dynamic_ipv6,
             .ps_addresses               = ps_addresses,
             .ps_eth_addresses           = ps_eth_addresses,
             .parent_name                = parent_name,
@@ -469,45 +471,29 @@ relation &SwitchPort(
         None -> None,
         Some{lport_addr} -> extract_lsp_addresses(lport_addr)
     },
-    var static_dynamic_mac = {
-        var mac_addr: Option<bit<64>> = None;
+    (var static_dynamic_mac: Option<eth_addr>,
+     var static_dynamic_ipv4: Option<ovs_be32>,
+     var static_dynamic_ipv6: Option<in6_addr>,
+     var has_dyn_lsp_addr: bool) = {
+        var dynamic_address_request: Option<dynamic_address_request> = None;
         for (addr in lsp.addresses) {
-            if is_dynamic_lsp_address(addr) {
-                match (extract_addresses(addr)) {
-                    None -> (),
-                    Some{lsp_addr} -> mac_addr = Some{eth_addr_to_uint64(lsp_addr.ea)}
-                }
-            } else ()
-        };
-        mac_addr
-    },
-    var static_dynamic_ip = {
-        var opt_ip: Option<bit<32>> = None;
-        for (addr in lsp.addresses) {
-            match (scan_static_dynamic_ip(addr)) {
-                None -> (),
-                Some{ip_addr} -> {
-                    opt_ip = Some{ip_addr}
-                }
+            dynamic_address_request = parse_dynamic_address_request(addr);
+            if (is_some(dynamic_address_request)) {
+                break
             }
         };
-        opt_ip
-    },
-    var has_dyn_lsp_addr = {
-        var has_dyn_lsp_addr = false;
-        for (addr in lsp.addresses) {
-            if (is_dynamic_lsp_address(addr)) {
-                has_dyn_lsp_addr = true
-            } else ()
-        };
-        has_dyn_lsp_addr
+
+        match (dynamic_address_request) {
+            Some{DynamicAddressRequest{mac, ipv4, ipv6}} -> (mac, ipv4, ipv6, true),
+            None -> (None, None, None, false)
+        }
     },
     var needs_dynamic_ipv4address = has_dyn_lsp_addr and is_none(peer) and is_some(subnet) and
-                                    is_none(static_dynamic_ip),
+                                    is_none(static_dynamic_ipv4),
     var needs_dynamic_macaddress = has_dyn_lsp_addr and is_none(peer) and is_none(static_dynamic_mac) and
                                    (is_some(subnet) or is_some(ipv6_prefix) or
                                     map_get(other_config, "mac_only") == Some{"true"}),
-    var needs_dynamic_ipv6address = has_dyn_lsp_addr and is_none(peer) and is_some(ipv6_prefix),
+    var needs_dynamic_ipv6address = has_dyn_lsp_addr and is_none(peer) and is_some(ipv6_prefix) and is_none(static_dynamic_ipv6),
     var parent_name: Option<string> = match (set_nth(lsp.parent_name, 0)) {
         None -> None,
         Some{pname} -> if (pname == "") { None } else { Some{pname} }
@@ -613,4 +599,3 @@ function put_svc_monitor_mac(options: Map<string,string>,
 relation SvcMonitorMac(mac: eth_addr)
 SvcMonitorMac(get_svc_monitor_mac(options, uuid)) :-
     nb.NB_Global(._uuid = uuid, .options = options).
-
