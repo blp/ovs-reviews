@@ -200,7 +200,7 @@ sb.Out_Port_Binding(.uuid_name          = uuid_name,
                           false)
          and is_some(l3dgw_port)) or
         Some{rport.lrp} == l3dgw_port or
-        (is_some(map_get(rport.lrp.options, "chassis")) and
+        (is_some(map_get(rport.router.lr.options, "chassis")) and
          sw.has_localnet_port)) {
         false -> set_empty(),
         true -> set_singleton(get_garp_nat_addresses(rport))
