@@ -5029,11 +5029,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
-
-as northd-backup
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
-
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 AT_CLEANUP
 ])
 
@@ -5649,8 +5645,8 @@ logical_port="c6" | stableid parent1], [0], [1
 
 dnl Restart northd to see that the same allocation remains.
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
-start_daemon ovn-northd \
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
+start_daemon NORTHD_TYPE \
     --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
     --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 
