@@ -11170,12 +11170,12 @@ test_packet() {
 # Test drop rule
 # --------------
 ovn-nbctl acl-del lsw0
-ovn-nbctl --log --severity=info --name=drop-acl acl-add lsw0 to-lport 5000 'outport == @pg1 && eth.src == $set1 && eth.type == 0x1234' drop
+ovn-nbctl --wait=hv --log --severity=info --name=drop-acl acl-add lsw0 to-lport 5000 'outport == @pg1 && eth.src == $set1 && eth.type == 0x1234' drop
 for sf in 0 1; do
     if test ${sf} = 1; then
         # Add a stateful rule and re-run the check to make sure the
         # drop rule is still effective..
-        ovn-nbctl acl-add lsw0 from-lport 2000  "inport == lp31 && ip" allow-related
+        ovn-nbctl --wait=hv acl-add lsw0 from-lport 2000  "inport == lp31 && ip" allow-related
     fi
     for is in 1 2 3; do
         s=${is}1
@@ -11209,12 +11209,12 @@ ovn-nbctl acl-del lsw0
 # drop all packets to 11 and 21.
 ovn-nbctl acl-add lsw0 to-lport 5000 'outport == @pg1 && eth.src == $set1' drop
 # allow 0x1234 between 11 and 21
-ovn-nbctl --log --severity=info --name=allow-acl acl-add lsw0 to-lport 6000 'outport == @pg1 && eth.src == $set1 && eth.type == 0x1234' allow
+ovn-nbctl --wait=hv --log --severity=info --name=allow-acl acl-add lsw0 to-lport 6000 'outport == @pg1 && eth.src == $set1 && eth.type == 0x1234' allow
 for sf in 0 1; do
     if test ${sf} = 1; then
         # Add a stateful rule and re-run the check to make sure the
         # allow rule is still effective..
-        ovn-nbctl acl-add lsw0 from-lport 2000  "inport == lp31 && ip" allow-related
+        ovn-nbctl --wait=hv acl-add lsw0 from-lport 2000  "inport == lp31 && ip" allow-related
     fi
     for is in 1 2 3; do
         s=${is}1

@@ -2088,7 +2088,7 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .dpname = dpname, .has_stateful_acl = ha
                      .stage         = stage,
                      .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
                      .__match          = __match ++ " && (${acl.__match})",
-                     .actions          = "${build_acl_log(acl)}/* drop */",
+                     .actions          = "${actions}${build_acl_log(acl)}/* drop */",
                      .external_ids     = stage_hint)
             }
         } else {
