@@ -12565,11 +12565,11 @@ ovn-nbctl lsp-add sw1 sw1-p2
 ovn-nbctl lsp-add sw1 sw1-p3
 ovn-nbctl lsp-add sw1 sw1-p4
 
-ovn-nbctl lsp-set-addresses sw1-p1 "00:00:00:00:00:01 10.0.0.1 aef0::1" "00:00:00:00:00:02 10.0.0.2 aef0::2"
-ovn-nbctl lsp-set-addresses sw1-p2 "00:00:00:00:00:03 dynamic"
-ovn-nbctl lsp-set-addresses sw1-p3 "dynamic"
-ovn-nbctl lsp-set-addresses sw1-p4 "router"
-ovn-nbctl lsp-set-addresses sw1-p5 "unknown"
+ovn-nbctl --wait=sb lsp-set-addresses sw1-p1 "00:00:00:00:00:01 10.0.0.1 aef0::1" "00:00:00:00:00:02 10.0.0.2 aef0::2"
+ovn-nbctl --wait=sb lsp-set-addresses sw1-p2 "00:00:00:00:00:03 dynamic"
+ovn-nbctl --wait=sb lsp-set-addresses sw1-p3 "dynamic"
+ovn-nbctl --wait=sb lsp-set-addresses sw1-p4 "router"
+ovn-nbctl --wait=sb lsp-set-addresses sw1-p5 "unknown"
 
 ovn-nbctl list logical_switch_port
 
