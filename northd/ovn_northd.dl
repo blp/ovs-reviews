@@ -3496,7 +3496,7 @@ Flow(.logical_datapath = sw.dpname,
         };
         eth_src_vec
     },
-    var eth_src = "{ " ++ string_join(eth_src_vec, ", ") ++ " }",
+    var eth_src = "{ " ++ string_join(eth_src_vec, ", ") ++ "}",
     var __match = "eth.src == ${eth_src} && (arp.op == 1 || nd_ns)",
     var actions = "outport = \"${mC_FLOOD().0}\"; output;".
 
@@ -3533,7 +3533,7 @@ Flow(.logical_datapath = sw.dpname,
      .priority         = 75,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && arp.op == 1 && arp.tpa == { " ++
-                         string_join(set2vec(all_ips_v4), ", ") ++ " }",
+                         string_join(set2vec(all_ips_v4), ", ") ++ "}",
      .actions          = "outport = ${sp.json_name}; output;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
