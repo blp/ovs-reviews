@@ -13548,20 +13548,21 @@ ovn-nbctl --wait=hv sync
 # Check that logical flows are added for sw0-vir in lsp_in_arp_rsp pipeline
 # with bind_vport action.
 
-ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport > lflows.txt
+ovn-sbctl dump-flows sw0 > sw0-flows
+AT_CAPTURE_FILE([sw0-flows])
 
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+AT_CHECK([grep ls_in_arp_rsp sw0-flows | grep bind_vport | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p1" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
   table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p2" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
   table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p3" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
 ])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
+ovn-sbctl dump-flows lr0 > lr0-flows
+AT_CAPTURE_FILE([lr0-flows])
 
 # Since the sw0-vir is not claimed by any chassis, eth.dst should be set to
 # zero if the ip4.dst is the virtual ip in the router pipeline.
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+AT_CHECK([grep lr_in_arp_resolve lr0-flows | grep "reg0 == 10.0.0.10" | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
 
@@ -13592,12 +13593,12 @@ logical_port=sw0-vir) = x$hv1_ch_uuid], [0], [])
 AT_CHECK([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = xsw0-p1])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
 
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p1's MAC.
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+ovn-sbctl dump-flows lr0 > lr0-flows2
+AT_CAPTURE_FILE([lr0-flows2])
+AT_CHECK([grep lr_in_arp_resolve lr0-flows2 | grep "reg0 == 10.0.0.10" | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
 ])
 
@@ -13615,12 +13616,14 @@ logical_port=sw0-vir) = x$hv1_ch_uuid], [0], [])
 OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = xsw0-p3])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
 
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p2's MAC.
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+sleep 1
+ovn-sbctl dump-flows lr0 > lr0-flows3
+AT_CAPTURE_FILE([lr0-flows3])
+cp ovn-sb/ovn-sb.db lr0-flows3.db
+AT_CHECK([grep lr_in_arp_resolve lr0-flows3 | grep "reg0 == 10.0.0.10"  | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:05; next;)
 ])
 
@@ -13638,12 +13641,13 @@ logical_port=sw0-vir) = x$hv2_ch_uuid], [0], [])
 AT_CHECK([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = xsw0-p2])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
 
 # There should be an arp resolve flow to resolve the virtual_ip with the
 # sw0-p3's MAC.
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+sleep 1
+ovn-sbctl dump-flows lr0 > lr0-flows4
+AT_CAPTURE_FILE([lr0-flows4])
+AT_CHECK([grep lr_in_arp_resolve lr0-flows4 | grep "reg0 == 10.0.0.10" | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
 ])
 
@@ -13657,14 +13661,14 @@ send_arp_reply 1 1 $eth_src $eth_dst $spa $tpa
 
 OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
 logical_port=sw0-vir) = x$hv1_ch_uuid], [0], [])
+sleep 1
 
 AT_CHECK([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = xsw0-p1])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
-
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+ovn-sbctl dump-flows lr0 > lr0-flows5
+AT_CAPTURE_FILE([lr0-flows5])
+AT_CHECK([grep lr_in_arp_resolve lr0-flows5 | grep "reg0 == 10.0.0.10" | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:03; next;)
 ])
 
@@ -13673,16 +13677,16 @@ as hv1 ovs-vsctl del-port hv1-vif1
 
 OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
 logical_port=sw0-vir) = x], [0], [])
+sleep 1
 
 AT_CHECK([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = x])
 
 # Since the sw0-vir is not claimed by any chassis, eth.dst should be set to
 # zero if the ip4.dst is the virtual ip.
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
-
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+ovn-sbctl dump-flows lr0 > lr0-flows6
+AT_CAPTURE_FILE([lr0-flows6])
+AT_CHECK([grep lr_in_arp_resolve lr0-flows6 | grep "reg0 == 10.0.0.10" | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
 
@@ -13697,14 +13701,13 @@ sleep 1
 
 OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
 logical_port=sw0-vir) = x$hv2_ch_uuid], [0], [])
-
+sleep 1
 AT_CHECK([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = xsw0-p2])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
-
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+ovn-sbctl dump-flows lr0 > lr0-flows7
+AT_CAPTURE_FILE([lr0-flows7])
+AT_CHECK([grep lr_in_arp_resolve lr0-flows7 | grep "reg0 == 10.0.0.10" | sed 's/table=../table=??/'], [0], [dnl
   table=??(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 50:54:00:00:00:04; next;)
 ])
 
@@ -13713,39 +13716,34 @@ ovn-nbctl lsp-del sw0-p2
 
 OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
 logical_port=sw0-vir) = x], [0], [])
-
 AT_CHECK([test x$(ovn-sbctl --bare --columns virtual_parent find port_binding \
 logical_port=sw0-vir) = x])
 
 # Clear virtual_ip column of sw0-vir. There should be no bind_vport flows.
 ovn-nbctl --wait=hv remove logical_switch_port sw0-vir options virtual-ip
 
-ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport > lflows.txt
-
-AT_CHECK([cat lflows.txt], [0], [dnl
-])
+ovn-sbctl dump-flows sw0 > sw0-flows2
+AT_CAPTURE_FILE([sw0-flows2])
+AT_CHECK([grep ls_in_arp_rsp sw0-flows2 | grep bind_vport], [1])
 
 # Add back virtual_ip and clear virtual_parents.
 ovn-nbctl --wait=hv set logical_switch_port sw0-vir options:virtual-ip=10.0.0.10
 
-ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport > lflows.txt
-
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
+ovn-sbctl dump-flows sw0 > sw0-flows3
+AT_CAPTURE_FILE([sw0-flows3])
+AT_CHECK([grep ls_in_arp_rsp sw0-flows3 | grep bind_vport | sed 's/table=../table=??/'], [0], [dnl
   table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p1" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
   table=??(ls_in_arp_rsp      ), priority=100  , match=(inport == "sw0-p3" && ((arp.op == 1 && arp.spa == 10.0.0.10 && arp.tpa == 10.0.0.10) || (arp.op == 2 && arp.spa == 10.0.0.10))), action=(bind_vport("sw0-vir", inport); next;)
 ])
 
 ovn-nbctl --wait=hv remove logical_switch_port sw0-vir options virtual-parents
-ovn-sbctl dump-flows sw0 | grep ls_in_arp_rsp | grep bind_vport > lflows.txt
+ovn-sbctl dump-flows sw0 > sw0-flows4
+AT_CAPTURE_FILE([sw0-flows4])
+AT_CHECK([grep ls_in_arp_rsp sw0-flows4 | grep bind_vport], [1])
 
-AT_CHECK([cat lflows.txt], [0], [dnl
-])
-
-ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
-> lflows.txt
-
-AT_CHECK([cat lflows.txt], [0], [dnl
-])
+ovn-sbctl dump-flows lr0 > lr0-flows8
+AT_CAPTURE_FILE([lr0-flows8])
+AT_CHECK([grep lr_in_arp_resolve lr0-flows8 | grep "reg0 == 10.0.0.10"], [1])
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP

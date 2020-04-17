@@ -5895,7 +5895,7 @@ function is_empty_set_or_string(s: Set<string>): bool = {
 Flow(.logical_datapath = peer.router.dpname,
      .stage            = router_stage(IN, ARP_RESOLVE),
      .priority         = 100,
-     .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
+     .__match          = "outport == ${peer.json_name} && reg0 == ${ip_fmt(virtual_ip)}",
      .actions          = "eth.dst = 00:00:00:00:00:00; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
@@ -5909,7 +5909,7 @@ Flow(.logical_datapath = peer.router.dpname,
 Flow(.logical_datapath = peer.router.dpname,
      .stage            = router_stage(IN, ARP_RESOLVE),
      .priority         = 100,
-     .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
+     .__match          = "outport == ${peer.json_name} && reg0 == ${ip_fmt(virtual_ip)}",
      .actions          = "eth.dst = ${address.ea_s}; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
