@@ -13837,16 +13837,21 @@ ovn-nbctl --wait=hv meter-add event-elb drop 100 pktps 10
 
 OVN_POPULATE_ARP
 ovn-nbctl --timeout=3 --wait=hv sync
-ovn-sbctl lflow-list
-as hv1 ovs-ofctl dump-flows br-int
+ovn-sbctl lflow-list > sbflows
+AT_CAPTURE_FILE([sbflows])
+as hv1 ovs-ofctl dump-flows br-int > offlows
+AT_CAPTURE_FILE([offlows])
 
 packet0="inport==\"sw0-p11\" && eth.src==00:00:00:00:00:11 && eth.dst==00:00:00:00:00:21 &&
          ip4 && ip.ttl==64 && ip4.src==192.168.1.11 && ip4.dst==192.168.1.100 &&
          tcp && tcp.src==10000 && tcp.dst==80"
 as hv1 ovs-appctl -t ovn-controller inject-pkt "$packet0"
 
-ovn-sbctl list controller_event
-uuid=$(ovn-sbctl list controller_event | awk '/_uuid/{print $3}')
+ovn-sbctl list controller_event > events
+AT_CAPTURE_FILE([events])
+uuid=$(awk '/_uuid/{print $3}' < events)
+echo uuid=$uuid
+AT_CHECK([test -n "$uuid"])
 AT_CHECK([ovn-sbctl get controller_event $uuid event_type], [0], [dnl
 empty_lb_backends
 ])

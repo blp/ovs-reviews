@@ -1616,7 +1616,7 @@ function build_empty_lb_event_flow(key: string, lb: nb.Load_Balancer,
 /* ControllerEventEn has exactly one row, either 'true' to enable controller
  * events or 'false' to disable them. */
 relation ControllerEventEn(enable: bool)
-ControllerEventEn(map_get_bool_def(options, "controller-event", false)) :-
+ControllerEventEn(map_get_bool_def(options, "controller_event", false)) :-
     nb.NB_Global(.options = options).
 ControllerEventEn(false) :- Unit(), not nb.NB_Global().
 
