@@ -764,7 +764,7 @@ sb.OutProxy_Multicast_Group(.datapath = mcgroup.datapath,
                             .ports = mcgroup.ports) :-
     sb.Swizzled_Multicast_Group[mcgroup],
     mcgroup.tunnel_key == 0,
-    MulticastGroupTunKeyAllocation(mcgroup.name, tunnel_key).
+    MulticastGroupTunKeyAllocation(mcgroup.datapath, mcgroup.name, tunnel_key).
 
 /*
  * MAC binding: records inserted by hypervisors; northd removes records for deleted logical ports
@@ -6395,18 +6395,18 @@ NotYetAllocatedMulticastGroupTunKeys(datapath, all_names) :-
     var all_names = Aggregate((datapath), group2vec(name)).
 
 // Perform the allocation
-relation MulticastGroupTunKeyAllocation(group: string, tunkey: integer)
+relation MulticastGroupTunKeyAllocation(datapath: uuid_or_string_t, group: string, tunkey: integer)
 
 // transfer existing allocations from the realized table
-MulticastGroupTunKeyAllocation(group, tunkey) :-
-    sb.UUIDMap_Datapath_Binding(_, Left{datapath_uuid}),
+MulticastGroupTunKeyAllocation(datapath, group, tunkey) :-
+    sb.UUIDMap_Datapath_Binding(_, datapath@Left{datapath_uuid}),
     sb.Multicast_Group(.name = group,
                        .datapath = datapath_uuid,
                        .tunnel_key = tunkey).
 
 // Case 1: AllocatedMulticastGroupTunKeys(datapath) is not empty (i.e.,
 // contains a single record that stores a set of allocated keys)
-MulticastGroupTunKeyAllocation(group, tunkey) :-
+MulticastGroupTunKeyAllocation(Right{datapath}, group, tunkey) :-
     AllocatedMulticastGroupTunKeys(datapath, allocated),
     NotYetAllocatedMulticastGroupTunKeys(datapath, unallocated),
     (_, var min_key) = mC_IP_MCAST_MIN(),
@@ -6416,7 +6416,7 @@ MulticastGroupTunKeyAllocation(group, tunkey) :-
     (var group, var tunkey) = allocation.
 
 // Case 2: AllocatedMulticastGroupTunKeys(datapath) relation is empty
-MulticastGroupTunKeyAllocation(group, tunkey) :-
+MulticastGroupTunKeyAllocation(Right{datapath}, group, tunkey) :-
     NotYetAllocatedMulticastGroupTunKeys(datapath, unallocated),
     not AllocatedMulticastGroupTunKeys(datapath, _),
     (_, var min_key) = mC_IP_MCAST_MIN(),
