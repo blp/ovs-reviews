@@ -758,13 +758,13 @@ sb.OutProxy_Multicast_Group(.datapath = mcgroup.datapath,
     mcgroup.tunnel_key != 0.
 
 /* Allocate a 'tunnel_key' for dynamic multicast groups. */
-sb.OutProxy_Multicast_Group(.datapath = mcgroup.datapath,
+sb.OutProxy_Multicast_Group(.datapath = Left{datapath_uuid},
                             .name = mcgroup.name,
                             .tunnel_key = tunnel_key,
                             .ports = mcgroup.ports) :-
-    sb.Swizzled_Multicast_Group[mcgroup],
+    mcgroup in sb.Swizzled_Multicast_Group(.datapath = Left{datapath_uuid}),
     mcgroup.tunnel_key == 0,
-    MulticastGroupTunKeyAllocation(mcgroup.datapath, mcgroup.name, tunnel_key).
+    MulticastGroupTunKeyAllocation(datapath_uuid, mcgroup.name, tunnel_key).
 
 /*
  * MAC binding: records inserted by hypervisors; northd removes records for deleted logical ports
@@ -6376,39 +6376,39 @@ PortTunKeyAllocation(port, tunkey) :-
  */
 
 // all tunnel keys already in use in the Realized table
-relation AllocatedMulticastGroupTunKeys(datapath: string, keys: Set<integer>)
+relation AllocatedMulticastGroupTunKeys(datapath_uuid: uuid, keys: Set<integer>)
 
-AllocatedMulticastGroupTunKeys(datapath, keys) :-
+AllocatedMulticastGroupTunKeys(datapath_uuid, keys) :-
     sb.Multicast_Group(.datapath = datapath_uuid, .tunnel_key = tunkey),
-    sb.UUIDMap_Datapath_Binding(datapath, Left{datapath_uuid}),
-    var keys = Aggregate((datapath), group2set(tunkey)).
+    //sb.UUIDMap_Datapath_Binding(datapath, Left{datapath_uuid}),
+    var keys = Aggregate((datapath_uuid), group2set(tunkey)).
 
 // Multicast_Group's not yet in the Realized table
-relation NotYetAllocatedMulticastGroupTunKeys(datapath: string,
+relation NotYetAllocatedMulticastGroupTunKeys(datapath_uuid: uuid,
                                               all_logical_ids: Vec<string>)
 
-NotYetAllocatedMulticastGroupTunKeys(datapath, all_names) :-
+NotYetAllocatedMulticastGroupTunKeys(datapath_uuid, all_names) :-
     sb.Out_Multicast_Group(.name = name, .datapath = datapath,
                            .tunnel_key = tunnel_key),
     sb.UUIDMap_Datapath_Binding(datapath, Left{datapath_uuid}),
     not sb.Multicast_Group(.name = name, .datapath = datapath_uuid),
-    var all_names = Aggregate((datapath), group2vec(name)).
+    var all_names = Aggregate((datapath_uuid), group2vec(name)).
 
 // Perform the allocation
-relation MulticastGroupTunKeyAllocation(datapath: uuid_or_string_t, group: string, tunkey: integer)
+relation MulticastGroupTunKeyAllocation(datapath_uuid: uuid, group: string, tunkey: integer)
 
 // transfer existing allocations from the realized table
-MulticastGroupTunKeyAllocation(datapath, group, tunkey) :-
-    sb.UUIDMap_Datapath_Binding(_, datapath@Left{datapath_uuid}),
+MulticastGroupTunKeyAllocation(datapath_uuid, group, tunkey) :-
+    //sb.UUIDMap_Datapath_Binding(_, datapath_uuid),
     sb.Multicast_Group(.name = group,
                        .datapath = datapath_uuid,
                        .tunnel_key = tunkey).
 
 // Case 1: AllocatedMulticastGroupTunKeys(datapath) is not empty (i.e.,
 // contains a single record that stores a set of allocated keys)
-MulticastGroupTunKeyAllocation(Right{datapath}, group, tunkey) :-
-    AllocatedMulticastGroupTunKeys(datapath, allocated),
-    NotYetAllocatedMulticastGroupTunKeys(datapath, unallocated),
+MulticastGroupTunKeyAllocation(datapath_uuid, group, tunkey) :-
+    AllocatedMulticastGroupTunKeys(datapath_uuid, allocated),
+    NotYetAllocatedMulticastGroupTunKeys(datapath_uuid, unallocated),
     (_, var min_key) = mC_IP_MCAST_MIN(),
     (_, var max_key) = mC_IP_MCAST_MAX(),
     var allocation = FlatMap(allocate(allocated, unallocated,
@@ -6416,9 +6416,9 @@ MulticastGroupTunKeyAllocation(Right{datapath}, group, tunkey) :-
     (var group, var tunkey) = allocation.
 
 // Case 2: AllocatedMulticastGroupTunKeys(datapath) relation is empty
-MulticastGroupTunKeyAllocation(Right{datapath}, group, tunkey) :-
-    NotYetAllocatedMulticastGroupTunKeys(datapath, unallocated),
-    not AllocatedMulticastGroupTunKeys(datapath, _),
+MulticastGroupTunKeyAllocation(datapath_uuid, group, tunkey) :-
+    NotYetAllocatedMulticastGroupTunKeys(datapath_uuid, unallocated),
+    not AllocatedMulticastGroupTunKeys(datapath_uuid, _),
     (_, var min_key) = mC_IP_MCAST_MIN(),
     (_, var max_key) = mC_IP_MCAST_MAX(),
     var allocation = FlatMap(allocate(set_empty(): Set<bit<64>>, unallocated,
