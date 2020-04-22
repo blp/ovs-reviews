@@ -901,7 +901,6 @@ get_sb_ops(struct northd_ctx *ctx)
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "IP_Multicast");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Controller_Event");
     ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Service_Monitor");
 
     ds_chomp(&ds, ',');
