@@ -245,8 +245,6 @@ LogicalRouterLBs(lr, vec_empty()) :-
 /* Router relation collects all attributes of a logical router.
  *
  * `lr` - Logical_Router record from the NB database
- * `dpname` - Name of the logical datapath to be created in the SB
- *      database for this router.
  * `l3dgw_port` - optional redirect port (see `DistributedGatewayPort`)
  * `redirect_port_name` - derived redirect port name (or empty string if
  *      router does not have a redirect port)
@@ -260,7 +258,6 @@ function chassis_redirect_name(port_name: string): string = "cr-${port_name}"
 
 relation &Router(
     lr:                 nb.Logical_Router,
-    dpname:             string,
     l3dgw_port:         Option<nb.Logical_Router_Port>,
     redirect_port_name: string,
     is_gateway:         bool,
@@ -270,7 +267,6 @@ relation &Router(
 )
 
 &Router(.lr = lr,
-        .dpname = uuid2name(lr._uuid),
         .l3dgw_port = l3dgw_port,
         .redirect_port_name =
             match (l3dgw_port) {
@@ -281,7 +277,8 @@ relation &Router(
         .nats       = nats,
         .lbs        = lbs,
         .mcast_cfg  = mcast_cfg) :-
-    nb.Logical_Router[lr],
+    lr in nb.Logical_Router(),
+    is_enabled(lr.enabled),
     LogicalRouterRedirectPort(lr._uuid, l3dgw_port),
     LogicalRouterNATs(lr._uuid, nats),
     LogicalRouterLBs(lr._uuid, lbs),
