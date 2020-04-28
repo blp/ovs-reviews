@@ -388,7 +388,11 @@ northd_send_schema_request(struct northd_ctx *ctx, struct northd_db *db)
 static void
 northd_send_transact(struct northd_ctx *ctx, struct json *ddlog_ops)
 {
-    /* xxx Need to store txn id */
+    /* xxx Need to store txn d */
+    struct json *comment = json_object_create();
+    json_object_put_string(comment, "op", "comment");
+    json_object_put_string(comment, "comment", "ovn-northd-ddlog");
+    json_array_add(ddlog_ops, comment);
     northd_send_request(ctx, jsonrpc_create_request("transact", ddlog_ops,
                                                     NULL));
 }
@@ -1245,6 +1249,8 @@ main(int argc, char *argv[])
         }
     }
 
+    VLOG_INFO("ovnnb_db=%s", ovnnb_db);
+    VLOG_INFO("ovnsb_db=%s", ovnsb_db);
     struct northd_ctx *nb_ctx = northd_ctx_create(ovnnb_db, "OVN_Northbound",
                                                   ddlog);
     struct northd_ctx *sb_ctx = northd_ctx_create(ovnsb_db, "OVN_Southbound",

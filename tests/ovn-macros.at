@@ -99,7 +99,7 @@ m4_divert_push([PREPARE_TESTS])
 #
 # Usually invoked from ovn_start.
 ovn_init_db () {
-    echo "creating $1 database"
+    echo "${AZ:+$AZ: }creating $1 database"
     local as_d=$1
     if test -n "$2"; then
         as_d=$2/$as_d
@@ -129,12 +129,14 @@ ovn_init_ic_db () {
 # ovn-sbctl and ovn-nbctl use them by default, and starts ovn-northd running
 # against them.
 ovn_start () {
+    AZ=$1
+    local prefix=${AZ:+$AZ: }
+
     local northd_args=
     case ${NORTHD_TYPE:=ovn-northd} in
         ovn-northd) ;;
-        ovn-northd-ddlog) northd_args="--ddlog-record=replay.dat" ;;
+        ovn-northd-ddlog) northd_args="--ddlog-record=${AZ:+$AZ/}replay.dat" ;;
     esac
-    AZ=$1
     if test -n "$AZ"; then
         mkdir "$ovs_base"/$AZ
     fi
@@ -151,7 +153,7 @@ ovn_start () {
     if test -n "$AZ"; then
         as_d=$AZ/$as_d
     fi
-    echo "starting $NORTHD_TYPE"
+    echo "${prefix}starting $NORTHD_TYPE"
     mkdir "$ovs_base"/$as_d
     as $as_d start_daemon $NORTHD_TYPE \
                -vjsonrpc \
@@ -162,7 +164,7 @@ ovn_start () {
     if test -n "$AZ"; then
         as_d=$AZ/$as_d
     fi
-    echo "starting backup $NORTHD_TYPE"
+    echo "${prefix}starting backup $NORTHD_TYPE"
     mkdir "$ovs_base"/$as_d
     as $as_d start_daemon $NORTHD_TYPE $northd_args \
                -vjsonrpc \
@@ -170,8 +172,10 @@ ovn_start () {
                --ovnsb-db=$ovn_sb_db
 
     if test -n "$AZ"; then
+        ovn-nbctl --wait=sb sync || exit $?
+
         as_d=$AZ/ic
-        echo "starting ovn-ic"
+        echo "${prefix}starting ovn-ic"
         mkdir "$ovs_base"/$as_d
         as $as_d start_daemon ovn-ic \
                --ovnnb-db=$ovn_nb_db \

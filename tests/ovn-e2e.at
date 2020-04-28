@@ -16831,6 +16831,10 @@ done
 
 for ts in `seq 1 $n_ts`; do
     ovn-ic-nbctl create Transit_Switch name=ts$ts
+    for az in `seq 1 $n_az`; do
+        echo "az$az: wait for ts$ts..."
+        ovn_as az$az ovn-nbctl wait-until logical_switch ts$ts
+    done
 done
 
 for az in `seq 1 $n_az`; do

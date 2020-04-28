@@ -413,16 +413,19 @@ AT_CHECK([ovn-sbctl list ha_chassis | grep chassis | awk '{print $3}' \
 
 # Create a logical router port and attach ha chassis group.
 ovn-nbctl lr-add lr0
-ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
+ovn-nbctl --wait=sb lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
 
 hagrp1_uuid=`ovn-nbctl --bare --columns _uuid find ha_chassis_group name=hagrp1`
-ovn-nbctl set logical_router_port lr0-public ha_chassis_group=$hagrp1_uuid
+echo "hagrp1_uuid=$hagrp1_uuid"
+ovn-nbctl --wait=sb set logical_router_port lr0-public ha_chassis_group=$hagrp1_uuid
 
 OVS_WAIT_UNTIL([test 1 = `ovn-sbctl --bare --columns name find \
 ha_chassis_group name="hagrp1" | wc -l`])
 
+ovn-sbctl list ha_chassis
 AT_CHECK([test 3 = `ovn-sbctl list ha_chassis | grep chassis | \
 grep -v chassis-name | wc -l`])
+exit 0
 
 # Make sure that ovn-northd doesn't recreate the ha_chassis
 # records if the chassis record is missing in SB DB.
