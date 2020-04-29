@@ -78,6 +78,7 @@ NORTHD_CLI = 0
 ddlog_targets = $(northd_lib_$(NORTHD_LIB)) $(northd_cli_$(NORTHD_CLI))
 northd_lib_1 = northd/ovn_northd_ddlog/target/release/libovn_%_ddlog.la
 northd_cli_1 = northd/ovn_northd_ddlog/target/release/ovn_%_cli
+EXTRA_northd_ovn_northd_DEPENDENCIES = $(northd_cli_$(NORTHD_CLI))
 
 cargo_build = $(cargo_build_$(NORTHD_LIB)$(NORTHD_CLI))
 cargo_build_01 = --bin ovn_northd_cli

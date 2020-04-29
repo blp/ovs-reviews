@@ -122,15 +122,14 @@ DistributedGatewayPortCandidate(lr_uuid, lrp_uuid) :-
     not map_contains_key(lrp.options, "chassis"),
     var has_hcg = not set_is_empty(lrp.ha_chassis_group),
     var has_gc = not set_is_empty(lrp.gateway_chassis),
-    has_hcg or has_gc,
-    not has_hcg or not has_gc.
+    has_hcg or has_gc.
 Warning(message) :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
     var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
     set_size(lrps) > 64'd1,
     lr in nb.Logical_Router(._uuid = lr_uuid),
     var message = "Bad configuration: multiple distributed gateway ports on "
-    "logical router ${lr.name}".
+    "logical router ${lr.name}; ignoring all of them".
 
 /* Distributed gateway ports.
  *
@@ -147,24 +146,28 @@ DistributedGatewayPort(lrp, lr_uuid) :-
 
 /* HAChassis is an abstraction over nb.Gateway_Chassis and nb.HA_Chassis, which
  * are different ways to represent the same configuration.  Each row is
- * effectively one HA_Chassis record for logical router 'lr_uuid'.
+ * effectively one HA_Chassis record.  (Usually, we could associated each
+ * row with a particular 'lr_uuid', but it's permissible for more than one
+ * logical router to use a HA chassis group, so we omit it so that multiple
+ * references get merged.)
  *
  * nb.Gateway_Chassis has an "options" column that this omits because
  * nb.HA_Chassis doesn't have anything similar.  That's OK because no options
  * were ever defined. */
-relation HAChassis(lr_uuid: uuid,
+relation HAChassis(hacg_name: string,
                    chassis_name: string,
                    priority: integer,
                    external_ids: Map<string,string>)
-HAChassis(lr_uuid, chassis_name, priority, external_ids) :-
-    DistributedGatewayPort(lrp, lr_uuid),
+HAChassis(lrp.name, chassis_name, priority, external_ids) :-
+    DistributedGatewayPort(.lrp = lrp),
+    set_is_empty(lrp.ha_chassis_group),
     var gw_chassis_uuid = FlatMap(lrp.gateway_chassis),
     nb.Gateway_Chassis(._uuid = gw_chassis_uuid,
                        .chassis_name = chassis_name,
                        .priority = priority,
                        .external_ids = external_ids).
-HAChassis(lr_uuid, chassis_name, priority, external_ids) :-
-    DistributedGatewayPort(lrp, lr_uuid),
+HAChassis(ha_chassis_group.name, chassis_name, priority, external_ids) :-
+    DistributedGatewayPort(.lrp = lrp),
     var ha_chassis_group_uuid = FlatMap(lrp.ha_chassis_group),
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
@@ -177,20 +180,40 @@ HAChassis(lr_uuid, chassis_name, priority, external_ids) :-
  * the two southbound ways to configure it via nb.Gateway_Chassis and
  * nb.HA_Chassis.  The former configuration method does not provide a name or
  * external_ids for the group (only for individual chassis), so we generate
- * them. */
-relation HAChassisGroup(lr_uuid: uuid,
-                        name: string,
+ * them.
+ *
+ * (Usually, we could associated each row with a particular 'lr_uuid', but it's
+ * permissible for more than one logical router to use a HA chassis group, so
+ * we omit it so that multiple references get merged.)
+ */
+relation HAChassisGroup(name: string,
                         external_ids: Map<string,string>)
-HAChassisGroup(lr_uuid, name, map_empty()) :-
+HAChassisGroup(lrp.name, map_empty()) :-
+    DistributedGatewayPort(.lrp = lrp),
+    set_is_empty(lrp.ha_chassis_group),
+    not set_is_empty(lrp.gateway_chassis).
+HAChassisGroup(hacg_name, external_ids) :-
+    DistributedGatewayPort(.lrp = lrp),
+    var ha_chassis_group_uuid = FlatMap(lrp.ha_chassis_group),
+    nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid,
+                        .name = hacg_name,
+                        .external_ids = external_ids).
+
+/* Each row maps from a logical router to the name of its HAChassisGroup.
+ * This level of indirection is needed because multiple logical routers
+ * are allowed to reference a given HAChassisGroup. */
+relation LogicalRouterHAChassisGroup(lr_uuid: uuid,
+                                     hacg_name: string)
+LogicalRouterHAChassisGroup(lr_uuid, lrp.name) :-
     DistributedGatewayPort(lrp, lr_uuid),
-    var gw_chassis_uuid = FlatMap(lrp.gateway_chassis),
-    var name = lrp.name.
-HAChassisGroup(lr_uuid, name, external_ids) :-
+    set_is_empty(lrp.ha_chassis_group),
+    set_size(lrp.gateway_chassis) > 64'd0.
+LogicalRouterHAChassisGroup(lr_uuid, hacg_name) :-
     DistributedGatewayPort(lrp, lr_uuid),
     var ha_chassis_group_uuid = FlatMap(lrp.ha_chassis_group),
     nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid,
-                        .name = name,
-                        .external_ids = external_ids).
+                        .name = hacg_name).
+
 
 /* For each router port, tracks whether it's a redirect port of its router */
 relation RouterPortIsRedirect(lrp: uuid, is_redirect: bool)
