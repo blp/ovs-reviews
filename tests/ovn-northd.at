@@ -545,31 +545,27 @@ wait_row_count ha_chassis_group 1 name=hagrp1
 check_row_count ha_chassis $(if_northd_type 3 1)
 
 # Create a Gateway chassis. ovn-northd should ignore this.
-check ovn-nbctl lrp-set-gateway-chassis lr0-public ch1 20
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis lr0-public ch1 20
 
 # There should be only 1 HA chassis group in SB DB with the
 # name hagrp1.
-wait_row_count ha_chassis_group 1
-wait_row_count ha_chassis_group 1 name=hagrp1
+check_row_count ha_chassis_group 1
+check_row_count ha_chassis_group 1 name=hagrp1
 check_row_count ha_chassis $(if_northd_type 3 1)
 
 # Now delete HA chassis group. ovn-northd should create HA chassis group
 # with the Gateway chassis name
 check ovn-nbctl clear logical_router_port lr0-public ha_chassis_group
-check ovn-nbctl ha-chassis-group-del hagrp1
+check ovn-nbctl --wait=sb ha-chassis-group-del hagrp1
 
-wait_row_count ha_chassis_group 0 name=hagrp1
+check_row_count ha_chassis_group 0 name=hagrp1
+check_row_count ha_chassis_group 1 name=lr0-public
+check_row_count ha_chassis_group 1
+
+check ovn-nbctl --wait=sb lrp-set-gateway-chassis lr0-public ch2 10
+
 wait_row_count ha_chassis_group 1 name=lr0-public
-wait_row_count ha_chassis_group 1
-
-check ovn-nbctl lrp-set-gateway-chassis lr0-public ch2 10
-
-OVS_WAIT_UNTIL([test 1 = `ovn-sbctl --bare --columns name find \
-ha_chassis_group name="lr0-public" | wc -l`])
-
-ovn-sbctl --bare --columns _uuid find ha_chassis
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl list ha_chassis | grep chassis | \
-grep -v chassis-name | wc -l`])
+wait_row_count ha_chassis $(if_northd_type 2 1)
 
 # Test if 'ref_chassis' column is properly set or not in
 # SB DB ha_chassis_group.

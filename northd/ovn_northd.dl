@@ -435,16 +435,16 @@ RefChassisSet(lr_uuid, set_empty()) :-
     not RefChassisSet0(lr_uuid, _).
 
 /* HA_Chassis_Group and HA_Chassis. */
-sb.Out_HA_Chassis_Group(hacg_name, hacg_name, ha_chassis, set_empty(), eids) :-
-    HAChassis(hacg_name, chassis_name, _, _),
+sb.Out_HA_Chassis_Group(hacg_uuid_name, hacg_name, ha_chassis, set_empty(), eids) :-
+    HAChassis(hacg_uuid_name, chassis_name, _, _),
     chassis_rec in sb.Chassis(.name = chassis_name),
     var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
-    var ha_chassis = Aggregate((hacg_name), group2set(ha_chassis_uuid_name)),
-    HAChassisGroup(hacg_name, eids).
+    var ha_chassis = Aggregate((hacg_uuid_name), group2set(ha_chassis_uuid_name)),
+    HAChassisGroup(hacg_uuid_name, hacg_name, eids).
     //RefChassisSet(lr_uuid, ref_chassis).
 
 sb.Out_HA_Chassis(ha_chassis_uuid_name, chassis, priority, eids) :-
-    HAChassis(hacg_name, chassis_name, priority, eids),
+    HAChassis(_, chassis_name, priority, eids),
     chassis_rec in sb.Chassis(.name = chassis_name),
     var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
     var chassis = set_singleton(chassis_rec._uuid).
