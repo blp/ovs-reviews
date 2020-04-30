@@ -897,9 +897,9 @@ ovn-nbctl ls-add S1
 ovn-nbctl lsp-add S1 S1-R1
 ovn-nbctl lsp-set-type S1-R1 router
 ovn-nbctl lsp-set-addresses S1-R1 router
-ovn-nbctl --wait=sb lsp-set-options S1-R1 router-port=R1-S1
+ovn-nbctl lsp-set-options S1-R1 router-port=R1-S1
 
-ovn-nbctl lrp-set-gateway-chassis R1-S1 gw1
+ovn-nbctl --wait=sb lrp-set-gateway-chassis R1-S1 gw1
 
 uuid=`ovn-sbctl --columns=_uuid --bare find Port_Binding logical_port=cr-R1-S1`
 echo "CR-LRP UUID is: " $uuid
