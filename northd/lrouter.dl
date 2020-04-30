@@ -89,6 +89,9 @@ ReachableLogicalRouter(a, b) :-
 ReachableLogicalRouter(a, b) :-
     FirstHopLogicalRouter(a, ls),
     FirstHopLogicalRouter(b, ls).
+ReachableLogicalRouter(a, b) :-
+    ReachableLogicalRouter(a, c),
+    ReachableLogicalRouter(c, b).
 ReachableLogicalRouter(a, a) :- ReachableLogicalRouter(a, _).
 
 // ha_chassis_group and gateway_chassis may not both be present.
