@@ -7277,11 +7277,9 @@ as gw1 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 as gw2 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 as ext1 ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 
-AT_CHECK([ovn-nbctl --timeout=3 --wait=sb sync], [0], [ignore])
-
-# Allow some time for ovn-northd and ovn-controller to catch up.
-# XXX This should be more systematic.
-sleep 2
+AT_CHECK([ovn-nbctl --wait=hv sync], [0], [ignore])
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
 
 ip_to_hex() {
     printf "%02x%02x%02x%02x" "$@"
