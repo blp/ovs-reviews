@@ -434,14 +434,26 @@ RefChassisSet(lr_uuid, set_empty()) :-
     nb.Logical_Router(._uuid = lr_uuid),
     not RefChassisSet0(lr_uuid, _).
 
+/* Referenced chassis for an HA chassis group.
+ *
+ * Multiple logical routers can reference an HA chassis group so we merge the
+ * referenced chassis across all of them.
+ */
+relation HAChassisGroupRefChassisSet(hacg_uuid_name: string,
+                                     chassis_uuids: Set<uuid>)
+HAChassisGroupRefChassisSet(hacg_name, chassis_uuids) :-
+    LogicalRouterHAChassisGroup(lr_uuid, hacg_name),
+    RefChassisSet(lr_uuid, chassis_uuids),
+    var chassis_uuids = Aggregate((hacg_name), group_set_unions(chassis_uuids)).
+
 /* HA_Chassis_Group and HA_Chassis. */
-sb.Out_HA_Chassis_Group(hacg_uuid_name, hacg_name, ha_chassis, set_empty(), eids) :-
+sb.Out_HA_Chassis_Group(hacg_uuid_name, hacg_name, ha_chassis, ref_chassis, eids) :-
     HAChassis(hacg_uuid_name, chassis_name, _, _),
     chassis_rec in sb.Chassis(.name = chassis_name),
     var ha_chassis_uuid_name = ha_chassis_uuid_name(chassis_rec._uuid),
     var ha_chassis = Aggregate((hacg_uuid_name), group2set(ha_chassis_uuid_name)),
-    HAChassisGroup(hacg_uuid_name, hacg_name, eids).
-    //RefChassisSet(lr_uuid, ref_chassis).
+    HAChassisGroup(hacg_uuid_name, hacg_name, eids),
+    HAChassisGroupRefChassisSet(hacg_uuid_name, ref_chassis).
 
 sb.Out_HA_Chassis(ha_chassis_uuid_name, chassis, priority, eids) :-
     HAChassis(_, chassis_name, priority, eids),
