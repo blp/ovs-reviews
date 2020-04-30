@@ -24,10 +24,10 @@ northd_ovn_northd_ddlog_SOURCES = \
 	northd/ovn-northd-ddlog.c \
 	northd/ovn_northd_ddlog/ddlog.h
 northd_ovn_northd_ddlog_LDADD = \
+	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
 	lib/libovn.la \
 	$(OVSDB_LIBDIR)/libovsdb.la \
-	$(OVS_LIBDIR)/libopenvswitch.la \
-	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la
+	$(OVS_LIBDIR)/libopenvswitch.la
 
 northd/OVN_Northbound.dl: ovn-nb.ovsschema northd/nb2ddlog
 	$(AM_V_GEN)$(srcdir)/northd/nb2ddlog $(srcdir)/ovn-nb.ovsschema > $@.tmp
