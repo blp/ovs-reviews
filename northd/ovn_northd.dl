@@ -526,6 +526,17 @@ sb.Out_SB_Global(.nb_cfg         = sb_global.nb_cfg,
     sb_global in sb.SB_Global(),
     not nb.NB_Global().
 
+
+/* Track minimum hv_cfg across all the (non-remote) chassis. */
+relation HvCfg0(hv_cfg: integer)
+HvCfg0(hv_cfg) :-
+    sb.Chassis(.nb_cfg = chassis_cfg, .external_ids = eids),
+    not map_get_bool_def(eids, "is-remote", false),
+    var hv_cfg = Aggregate((), group_min(chassis_cfg)).
+relation HvCfg(hv_cfg: integer)
+HvCfg(hv_cfg) :- HvCfg0(hv_cfg).
+HvCfg(hv_cfg) :- Unit(), not HvCfg0(), nb.NB_Global(.nb_cfg = hv_cfg).
+
 /*
  * NB_Global:
  * - set `sb_cfg` to the value of `SB_Global.nb_cfg`.
@@ -535,26 +546,12 @@ sb.Out_SB_Global(.nb_cfg         = sb_global.nb_cfg,
  *   time northd is updating `sb_cfg` or `hv_cfg`.
  */
 nb.Out_NB_Global(.sb_cfg        = sb_cfg,
-                 .hv_cfg        = nb_cfg,
+                 .hv_cfg        = hv_cfg,
                  .ipsec         = ipsec,
                  .options       = options) :-
-    nbg in nb.NB_Global(.ipsec = ipsec, .nb_cfg = nb_cfg),
+    nbg in nb.NB_Global(.ipsec = ipsec),
     sb.SB_Global(.nb_cfg = sb_cfg),
-    not sb.Chassis(),
-    MacPrefix(mac_prefix),
-    SvcMonitorMac(svc_monitor_mac),
-    var options0 = put_mac_prefix(nbg.options, mac_prefix),
-    var options = put_svc_monitor_mac(options0, svc_monitor_mac).
-
-nb.Out_NB_Global(.sb_cfg        = sb_cfg,
-                 .hv_cfg        = hv_cfg,
-                 .ipsec         = nbg.ipsec,
-                 .options       = options) :-
-    nbg in nb.NB_Global(),
-    sb.SB_Global(.nb_cfg = sb_cfg),
-    chassis in sb.Chassis(.nb_cfg = chassis_cfg),
-    not map_get_bool_def(chassis.external_ids, "is-remote", false),
-    var hv_cfg = Aggregate((nbg, sb_cfg), group_min(chassis_cfg)),
+    HvCfg(hv_cfg),
     MacPrefix(mac_prefix),
     SvcMonitorMac(svc_monitor_mac),
     var options0 = put_mac_prefix(nbg.options, mac_prefix),
