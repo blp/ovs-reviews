@@ -26,7 +26,8 @@ for (meter in nb.Meter) {
 
 /* Datapath_Binding table */
 sb.Out_Datapath_Binding(uuid2name(uuid), 0, external_ids) :-
-    nb.Logical_Switch(._uuid = uuid, .name = name, .external_ids = ids),
+    nb.Logical_Switch(._uuid = uuid, .name = name, .external_ids = ids,
+                      .other_config = other_config),
     var uuid_str = uuid2str(uuid),
     var external_ids = {
         var eids: Map<string, string> = map_empty();
@@ -36,7 +37,7 @@ sb.Out_Datapath_Binding(uuid2name(uuid), 0, external_ids) :-
             None -> (),
             Some{nnn} -> map_insert(eids, "name2", nnn)
         };
-        match (map_get(ids, "interconn-ts")) {
+        match (map_get(other_config, "interconn-ts")) {
             None -> (),
             Some{value} -> map_insert(eids, "interconn-ts", value)
         };
