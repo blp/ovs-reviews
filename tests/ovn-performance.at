@@ -224,6 +224,7 @@ m4_define([OVN_CONTROLLER_EXPECT_HIT_COND],[
     CHECK_COUNTER_DELTA_COND([$1], [ovn-controller], [$2], [$3], [$4])
 ])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- ovn-controller incremental processing])
 # Check which operations the trigger full logical flow processing.
 #
@@ -422,3 +423,4 @@ OVN_CONTROLLER_EXPECT_HIT(
 OVN_CLEANUP([hv1], [hv2])
 
 AT_CLEANUP
+])

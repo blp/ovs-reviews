@@ -14482,6 +14482,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- MLD snoop/querier/relay])
+AT_KEYWORDS([snoop querier query relay])
 ovn_start
 
 # Logical network:
@@ -14694,10 +14695,12 @@ ovs-vsctl -- add-port br-int hv2-vif4 -- \
     options:rxq_pcap=hv2/vif4-rx.pcap \
     ofport-request=1
 
+ovn-nbctl --wait=hv sync
+
 OVN_POPULATE_ARP
 
 # Enable multicast snooping on sw1.
-ovn-nbctl set Logical_Switch sw1       \
+ovn-nbctl --wait=hv set Logical_Switch sw1       \
     other_config:mcast_querier="false" \
     other_config:mcast_snoop="true"
 
@@ -14726,6 +14729,9 @@ OVS_WAIT_UNTIL([
     total_entries=`ovn-sbctl find IGMP_Group | grep "ff0a:dead:beef::1" -c`
     test "${total_entries}" = "2"
 ])
+
+# This gives the ovn-controller nodes a chance to see the new IGMP_Group.
+ovn-nbctl --wait=hv sync
 
 # Send traffic and make sure it gets forwarded only on the two ports that
 # joined.
@@ -16831,7 +16837,7 @@ for ts in `seq 1 $n_ts`; do
     ovn-ic-nbctl create Transit_Switch name=ts$ts
     for az in `seq 1 $n_az`; do
         echo "az$az: wait for ts$ts..."
-        ovn_as az$az ovn-nbctl wait-until logical_switch ts$ts
+        AT_CHECK([ovn_as az$az ovn-nbctl wait-until logical_switch ts$ts])
     done
 done
 
@@ -16866,7 +16872,7 @@ for az in `seq 1 $n_az`; do
         ovn-nbctl lsp-set-addresses lsp-ts$i-lr$az-$i router
         ovn-nbctl lsp-set-type lsp-ts$i-lr$az-$i router
         ovn-nbctl lsp-set-options lsp-ts$i-lr$az-$i router-port=lrp-lr$az-$i-ts$i
-        ovn-nbctl lrp-set-gateway-chassis lrp-lr$az-$i-ts$i gw$az
+        ovn-nbctl --wait=hv lrp-set-gateway-chassis lrp-lr$az-$i-ts$i gw$az
     done
 done
 
@@ -16876,7 +16882,7 @@ done
 OVN_POPULATE_ARP
 
 for i in `seq 1 $n_az`; do
-    AT_CHECK([ovn_as az$i ovn-nbctl --timeout=3 --wait=sb sync], [0], [ignore])
+    AT_CHECK([ovn_as az$i ovn-nbctl --timeout=3 --wait=hv sync], [0], [ignore])
 done
 
 # Allow some time for ovn-northd and ovn-controller to catch up.
@@ -16914,20 +16920,20 @@ for s_az in `seq 1 $n_az`; do
 done
 
 echo "---------INB dump-----"
-ovn-ic-nbctl show
+ovn-ic-nbctl show > ic-nbctl.dump
 echo "---------------------"
 
-echo "---------ISB dump-----"
-ovn-ic-sbctl show
-echo "---------------------"
-ovn-ic-sbctl list gateway
-echo "---------------------"
-ovn-ic-sbctl list datapath_binding
-echo "---------------------"
-ovn-ic-sbctl list port_binding
-echo "---------------------"
-ovn-ic-sbctl list route
-echo "---------------------"
+(echo "---------ISB dump-----"
+ ovn-ic-sbctl show
+ echo "---------------------"
+ ovn-ic-sbctl list gateway
+ echo "---------------------"
+ ovn-ic-sbctl list datapath_binding
+ echo "---------------------"
+ ovn-ic-sbctl list port_binding
+ echo "---------------------"
+ ovn-ic-sbctl list route
+ echo "---------------------") > ic-sbctl.dump
 
 for az in `seq 1 $n_az`; do
     for i in `seq 1 $n_ts`; do

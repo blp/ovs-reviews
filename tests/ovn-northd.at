@@ -928,85 +928,52 @@ ovn-nbctl ls-add S1
 ovn-nbctl lsp-add S1 S1-R1
 ovn-nbctl lsp-set-type S1-R1 router
 ovn-nbctl lsp-set-addresses S1-R1 router
-ovn-nbctl --wait=sb lsp-set-options S1-R1 router-port=R1-S1
+ovn-nbctl lsp-set-options S1-R1 router-port=R1-S1
 
-ovn-nbctl lrp-set-gateway-chassis R1-S1 gw1
+ovn-nbctl --wait=sb lrp-set-gateway-chassis R1-S1 gw1
 
 uuid=`ovn-sbctl --columns=_uuid --bare find Port_Binding logical_port=cr-R1-S1`
 echo "CR-LRP UUID is: " $uuid
 
-# IPV4
-ovn-nbctl lr-nat-add R1 dnat_and_snat  172.16.1.1 50.0.0.11
+check_flow_matches() {
+    local regex=$1 count=$2
+    local found=$(grep -c "$1" r1-flows)
+    echo "checking for $count flows matching $regex... found $found"
+    AT_FAIL_IF([test $found != $count])
+}
 
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl dump-flows R1 | grep lr_in_unsnat | \
-wc -l`])
+check_flow_match_sets() {
+    ovn-sbctl dump-flows R1 > r1-flows
+    AT_CAPTURE_FILE([r1-flows])
 
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_snat | wc -l], [0], [2
-])
+    for regex in lr_in_unsnat ct_snat ct_dnat ip4.dst= ip4.src= ip6.dst= ip6.src=; do
+        check_flow_matches $regex $1
+        shift
+    done
+}
 
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_dnat | wc -l], [0], [2
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip4.dst=| wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip4.src=| wc -l], [0], [0
-])
-
+echo
+echo "IPv4: stateful"
+ovn-nbctl --wait=sb lr-nat-add R1 dnat_and_snat  172.16.1.1 50.0.0.11
+check_flow_match_sets 2 2 2 0 0 0 0
 ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.1
 
-ovn-nbctl --stateless lr-nat-add R1 dnat_and_snat  172.16.1.1 50.0.0.11
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl dump-flows R1 | grep lr_in_unsnat | \
-wc -l`])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_snat | wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_dnat | wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip4.dst=| wc -l], [0], [2
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip4.src=| wc -l], [0], [2
-])
+echo
+echo "IPv4: stateless"
+ovn-nbctl --wait=sb --stateless lr-nat-add R1 dnat_and_snat  172.16.1.1 50.0.0.11
+check_flow_match_sets 2 0 0 2 2 0 0
 ovn-nbctl lr-nat-del R1 dnat_and_snat  172.16.1.1
 
-# IPV6
-ovn-nbctl lr-nat-add R1 dnat_and_snat fd01::1 fd11::2
-
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl dump-flows R1 | grep lr_in_unsnat | \
-wc -l`])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_snat | wc -l], [0], [2
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_dnat | wc -l], [0], [2
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip6.dst=| wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip6.src=| wc -l], [0], [0
-])
-
+echo
+echo "IPv6: stateful"
+ovn-nbctl --wait=sb lr-nat-add R1 dnat_and_snat fd01::1 fd11::2
+check_flow_match_sets 2 2 2 0 0 0 0
 ovn-nbctl lr-nat-del R1 dnat_and_snat  fd01::1
-ovn-nbctl --stateless lr-nat-add R1 dnat_and_snat fd01::1 fd11::2
 
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl dump-flows R1 | grep lr_in_unsnat | \
-wc -l`])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_snat | wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ct_dnat | wc -l], [0], [0
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip6.dst=| wc -l], [0], [2
-])
-
-AT_CHECK([ovn-sbctl dump-flows R1 | grep ip6.src=| wc -l], [0], [2
-])
+echo
+echo "IPv6: stateless"
+ovn-nbctl --wait=sb --stateless lr-nat-add R1 dnat_and_snat fd01::1 fd11::2
+check_flow_match_sets 2 0 0 0 0 2 2
 
 AT_CLEANUP
 ])
