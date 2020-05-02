@@ -64,13 +64,12 @@ PeerLogicalRouter(lrp_uuid, peer._uuid) :-
  * A switch can have multiple first-hop routers. */
 relation FirstHopLogicalRouter(lrouter: uuid, lswitch: uuid)
 FirstHopLogicalRouter(lrouter, lswitch) :-
+  lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid, .__type = "router"),
+  Some{var lrp_name} = map_get(lsp.options, "router-port"),
+  lrp in nb.Logical_Router_Port(._uuid = lrp_uuid, .name = lrp_name),
+  set_is_empty(lrp.peer),
   LogicalRouterPort(lrp_uuid, lrouter),
-  lrp in nb.Logical_Router_Port(._uuid = lrp_uuid),
-  LogicalSwitchPort(lsp_uuid, lswitch),
-  lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
-  lsp.__type == "router",
-  map_get(lsp.options, "router-port") == Some{lrp.name},
-  set_is_empty(lrp.peer).
+  LogicalSwitchPort(lsp_uuid, lswitch).
 
 /*
  * Reachable routers.
