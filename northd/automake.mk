@@ -48,7 +48,8 @@ cargo_verbose_1 = --verbose
 
 DDLOGFLAGS = -L $(DDLOGLIBDIR) -L $(builddir)/northd $(DDLOG_EXTRA_FLAGS)
 
-DDLOG_EXTRA_FLAGS = --output-internal-relations --output-input-relations=In_
+#DDLOG_EXTRA_FLAGS = --output-internal-relations --output-input-relations=In_
+DDLOG_EXTRA_FLAGS =
 
 RUSTFLAGS = \
 	-L ../../lib/.libs \
