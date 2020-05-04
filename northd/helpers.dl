@@ -89,8 +89,8 @@ function vec_nth_def(vector: Vec<'A>, index: bit<64>, def: 'A): 'A {
     }
 }
 
-function ha_chassis_group_uuid_name(lr_uuid: uuid): string = { "hacg" ++ uuid2name(lr_uuid) }
-function ha_chassis_uuid_name(chassis_uuid: uuid): string = { "hac" ++ uuid2name(chassis_uuid) }
+function ha_chassis_group_uuid(uuid: uuid): uuid { hash128("hacg" ++ uuid) }
+function ha_chassis_uuid(chassis_uuid: uuid): uuid { hash128("hac" ++ chassis_uuid) }
 
 /* Dummy relation with one empty row, useful for putting into antijoins. */
 relation Unit()

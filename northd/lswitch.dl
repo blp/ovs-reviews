@@ -126,7 +126,6 @@ LogicalSwitchHasDNSRecords(ls, false) :-
 
 relation &Switch(
     ls:                nb.Logical_Switch,
-    dpname:            string,
     has_stateful_acl:  bool,
     has_dns_records:   bool,
     has_localnet_port: bool,
@@ -148,7 +147,6 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
 }
 
 &Switch(.ls                = ls,
-        .dpname            = uuid2name(ls._uuid),
         .has_stateful_acl  = has_stateful_acl,
         .has_dns_records   = has_dns_records,
         .has_localnet_port = has_localnet_port,
@@ -362,17 +360,20 @@ SwitchPortUp(lsp, up) :-
     not sb.Port_Binding(.logical_port = lsp_name),
     var up = __type == "router".
 
-relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, ha_chassis_group_uuid_name: string)
-SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid_name) :-
+relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, ha_chassis_group_uuid: uuid)
+SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid(ls_uuid)) :-
     lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
     lsp.__type == "external",
     var ha_chassis_group_uuid = FlatMap(lsp.ha_chassis_group),
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
-    LogicalSwitchPort(.lport = lsp_uuid, .lswitch = ls_uuid),
-    var ha_chassis_group_uuid_name = ha_chassis_group_uuid_name(ls_uuid).
-relation SwitchPortHAChassisGroup(lsp_uuid: uuid, ha_chassis_group_uuid_name: Option<string>)
-SwitchPortHAChassisGroup(lsp_uuid, Some{ha_chassis_group_uuid_name}) :-
-    SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid_name).
+    /* If the group is empty, then HA_Chassis_Group record will not be created in SB,
+     * and so we should not create a reference to the group in Port_Binding table,
+     * to avoid integrity violation. */
+    not set_is_empty(ha_chassis_group.ha_chassis),
+    LogicalSwitchPort(.lport = lsp_uuid, .lswitch = ls_uuid).
+relation SwitchPortHAChassisGroup(lsp_uuid: uuid, ha_chassis_group_uuid: Option<uuid>)
+SwitchPortHAChassisGroup(lsp_uuid, Some{ha_chassis_group_uuid}) :-
+    SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid).
 SwitchPortHAChassisGroup(lsp_uuid, None) :-
     lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
     not SwitchPortHAChassisGroup0(lsp_uuid, _).
@@ -387,7 +388,7 @@ SwitchPortHAChassisGroup(lsp_uuid, None) :-
  * - `needs_dynamic_macaddress`  - port requires a dynamically allocated MAC address
  * - `needs_dynamic_tag`         - port requires a dynamically allocated tag
  * - `up`                        - true if the port is bound to a chassis or has type ""
- * - 'ha_chassis_group_uuid_name' - uuid_name of sb.HA_Chassis_Group, only for "external" ports
+ * - 'ha_chassis_group_uuid'     - uuid of sb.HA_Chassis_Group, only for "external" ports
  */
 relation &SwitchPort(
     lsp:                        nb.Logical_Switch_Port,
@@ -408,7 +409,7 @@ relation &SwitchPort(
     needs_dynamic_tag:          bool,
     up:                         bool,
     mcast_cfg:                  Ref<McastPortCfg>,
-    ha_chassis_group_uuid_name: Option<string>
+    ha_chassis_group_uuid:      Option<uuid>
 )
 
 &SwitchPort(.lsp                        = lsp,
@@ -429,7 +430,7 @@ relation &SwitchPort(
             .needs_dynamic_tag          = needs_dynamic_tag,
             .up                         = up,
             .mcast_cfg                  = mcast_cfg,
-            .ha_chassis_group_uuid_name = ha_chassis_group_uuid_name) :-
+            .ha_chassis_group_uuid      = ha_chassis_group_uuid) :-
     nb.Logical_Switch_Port[lsp],
     LogicalSwitchPort(lsp._uuid, lswitch_uuid),
     sw in &Switch(.ls = nb.Logical_Switch{._uuid = lswitch_uuid, .other_config = other_config},
@@ -502,7 +503,7 @@ relation &SwitchPort(
     var needs_dynamic_tag = is_some(parent_name) and
                             set_nth(lsp.tag_request, 0) == Some{0: integer},
     SwitchPortHAChassisGroup(.lsp_uuid = lsp._uuid,
-                             .ha_chassis_group_uuid_name = ha_chassis_group_uuid_name).
+                             .ha_chassis_group_uuid = ha_chassis_group_uuid).
 
 /* Switch port port security addresses */
 relation SwitchPortPSAddresses(port:     Ref<SwitchPort>,

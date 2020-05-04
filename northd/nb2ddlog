@@ -1,7 +1,6 @@
 #! /bin/sh
 ovsdb2ddlog -f "$1" \
     -o Logical_Switch_Port \
-    -k Logical_Switch_Port.name \
     -o NB_Global \
     --ro NB_Global.name \
     --ro NB_Global.nb_cfg \
