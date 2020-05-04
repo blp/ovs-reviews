@@ -53,8 +53,8 @@ DDLOG_EXTRA_FLAGS = --output-internal-relations --output-input-relations=In_
 RUSTFLAGS = \
 	-L ../../lib/.libs \
 	-L $(OVS_LIBDIR)/.libs \
-	$(LIBOPENVSWITCH_DEPS) \
-	$(LIBOVN_DEPS) \
+	$$LIBOPENVSWITCH_DEPS \
+	$$LIBOVN_DEPS \
 	-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)
 
 ddlog_sources = \
@@ -89,7 +89,7 @@ $(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.
 	$(AM_V_GEN)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
 	LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
 	cd northd/ovn_northd_ddlog && \
-	RUSTC='$(RUSTC)' RUSTFLAGS='$(RUSTFLAGS)' \
+	RUSTC='$(RUSTC)' RUSTFLAGS="$(RUSTFLAGS)" \
 	    cargo build --release $(CARGO_VERBOSE) $(cargo_build)
 
 CLEAN_LOCAL += clean-ddlog
