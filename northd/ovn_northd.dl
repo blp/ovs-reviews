@@ -1481,6 +1481,19 @@ for (&Switch(.ls =ls)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
+         .external_ids     = map_empty());
+
+    Flow(.logical_datapath = ls._uuid,
+         .stage            = switch_stage(IN, PRE_ACL),
+         .priority         = 110,
+         .__match          = "eth.dst == $svc_monitor_mac",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+    Flow(.logical_datapath = ls._uuid,
+         .stage            = switch_stage(OUT, PRE_ACL),
+         .priority         = 110,
+         .__match          = "eth.src == $svc_monitor_mac",
+         .actions          = "next;",
          .external_ids     = map_empty())
 }
 
@@ -1603,7 +1616,7 @@ for (&Switch(.ls = ls)) {
     Flow(.logical_datapath = ls._uuid,
          .stage            = switch_stage(IN, PRE_LB),
          .priority         = 110,
-         .__match          = "eth.src == $svc_monitor_mac",
+         .__match          = "eth.dst == $svc_monitor_mac",
          .actions          = "next;",
          .external_ids     = map_empty());
     Flow(.logical_datapath = ls._uuid,
