@@ -2837,7 +2837,7 @@ function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
 
 /*
  * Add ARP/ND reply flows if either the
- *  - port is up or
+ *  - port is up and it doesn't have 'unknown' address defined or
  *  - port type is router or
  *  - port type is localport
  */
@@ -2845,7 +2845,8 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
                            .ea_s = ea_s, .addr = addr)
      if is_enabled(lsp.enabled) and
         (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport") and
-        lsp.__type != "external" and lsp.__type != "virtual")
+        lsp.__type != "external" and lsp.__type != "virtual" and
+        not set_contains(lsp.addresses, "unknown"))
 {
     var __match = "arp.tpa == ${addr.addr_s} && arp.op == 1" in
     var actions = "eth.dst = eth.src; "
