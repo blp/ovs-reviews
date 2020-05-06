@@ -1578,6 +1578,7 @@ get_lsp_uuid () {
 
 ovn-nbctl create Port_Group name=pg1 ports=`get_lsp_uuid lp22`,`get_lsp_uuid lp33`
 ovn-nbctl acl-add lsw0 to-lport 1000 'eth.type == 0x1238 && outport == @pg1' drop
+ovn-nbctl --wait=hv sync
 
 # Pre-populate the hypervisors' ARP tables so that we don't lose any
 # packets for ARP resolution (native tunneling doesn't queue packets
@@ -1801,19 +1802,8 @@ tip=`ip_to_hex 192 169 0 13`
 test_arp 11 f00000000011  $sip $tip
 
 # dump information and flows with counters
-ovn-sbctl dump-flows -- list multicast_group
-
-echo "------ hv1 dump ------"
-as hv1 ovs-vsctl show
-as hv1 ovs-ofctl -O OpenFlow13 dump-flows br-int
-
-echo "------ hv2 dump ------"
-as hv2 ovs-vsctl show
-as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int
-
-echo "------ hv3 dump ------"
-as hv3 ovs-vsctl show
-as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int
+ovn-sbctl dump-flows -- list multicast_group > sbflows
+AT_CAPTURE_FILE([sbflows])
 
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
