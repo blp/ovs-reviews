@@ -3004,7 +3004,7 @@ function build_dhcpv4_action(
                         var options_action = "${rEGBIT_DHCP_OPTS_RESULT()} = put_dhcp_opts(offerip = ${ip_fmt(offer_ip)}, " ++
                                              string_join(options, ", ") ++ "); next;";
                         var response_action = "eth.dst = eth.src; eth.src = ${server_mac}; "
-                                              "ip4.dst = ${ip_fmt(offer_ip)}; ip4.src = ${server_ip}; udp.src = 67; "
+                                              "ip4.src = ${server_ip}; udp.src = 67; "
                                               "udp.dst = 68; outport = inport; flags.loopback = 1; "
                                               "output;";
 
