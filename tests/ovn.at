@@ -18521,6 +18521,9 @@ ovs-vsctl -- add-port br-int hv1-vif2 -- \
 OVN_POPULATE_ARP
 ovn-nbctl --wait=hv sync
 
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
+
 sw_dp_uuid=$(ovn-sbctl --bare --columns _uuid list datapath_binding sw-agg)
 sw_dp_key=$(ovn-sbctl --bare --columns tunnel_key list datapath_binding sw-agg)
 r1_dp_key=$(ovn-sbctl --bare --columns tunnel_key list datapath_binding rtr1)

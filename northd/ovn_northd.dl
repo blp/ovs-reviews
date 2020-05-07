@@ -3606,7 +3606,10 @@ Flow(.logical_datapath = sw.ls._uuid,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && arp.op == 1 && arp.tpa == { " ++
                          string_join(set2vec(all_ips_v4), ", ") ++ "}",
-     .actions          = "outport = ${sp.json_name}; output;",
+     .actions          = match (sw.localnet_port_name) {
+                             Some{name} -> "clone { outport = ${json_string_escape(name)}; output; }; ",
+                             None -> ""
+                         } ++ "outport = ${sp.json_name}; output;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
     is_enabled(rp.lrp.enabled),
@@ -3618,7 +3621,10 @@ Flow(.logical_datapath = sw.ls._uuid,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && nd_ns && nd.target == { " ++
                          string_join(set2vec(all_ips_v6), ", ") ++ "}",
-     .actions          = "outport = ${sp.json_name}; output;",
+     .actions          = match (sw.localnet_port_name) {
+                             Some{name} -> "clone { outport = ${json_string_escape(name)}; output; }; ",
+                             None -> ""
+                         } ++ "outport = ${sp.json_name}; output;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
     is_enabled(rp.lrp.enabled),
