@@ -4995,7 +4995,7 @@ for (&Router(.lr = lr,
                 "${ipX}.src == ${nat.logical_ip} && outport == ${json_string_escape(gwport.name)}" in
             Flow(.logical_datapath = lr._uuid,
                  .stage            = router_stage(IN, GW_REDIRECT),
-                 .priority         = 100,
+                 .priority         = 200,
                  .__match          = __match,
                  .actions          = "next;",
                  .external_ids     = stage_hint(nat._uuid));
@@ -5522,6 +5522,32 @@ for (&Router(.lr = lr))
          .external_ids     = map_empty())
 }
 
+/* Logical router ingress table IP_ROUTING - IP routing for distributed
+ * logical router
+ */
+Flow(.logical_datapath = r.lr._uuid,
+     .stage            = router_stage(IN, IP_ROUTING),
+     .priority         = 32'd0 ++ dROUTE_PRIO(),
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = stage_hint(nat._uuid)) :-
+    r in &Router(.l3dgw_port = Some{l3dgw_port}),
+    var nat = FlatMap(r.nats),
+    nat.__type == "dnat_and_snat",
+    var external_mac = FlatMap(nat.external_mac),
+    var logical_port = FlatMap(nat.logical_port),
+    (var ipx, var xx) = match (string_contains(nat.logical_ip, ".")) {
+        true -> ("ip4", ""),
+        false -> ("ip6", "xx")
+    },
+    var __match = "${ipx}.src == ${nat.logical_ip} && "
+                  "is_chassis_resident(${json_string_escape(logical_port)})",
+    var actions = "outport = ${r.redirect_port_name}; "
+                  "eth.src = ${external_mac}; "
+                  "${xx}reg0 = ${ipx}.dst; "
+                  "${xx}reg1 = ${nat.external_ip}; "
+                  "next;".
+
 /* Proxy table that stores per-port routes.
  * There routes get converted into logical flows by
  * the following rule.
@@ -5565,6 +5591,14 @@ for (Route(.port        = port,
         _ -> ""
     } in
     (var ip_match, var priority) = build_route_match(key) in
+    /* traffic for internal IPs of logical switch ports must be sent to
+     * the gw controller through the overlay tunnels
+     */
+    var dprio_bonus = if (set_is_empty(port.lrp.gateway_chassis)) {
+        dROUTE_PRIO()
+    } else {
+        32'd0
+    } in
     var __match = inport_match ++ ip_match in
     var nexthop = match (gateway) {
         Some{gw} -> "${gw}",
@@ -5583,7 +5617,7 @@ for (Route(.port        = port,
      * routing. */
     Flow(.logical_datapath = port.router.lr._uuid,
          .stage            = router_stage(IN, IP_ROUTING),
-         .priority         = 32'd0 ++ priority,
+         .priority         = 32'd0 ++ (priority + dprio_bonus),
          .__match          = __match,
          .actions          = actions,
          .external_ids     = stage_hint(port.lrp._uuid))
