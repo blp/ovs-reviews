@@ -770,6 +770,33 @@ northd_run(struct northd_ctx *ctx, bool run_deltas)
     }
 }
 
+static bool
+northd_update_probe_interval_cb(uintptr_t probe_intervalp_,
+                                const ddlog_record *rec)
+{
+    int *probe_intervalp = (int *) probe_intervalp_;
+
+    uint64_t x = ddlog_get_u64(rec);
+    if (x > 1000) {
+        *probe_intervalp = x;
+    }
+    return true;
+}
+
+static void
+northd_update_probe_interval(struct northd_ctx *nb, struct northd_ctx *sb)
+{
+    /* Default probe interval for NB and SB DB connections. */
+    int probe_interval = 5000;
+    ddlog_dump_table(nb->ddlog,
+                     ddlog_get_table_id("Northd_Probe_Interval"),
+                     northd_update_probe_interval_cb,
+                     (uintptr_t) &probe_interval);
+
+    jsonrpc_session_set_probe_interval(nb->session, probe_interval);
+    jsonrpc_session_set_probe_interval(sb->session, probe_interval);
+}
+
 /* Arranges for poll_block() to wake up when northd_run() has something to
  * do or when activity occurs on a transaction on 'ctx'. */
 static void
@@ -1158,8 +1185,6 @@ main(int argc, char *argv[])
         }
     }
 
-    VLOG_INFO("ovnnb_db=%s", ovnnb_db);
-    VLOG_INFO("ovnsb_db=%s", ovnsb_db);
     struct northd_ctx *nb_ctx = northd_ctx_create(ovnnb_db, "OVN_Northbound",
                                                   ddlog);
     struct northd_ctx *sb_ctx = northd_ctx_create(ovnsb_db, "OVN_Southbound",
@@ -1210,6 +1235,8 @@ main(int argc, char *argv[])
 
         northd_run(sb_ctx, run_deltas);
         northd_wait(sb_ctx);
+
+        northd_update_probe_interval(nb_ctx, sb_ctx);
 
         unixctl_server_run(unixctl);
         unixctl_server_wait(unixctl);
