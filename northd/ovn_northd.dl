@@ -580,6 +580,11 @@ nb.Out_NB_Global(._uuid         = nbg._uuid,
     nbg in nb.NB_Global(),
     not sb.SB_Global().
 
+output relation Northd_Probe_Interval[integer]
+Northd_Probe_Interval[interval] :-
+    nb in nb.NB_Global(),
+    var interval = map_get_int_def(nb.options, "northd_probe_interval", 0).
+
 /*
  * Address_Set: copy from NB + additional records generated from NB Port_Group (two records for each
  * Port_Group for IPv4 and IPv6 addresses).
