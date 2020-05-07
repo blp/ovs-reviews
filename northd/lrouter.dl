@@ -7,6 +7,9 @@ import lswitch
 
 output relation Warning(message: string)
 
+/* default logical flow prioriry for distributed routes */
+function dROUTE_PRIO(): bit<32> = 400
+
 /* LogicalRouterPortCandidate.
  *
  * Each row pairs a logical router port with its logical router, but without
