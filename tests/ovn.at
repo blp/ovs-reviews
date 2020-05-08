@@ -18415,7 +18415,7 @@ service_monitor | sed '/^$/d' | wc -l`])
 # Let's also be sure the warning message about SCTP load balancers is
 # is in the ovn-northd log
 
-AT_CHECK([test 1 = `grep -c "SCTP load balancers do not currently support health checks" northd/ovn-northd.log`])
+AT_CHECK([test 1 = `grep -c "SCTP load balancers do not currently support health checks" northd/NORTHD_TYPE.log`])
 
 AT_CLEANUP
 ])

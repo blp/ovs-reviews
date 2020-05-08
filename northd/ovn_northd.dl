@@ -9,6 +9,8 @@ import multicast
 import helpers
 import ipam
 
+output relation Warning[string]
+
 /* Meter_Band table */
 for (mb in nb.Meter_Band) {
     sb.Out_Meter_Band(._uuid = mb._uuid,
@@ -6343,7 +6345,7 @@ RequestedTunKey(uuid, tunkey) :-
 RequestedTunKey(uuid, tunkey) :-
     lr in nb.Logical_Router(._uuid = uuid),
     Some{var tunkey} = get_dp_tunkey(lr.options, "requested-tnl-key").
-Warning(message) :-
+Warning[message] :-
     RequestedTunKey(datapath, tunkey),
     var count = Aggregate((tunkey), group_count(datapath)),
     count > 1,
@@ -6431,7 +6433,7 @@ RequestedPortTunKey(datapath, port, tunkey) :-
     var datapath = rp.router.lr._uuid,
     var port = rp.lrp._uuid,
     Some{var tunkey} = get_port_tunkey(rp.lrp.options, "requested-tnl-key").
-Warning(message) :-
+Warning[message] :-
     RequestedPortTunKey(datapath, port, tunkey),
     var count = Aggregate((datapath, tunkey), group_count(port)),
     count > 1,
@@ -6635,7 +6637,7 @@ QueueIDAllocation(port, Some{qid}) :-
  * 3. For ports that do not have a tag_request, but have a tag statically assigned
  *    by directly setting the `tag` field, use this value.
  */
-output relation SwitchPortReservedTag(parent_name: string, tags: integer)
+relation SwitchPortReservedTag(parent_name: string, tags: integer)
 
 SwitchPortReservedTag(parent_name, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = needs_dynamic_tag, .parent_name = Some{parent_name}),
@@ -6648,7 +6650,7 @@ SwitchPortReservedTag(parent_name, tag) :-
         }
     }.
 
-output relation SwitchPortReservedTags(parent_name: string, tags: Set<integer>)
+relation SwitchPortReservedTags(parent_name: string, tags: Set<integer>)
 
 SwitchPortReservedTags(parent_name, tags) :-
     SwitchPortReservedTag(parent_name, tag),
@@ -6661,7 +6663,7 @@ SwitchPortReservedTags(parent_name, set_empty()) :-
 /* Allocate tags for ports that require dynamically allocated tags and do not
  * have any yet.
  */
-output relation SwitchPortAllocatedTags(lsp_uuid: uuid, tag: Option<integer>)
+relation SwitchPortAllocatedTags(lsp_uuid: uuid, tag: Option<integer>)
 
 SwitchPortAllocatedTags(lsp_uuid, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true, .parent_name = Some{parent_name}),
@@ -6680,7 +6682,7 @@ SwitchPortAllocatedTags(lsp_uuid, tag) :-
  * Case 2. Existing tag for ports that require a dynamically allocated tag and already have one.
  * Case 3. Use newly allocated tags (from `SwitchPortAllocatedTags`) for all other ports.
  */
-output relation SwitchPortNewDynamicTag(port: uuid, tag: Option<integer>)
+relation SwitchPortNewDynamicTag(port: uuid, tag: Option<integer>)
 
 /* Case 1 */
 SwitchPortNewDynamicTag(lsp._uuid, tag) :-
@@ -6718,7 +6720,7 @@ sb.Out_IP_Multicast(._uuid = cfg.datapath,
 
 sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip, lbvipbackend.port, protocol)),
                        .ip = lbvipbackend.ip,
-                       .protocol = protocol,
+                       .protocol = set_singleton(protocol),
                        .port = lbvipbackend.port as integer,
                        .logical_port = svc_monitor.port_name,
                        .src_mac = eth_addr2string(svc_monitor_mac),
@@ -6731,4 +6733,15 @@ sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip,
     LoadBalancerHealthCheckRef[lbhc],
     set_contains(lbvipbackend.lbvip.lb.health_check, lbhc._uuid),
     lbhc.vip == lbvipbackend.lbvip.vip_key,
-    var protocol = set_singleton(default_protocol(lbvipbackend.lbvip.lb.protocol)).
+    var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
+    protocol != "sctp".
+
+Warning["SCTP load balancers do not currently support "
+        "health checks. Not creating health checks for "
+        "load balancer ${uuid2str(lbvipbackend.lbvip.lb._uuid)}"] :-
+    LBVIPBackend[lbvipbackend],
+    default_protocol(lbvipbackend.lbvip.lb.protocol) == "sctp",
+    Some{var svc_monitor} = lbvipbackend.svc_monitor,
+    LoadBalancerHealthCheckRef[lbhc],
+    set_contains(lbvipbackend.lbvip.lb.health_check, lbhc._uuid),
+    lbhc.vip == lbvipbackend.lbvip.vip_key.
