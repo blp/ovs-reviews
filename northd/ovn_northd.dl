@@ -5338,7 +5338,7 @@ Flow(.logical_datapath = r.lr._uuid,
               _ -> ""
           },
     var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
-    var actions = "ct_lb$({lbvip.backend_ips});".
+    var actions = "ct_lb(${lbvip.backend_ips});".
 
 
 /* Defaults based on MaxRtrInterval and MinRtrInterval from RFC 4861 section
