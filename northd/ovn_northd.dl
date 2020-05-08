@@ -1059,8 +1059,17 @@ sb.Out_DHCPv6_Options (
  * DNS: copied from NB + datapaths column pointer to LS datapaths that use the record
  */
 
+function map_to_lowercase(m_in: Map<string,string>): Map<string,string> {
+    var m_out: Map<string,string> = map_empty();
+    for (node in m_in) {
+        (var k, var v) = node;
+        map_insert(m_out, string_to_lowercase(k), string_to_lowercase(v))
+    };
+    m_out
+}
+
 sb.Out_DNS(._uuid        = nbdns._uuid,
-           .records      = nbdns.records,
+           .records      = map_to_lowercase(nbdns.records),
            .datapaths    = datapaths,
            .external_ids = map_insert_imm(nbdns.external_ids, "dns_id", uuid2str(nbdns._uuid))) :-
     nb.DNS[nbdns],
