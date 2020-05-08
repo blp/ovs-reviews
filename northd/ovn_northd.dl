@@ -4039,25 +4039,6 @@ for (&Router(.lr = lr, .mcast_cfg = &mcast_cfg)) {
 
     /* Priority-90 flows reply to ARP requests and ND packets. */
 
-    /* Allow IPv6 multicast traffic that's supposed to reach the
-     * router pipeline (e.g., neighbor solicitations).
-     */
-    Flow(.logical_datapath = lr._uuid,
-         .stage            = router_stage(IN, IP_INPUT),
-         .priority         = 87,
-         .__match          = "ip6.mcast_flood",
-         .actions          = "next;",
-         .external_ids     = map_empty());
-
-    /* Allow multicast if relay enabled (priority 86). */
-    var mcast_action = { if (mcast_cfg.relay) { "next;" } else { "drop;" } } in
-    Flow(.logical_datapath = lr._uuid,
-         .stage            = router_stage(IN, IP_INPUT),
-         .priority         = 86,
-         .__match          = "ip4.mcast || ip6.mcast",
-         .actions          = "${mcast_action}",
-         .external_ids     = map_empty());
-
    /* Drop ARP packets (priority 85). ARP request packets for router's own
     * IPs are handled with priority-90 flows.
     * Drop IPv6 ND packets (priority 85). ND NA packets for router's own
@@ -4068,6 +4049,33 @@ for (&Router(.lr = lr, .mcast_cfg = &mcast_cfg)) {
          .priority         = 85,
          .__match          = "arp || nd",
          .actions          = "drop;",
+         .external_ids     = map_empty());
+
+    /* Allow IPv6 multicast traffic that's supposed to reach the
+     * router pipeline (e.g., router solicitations).
+     */
+    Flow(.logical_datapath = lr._uuid,
+         .stage            = router_stage(IN, IP_INPUT),
+         .priority         = 84,
+         .__match          = "nd_rs || nd_ra",
+         .actions          = "next;",
+         .external_ids     = map_empty());
+
+    /* Drop other reserved multicast. */
+    Flow(.logical_datapath = lr._uuid,
+         .stage            = router_stage(IN, IP_INPUT),
+         .priority         = 83,
+         .__match          = "ip6.mcast_rsvd",
+         .actions          = "drop;",
+         .external_ids     = map_empty());
+
+    /* Allow other multicast if relay enabled (priority 82). */
+    var mcast_action = { if (mcast_cfg.relay) { "next;" } else { "drop;" } } in
+    Flow(.logical_datapath = lr._uuid,
+         .stage            = router_stage(IN, IP_INPUT),
+         .priority         = 82,
+         .__match          = "ip4.mcast || ip6.mcast",
+         .actions          = mcast_action,
          .external_ids     = map_empty());
 
     /* Drop Ethernet local broadcast.  By definition this traffic should
@@ -5802,8 +5810,19 @@ Flow(.logical_datapath = router.lr._uuid,
 /* IP Multicast lookup. Here we set the output port, adjust TTL and advance
  * to next table (priority 500).
  */
+/* Drop IPv6 multicast traffic that shouldn't be forwarded,
+ * i.e., router solicitation and router advertisement.
+ */
+Flow(.logical_datapath = router.lr._uuid,
+     .stage            = router_stage(IN, IP_ROUTING),
+     .priority         = 550,
+     .__match          = "nd_rs || nd_ra",
+     .actions          = "drop;",
+     .external_ids     = map_empty()) :-
+    router in &Router().
+    
 for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
-    for (RouterMcastFloodPorts(&rtr, flood_ports)) {
+    for (RouterMcastFloodPorts(&rtr, flood_ports) if rtr.mcast_cfg.relay) {
         var flood_static = not set_is_empty(flood_ports) in
         (var mc_static, _) = mC_STATIC() in
         var static_act = {
@@ -5832,17 +5851,25 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
 }
 
 /* If needed, flood unregistered multicast on statically configured ports.
- * Priority 450.
+ * Priority 450. Otherwise drop any multicast traffic.
  */
-for (RouterMcastFloodPorts(&rtr, flood_ports)
-     if rtr.mcast_cfg.relay) {
+for (RouterMcastFloodPorts(&rtr, flood_ports)) {
     (var mc_static, _) = mC_STATIC() in
+    var flood_static = not set_is_empty(flood_ports) in
+    var actions = if (flood_static) {
+        "clone { "
+            "outport = \"${mc_static}\"; "
+            "ip.ttl--; "
+            "next; "
+        "};"
+    } else {
+        "drop;"
+    } in 
     Flow(.logical_datapath = rtr.lr._uuid,
          .stage            = router_stage(IN, IP_ROUTING),
          .priority         = 450,
          .__match          = "ip4.mcast || ip6.mcast",
-         .actions          =
-            "clone { outport = \"${mc_static}\"; ip.ttl--; next;};",
+         .actions          = actions,
          .external_ids     = map_empty())
 }
 
