@@ -5119,13 +5119,23 @@ for (&Router(.lr = lr,
     }
 }
 
+function nats_contain_vip(nats: Vec<Ref<nb.NAT>>, vip: string): bool {
+    for (nat in nats) {
+        if (nat.external_ip == vip) {
+            return true
+        }
+    };
+    return false
+}
+
 /* Load balancing and packet defrag are only valid on
  * Gateway routers or router with gateway port. */
 for (RouterLBVIP(
         .router = &Router{.lr = lr,
                           .l3dgw_port = l3dgw_port,
                           .redirect_port_name = redirect_port_name,
-                          .is_gateway = is_gateway},
+                          .is_gateway = is_gateway,
+                          .nats = nats},
         .lb = &lb,
         .vip = vip,
         .backends = backends)
@@ -5149,7 +5159,16 @@ for (RouterLBVIP(
     /* A set to hold all ips that need defragmentation and tracking. */
 
     /* vip contains IP:port or just IP. */
-    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip) in {
+    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
+    var ipX = if (addr_family == aF_INET()) {
+        "ip4"
+    } else {
+        "ip6"
+    } in
+    var proto = match (set_nth(lb.protocol, 0)) {
+        Some{proto} -> proto,
+        _ -> "tcp"
+    } in {
         /* If there are any load balancing rules, we should send
          * the packet to conntrack for defragmentation and
          * tracking.  This helps with two things.
@@ -5158,12 +5177,7 @@ for (RouterLBVIP(
          *    pick a DNAT ip address from a group.
          * 2. If there are L4 ports in load balancing rules, we
          *    need the defragmentation to match on L4 ports. */
-        var __match =
-            if (addr_family == aF_INET()) {
-                "ip && ip4.dst == ${ip_address}"
-            } else {
-                "ip && ip6.dst == ${ip_address}"
-            } in
+        var __match = "ip && ${ipX}.dst == ${ip_address}" in
         /* One of these flows must be created for each unique LB VIP address.
          * We create one for each VIP:port pair; flows with the same IP and
          * different port numbers will produce identical flows that will
@@ -5180,24 +5194,10 @@ for (RouterLBVIP(
          * via add_router_lb_flow().  One flow is for specific matching
          * on ct.new with an action of "ct_lb($targets);".  The other
          * flow is for ct.est with an action of "ct_dnat;". */
-        var match1 =
-            if (addr_family == aF_INET()) {
-                "ip && ip4.dst == ${ip_address}"
-            } else {
-                "ip && ip6.dst == ${ip_address}"
-            } in
-        var is_udp =
-            match (set_nth(lb.protocol, 0)) {
-                Some{"udp"} -> true,
-                _           -> false
-            } in
+        var match1 = "ip && ${ipX}.dst == ${ip_address}" in
         (var prio, var match2) =
             if (port != 0) {
-                (120: integer, if (is_udp) {
-                          " && udp && udp.dst == ${port}"
-                      } else {
-                          " && tcp && tcp.dst == ${port}"
-                      })
+                (120: integer, " && ${proto} && ${proto}.dst == ${port}")
             } else {
                 (110: integer, "")
             } in
@@ -5222,6 +5222,29 @@ for (RouterLBVIP(
                  .actions          = actions,
                  .external_ids     = stage_hint(lb._uuid));
 
+            if (nats_contain_vip(nats, ip_address)) {
+                /* The load balancer vip is also present in the NAT entries.
+                 * So add a high priority lflow to advance the the packet
+                 * destined to the vip (and the vip port if defined)
+                 * in the S_ROUTER_IN_UNSNAT stage.
+                 * There seems to be an issue with ovs-vswitchd. When the new
+                 * connection packet destined for the lb vip is received,
+                 * it is dnat'ed in the S_ROUTER_IN_DNAT stage in the dnat
+                 * conntrack zone. For the next packet, if it goes through
+                 * unsnat stage, the conntrack flags are not set properly, and
+                 * it doesn't hit the established state flows in
+                 * S_ROUTER_IN_DNAT stage. */
+                var match3 = "${ipX} && ${ipX}.dst == ${ip_address} && ${proto}" ++
+                             if (port != 0) { " && ${proto}.dst == ${port}" }
+                             else { "" } in
+                Flow(.logical_datapath = lr._uuid,
+                     .stage            = router_stage(IN, UNSNAT),
+                     .priority         = 120,
+                     .__match          = match3,
+                     .actions          = "next;",
+                     .external_ids     = stage_hint(lb._uuid))
+            };
+
             Some{var gwport} = l3dgw_port in
             /* Add logical flows to UNDNAT the load balanced reverse traffic in
              * the router egress pipleine stage - S_ROUTER_OUT_UNDNAT if the logical
@@ -5233,13 +5256,9 @@ for (RouterLBVIP(
                     match (ip_address_and_port_from_lb_key(ip_str)) {
                         None -> () /* FIXME: put a break here */,
                         Some{(ip_address_, port_, addr_family_)} -> vec_push(conds,
-                            if (addr_family_ == aF_INET()) {
-                                "(ip4.src == ${ip_address_}"
-                            } else {
-                                "(ip6.src == ${ip_address_}"
-                            } ++
+                            "(${ipX}.src == ${ip_address_}" ++
                             if (port_ != 0) {
-                                " && ${if is_udp \"udp\" else \"tcp\"}.src == ${port_}) || "
+                                " && ${proto}.src == ${port_}) || "
                             } else {
                                 ")"
                             })

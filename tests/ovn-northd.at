@@ -1245,6 +1245,7 @@ OVS_WAIT_UNTIL([test 0 = `ovn-sbctl list service_monitor |  wc -l`])
 AT_CLEANUP
 ])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- Load balancer VIP in NAT entries])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
 ovn_start
@@ -1267,22 +1268,27 @@ ovn-nbctl lr-lb-add lr0 lb4
 
 ovn-nbctl lr-nat-add lr0 snat 192.168.2.1 10.0.0.0/24
 ovn-nbctl lr-nat-add lr0 dnat_and_snat 192.168.2.4 10.0.0.4
-ovn-nbctl lr-nat-add lr0 dnat 192.168.2.5 10.0.0.5
+ovn-nbctl --wait=sb lr-nat-add lr0 dnat 192.168.2.5 10.0.0.5
 
-OVS_WAIT_UNTIL([test 1 = $(ovn-sbctl dump-flows lr0 | grep lr_in_unsnat | \
+ovn-sbctl dump-flows lr0 > sbflows
+AT_CAPTURE_FILE([sbflows])
+
+OVS_WAIT_UNTIL([test 1 = $(grep lr_in_unsnat sbflows | \
 grep "ip4 && ip4.dst == 192.168.2.1 && tcp && tcp.dst == 8080" -c) ])
 
-AT_CHECK([test 1 = $(ovn-sbctl dump-flows lr0 | grep lr_in_unsnat | \
+AT_CHECK([test 1 = $(grep lr_in_unsnat sbflows | \
 grep "ip4 && ip4.dst == 192.168.2.4 && udp && udp.dst == 8080" -c) ])
 
-AT_CHECK([test 1 = $(ovn-sbctl dump-flows lr0 | grep lr_in_unsnat | \
+AT_CHECK([test 1 = $(grep lr_in_unsnat sbflows | \
 grep "ip4 && ip4.dst == 192.168.2.5 && tcp && tcp.dst == 8080" -c) ])
 
-AT_CHECK([test 0 = $(ovn-sbctl dump-flows lr0 | grep lr_in_unsnat | \
+AT_CHECK([test 0 = $(grep lr_in_unsnat sbflows | \
 grep "ip4 && ip4.dst == 192.168.2.6 && tcp && tcp.dst == 8080" -c) ])
 
 AT_CLEANUP
+])
 
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check reconcile stale Datapath_Binding])
 ovn_start
 
@@ -1306,6 +1312,7 @@ lr_uuid=$(ovn-nbctl --columns _uuid list Logical_Router .)
 AT_CHECK[test ${nb_uuid} = ${lr_uuid}]
 
 AT_CLEANUP
+])
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check reconcile stale tunnel keys])
