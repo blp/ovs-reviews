@@ -1,6 +1,29 @@
 #! /bin/sh
 ovsdb2ddlog -f "$1" \
+    -o Logical_Router_Port \
+    --ro Logical_Router_Port.name \
+    --ro Logical_Router_Port.gateway_chassis \
+    --ro Logical_Router_Port.ha_chassis_group \
+    --ro Logical_Router_Port.options \
+    --ro Logical_Router_Port.networks \
+    --ro Logical_Router_Port.mac \
+    --ro Logical_Router_Port.peer \
+    --ro Logical_Router_Port.enabled \
+    --ro Logical_Router_Port.ipv6_ra_configs \
+    --ro Logical_Router_Port.external_ids \
     -o Logical_Switch_Port \
+    --ro Logical_Switch_Port.name \
+    --ro Logical_Switch_Port.type \
+    --ro Logical_Switch_Port.options \
+    --ro Logical_Switch_Port.parent_name \
+    --ro Logical_Switch_Port.tag_request \
+    --ro Logical_Switch_Port.addresses \
+    --ro Logical_Switch_Port.port_security \
+    --ro Logical_Switch_Port.enabled \
+    --ro Logical_Switch_Port.dhcpv4_options \
+    --ro Logical_Switch_Port.dhcpv6_options \
+    --ro Logical_Switch_Port.ha_chassis_group \
+    --ro Logical_Switch_Port.external_ids \
     -o NB_Global \
     --ro NB_Global.name \
     --ro NB_Global.nb_cfg \

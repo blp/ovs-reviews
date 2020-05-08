@@ -436,11 +436,15 @@ sb.Out_Port_Binding(._uuid              = pbinding._uuid,
     pbinding in OutProxy_Port_Binding(),
     PortTunKeyAllocation(pbinding._uuid, tunkey),
     QueueIDAllocation(pbinding._uuid, qid),
-    var options = match (qid) {
+    var options0 = match (qid) {
         None -> pbinding.options,
         Some{id} -> map_insert_imm(pbinding.options, "qdisc_queue_id", "${id}")
+    },
+    PreserveIPv6RAPDList(pbinding._uuid, ipv6_ra_pd_list),
+    var options = match (ipv6_ra_pd_list) {
+        None -> options0,
+        Some{value} -> map_insert_imm(options0, "ipv6_ra_pd_list", value)
     }.
-
 
 /* Referenced chassis.
  *
@@ -1146,21 +1150,9 @@ sb.Out_RBAC_Role (
 
 /* Output modified Logical_Switch_Port table with dynamic address updated */
 nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
-                           .name                   = lsp.name,
-                           .__type                 = lsp.__type,
-                           .options                = lsp.options,
-                           .parent_name            = lsp.parent_name,
-                           .tag_request            = lsp.tag_request,
                            .tag                    = tag,
-                           .addresses              = lsp.addresses,
                            .dynamic_addresses      = dynamic_addresses,
-                           .port_security          = lsp.port_security,
-                           .up                     = set_singleton(up),
-                           .enabled                = lsp.enabled,
-                           .dhcpv4_options         = lsp.dhcpv4_options,
-                           .dhcpv6_options         = lsp.dhcpv6_options,
-                           .ha_chassis_group       = lsp.ha_chassis_group,
-                           .external_ids           = lsp.external_ids) :-
+                           .up                     = set_singleton(up)) :-
     SwitchPortNewDynamicAddress(&SwitchPort{.lsp = lsp, .up = up}, opt_dyn_addr),
     var dynamic_addresses: Set<string> = match (opt_dyn_addr) {
         None -> set_empty(),
@@ -1171,6 +1163,26 @@ nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
         None -> lsp.tag,
         Some{t} -> set_singleton(t)
     }.
+
+relation LRPIPv6Prefix0(lrp_uuid: uuid, ipv6_prefix: string)
+LRPIPv6Prefix0(lrp_uuid, ipv6_prefix) :-
+    nb.Logical_Router_Port(._uuid = lrp_uuid, .name = name),
+    sb.Port_Binding(.logical_port = name, .options = options),
+    Some{var ipv6_ra_pd_list} = map_get(options, "ipv6_ra_pd_list"),
+    var parts = string_split(ipv6_ra_pd_list, ","),
+    Some{var ipv6_prefix} = vec_nth(parts, 1).
+
+relation LRPIPv6Prefix(lrp_uuid: uuid, ipv6_prefix: Option<string>)
+LRPIPv6Prefix(lrp_uuid, Some{ipv6_prefix}) :-
+    LRPIPv6Prefix0(lrp_uuid, ipv6_prefix).
+LRPIPv6Prefix(lrp_uuid, None) :-
+    nb.Logical_Router_Port(._uuid = lrp_uuid),
+    not LRPIPv6Prefix0(lrp_uuid, _).
+
+nb.Out_Logical_Router_Port(._uuid = _uuid,
+                           .ipv6_prefix = option2set(ipv6_prefix)) :-
+    nb.Logical_Router_Port(._uuid = _uuid, .name = name),
+    LRPIPv6Prefix(_uuid, ipv6_prefix).
 
 typedef Direction = IN | OUT
 
@@ -1567,14 +1579,16 @@ for (&Switch(.ls = ls, .has_stateful_acl = true)) {
          .stage            = switch_stage(IN, PRE_ACL),
          .priority         = 110,
          .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                             "icmp6.type == 1 || (tcp && tcp.flags == 20)",
+                             "icmp6.type == 1 || (tcp && tcp.flags == 20) || "
+                             "(udp && udp.src == 546 && udp.dst == 547)",
          .actions          = "next;",
          .external_ids     = map_empty());
     Flow(.logical_datapath = ls._uuid,
          .stage            = switch_stage(OUT, PRE_ACL),
          .priority         = 110,
          .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                             "icmp6.type == 1 || (tcp && tcp.flags == 20)",
+                             "icmp6.type == 1 || (tcp && tcp.flags == 20) || "
+                             "(udp && udp.src == 546 && udp.dst == 547)",
          .actions          = "next;",
          .external_ids     = map_empty());
 
@@ -4505,6 +4519,17 @@ for (&RouterPort(.lrp = lrp,
     }
 }
 
+/* DHCPv6 reply handling */
+Flow(.logical_datapath = rp.router.lr._uuid,
+     .stage            = router_stage(IN, IP_INPUT),
+     .priority         = 100,
+     .__match          = "ip6.dst == ${ipv6_addr.addr_s} "
+                         "&& udp.src == 547 && udp.dst == 546",
+     .actions          = "reg0 = 0; handle_dhcpv6_reply;",
+     .external_ids     = stage_hint(rp.lrp._uuid)) :-
+    rp in &RouterPort(),
+    var ipv6_addr = FlatMap(rp.networks.ipv6_addrs).
+
 /* Logical router ingress table IP_INPUT: IP Input for IPv6. */
 for (&RouterPort(.router = &router, .networks = networks, .lrp = lrp)
      if (not vec_is_empty(networks.ipv6_addrs)))
@@ -5442,6 +5467,8 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
             vec_push(prefixes, "${addrs.network_s}/${addrs.plen}")
         }
     };
+
+    /* XXX add ra_d_list */
 
     /* Remove trailing space */
     map_insert(options, "ipv6_ra_prefixes", string_join(prefixes, " "));
@@ -6639,6 +6666,18 @@ QueueIDAllocation(port, Some{qid}) :-
     not AllocatedQIDs(chassis, _),
     var allocations = FlatMap(adjust_allocation(map_empty(): Map<uuid, integer>, ports, 64'h1, 64'hf000)),
     (var port, var qid) = allocations.
+
+/*
+ * This allows ovn-northd to preserve options:ipv6_ra_pd_list, which is set by
+ * ovn-controller.
+ */
+relation PreserveIPv6RAPDList(pb_uuid: uuid, ipv6_ra_pd_list: Option<string>)
+PreserveIPv6RAPDList(pb_uuid, ipv6_ra_pd_list) :-
+    sb.Port_Binding(._uuid = pb_uuid, .options = options),
+    var ipv6_ra_pd_list = map_get(options, "ipv6_ra_pd_list").
+PreserveIPv6RAPDList(pb_uuid, None) :-
+    OutProxy_Port_Binding(._uuid = pb_uuid),
+    not sb.Port_Binding(._uuid = pb_uuid).
 
 /*
  * Tag allocation for nested containers.
