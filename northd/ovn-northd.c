@@ -9365,7 +9365,6 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
         }
         smap_add(&options, "ipv6_prefix_delegation",
                  prefix_delegation ? "true" : "false");
-        sbrec_port_binding_set_options(op->sb, &options);
 
         bool ipv6_prefix = smap_get_bool(&op->nbrp->options,
                                          "prefix", false);
