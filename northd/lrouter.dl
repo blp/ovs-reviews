@@ -4,8 +4,7 @@ import ovsdb
 import ovn
 import helpers
 import lswitch
-
-output relation Warning(message: string)
+import ovn_northd
 
 /* default logical flow prioriry for distributed routes */
 function dROUTE_PRIO(): bit<32> = 400
@@ -20,7 +19,7 @@ relation LogicalRouterPortCandidate(lrp_uuid: uuid, lr_uuid: uuid)
 LogicalRouterPortCandidate(lrp_uuid, lr_uuid) :-
     nb.Logical_Router(._uuid = lr_uuid, .ports = ports),
     var lrp_uuid = FlatMap(ports).
-Warning(message) :-
+Warning[message] :-
     LogicalRouterPortCandidate(lrp_uuid, lr_uuid),
     var lrs = Aggregate((lrp_uuid), group2set(lr_uuid)),
     set_size(lrs) > 64'd1,
@@ -98,7 +97,7 @@ ReachableLogicalRouter(a, b) :-
 ReachableLogicalRouter(a, a) :- ReachableLogicalRouter(a, _).
 
 // ha_chassis_group and gateway_chassis may not both be present.
-Warning(message) :-
+Warning[message] :-
     lrp in nb.Logical_Router_Port(),
     not set_is_empty(lrp.ha_chassis_group),
     not set_is_empty(lrp.gateway_chassis),
@@ -106,7 +105,7 @@ Warning(message) :-
     "port ${lrp.name}; ignoring the latter".
 
 // A distributed gateway port cannot also be an L3 gateway router.
-Warning(message) :-
+Warning[message] :-
     lrp in nb.Logical_Router_Port(),
     not set_is_empty(lrp.ha_chassis_group)
         or not set_is_empty(lrp.gateway_chassis),
@@ -129,7 +128,7 @@ DistributedGatewayPortCandidate(lr_uuid, lrp_uuid) :-
     var has_hcg = not set_is_empty(lrp.ha_chassis_group),
     var has_gc = not set_is_empty(lrp.gateway_chassis),
     has_hcg or has_gc.
-Warning(message) :-
+Warning[message] :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
     var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
     set_size(lrps) > 64'd1,
@@ -568,7 +567,7 @@ RouterStaticRoute(router, key, dsts) :-
     },
     var dsts = set_singleton(RouteDst{nexthop, src_ip, port}).
 
-Warning(message) :-
+Warning[message] :-
     RouterStaticRoute_(.router = router, .key = key, .nexthop = nexthop),
     not RouterStaticRoute(.router = router, .key = key),
     var message = "No path for ${key.policy} static route ${key.ip_prefix}/${key.plen} with next hop ${nexthop}".

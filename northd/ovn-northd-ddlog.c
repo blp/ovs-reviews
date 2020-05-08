@@ -39,6 +39,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb/ovsdb.h"
 #include "ovsdb/table.h"
+#include "sset.h"
 #include "stream.h"
 #include "stream-ssl.h"
 #include "unixctl.h"
@@ -797,6 +798,36 @@ northd_update_probe_interval(struct northd_ctx *nb, struct northd_ctx *sb)
     jsonrpc_session_set_probe_interval(sb->session, probe_interval);
 }
 
+static bool
+northd_warning_cb(uintptr_t new_warnings_, const ddlog_record *rec)
+{
+    struct sset *new_warnings = (struct sset *) new_warnings_;
+
+    size_t len;
+    const char *s = ddlog_get_str_with_length(rec, &len);
+    sset_add_len(new_warnings, s, len);
+    return true;
+}
+
+static void
+northd_issue_warnings(const ddlog_prog ddlog)
+{
+    static struct sset old_warnings = SSET_INITIALIZER(&old_warnings);
+
+    struct sset new_warnings = SSET_INITIALIZER(&new_warnings);
+    ddlog_dump_table(ddlog, ddlog_get_table_id("Warning"),
+                     northd_warning_cb, (uintptr_t) &new_warnings);
+
+    const char *s;
+    SSET_FOR_EACH (s, &new_warnings) {
+        if (!sset_contains(&old_warnings, s)) {
+            VLOG_WARN("%s", s);
+        }
+    }
+    sset_swap(&new_warnings, &old_warnings);
+    sset_destroy(&new_warnings);
+}
+
 /* Arranges for poll_block() to wake up when northd_run() has something to
  * do or when activity occurs on a transaction on 'ctx'. */
 static void
@@ -1236,6 +1267,9 @@ main(int argc, char *argv[])
         northd_run(sb_ctx, run_deltas);
         northd_wait(sb_ctx);
 
+        if (run_deltas) {
+            northd_issue_warnings(ddlog);
+        }
         northd_update_probe_interval(nb_ctx, sb_ctx);
 
         unixctl_server_run(unixctl);
