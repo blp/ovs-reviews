@@ -1038,6 +1038,20 @@ sb.Out_DHCP_Options (
     .__type = "ipv4"
 ).
 
+sb.Out_DHCP_Options (
+    ._uuid  = 128'hfbe06e70_b43d_4dd9_9b21_2f27eb5da5df,
+    .name   = "arp_cache_timeout",
+    .code   = 35,
+    .__type = "uint32"
+).
+
+sb.Out_DHCP_Options (
+    ._uuid  = 128'h2af54a3c_545c_4104_ae1c_432caa3e085e,
+    .name   = "tcp_keepalive_interval",
+    .code   = 38,
+    .__type = "uint32"
+).
+
 
 /*
  * DHCPv6 options: fixed table
