@@ -1,4 +1,5 @@
 import OVN_Northbound as nb
+import OVN_Southbound as sb
 import multicast
 import ovsdb
 import ovn
@@ -372,6 +373,25 @@ RouterPortPeer(rport, PeerNone) :-
     not SwitchRouterPeer(_, _, rport),
     not RouterRouterPeer(rport, _, _).
 
+/* Each row maps from a Logical_Router port to the input options in its
+ * corresponding Port_Binding (if any).  This is because northd preserves
+ * most of the options in that column.  (northd unconditionally sets the
+ * ipv6_prefix_delegation and ipv6_prefix options, so we remove them for
+ * faster convergence.) */
+relation RouterPortSbOptions(lrp_uuid: uuid, options: Map<string,string>)
+RouterPortSbOptions(lrp._uuid, options) :-
+    lrp in nb.Logical_Router_Port(),
+    pb in sb.Port_Binding(._uuid = lrp._uuid),
+    var options = {
+        var options = pb.options;
+        map_remove(options, "ipv6_prefix");
+        map_remove(options, "ipv6_prefix_delegation");
+        options
+    }.
+RouterPortSbOptions(lrp._uuid, map_empty()) :-
+    lrp in nb.Logical_Router_Port(),
+    not sb.Port_Binding(._uuid = lrp._uuid).
+
 /* FIXME: what should happen when extract_lrp_networks fails? */
 /* RouterPort relation collects all attributes of a logical router port */
 relation &RouterPort(
@@ -381,7 +401,8 @@ relation &RouterPort(
     router:           Ref<Router>,
     is_redirect:      bool,
     peer:             RouterPeer,
-    mcast_cfg:        Ref<McastPortCfg>)
+    mcast_cfg:        Ref<McastPortCfg>,
+    sb_options:       Map<string,string>)
 
 &RouterPort(.lrp                = lrp,
             .json_name          = json_string_escape(lrp.name),
@@ -389,14 +410,16 @@ relation &RouterPort(
             .router             = router,
             .is_redirect        = is_redirect,
             .peer               = peer,
-            .mcast_cfg          = mcast_cfg) :-
+            .mcast_cfg          = mcast_cfg,
+            .sb_options         = sb_options) :-
     nb.Logical_Router_Port[lrp],
     Some{var networks} = extract_lrp_networks(lrp.mac, lrp.networks),
     LogicalRouterPort(lrp._uuid, lrouter_uuid),
     router in &Router(.lr = nb.Logical_Router{._uuid = lrouter_uuid}),
     RouterPortIsRedirect(lrp._uuid, is_redirect),
     RouterPortPeer(lrp._uuid, peer),
-    mcast_cfg in &McastPortCfg(.port = lrp._uuid, .router_port = true).
+    mcast_cfg in &McastPortCfg(.port = lrp._uuid, .router_port = true),
+    RouterPortSbOptions(lrp._uuid, sb_options).
 
 relation RouterPortNetworksIPv4Addr(port: Ref<RouterPort>, addr: ipv4_netaddr)
 

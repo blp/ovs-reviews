@@ -224,15 +224,15 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
                       .__type             = __type,
                       .gateway_chassis    = set_empty(),
                       .ha_chassis_group   = set_empty(),
-                      .options            = map_union(map_union(options1, options2), extra_options),
+                      .options            = options,
                       .datapath           = router.lr._uuid,
                       .parent_port        = set_empty(),
                       .tag                = set_empty(), // always empty for router ports
                       .mac                = set_singleton("${lrp.mac} ${set_space_sep(lrp.networks)}"),
                       .nat_addresses      = set_empty(),
                       .external_ids       = lrp.external_ids) :-
-    &RouterPort(.lrp = lrp, .router = &router, .peer = peer),
-    RouterPortRAOptionsComplete(lrp._uuid, extra_options),
+    rp in &RouterPort(.lrp = lrp, .router = &router, .peer = peer),
+    RouterPortRAOptionsComplete(lrp._uuid, options0),
     (var __type, var options1) = match (map_get(router.lr.options, "chassis")) {
         /* TODO: derived ports */
         None -> ("patch", map_empty(): Map<string, string>),
@@ -242,6 +242,26 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
         None -> map_empty(): Map<string, string>,
         Some{peer_name} -> map_singleton("peer", peer_name)
     },
+    var options3 = match ((peer, vec_is_empty(rp.networks.ipv6_addrs))) {
+        (PeerSwitch{_, _}, false) -> {
+            var enabled = is_enabled(lrp.enabled);
+            var pd = map_get_bool_def(lrp.options, "prefix_delegation", false);
+            var p = map_get_bool_def(lrp.options, "prefix", false);
+            map_union(
+                map_singleton("ipv6_prefix_delegation", "${pd and enabled}"),
+                map_singleton("ipv6_prefix", "${p and enabled}"))
+        },
+        _ -> map_empty(): Map<string,string>
+    },
+    PreserveIPv6RAPDList(lrp._uuid, ipv6_ra_pd_list),
+    var options4: Map<string,string> = match (ipv6_ra_pd_list) {
+        None -> map_empty(),
+        Some{value} -> map_singleton("ipv6_ra_pd_list", value)
+    },
+    var options = map_union(options0,
+                      map_union(options1,
+                          map_union(options2,
+                              map_union(options3, options4)))),
     var eids = {
         var eids = lrp.external_ids;
         match (map_get(lrp.external_ids, "neutron:port_name")) {
@@ -250,7 +270,8 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
         };
         eids
     }.
-
+/*
+*/
 function get_router_load_balancer_ips(router: Router) :
     (Set<string>, Set<string>) =
 {
@@ -425,7 +446,7 @@ sb.Out_Port_Binding(._uuid              = pbinding._uuid,
                     .__type             = pbinding.__type,
                     .gateway_chassis    = pbinding.gateway_chassis,
                     .ha_chassis_group   = pbinding.ha_chassis_group,
-                    .options            = options,
+                    .options            = options0,
                     .datapath           = pbinding.datapath,
                     .tunnel_key         = tunkey,
                     .parent_port        = pbinding.parent_port,
@@ -439,11 +460,6 @@ sb.Out_Port_Binding(._uuid              = pbinding._uuid,
     var options0 = match (qid) {
         None -> pbinding.options,
         Some{id} -> map_insert_imm(pbinding.options, "qdisc_queue_id", "${id}")
-    },
-    PreserveIPv6RAPDList(pbinding._uuid, ipv6_ra_pd_list),
-    var options = match (ipv6_ra_pd_list) {
-        None -> options0,
-        Some{value} -> map_insert_imm(options0, "ipv6_ra_pd_list", value)
     }.
 
 /* Referenced chassis.
@@ -1174,9 +1190,10 @@ nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
     }.
 
 relation LRPIPv6Prefix0(lrp_uuid: uuid, ipv6_prefix: string)
-LRPIPv6Prefix0(lrp_uuid, ipv6_prefix) :-
-    nb.Logical_Router_Port(._uuid = lrp_uuid, .name = name),
-    sb.Port_Binding(.logical_port = name, .options = options),
+LRPIPv6Prefix0(lrp._uuid, ipv6_prefix) :-
+    lrp in nb.Logical_Router_Port(),
+    map_get_bool_def(lrp.options, "prefix", false),
+    sb.Port_Binding(.logical_port = lrp.name, .options = options),
     Some{var ipv6_ra_pd_list} = map_get(options, "ipv6_ra_pd_list"),
     var parts = string_split(ipv6_ra_pd_list, ","),
     Some{var ipv6_prefix} = vec_nth(parts, 1).
@@ -5438,7 +5455,7 @@ function nD_MTU_DEFAULT(): integer = 0
 
 function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, string> =
 {
-    var options: Map<string, string> = map_empty();
+    var options = port.sb_options;
 
     map_insert(options, "ipv6_ra_send_periodic", "true");
     map_insert(options, "ipv6_ra_address_mode", address_mode);
@@ -5484,10 +5501,10 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
             vec_push(prefixes, "${addrs.network_s}/${addrs.plen}")
         }
     };
-
-    /* XXX add ra_d_list */
-
-    /* Remove trailing space */
+    match (map_get(port.sb_options, "ipv6_ra_pd_list")) {
+        Some{value} -> vec_push(prefixes, value),
+        _ -> ()
+    };
     map_insert(options, "ipv6_ra_prefixes", string_join(prefixes, " "));
 
     match (map_get(port.lrp.ipv6_ra_configs, "rdnss")) {
@@ -5796,7 +5813,7 @@ Flow(.logical_datapath = router.lr._uuid,
         "flags.loopback = 1; "
         "${rEG_ECMP_GROUP_ID()} = ${group_id}; " /* XXX */
         "${rEG_ECMP_MEMBER_ID()} = select(${all_member_ids});".
-        
+
 Flow(.logical_datapath = router.lr._uuid,
      .stage            = router_stage(IN, IP_ROUTING_ECMP),
      .priority         = 100,
@@ -5814,7 +5831,7 @@ Flow(.logical_datapath = router.lr._uuid,
                   "eth.src = ${dst.port.networks.ea_s}; "
                   "outport = ${dst.port.json_name}; "
                   "next;".
-    
+
 
 /* IP Multicast lookup. Here we set the output port, adjust TTL and advance
  * to next table (priority 500).
@@ -5829,7 +5846,7 @@ Flow(.logical_datapath = router.lr._uuid,
      .actions          = "drop;",
      .external_ids     = map_empty()) :-
     router in &Router().
-    
+
 for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
     for (RouterMcastFloodPorts(&rtr, flood_ports) if rtr.mcast_cfg.relay) {
         var flood_static = not set_is_empty(flood_ports) in
@@ -5873,7 +5890,7 @@ for (RouterMcastFloodPorts(&rtr, flood_ports)) {
         "};"
     } else {
         "drop;"
-    } in 
+    } in
     Flow(.logical_datapath = rtr.lr._uuid,
          .stage            = router_stage(IN, IP_ROUTING),
          .priority         = 450,
