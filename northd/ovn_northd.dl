@@ -1619,7 +1619,7 @@ for (&Switch(.ls = ls, .has_stateful_acl = true)) {
          .stage            = switch_stage(IN, PRE_ACL),
          .priority         = 110,
          .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                             "icmp6.type == 1 || (tcp && tcp.flags == 20) || "
+                             "icmp6.type == 1 || "
                              "(udp && udp.src == 546 && udp.dst == 547)",
          .actions          = "next;",
          .external_ids     = map_empty());
@@ -1627,7 +1627,7 @@ for (&Switch(.ls = ls, .has_stateful_acl = true)) {
          .stage            = switch_stage(OUT, PRE_ACL),
          .priority         = 110,
          .__match          = "nd || nd_rs || nd_ra || icmp4.type == 3 || "
-                             "icmp6.type == 1 || (tcp && tcp.flags == 20) || "
+                             "icmp6.type == 1 || "
                              "(udp && udp.src == 546 && udp.dst == 547)",
          .actions          = "next;",
          .external_ids     = map_empty());
@@ -1658,7 +1658,7 @@ for (&Switch(.ls = ls, .has_stateful_acl = true)) {
 for (&Switch(.ls = ls)) {
     /* Do not send ND packets to conntrack */
     var __match = "nd || nd_rs || nd_ra || icmp4.type == 3 ||"
-                  "icmp6.type == 1 || (tcp && tcp.flags == 20)" in {
+                  "icmp6.type == 1" in {
         Flow(.logical_datapath = ls._uuid,
              .stage            = switch_stage(IN, PRE_LB),
              .priority         = 110,
@@ -1890,7 +1890,12 @@ relation Reject(lsuuid: uuid, pipeline: string, stage: Stage, acl: nb.ACL, extra
 
 /* build_reject_acl_rules() */
 for (Reject(lsuuid, pipeline, stage, acl, extra_match, extra_actions)) {
-    var ingress = (pipeline == "ingress") in {
+    var ingress = (pipeline == "ingress") in
+    var tcp_next_action = if (ingress) {
+        "next(pipeline=egress,table=5)"
+    } else {
+        "next(pipeline=ingress,table=19)"
+    } in {
         /* TCP */
         var __match = if (extra_match != "") {
                 "(${extra_match}) && "
@@ -1899,7 +1904,7 @@ for (Reject(lsuuid, pipeline, stage, acl, extra_match, extra_actions)) {
             } ++ "ip4 && tcp && (${acl.__match})" in
         var actions = "${build_acl_log(acl)}reg0 = 0; "
                       "eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
-                      "tcp_reset { outport <-> inport; ${if ingress \"output;\" else \"next(pipeline=ingress,table=0);\"} };" in
+                      "tcp_reset { outport <-> inport; ${tcp_next_action}; };" in
         Flow(.logical_datapath = lsuuid,
              .stage            = stage,
              .priority         = acl.priority + oVN_ACL_PRI_OFFSET() + 10,
@@ -1913,7 +1918,7 @@ for (Reject(lsuuid, pipeline, stage, acl, extra_match, extra_actions)) {
             "ip6 && tcp && (${acl.__match})" in
         var actions = "${build_acl_log(acl)}reg0 = 0; "
                       "eth.dst <-> eth.src; ip6.dst <-> ip6.src; "
-                      "tcp_reset { outport <-> inport; ${if ingress \"output;\" else \"next(pipeline=ingress,table=0);\"} };" in
+                      "tcp_reset { outport <-> inport; ${tcp_next_action}; };" in
         Flow(.logical_datapath = lsuuid,
              .stage            = stage,
              .priority         = acl.priority + oVN_ACL_PRI_OFFSET() + 10,
