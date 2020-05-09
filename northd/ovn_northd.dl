@@ -2546,7 +2546,7 @@ Flow(.logical_datapath = sw.ls._uuid,
  */
 
 function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
-                           l4_dir: string, l3_dst: string): string = {
+                           l4_dir: string, l3_dst: Option<string>): string = {
     var lbvip = lbvipbackend.lbvip;
     var lb = lbvip.lb;
     var ipX = if (lbvip.addr_family == aF_INET()) {
@@ -2554,27 +2554,37 @@ function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
     } else {
         "ip6"
     };
-    var proto = if (set_nth(lb.protocol, 0) == Some{"udp"}) {
-        "udp"
-    } else {
-        "tcp"
+
+    var __match: Vec<string> = vec_with_capacity(3);
+
+    vec_push(__match, "${ipX}.src == ${lbvipbackend.ip}");
+
+    match (l3_dst) {
+        Some{s} -> vec_push(__match, "${ipX}.dst == ${s}"),
+        _ -> ()
     };
-    var proto_match = if (lbvip.vip_port != 0) {
-        " && ${proto} && ${proto}.${l4_dir} == ${lbvipbackend.port}"
-    } else {
-        ""
+
+    if (lbvip.vip_port != 0) {
+        var proto = match (set_nth(lb.protocol, 0)) {
+            Some{value} -> value,
+            None -> "tcp"
+        };
+        vec_push(__match, "${proto}.${l4_dir} == ${lbvipbackend.port}")
     };
-    "${ipX}.src == ${lbvipbackend.ip} && "
-    "${ipX}.dst == ${l3_dst}" ++ proto_match
- }
+
+    "(" ++ string_join(__match, " && ") ++ ")"
+}
 
 /* Ingress Pre-Hairpin table.
- * - Priority 2: SNAT load balanced traffic that needs to be hairpinned.
+ * - Priority 2: SNAT load balanced traffic that needs to be hairpinned:
+ *   - Both SRC and DST IP match backend->ip and destination port
+ *     matches backend->port.
  * - Priority 1: unSNAT replies to hairpinned load balanced traffic.
+ *   - SRC IP matches backend->ip, DST IP matches LB VIP and source port
+ *     matches backend->port.
  */
 /* Packets that after load balancing have equal source and
- * destination IPs should be hairpinned. SNAT them so that the reply
- * traffic is directed also through OVN.
+ * destination IPs should be hairpinned.
  */
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, PRE_HAIRPIN),
@@ -2587,7 +2597,9 @@ Flow(.logical_datapath = sw.ls._uuid,
     var lbvip = lbvipbackend.lbvip,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
-    var __match = get_hairpin_match(lbvipbackend, "dst", lbvipbackend.ip),
+    var __match = get_hairpin_match(lbvipbackend, "dst", Some{lbvipbackend.ip}),
+    var matches = Aggregate((lbvip, lb, sw), group2vec(__match)),
+    var __match = string_join(matches, " || "),
     var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat(${lbvip.vip_addr});".
 /* If the packets are replies for hairpinned traffic, UNSNAT them. */
 Flow(.logical_datapath = sw.ls._uuid,
@@ -2601,7 +2613,11 @@ Flow(.logical_datapath = sw.ls._uuid,
     var lbvip = lbvipbackend.lbvip,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
-    var __match = get_hairpin_match(lbvipbackend, "src", lbvip.vip_addr),
+    var __match = get_hairpin_match(lbvipbackend, "src", None),
+    var matches = Aggregate((lbvip, lb, sw), group2vec(__match)),
+    var ipX = if (lbvip.addr_family == aF_INET()) { "ip4" } else { "ip6" },
+    var __match = "(" ++ string_join(matches, " || ") ++ ") && "
+                  "${ipX}.dst == ${lbvip.vip_addr}",
     var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat;".
 
 
