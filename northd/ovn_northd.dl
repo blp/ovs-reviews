@@ -517,16 +517,20 @@ sb.Out_HA_Chassis(ha_chassis_uuid(chassis_name), set_empty(), priority, eids) :-
     HAChassis(_, chassis_name, priority, eids),
     not chassis_rec in sb.Chassis(.name = chassis_name).
 
-sb.Out_HA_Chassis(_uuid, chassis, priority, eids) :-
+relation HAChassisToChassis(name: string, chassis: Option<uuid>)
+HAChassisToChassis(name, Some{chassis}) :-
+    sb.Chassis(._uuid = chassis, .name = name).
+HAChassisToChassis(name, None) :-
+    nb.HA_Chassis(.chassis_name = name),
+    not sb.Chassis(.name = name).
+sb.Out_HA_Chassis(ha_chassis_uuid(ha_chassis.chassis_name), option2set(chassis), priority, eids) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
     var ha_chassis_group_uuid = FlatMap(sp.lsp.ha_chassis_group),
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
     ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid, .priority = priority, .external_ids = eids),
-    chassis_rec in sb.Chassis(.name = ha_chassis.chassis_name),
-    var chassis = set_singleton(chassis_rec._uuid),
-    var _uuid = ha_chassis_uuid(ha_chassis.chassis_name).
+    HAChassisToChassis(ha_chassis.chassis_name, chassis).
 sb.Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
@@ -536,8 +540,6 @@ sb.Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :
                                             .external_ids = eids),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
     ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid),
-    chassis_rec in sb.Chassis(.name = ha_chassis.chassis_name),
-    var chassis = set_singleton(chassis_rec._uuid),
     var ha_chassis_uuid_name = ha_chassis_uuid(ha_chassis.chassis_name),
     var ha_chassis = Aggregate((ls_uuid, name, eids), group2set(ha_chassis_uuid_name)),
     var _uuid = ha_chassis_group_uuid(ls_uuid).
