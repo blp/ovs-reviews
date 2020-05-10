@@ -2891,6 +2891,8 @@ for i in 1 2 3; do
     done
 done
 
+ovn-nbctl --wait=hv sync
+
 # Pre-populate the hypervisors' ARP tables so that we don't lose any
 # packets for ARP resolution (native tunneling doesn't queue packets
 # for ARP resolution).
@@ -2898,7 +2900,6 @@ OVN_POPULATE_ARP
 
 # Allow some time for ovn-northd and ovn-controller to catch up.
 # XXX This should be more systematic.
-sleep 1
 
 # test_ip INPORT SRC_MAC DST_MAC SRC_IP DST_IP OUTPORT...
 #
@@ -2949,12 +2950,12 @@ test_ip() {
 # SHA and REPLY_HA are each 12 hex digits.
 # SPA and TPA are each 8 hex digits.
 test_arp() {
-    echo "$0 $@"
+    echo "$@"
     local inport=$1 sha=$2 spa=$3 tpa=$4 flood=$5 reply_ha=$6
     local request=ffffffffffff${sha}08060001080006040001${sha}${spa}ffffffffffff${tpa}
     hv=hv`vif_to_hv $inport`
     as $hv ovs-appctl netdev-dummy/receive vif$inport $request
-    as $hv ovs-appctl ofproto/trace br-int in_port=$inport $request
+    as $hv ovs-appctl ofproto/trace br-int in_port=$inport $request > trace
 
     # Expect to receive the broadcast ARP on the other logical switch ports if
     # IP address is not configured on the switch patch port or on the router
@@ -3017,15 +3018,16 @@ for is in 1 2 3; do
                 if test $is = $id; then dmac=f00000000$d; else dmac=00000000ff$is$js; fi
                 if test $d != $s; then unicast=$d; else unicast=; fi
 
-                test_ip $s $smac $dmac $sip $dip $unicast #1
+                test_ip $s $smac $dmac $sip $dip $unicast & #1
 
                 if test $id = $is && test $d != $s; then bcast="$bcast $d"; fi
               done
           done
         done
-      test_ip $s $smac ffffffffffff $sip ffffffff $bcast #2
+      test_ip $s $smac ffffffffffff $sip ffffffff $bcast & #2
       done
   done
+  wait
 done
 
 : > mac_bindings.expected
@@ -3186,22 +3188,34 @@ for is in 1 2 3; do
   done
 done
 
-ovn-sbctl -f csv -d bare --no-heading \
-    -- --columns=logical_port,ip,mac list mac_binding > mac_bindings
+ovn-sbctl dump-flows > sbflows2
+AT_CAPTURE_FILE([sbflows2])
 
-# Now check the packets actually received against the ones expected.
-for i in 1 2 3; do
-    for j in 1 2 3; do
-        for k in 1 2 3; do
-            OVN_CHECK_PACKETS([hv`vif_to_hv $i$j$k`/vif$i$j$k-tx.pcap],
-                              [$i$j$k.expected])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+check_packets() {
+    > expected
+    > received
+    for i in 1 2 3; do
+        for j in 1 2 3; do
+            for k in 1 2 3; do
+                pcap=hv`vif_to_hv $i$j$k`/vif$i$j$k-tx.pcap
+                echo "--- $pcap" | tee -a expected >> received
+                sort $i$j$k.expected >> expected
+                $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | sort >> received
+                echo | tee -a expected >> received
+            done
         done
     done
-done
 
-# Check the MAC bindings against those expected.
-AT_CHECK_UNQUOTED([sort < mac_bindings], [0], [`sort < mac_bindings.expected`
-])
+    echo '--- MAC bindings' | tee -a expected >> received
+    ovn-sbctl -f csv -d bare --no-heading \
+        -- --columns=logical_port,ip,mac list mac_binding | sort >> received
+    sort < mac_bindings.expected >> expected
+
+    $at_diff expected received >/dev/null
+}
+OVS_WAIT_UNTIL([check_packets], [$at_diff -F'^---' expected received])
 
 # Gracefully terminate daemons
 OVN_CLEANUP([hv1], [hv2], [hv3])
@@ -11931,7 +11945,7 @@ AT_SETUP([ovn -- ACL reject rule test])
 AT_KEYWORDS([acl-reject])
 ovn_start
 
- test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
+# test_ip_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM EXP_IP_CHKSUM EXP_ICMP_CHKSUM
 #
 # Causes a packet to be received on INPORT of the hypervisor HV. The packet is an IPv4 packet with
 # ETH_SRC, ETH_DST, IPV4_SRC, IPV4_DST, IP_CHKSUM as specified.

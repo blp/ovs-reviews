@@ -5914,7 +5914,7 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
 /* If needed, flood unregistered multicast on statically configured ports.
  * Priority 450. Otherwise drop any multicast traffic.
  */
-for (RouterMcastFloodPorts(&rtr, flood_ports)) {
+for (RouterMcastFloodPorts(&rtr, flood_ports) if rtr.mcast_cfg.relay) {
     (var mc_static, _) = mC_STATIC() in
     var flood_static = not set_is_empty(flood_ports) in
     var actions = if (flood_static) {
@@ -6744,13 +6744,13 @@ QueueIDAllocation(port, Some{qid}) :-
  * This allows ovn-northd to preserve options:ipv6_ra_pd_list, which is set by
  * ovn-controller.
  */
-relation PreserveIPv6RAPDList(pb_uuid: uuid, ipv6_ra_pd_list: Option<string>)
-PreserveIPv6RAPDList(pb_uuid, ipv6_ra_pd_list) :-
-    sb.Port_Binding(._uuid = pb_uuid, .options = options),
+relation PreserveIPv6RAPDList(lrp_uuid: uuid, ipv6_ra_pd_list: Option<string>)
+PreserveIPv6RAPDList(lrp_uuid, ipv6_ra_pd_list) :-
+    sb.Port_Binding(._uuid = lrp_uuid, .options = options),
     var ipv6_ra_pd_list = map_get(options, "ipv6_ra_pd_list").
-PreserveIPv6RAPDList(pb_uuid, None) :-
-    OutProxy_Port_Binding(._uuid = pb_uuid),
-    not sb.Port_Binding(._uuid = pb_uuid).
+PreserveIPv6RAPDList(lrp_uuid, None) :-
+    nb.Logical_Router_Port(._uuid = lrp_uuid),
+    not sb.Port_Binding(._uuid = lrp_uuid).
 
 /*
  * Tag allocation for nested containers.
