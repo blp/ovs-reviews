@@ -1437,6 +1437,13 @@ Flow(.logical_datapath = sw.ls._uuid,
                   "flags.loopback = 1; "
                   "output;".
 
+function escape_child_ports(child_port: Set<string>): string {
+    var escaped: Vec<string> = vec_with_capacity(set_size(child_port));
+    for (s in child_port) {
+        vec_push(escaped, json_string_escape(s))
+    };
+    string_join(escaped, ",")
+}
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, L2_LKUP),
      .priority         = 50,
@@ -1450,9 +1457,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     var __match = "eth.dst == ${fg.vmac}",
     var actions = "fwd_group(" ++
                   if (fg.liveness) { "liveness=\"true\"," } else { "" } ++
-                  "childports=" ++
-                  json_string_escape(string_join(set2vec(fg.child_port), "\", \"")) ++
-                  ");".
+                  "childports=" ++ escape_child_ports(fg.child_port) ++ ");".
 
 /* Logical switch ingress table PORT_SEC_L2: admission control framework
  * (priority 100) */
@@ -3418,7 +3423,7 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                         "clone { "
                             "outport = ${mrouter_static}; "
                             "output; "
-                        "}; igmp;"
+                        "};igmp;"
                     } else {
                         "igmp;"
                     }
