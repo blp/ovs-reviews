@@ -14691,85 +14691,89 @@ ovn_start
 # GARPs have been sent out to the external network as well.
 
 # Create logical switches
-ovn-nbctl ls-add sw0
-ovn-nbctl ls-add sw1
-ovn-nbctl ls-add pub
+check ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add sw1
+check ovn-nbctl ls-add pub
 
 # Created localnet port on public switch
-ovn-nbctl lsp-add pub ln-pub
-ovn-nbctl lsp-set-type ln-pub localnet
-ovn-nbctl lsp-set-addresses ln-pub unknown
-ovn-nbctl lsp-set-options ln-pub network_name=phys
+check ovn-nbctl lsp-add pub ln-pub
+check ovn-nbctl lsp-set-type ln-pub localnet
+check ovn-nbctl lsp-set-addresses ln-pub unknown
+check ovn-nbctl lsp-set-options ln-pub network_name=phys
 
 # Create logical routers and connect them to public switch
-ovn-nbctl create Logical_Router name=lr0
-ovn-nbctl create Logical_Router name=lr1
+AT_CHECK([(ovn-nbctl create Logical_Router name=lr0;
+           ovn-nbctl create Logical_Router name=lr1) | uuidfilt], [0], [<0>
+<1>
+])
 
-ovn-nbctl lrp-add lr0 lr0-pub f0:00:00:00:00:01 172.24.4.220/24
-ovn-nbctl lsp-add pub pub-lr0 -- set Logical_Switch_Port pub-lr0 \
+check ovn-nbctl lrp-add lr0 lr0-pub f0:00:00:00:00:01 172.24.4.220/24
+check ovn-nbctl lsp-add pub pub-lr0 -- set Logical_Switch_Port pub-lr0 \
     type=router options:router-port=lr0-pub options:nat-addresses="router" addresses="router"
-ovn-nbctl lrp-add lr1 lr1-pub f0:00:00:00:01:01 172.24.4.221/24
-ovn-nbctl lsp-add pub pub-lr1 -- set Logical_Switch_Port pub-lr1 \
+check ovn-nbctl lrp-add lr1 lr1-pub f0:00:00:00:01:01 172.24.4.221/24
+check ovn-nbctl lsp-add pub pub-lr1 -- set Logical_Switch_Port pub-lr1 \
     type=router options:router-port=lr1-pub options:nat-addresses="router" addresses="router"
 
-ovn-nbctl lrp-set-gateway-chassis lr0-pub hv1 10
-ovn-nbctl lrp-set-gateway-chassis lr1-pub hv1 10
+check ovn-nbctl lrp-set-gateway-chassis lr0-pub hv1 10
+check ovn-nbctl lrp-set-gateway-chassis lr1-pub hv1 10
 
 # Connect sw0 and sw1 to lr0 and lr1
-ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.254/24
-ovn-nbctl lsp-add sw0 sw0-lr0 -- set Logical_Switch_Port sw0-lr0 type=router \
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.254/24
+check ovn-nbctl lsp-add sw0 sw0-lr0 -- set Logical_Switch_Port sw0-lr0 type=router \
     options:router-port=lr0-sw0 addresses="router"
-ovn-nbctl lrp-add lr1 lr1-sw1 00:00:00:00:ff:02 20.0.0.254/24
-ovn-nbctl lsp-add sw1 sw1-lr1 -- set Logical_Switch_Port sw1-lr1 type=router \
+check ovn-nbctl lrp-add lr1 lr1-sw1 00:00:00:00:ff:02 20.0.0.254/24
+check ovn-nbctl lsp-add sw1 sw1-lr1 -- set Logical_Switch_Port sw1-lr1 type=router \
     options:router-port=lr1-sw1 addresses="router"
 
 
 # Add SNAT rules
-ovn-nbctl lr-nat-add lr0 snat 172.24.4.220 10.0.0.0/24
-ovn-nbctl lr-nat-add lr1 snat 172.24.4.221 20.0.0.0/24
+check ovn-nbctl lr-nat-add lr0 snat 172.24.4.220 10.0.0.0/24
+check ovn-nbctl lr-nat-add lr1 snat 172.24.4.221 20.0.0.0/24
 
 net_add n1
 sim_add hv1
 as hv1
-ovs-vsctl add-br br-phys
+check ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 172.24.4.1
-ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 
-ovs-vsctl add-port br-int vif0 -- set Interface vif0 external-ids:iface-id=lp0
-ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=lp1
+check ovs-vsctl add-port br-int vif0 -- set Interface vif0 external-ids:iface-id=lp0
+check ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=lp1
 
-ovn-nbctl lsp-add sw0 lp0
-ovn-nbctl lsp-add sw1 lp1
-ovn-nbctl lsp-set-addresses lp0 "50:54:00:00:00:01 10.0.0.10"
-ovn-nbctl lsp-set-addresses lp1 "50:54:00:00:00:02 20.0.0.10"
+check ovn-nbctl lsp-add sw0 lp0
+check ovn-nbctl lsp-add sw1 lp1
+check ovn-nbctl lsp-set-addresses lp0 "50:54:00:00:00:01 10.0.0.10"
+check ovn-nbctl lsp-set-addresses lp1 "50:54:00:00:00:02 20.0.0.10"
 
 OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp0` = xup])
 OVS_WAIT_UNTIL([test x`ovn-nbctl lsp-get-up lp1` = xup])
 
 # Create two floating IPs, one for each VIF
-ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.24.4.100 10.0.0.10
-ovn-nbctl lr-nat-add lr1 dnat_and_snat 172.24.4.200 20.0.0.10
+check ovn-nbctl lr-nat-add lr0 dnat_and_snat 172.24.4.100 10.0.0.10
+check ovn-nbctl lr-nat-add lr1 dnat_and_snat 172.24.4.200 20.0.0.10
 
 # Check that the MAC_Binding entries have been properly created
-OVS_WAIT_UNTIL([test `ovn-sbctl find mac_binding logical_port="lr0-pub" ip="172.24.4.200" | wc -l` -gt 0])
-OVS_WAIT_UNTIL([test `ovn-sbctl find mac_binding logical_port="lr1-pub" ip="172.24.4.100" | wc -l` -gt 0])
+wait_row_count MAC_Binding 1 logical_port=lr0-pub ip=172.24.4.200
+wait_row_count MAC_Binding 1 logical_port=lr1-pub ip=172.24.4.100
 
 # Check that the GARPs went also to the external physical network
 # Wait until at least 4 packets have arrived and copy them to a separate file as
 # more GARPs are expected in the capture in order to avoid race conditions.
-OVS_WAIT_UNTIL([test `$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/br-phys-tx.pcap | wc -l` -gt 4])
-$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/br-phys-tx.pcap | head -n4 > hv1/br-phys-tx4.pcap
-
+#
+# The expected output is:
 # GARP for lp0 172.24.4.100 on lr0-pub MAC (f0:00:00:00:00:01)
-echo "fffffffffffff0000000000108060001080006040001f00000000001ac180464000000000000ac180464" > expout
 # GARP for 172.24.4.220 on lr0-pub (f0:00:00:00:00:01)
-echo "fffffffffffff0000000000108060001080006040001f00000000001ac1804dc000000000000ac1804dc" >> expout
 # GARP for lp1 172.24.4.200 on lr1-pub MAC (f0:00:00:00:01:01)
-echo "fffffffffffff0000000010108060001080006040001f00000000101ac1804c8000000000000ac1804c8" >> expout
 # GARP for 172.24.4.221 on lr1-pub (f0:00:00:00:01:01)
-echo "fffffffffffff0000000010108060001080006040001f00000000101ac1804dd000000000000ac1804dd" >> expout
-AT_CHECK([sort hv1/br-phys-tx4.pcap], [0], [expout])
-#OVN_CHECK_PACKETS([hv1/br-phys-tx4.pcap], [br-phys.expected])
+
+OVS_WAIT_FOR_OUTPUT(
+  [$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/br-phys-tx.pcap | sort | uniq],
+  [0],
+  [fffffffffffff0000000000108060001080006040001f00000000001ac180464000000000000ac180464
+fffffffffffff0000000000108060001080006040001f00000000001ac1804dc000000000000ac1804dc
+fffffffffffff0000000010108060001080006040001f00000000101ac1804c8000000000000ac1804c8
+fffffffffffff0000000010108060001080006040001f00000000101ac1804dd000000000000ac1804dd
+])
 
 OVN_CLEANUP([hv1])
 AT_CLEANUP
