@@ -18306,8 +18306,7 @@ OVS_WAIT_UNTIL(
 grep "405400000003${svc_mon_src_mac}" | wc -l`]
 )
 
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl --bare --columns status find \
-service_monitor | grep offline | wc -l`])
+wait_row_count Service_Monitor 2 status=offline
 
 OVS_WAIT_UNTIL(
     [test 2 = `$PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif1-tx.pcap | \
