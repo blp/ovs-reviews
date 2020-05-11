@@ -329,7 +329,7 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                                 match (eth_addr_from_string(set_space_sep(nat.external_mac))) {
                                     Some{emac} -> {
                                         set_insert(addresses,
-                                                   "${emac} ${nat.external_ip} is_chassis_resident(\"${set_space_sep(nat.logical_port)}\")")
+                                                   "${emac} ${nat.external_ip} is_chassis_resident(${json_string_escape(set_space_sep(nat.logical_port))})")
                                     },
                                     None -> ()
                                 }
@@ -824,7 +824,7 @@ sb.Out_Multicast_Group(._uuid    = hash128((mcgroup.datapath,mcgroup.name)),
     MulticastGroupTunKeyAllocation(mcgroup.datapath, mcgroup.name, tunnel_key).
 
 /*
- * MAC binding: records inserted by hypervisors; northd removes records for deleted logical ports
+ * MAC binding: records inserted by hypervisors; northd removes records for deleted logical ports and datapaths.
  */
 sb.Out_MAC_Binding (._uuid        = mb._uuid,
                     .logical_port = mb.logical_port,
@@ -832,7 +832,8 @@ sb.Out_MAC_Binding (._uuid        = mb._uuid,
                     .mac          = mb.mac,
                     .datapath     = mb.datapath) :-
     sb.MAC_Binding[mb],
-    sb.Out_Port_Binding(.logical_port = mb.logical_port).
+    sb.Out_Port_Binding(.logical_port = mb.logical_port),
+    sb.Out_Datapath_Binding(._uuid = mb.datapath).
 
 /*
  * DHCP options: fixed table
@@ -1449,9 +1450,9 @@ Flow(.logical_datapath = sw.ls._uuid,
     var __match = "eth.dst == ${fg.vmac}",
     var actions = "fwd_group(" ++
                   if (fg.liveness) { "liveness=\"true\"," } else { "" } ++
-                  "childports=\"" ++
-                  string_join(set2vec(fg.child_port), "\", \"") ++
-                  "\");".
+                  "childports=" ++
+                  json_string_escape(string_join(set2vec(fg.child_port), "\", \"")) ++
+                  ");".
 
 /* Logical switch ingress table PORT_SEC_L2: admission control framework
  * (priority 100) */
@@ -1846,7 +1847,7 @@ function build_acl_log(acl: nb.ACL): string =
         var strs: Vec<string> = vec_empty();
         match (set_nth(acl.name, 0)) {
             None -> (),
-            Some{name} -> vec_push(strs, "name=\"${name}\"")
+            Some{name} -> vec_push(strs, "name=${json_string_escape(name)}")
         };
         /* If a severity level isn't specified, default to "info". */
         match (set_nth(acl.severity, 0)) {
@@ -1928,8 +1929,13 @@ for (Reject(lsuuid, pipeline, stage, acl, extra_match_, extra_actions_)) {
         /* IP traffic */
         var __match = extra_match ++ "ip4 && (${acl.__match})" in
         var actions = acl_log ++ extra_actions ++ 
-                      "reg0 = 0; eth.dst <-> eth.src; ip4.dst <-> ip4.src; "
-                      "icmp4 { outport <-> inport; ${next}; };" in
+                      "reg0 = 0; "
+                      "icmp4 { "
+                          "eth.dst <-> eth.src; "
+                          "ip4.dst <-> ip4.src; "
+                          "outport <-> inport; "
+                          "${next}; "
+                      "};" in
         Flow(.logical_datapath = lsuuid,
              .stage            = stage,
              .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
@@ -2252,7 +2258,8 @@ for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
     Flow(.logical_datapath = sw.ls._uuid,
          .stage            = switch_stage(OUT, ACL),
          .priority         = 34000,
-         .__match          = "outport == \"${lsp.name}\" && eth.src == ${server_mac} "
+         .__match          = "outport == json_string_escape(${lsp.name}) "
+                             "&& eth.src == ${server_mac} "
                              "&& ip4.src == ${server_id} && udp && udp.src == 67 "
                              "&& udp.dst == 68",
          .actions          = if (sw.has_stateful_acl) "ct_commit; next;" else "next;",
@@ -2270,7 +2277,8 @@ for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
     Flow(.logical_datapath = sw.ls._uuid,
          .stage            = switch_stage(OUT, ACL),
          .priority         = 34000,
-         .__match          = "outport == \"${lsp.name}\" && eth.src == ${server_mac} "
+         .__match          = "outport == ${json_string_escape(lsp.name)} "
+                             "&& eth.src == ${server_mac} "
                              "&& ip6.src == ${server_ip} && udp && udp.src == 547 "
                              "&& udp.dst == 546",
          .actions          = if (sw.has_stateful_acl) "ct_commit; next;" else "next;",
@@ -3406,9 +3414,9 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                 var flood_static = not set_is_empty(flood_ports) in
                 var igmp_act = {
                     if (flood_reports) {
-                        (var mrouter_static, _) = mC_MROUTER_STATIC();
+                        var mrouter_static = json_string_escape(mC_MROUTER_STATIC().0);
                         "clone { "
-                            "outport = \"${mrouter_static}\"; "
+                            "outport = ${mrouter_static}; "
                             "output; "
                         "}; igmp;"
                     } else {
@@ -3434,23 +3442,23 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                     /* Flood all IP multicast traffic destined to 224.0.0.X to
                      * all ports - RFC 4541, section 2.1.2, item 2.
                      */
-                    (var flood, _) = mC_FLOOD() in
+                    var flood = json_string_escape(mC_FLOOD().0) in
                     Flow(.logical_datapath = ls._uuid,
                          .stage            = switch_stage(IN, L2_LKUP),
                          .priority         = 85,
                          .__match          = "ip4.mcast && ip4.dst == 224.0.0.0/24",
-                         .actions          = "outport = \"${flood}\"; output;",
+                         .actions          = "outport = ${flood}; output;",
                          .external_ids     = map_empty());
 
                     /* Flood all IPv6 multicast traffic destined to reserved
                      * multicast IPs (RFC 4291, 2.7.1).
                      */
-                    (var flood, _) = mC_FLOOD() in
+                    var flood = json_string_escape(mC_FLOOD().0) in
                     Flow(.logical_datapath = ls._uuid,
                          .stage            = switch_stage(IN, L2_LKUP),
                          .priority         = 85,
                          .__match          = "ip6.mcast_flood",
-                         .actions          = "outport = \"${flood}\"; output;",
+                         .actions          = "outport = ${flood}; output;",
                          .external_ids     = map_empty());
 
                     /* Forward uregistered IP multicast to routers with relay
@@ -3461,9 +3469,9 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                     if (not mcast_cfg.flood_unreg) {
                         var relay_act = {
                             if (flood_relay) {
-                                (var rtr_flood, _) = mC_MROUTER_FLOOD();
+                                var rtr_flood = json_string_escape(mC_MROUTER_FLOOD().0);
                                 "clone { "
-                                    "outport = \"${rtr_flood}\"; "
+                                    "outport = ${rtr_flood}; "
                                     "output; "
                                 "}; "
                             } else {
@@ -3472,8 +3480,8 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                         } in
                         var static_act = {
                             if (flood_static) {
-                                (var mc_static, _) = mC_STATIC();
-                                "outport =\"${mc_static}\"; output;"
+                                var mc_static = json_string_escape(mC_STATIC().0);
+                                "outport =${mc_static}; output;"
                             } else {
                                 ""
                             }
@@ -3517,12 +3525,12 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
         for (SwitchMcastFloodPorts(&sw, flood_ports)) {
             var flood_relay = not set_is_empty(relay_ports) in
             var flood_static = not set_is_empty(flood_ports) in
-            (var mc_rtr_flood, _) = mC_MROUTER_FLOOD() in
-            (var mc_static, _) = mC_STATIC() in
+            var mc_rtr_flood = json_string_escape(mC_MROUTER_FLOOD().0) in
+            var mc_static = json_string_escape(mC_STATIC().0) in
             var relay_act = {
                 if (flood_relay) {
                     "clone { "
-                        "outport = \"${mc_rtr_flood}\"; output; "
+                        "outport = ${mc_rtr_flood}; output; "
                     "};"
                 } else {
                     ""
@@ -3531,7 +3539,7 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
             var static_act = {
                 if (flood_static) {
                     "clone { "
-                        "outport =\"${mc_static}\"; "
+                        "outport =${mc_static}; "
                         "output; "
                     "};"
                 } else {
@@ -3595,12 +3603,12 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 /* Ingress table L2_LKUP: Destination lookup, broadcast and multicast handling
  * (priority 100). */
 for (ls in nb.Logical_Switch) {
-    (var mc_flood, _) = mC_FLOOD() in
+    var mc_flood = json_string_escape(mC_FLOOD().0) in
     Flow(.logical_datapath = ls._uuid,
          .stage            = switch_stage(IN, L2_LKUP),
          .priority         = 70,
          .__match          = "eth.mcast",
-         .actions          = "outport = \"${mc_flood}\"; output;",
+         .actions          = "outport = ${mc_flood}; output;",
          .external_ids     = map_empty())
 }
 
@@ -3647,7 +3655,8 @@ Flow(.logical_datapath = sw.ls._uuid,
     },
     var eth_src = "{ " ++ string_join(eth_src_vec, ", ") ++ "}",
     var __match = "eth.src == ${eth_src} && (arp.op == 1 || nd_ns)",
-    var actions = "outport = \"${mC_FLOOD().0}\"; output;".
+    var mc_flood = json_string_escape(mC_FLOOD().0),
+    var actions = "outport = ${mc_flood}; output;".
 
 /* Forward ARP requests for owned IP addresses (L3, VIP, NAT) only to this
  * router port.
@@ -3767,7 +3776,7 @@ for (&SwitchPort(.lsp = lsp,
                     Some{var lport} = set_nth(nat.logical_port, 0) in
                     Some{var emac} = set_nth(nat.external_mac, 0) in
                     Some{var nat_mac} = eth_addr_from_string(emac) in
-                    var __match = "eth.dst == ${nat_mac} && is_chassis_resident(\"${lport}\")" in
+                    var __match = "eth.dst == ${nat_mac} && is_chassis_resident(${json_string_escape(lport)})" in
                     Flow(.logical_datapath = sw.ls._uuid,
                          .stage            = switch_stage(IN, L2_LKUP),
                          .priority         = 50,
@@ -3790,12 +3799,12 @@ for (&SwitchPort(.lsp = lsp,
 
 /* Ingress table L2_LKUP: Destination lookup for unknown MACs (priority 0). */
 for (LogicalSwitchUnknownPorts(.ls = ls_uuid)) {
-    (var mc_unknown, _) = mC_UNKNOWN() in
+    var mc_unknown = json_string_escape(mC_UNKNOWN().0) in
     Flow(.logical_datapath = ls_uuid,
          .stage            = switch_stage(IN, L2_LKUP),
          .priority         = 0,
          .__match          = "1",
-         .actions          = "outport = \"${mc_unknown}\"; output;",
+         .actions          = "outport = ${mc_unknown}; output;",
          .external_ids     = map_empty())
 }
 
@@ -4400,16 +4409,17 @@ for (&RouterPort(.lrp = lrp,
          * DNAT IP addresses are external IP addresses that need ARP
          * handling. */
         var __match = "inport == ${json_name} && " ++ match (ip) {
-            IPv4{ipv4} -> "arp.tpa == ${ipv4} && arp.op == 1",
+            IPv4{ipv4} -> "arp.tpa == ${nat.external_ip} && arp.op == 1",
             IPv6{ipv6} -> {
                 var sn_addr = in6_addr_solicited_node(ipv6);
                 "nd_ns && ip6.dst == {${ipv6}, ${sn_addr}} && nd.target == ${ipv6}"
             }
         } in
-        var actions = "eth.dst = eth.src; " ++ match (ip) {
-            IPv4{_} -> "arp.op = 2; /* ARP reply */ "
-                       "arp.tha = arp.sha; ",
-            IPv6{_} -> "nd_na { "
+        (var actions, var actions4) = match (ip) {
+            IPv4{_} -> ("arp.op = 2; /* ARP reply */ arp.tha = arp.sha; ",
+                        ""),
+            IPv6{_} -> ("nd_na { ",
+                        " };")
         } in
         var arp_sha = match (ip) {
             IPv4{_} -> "arp.sha",
@@ -4426,7 +4436,7 @@ for (&RouterPort(.lrp = lrp,
                              * resident, so that upstream MAC learning points to the
                              * correct chassis.  Also need to avoid generation of
                              * multiple ARP responses from different chassis. */
-                            (" && is_chassis_resident(\"${logical_port}\")",
+                            (" && is_chassis_resident(${json_string_escape(logical_port)})",
                              "eth.src = ${mac}; ${arp_sha} = ${mac}; ")
                         },
                         None -> {
@@ -4451,7 +4461,7 @@ for (&RouterPort(.lrp = lrp,
         } in
         var actions3 = match (ip) {
             IPv4{ipv4} -> "arp.tpa = arp.spa; "
-                          "arp.spa = ${ipv4}; ",
+                          "arp.spa = ${ip_fmt(ipv4)}; ",
             IPv6{ipv6} -> "ip6.src = ${ipv6}; "
                           "nd.target = ${ipv6}; "
         } in
@@ -4459,10 +4469,12 @@ for (&RouterPort(.lrp = lrp,
              .stage            = router_stage(IN, IP_INPUT),
              .priority         = 90,
              .__match          = __match ++ __match2,
-             .actions          = actions ++ actions2 ++ actions3 ++
-                                "outport = ${json_name}; "
-                                "flags.loopback = 1; "
-                                "output;",
+             .actions          = "eth.dst = eth.src; " ++
+                                 actions ++ actions2 ++ actions3 ++
+                                 "outport = ${json_name}; "
+                                 "flags.loopback = 1; "
+                                 "output;" ++
+                                 actions4,
              .external_ids     = stage_hint(nat._uuid))
     }
 }
@@ -5098,7 +5110,7 @@ for (&Router(.lr = lr,
             Some{var logical_port} = set_nth(nat.logical_port, 0) in
             var __match =
                 "eth.dst == ${mac_addr} && inport == ${json_string_escape(gwport.name)}"
-                " && is_chassis_resident(\"${logical_port}\")" in
+                " && is_chassis_resident(${json_string_escape(logical_port)})" in
             Flow(.logical_datapath = lr._uuid,
                  .stage            = router_stage(IN, ADMISSION),
                  .priority         = 50,
@@ -5129,10 +5141,13 @@ for (&Router(.lr = lr,
             Some{var gwport} = l3dgw_port in
             /* Distributed router. */
             Some{var port} = match (mac) {
-                Some{_} -> set_nth(nat.logical_port, 0),
+                Some{_} -> match (set_nth(nat.logical_port, 0)) {
+                               Some{name} -> Some{json_string_escape(name)},
+                               None -> None: Option<string>
+                           },
                 None -> Some{redirect_port_name}
             } in
-            var __match = "${ipX}.dst == ${nat.external_ip} && outport == ${json_string_escape(gwport.name)} && is_chassis_resident(${json_string_escape(port)})" in
+            var __match = "${ipX}.dst == ${nat.external_ip} && outport == ${json_string_escape(gwport.name)} && is_chassis_resident(${port})" in
             var regs = {
                 var regs: Vec<string> = vec_empty();
                 for (j in range(32'd0, mFF_N_LOG_REGS()-32'd1, 32'd1)) {
@@ -5443,8 +5458,7 @@ Flow(.logical_datapath = r.lr._uuid,
         match (get_force_snat_ip(r.lr, "lb")) {
             Some{snat_ip} -> "flags.force_snat_for_lb = 1; ",
             _ -> ""
-        } ++
-        "ct_lb(" ++ string_join(set2vec(up_backends), ",") ++ ");"
+        } ++ ct_lb(string_join(set2vec(up_backends), ","), lb.selection_fields)
     }.
 Flow(.logical_datapath = r.lr._uuid,
      .stage            = router_stage(IN, DNAT),
@@ -5467,7 +5481,7 @@ Flow(.logical_datapath = r.lr._uuid,
               _ -> ""
           },
     var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
-    var actions = "ct_lb(${lbvip.backend_ips});".
+    var actions = ct_lb(lbvip.backend_ips, lb.selection_fields).
 
 
 /* Defaults based on MaxRtrInterval and MinRtrInterval from RFC 4861 section
@@ -5618,7 +5632,8 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_e
                 } in
             var actions0 =
                 "${rEGBIT_ND_RA_OPTS_RESULT()} = put_nd_ra_opts("
-                "addr_mode = \"${address_mode}\", slla = ${networks.ea_s}" ++
+                "addr_mode = ${json_string_escape(address_mode)}, "
+                "slla = ${networks.ea_s}" ++
                 if (mtu > 0) { ", mtu = ${mtu}" } else { "" } in
             var actions = actions0 ++ prefix ++ "); next;" in
             Flow(.logical_datapath = router.lr._uuid,
@@ -5684,7 +5699,7 @@ Flow(.logical_datapath = r.lr._uuid,
     },
     var __match = "${ipx}.src == ${nat.logical_ip} && "
                   "is_chassis_resident(${json_string_escape(logical_port)})",
-    var actions = "outport = ${r.redirect_port_name}; "
+    var actions = "outport = ${json_string_escape(l3dgw_port.name)}; "
                   "eth.src = ${external_mac}; "
                   "${xx}reg0 = ${ipx}.dst; "
                   "${xx}reg1 = ${nat.external_ip}; "
@@ -5885,11 +5900,11 @@ Flow(.logical_datapath = router.lr._uuid,
 for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
     for (RouterMcastFloodPorts(&rtr, flood_ports) if rtr.mcast_cfg.relay) {
         var flood_static = not set_is_empty(flood_ports) in
-        (var mc_static, _) = mC_STATIC() in
+        var mc_static = json_string_escape(mC_STATIC().0) in
         var static_act = {
             if (flood_static) {
                 "clone { "
-                    "outport = \"${mc_static}\"; "
+                    "outport = ${mc_static}; "
                     "ip.ttl--; "
                     "next; "
                 "};"
@@ -5906,7 +5921,8 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
              .priority         = 500,
              .__match          = "${ipX} && ${ipX}.dst == ${address}",
              .actions          =
-                "${static_act} outport = \"${address}\"; ip.ttl--; next;",
+                "${static_act} outport = ${json_string_escape(address)}; "
+                "ip.ttl--; next;",
              .external_ids     = map_empty())
     }
 }
@@ -5915,11 +5931,11 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
  * Priority 450. Otherwise drop any multicast traffic.
  */
 for (RouterMcastFloodPorts(&rtr, flood_ports) if rtr.mcast_cfg.relay) {
-    (var mc_static, _) = mC_STATIC() in
+    var mc_static = json_string_escape(mC_STATIC().0) in
     var flood_static = not set_is_empty(flood_ports) in
     var actions = if (flood_static) {
         "clone { "
-            "outport = \"${mc_static}\"; "
+            "outport = ${mc_static}; "
             "ip.ttl--; "
             "next; "
         "};"
@@ -6844,6 +6860,10 @@ sb.Out_IP_Multicast(._uuid = cfg.datapath,
     &McastSwitchCfg[cfg].
 
 
+relation PortExists(name: string)
+PortExists(name) :- nb.Logical_Switch_Port(.name = name).
+PortExists(name) :- nb.Logical_Router_Port(.name = name).
+
 sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip, lbvipbackend.port, protocol)),
                        .ip = lbvipbackend.ip,
                        .protocol = set_singleton(protocol),
@@ -6857,6 +6877,7 @@ sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip,
     LBVIPBackend[lbvipbackend],
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
     LoadBalancerHealthCheckRef[lbhc],
+    PortExists(svc_monitor.port_name),
     set_contains(lbvipbackend.lbvip.lb.health_check, lbhc._uuid),
     lbhc.vip == lbvipbackend.lbvip.vip_key,
     var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),

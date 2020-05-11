@@ -7623,23 +7623,23 @@ AT_SETUP([ovn -- DSCP marking and meter check])
 AT_KEYWORDS([ovn])
 ovn_start
 
-ovn-nbctl ls-add lsw0
-ovn-nbctl --wait=sb lsp-add lsw0 lp1
-ovn-nbctl --wait=sb lsp-add lsw0 lp2
-ovn-nbctl --wait=sb lsp-add lsw0 lp3
-ovn-nbctl lsp-set-addresses lp1 f0:00:00:00:00:01
-ovn-nbctl lsp-set-addresses lp2 f0:00:00:00:00:02
-ovn-nbctl lsp-set-addresses lp3 f0:00:00:00:00:03
-ovn-nbctl lsp-set-port-security lp1 f0:00:00:00:00:01
-ovn-nbctl lsp-set-port-security lp2 f0:00:00:00:00:02
-ovn-nbctl --wait=sb sync
+check ovn-nbctl ls-add lsw0
+check ovn-nbctl --wait=sb lsp-add lsw0 lp1
+check ovn-nbctl --wait=sb lsp-add lsw0 lp2
+check ovn-nbctl --wait=sb lsp-add lsw0 lp3
+check ovn-nbctl lsp-set-addresses lp1 f0:00:00:00:00:01
+check ovn-nbctl lsp-set-addresses lp2 f0:00:00:00:00:02
+check ovn-nbctl lsp-set-addresses lp3 f0:00:00:00:00:03
+check ovn-nbctl lsp-set-port-security lp1 f0:00:00:00:00:01
+check ovn-nbctl lsp-set-port-security lp2 f0:00:00:00:00:02
+check ovn-nbctl --wait=sb sync
 net_add n1
 sim_add hv
 as hv
-ovs-vsctl add-br br-phys
+check ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.1
-ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=lp1 options:tx_pcap=vif1-tx.pcap options:rxq_pcap=vif1-rx.pcap ofport-request=1
-ovs-vsctl add-port br-int vif2 -- set Interface vif2 external-ids:iface-id=lp2 options:tx_pcap=vif2-tx.pcap options:rxq_pcap=vif2-rx.pcap ofport-request=2
+check ovs-vsctl add-port br-int vif1 -- set Interface vif1 external-ids:iface-id=lp1 options:tx_pcap=vif1-tx.pcap options:rxq_pcap=vif1-rx.pcap ofport-request=1
+check ovs-vsctl add-port br-int vif2 -- set Interface vif2 external-ids:iface-id=lp2 options:tx_pcap=vif2-tx.pcap options:rxq_pcap=vif2-rx.pcap ofport-request=2
 
 AT_CAPTURE_FILE([trace])
 ovn_trace () {
@@ -7698,7 +7698,7 @@ AT_CHECK([as hv ovs-ofctl dump-flows br-int -O OpenFlow13 | grep meter | wc -l],
 ])
 
 # Update the meter rate
-ovn-nbctl --wait=hv set QoS $qos_id bandwidth=rate=100
+check ovn-nbctl --wait=hv set QoS $qos_id bandwidth=rate=100
 
 # check at hv with a qos meter table
 AT_CHECK([as hv ovs-ofctl dump-meters br-int -O OpenFlow13 | grep rate=100 | wc -l], [0], [1
@@ -7707,11 +7707,11 @@ AT_CHECK([as hv ovs-ofctl dump-flows br-int -O OpenFlow13 | grep meter | wc -l],
 ])
 
 # Update the DSCP marking
-ovn-nbctl --wait=hv set QoS $qos_id action=dscp=63
+check ovn-nbctl --wait=hv set QoS $qos_id action=dscp=63
 check_tos 63
 
 # Update the meter rate
-ovn-nbctl --wait=hv set QoS $qos_id bandwidth=rate=4294967295,burst=4294967295
+check ovn-nbctl --wait=hv set QoS $qos_id bandwidth=rate=4294967295,burst=4294967295
 
 # check at hv with a qos meter table
 AT_CHECK([as hv ovs-ofctl dump-meters br-int -O OpenFlow13 | grep burst_size=4294967295 | wc -l], [0], [1
@@ -7719,11 +7719,11 @@ AT_CHECK([as hv ovs-ofctl dump-meters br-int -O OpenFlow13 | grep burst_size=429
 AT_CHECK([as hv ovs-ofctl dump-flows br-int -O OpenFlow13 | grep meter | wc -l], [0], [1
 ])
 
-ovn-nbctl --wait=hv set QoS $qos_id match="outport\=\=\"lp2\"" direction="to-lport"
+check ovn-nbctl --wait=hv set QoS $qos_id match="outport\=\=\"lp2\"" direction="to-lport"
 check_tos 63
 
 # Disable DSCP marking
-ovn-nbctl --wait=hv qos-del lsw0
+check ovn-nbctl --wait=hv qos-del lsw0
 AT_CHECK([as hv ovn-nbctl qos-list lsw0 | wc -l], [0], [0
 ])
 check_tos 0
@@ -7733,7 +7733,7 @@ AT_CHECK([as hv ovs-ofctl dump-flows br-int -O OpenFlow13 | grep meter | wc -l],
 ])
 
 # check meter with chassis not resident
-ovn-nbctl qos-add lsw0 to-lport 1001 'inport=="lp3" && is_chassis_resident("lp3")' rate=11123 burst=111230
+check ovn-nbctl --wait=hv qos-add lsw0 to-lport 1001 'inport=="lp3" && is_chassis_resident("lp3")' rate=11123 burst=111230
 AT_CHECK([as hv ovn-nbctl qos-list lsw0 | wc -l], [0], [1
 ])
 
@@ -7744,11 +7744,11 @@ AT_CHECK([as hv ovs-ofctl dump-meters br-int -O OpenFlow13 | grep rate=11123 | w
 ])
 
 # Check multiple qos meters
-ovn-nbctl qos-del lsw0
-ovn-nbctl qos-add lsw0 to-lport 1001 'inport=="lp1" && is_chassis_resident("lp1")' rate=100000 burst=100000
-ovn-nbctl qos-add lsw0 to-lport 1001 'inport=="lp2" && is_chassis_resident("lp2")' rate=100000 burst=100000
-ovn-nbctl qos-add lsw0 to-lport 1002 'inport=="lp1" && is_chassis_resident("lp1")' rate=100001 burst=100001
-ovn-nbctl qos-add lsw0 to-lport 1002 'inport=="lp2" && is_chassis_resident("lp2")' rate=100001 burst=100001
+check ovn-nbctl qos-del lsw0
+check ovn-nbctl qos-add lsw0 to-lport 1001 'inport=="lp1" && is_chassis_resident("lp1")' rate=100000 burst=100000
+check ovn-nbctl qos-add lsw0 to-lport 1001 'inport=="lp2" && is_chassis_resident("lp2")' rate=100000 burst=100000
+check ovn-nbctl qos-add lsw0 to-lport 1002 'inport=="lp1" && is_chassis_resident("lp1")' rate=100001 burst=100001
+check ovn-nbctl --wait=hv qos-add lsw0 to-lport 1002 'inport=="lp2" && is_chassis_resident("lp2")' rate=100001 burst=100001
 
 AT_CHECK([as hv ovs-ofctl dump-meters br-int -O OpenFlow13 | grep meter | wc -l], [0], [4
 ])
@@ -11972,7 +11972,7 @@ test_ip_packet() {
     local reply=${eth_src}${eth_dst}08004500003000004000${reply_icmp_ttl}01${exp_ip_chksum}${ipv4_dst}${ipv4_src}${reply_icmp_payload}
     echo $reply$orig_pkt_in_reply >> vif$inport.expected
 
-    as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
+    check as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
 }
 
 # test_ipv6_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST EXP_ICMP_CHKSUM
@@ -11990,7 +11990,7 @@ test_ipv6_packet() {
     local reply=${eth_src}${eth_dst}86dd6000000000383aff${ipv6_dst}${ipv6_src}0101${exp_icmp_chksum}00000000${ip6_hdr}0000000000000000
     echo $reply >> vif$inport.expected
 
-    as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
+    check as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
 }
 
 # test_tcp_syn_packet INPORT HV ETH_SRC ETH_DST IPV4_SRC IPV4_DST IP_CHKSUM TCP_SPORT TCP_DPORT TCP_CHKSUM EXP_IP_CHKSUM EXP_TCP_RST_CHKSUM
@@ -12018,7 +12018,7 @@ test_tcp_syn_packet() {
     local reply=${eth_src}${eth_dst}08004500002800004000${tcp_rst_ttl}06${exp_ip_chksum}${ipv4_dst}${ipv4_src}${tcp_dport}${tcp_sport}000000000000000250140000${exp_tcp_rst_chksum}0000
     echo $reply >> vif$inport.expected
 
-    as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
+    check as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
 }
 
 # Create hypervisors hv[123].
@@ -12026,18 +12026,18 @@ test_tcp_syn_packet() {
 # Add all of the vifs to a single logical switch sw0.
 
 net_add n1
-ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add sw0
 for i in 1 2 3; do
     sim_add hv$i
     as hv$i
-    ovs-vsctl add-br br-phys
+    check ovs-vsctl add-br br-phys
     ovn_attach n1 br-phys 192.168.0.$i
 
     for j in 1 2 3; do
         ovn-nbctl lsp-add sw0 sw0-p$i$j -- \
                 lsp-set-addresses sw0-p$i$j "00:00:00:00:00:$i$j 192.168.1.$i$j"
 
-        ovs-vsctl -- add-port br-int vif$i$j -- \
+        check ovs-vsctl -- add-port br-int vif$i$j -- \
                 set interface vif$i$j \
                 external-ids:iface-id=sw0-p$i$j \
                 options:tx_pcap=hv$i/vif$i$j-tx.pcap \
@@ -12058,12 +12058,15 @@ for i in 1 2 3; do
     : > vif${i}1.expected
 done
 
-ovn-nbctl --log acl-add sw0 to-lport 1000 "outport == \"sw0-p12\"" reject
-ovn-nbctl --log acl-add sw0 from-lport 1000 "inport == \"sw0-p11\"" reject
-ovn-nbctl --log acl-add sw0 from-lport 1000 "inport == \"sw0-p21\"" reject
+check ovn-nbctl --log acl-add sw0 to-lport 1000 "outport == \"sw0-p12\"" reject
+check ovn-nbctl --log acl-add sw0 from-lport 1000 "inport == \"sw0-p11\"" reject
+check ovn-nbctl --log acl-add sw0 from-lport 1000 "inport == \"sw0-p21\"" reject
 
 # Allow some time for ovn-northd and ovn-controller to catch up.
-ovn-nbctl --timeout=3 --wait=hv sync
+check ovn-nbctl --wait=hv sync
+
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
 
 test_ip_packet 11 1 000000000011 000000000021 $(ip_to_hex 192 168 1 11) $(ip_to_hex 192 168 1 21) 0000 f85b f576
 test_ip_packet 21 2 000000000021 000000000011 $(ip_to_hex 192 168 1 21) $(ip_to_hex 192 168 1 11) 0000 f85b f576
@@ -18122,14 +18125,14 @@ net_add n1
 
 sim_add hv1
 as hv1
-ovs-vsctl add-br br-phys
+check ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.1
-ovs-vsctl -- add-port br-int hv1-vif1 -- \
+check ovs-vsctl -- add-port br-int hv1-vif1 -- \
     set interface hv1-vif1 external-ids:iface-id=sw0-p1 \
     options:tx_pcap=hv1/vif1-tx.pcap \
     options:rxq_pcap=hv1/vif1-rx.pcap \
     ofport-request=1
-ovs-vsctl -- add-port br-int hv1-vif2 -- \
+check ovs-vsctl -- add-port br-int hv1-vif2 -- \
     set interface hv1-vif2 external-ids:iface-id=sw0-p2 \
     options:tx_pcap=hv1/vif2-tx.pcap \
     options:rxq_pcap=hv1/vif2-rx.pcap \
@@ -18137,108 +18140,97 @@ ovs-vsctl -- add-port br-int hv1-vif2 -- \
 
 sim_add hv2
 as hv2
-ovs-vsctl add-br br-phys
+check ovs-vsctl add-br br-phys
 ovn_attach n1 br-phys 192.168.0.2
-ovs-vsctl -- add-port br-int hv2-vif1 -- \
+check ovs-vsctl -- add-port br-int hv2-vif1 -- \
     set interface hv2-vif1 external-ids:iface-id=sw1-p1 \
     options:tx_pcap=hv2/vif1-tx.pcap \
     options:rxq_pcap=hv2/vif1-rx.pcap \
     ofport-request=1
 
-ovn-nbctl ls-add sw0
+check ovn-nbctl ls-add sw0
 
-ovn-nbctl lsp-add sw0 sw0-p1
-ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3"
-ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+check ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03 10.0.0.3"
+check ovn-nbctl lsp-set-port-security sw0-p1 "50:54:00:00:00:03 10.0.0.3"
 
-ovn-nbctl lsp-set-addresses sw0-p2 "50:54:00:00:00:04 10.0.0.4"
-ovn-nbctl lsp-set-port-security sw0-p2 "50:54:00:00:00:04 10.0.0.4"
-
-# Create port group and ACLs for sw0 ports.
-ovn-nbctl pg-add pg0_drop sw0-p1 sw0-p2
-ovn-nbctl acl-add pg0_drop from-lport 1001 "inport == @pg0_drop && ip" drop
-ovn-nbctl acl-add pg0_drop to-lport 1001 "outport == @pg0_drop && ip" drop
-
-ovn-nbctl pg-add pg0 sw0-p1 sw0-p2
-ovn-nbctl acl-add pg0 from-lport 1002 "inport == @pg0 && ip4" allow-related
-ovn-nbctl acl-add pg0 to-lport 1002 "outport == @pg0 && ip4 && ip4.src == 0.0.0.0/0 && icmp4" allow-related
-ovn-nbctl acl-add pg0 to-lport 1002 "outport == @pg0 && ip4 && ip4.src == 0.0.0.0/0 && tcp && tcp.dst == 80" allow-related
-ovn-nbctl acl-add pg0 to-lport 1002 "outport == @pg0 && ip4 && ip4.src == 0.0.0.0/0 && udp && udp.dst == 80" allow-related
 
 # Create the second logical switch with one port
-ovn-nbctl ls-add sw1
-ovn-nbctl lsp-add sw1 sw1-p1
-ovn-nbctl lsp-set-addresses sw1-p1 "40:54:00:00:00:03 20.0.0.3"
-ovn-nbctl lsp-set-port-security sw1-p1 "40:54:00:00:00:03 20.0.0.3"
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw1 sw1-p1
+check ovn-nbctl lsp-set-addresses sw1-p1 "40:54:00:00:00:03 20.0.0.3"
+check ovn-nbctl lsp-set-port-security sw1-p1 "40:54:00:00:00:03 20.0.0.3"
 
 # Create port group and ACLs for sw1 ports.
-ovn-nbctl pg-add pg1_drop sw1-p1
-ovn-nbctl acl-add pg1_drop from-lport 1001 "inport == @pg1_drop && ip" drop
-ovn-nbctl acl-add pg1_drop to-lport 1001 "outport == @pg1_drop && ip" drop
+check ovn-nbctl pg-add pg1_drop sw1-p1
+check ovn-nbctl acl-add pg1_drop from-lport 1001 "inport == @pg1_drop && ip" drop
+check ovn-nbctl acl-add pg1_drop to-lport 1001 "outport == @pg1_drop && ip" drop
 
-ovn-nbctl pg-add pg1 sw1-p1
-ovn-nbctl acl-add pg1 from-lport 1002 "inport == @pg1 && ip4" allow-related
-ovn-nbctl acl-add pg1 to-lport 1002 "outport == @pg1 && ip4 && ip4.src == 0.0.0.0/0 && icmp4" allow-related
-ovn-nbctl acl-add pg1 to-lport 1002 "outport == @pg1 && ip4 && ip4.src == 0.0.0.0/0 && tcp && tcp.dst == 80" allow-related
-ovn-nbctl acl-add pg1 to-lport 1002 "outport == @pg1 && ip4 && ip4.src == 0.0.0.0/0 && udp && udp.dst == 80" allow-related
+check ovn-nbctl pg-add pg1 sw1-p1
+check ovn-nbctl acl-add pg1 from-lport 1002 "inport == @pg1 && ip4" allow-related
+check ovn-nbctl acl-add pg1 to-lport 1002 "outport == @pg1 && ip4 && ip4.src == 0.0.0.0/0 && icmp4" allow-related
+check ovn-nbctl acl-add pg1 to-lport 1002 "outport == @pg1 && ip4 && ip4.src == 0.0.0.0/0 && tcp && tcp.dst == 80" allow-related
+check ovn-nbctl acl-add pg1 to-lport 1002 "outport == @pg1 && ip4 && ip4.src == 0.0.0.0/0 && udp && udp.dst == 80" allow-related
 
 # Create a logical router and attach both logical switches
-ovn-nbctl lr-add lr0
-ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
-ovn-nbctl lsp-add sw0 sw0-lr0
-ovn-nbctl lsp-set-type sw0-lr0 router
-ovn-nbctl lsp-set-addresses sw0-lr0 router
-ovn-nbctl lsp-set-options sw0-lr0 router-port=lr0-sw0
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-sw0 00:00:00:00:ff:01 10.0.0.1/24
+check ovn-nbctl lsp-add sw0 sw0-lr0
+check ovn-nbctl lsp-set-type sw0-lr0 router
+check ovn-nbctl lsp-set-addresses sw0-lr0 router
+check ovn-nbctl lsp-set-options sw0-lr0 router-port=lr0-sw0
 
-ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 20.0.0.1/24
-ovn-nbctl lsp-add sw1 sw1-lr0
-ovn-nbctl lsp-set-type sw1-lr0 router
-ovn-nbctl lsp-set-addresses sw1-lr0 router
-ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
+check ovn-nbctl lrp-add lr0 lr0-sw1 00:00:00:00:ff:02 20.0.0.1/24
+check ovn-nbctl lsp-add sw1 sw1-lr0
+check ovn-nbctl lsp-set-type sw1-lr0 router
+check ovn-nbctl lsp-set-addresses sw1-lr0 router
+check ovn-nbctl lsp-set-options sw1-lr0 router-port=lr0-sw1
 
-ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
+check ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
 
-ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
-ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:20.0.0.3=sw1-p1:20.0.0.2
+check ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:10.0.0.3=sw0-p1:10.0.0.2
+check ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:20.0.0.3=sw1-p1:20.0.0.2
 
-ovn-nbctl --wait=sb -- --id=@hc create \
-Load_Balancer_Health_Check vip="10.0.0.10\:80" -- add Load_Balancer . \
-health_check @hc
-
-ovn-nbctl --wait=sb ls-lb-add sw0 lb1
-ovn-nbctl --wait=sb ls-lb-add sw1 lb1
-ovn-nbctl --wait=sb lr-lb-add lr0 lb1
-
-ovn-nbctl ls-add public
-ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
-ovn-nbctl lsp-add public public-lr0
-ovn-nbctl lsp-set-type public-lr0 router
-ovn-nbctl lsp-set-addresses public-lr0 router
-ovn-nbctl lsp-set-options public-lr0 router-port=lr0-public
-
-# localnet port
-ovn-nbctl lsp-add public ln-public
-ovn-nbctl lsp-set-type ln-public localnet
-ovn-nbctl lsp-set-addresses ln-public unknown
-ovn-nbctl lsp-set-options ln-public network_name=public
-
-# schedule the gw router port to a chassis. Change the name of the chassis
-ovn-nbctl --wait=hv lrp-set-gateway-chassis lr0-public hv1 20
-
-OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
-
-OVS_WAIT_UNTIL([test 2 = `ovn-sbctl --bare --columns _uuid find \
-service_monitor | sed '/^$/d' | wc -l`])
-
-ovn-sbctl dump-flows sw0 | grep ct_lb | grep priority=120 > lflows.txt
-AT_CHECK([cat lflows.txt], [0], [dnl
-  table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+AT_CHECK([ovn-nbctl --wait=sb \
+          -- --id=@hc create Load_Balancer_Health_Check vip="10.0.0.10\:80" \
+          -- add Load_Balancer . health_check @hc | uuidfilt], [0], [<0>
 ])
 
-ovn-sbctl dump-flows lr0 | grep ct_lb | grep priority=120 > lflows.txt
-AT_CHECK([cat lflows.txt], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80 && is_chassis_resident("cr-lr0-public")), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+check ovn-nbctl --wait=sb ls-lb-add sw0 lb1
+check ovn-nbctl --wait=sb ls-lb-add sw1 lb1
+check ovn-nbctl --wait=sb lr-lb-add lr0 lb1
+
+check ovn-nbctl ls-add public
+check ovn-nbctl lrp-add lr0 lr0-public 00:00:20:20:12:13 172.168.0.100/24
+check ovn-nbctl lsp-add public public-lr0
+check ovn-nbctl lsp-set-type public-lr0 router
+check ovn-nbctl lsp-set-addresses public-lr0 router
+check ovn-nbctl lsp-set-options public-lr0 router-port=lr0-public
+
+# localnet port
+check ovn-nbctl lsp-add public ln-public
+check ovn-nbctl lsp-set-type ln-public localnet
+check ovn-nbctl lsp-set-addresses ln-public unknown
+check ovn-nbctl lsp-set-options ln-public network_name=public
+
+# schedule the gw router port to a chassis. Change the name of the chassis
+check ovn-nbctl --wait=hv lrp-set-gateway-chassis lr0-public hv1 20
+
+OVN_POPULATE_ARP
+check ovn-nbctl --wait=hv sync
+
+wait_row_count Service_Monitor 2
+
+AT_CAPTURE_FILE([sbflows])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows sw0 | tee sbflows | grep ct_lb | grep priority=120], 0,
+  [  table=10(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
+])
+
+AT_CAPTURE_FILE([sbflows2])
+OVS_WAIT_FOR_OUTPUT(
+  [ovn-sbctl dump-flows lr0 | tee sbflows2 | grep ct_lb | grep priority=120], 0,
+  [  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80 && is_chassis_resident("cr-lr0-public")), action=(ct_lb(backends=10.0.0.3:80,20.0.0.3:80);)
 ])
 
 # get the svc monitor mac.
@@ -18268,48 +18260,43 @@ OVS_WAIT_UNTIL(
 grep "405400000003${svc_mon_src_mac}" | wc -l`]
 )
 
-ovn-sbctl dump-flows sw0 | grep "ip4.dst == 10.0.0.10 && tcp.dst == 80" \
-| grep priority=120 > lflows.txt
-AT_CHECK([sed 's/table=../table=??/' lflows.txt], [0], [dnl
-  table=??(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(drop;)
+AT_CAPTURE_FILE([sbflows3])
+ovn-sbctl dump-flows sw0 > sbflows3
+AT_CHECK(
+  [grep "ip4.dst == 10.0.0.10 && tcp.dst == 80" sbflows3 | grep priority=120 |\
+   sed 's/table=../table=??/'], [0],
+  [  table=??(ls_in_stateful     ), priority=120  , match=(ct.new && ip4.dst == 10.0.0.10 && tcp.dst == 80), action=(drop;)
 ])
 
-ovn-sbctl dump-flows lr0 | grep lr_in_dnat | grep priority=120 > lflows.txt
-AT_CHECK([cat lflows.txt], [0], [dnl
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80 && is_chassis_resident("cr-lr0-public")), action=(ct_dnat;)
-  table=6 (lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80 && is_chassis_resident("cr-lr0-public")), action=(drop;)
+AT_CAPTURE_FILE([sbflows4])
+ovn-sbctl dump-flows lr0 > sbflows4
+AT_CHECK([grep lr_in_dnat sbflows4 | grep priority=120 | sed 's/table=../table=??/'], [0], [dnl
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.est && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80 && is_chassis_resident("cr-lr0-public")), action=(ct_dnat;)
+  table=??(lr_in_dnat         ), priority=120  , match=(ct.new && ip && ip4.dst == 10.0.0.10 && tcp && tcp.dst == 80 && is_chassis_resident("cr-lr0-public")), action=(drop;)
 ])
 
 # Delete sw0-p1
-ovn-nbctl lsp-del sw0-p1
+check ovn-nbctl lsp-del sw0-p1
 
-OVS_WAIT_UNTIL([test 1 = $(ovn-sbctl --bare --columns _uuid find \
-service_monitor | sed '/^$/d' | wc -l)])
+wait_row_count Service_Monitor 1
 
 # Add back sw0-p1 but without any IP address.
-ovn-nbctl lsp-add sw0 sw0-p1
-ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03" -- \
-lsp-set-port-security sw0-p1 "50:54:00:00:00:03"
+check ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-set-addresses sw0-p1 "50:54:00:00:00:03" \
+             -- lsp-set-port-security sw0-p1 "50:54:00:00:00:03"
 
-OVS_WAIT_UNTIL([test 2 = $(ovn-sbctl --bare --columns status find \
-service_monitor | grep offline | wc -l)])
+wait_row_count Service_Monitor 2 status=offline
 
-ovn-nbctl lsp-del sw0-p1
-ovn-nbctl lsp-del sw1-p1
-OVS_WAIT_UNTIL([test 0 = $(ovn-sbctl --bare --columns _uuid find \
-service_monitor | sed '/^$/d' | wc -l)])
+check ovn-nbctl lsp-del sw0-p1
+check ovn-nbctl lsp-del sw1-p1
+wait_row_count Service_Monitor 0
 
 # Add back sw0-p1 but without any address set.
-ovn-nbctl lsp-add sw0 sw0-p1
+check ovn-nbctl lsp-add sw0 sw0-p1
 
-OVS_WAIT_UNTIL([test 1 = $(ovn-sbctl --bare --columns _uuid find \
-service_monitor | sed '/^$/d' | wc -l)])
-
-OVS_WAIT_UNTIL([test 0 = $(ovn-sbctl --bare --columns status find \
-service_monitor | grep offline | wc -l)])
-
-OVS_WAIT_UNTIL([test 0 = $(ovn-sbctl --bare --columns status find \
-service_monitor | grep online | wc -l)])
+wait_row_count Service_Monitor 1
+wait_row_count Service_Monitor 0 status=offline
+wait_row_count Service_Monitor 0 status=online
 
 OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
@@ -18451,7 +18438,7 @@ send_arp_request() {
     local arp=0001080006040001${eth_src}${spa}${eth_dst}${tpa}
 
     local request=${eth}${arp}
-    as hv$hv ovs-appctl netdev-dummy/receive hv${hv}-vif$inport $request
+    check as hv$hv ovs-appctl netdev-dummy/receive hv${hv}-vif$inport $request
 }
 
 send_nd_ns() {
@@ -18478,7 +18465,7 @@ send_nd_ns() {
 
     local request=${eth}${ip}${icmp6}
 
-    as hv$hv ovs-appctl netdev-dummy/receive hv${hv}-vif$inport $request
+    check as hv$hv ovs-appctl netdev-dummy/receive hv${hv}-vif$inport $request
 }
 
 src_mac=000000000001
@@ -18486,63 +18473,63 @@ src_mac=000000000001
 net_add n1
 sim_add hv1
 as hv1
-ovs-vsctl add-br br-phys
-ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 ovn_attach n1 br-phys 192.168.0.1
 
 sim_add hv2
 as hv2
-ovs-vsctl add-br br-phys
-ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl add-br br-phys
+check ovs-vsctl set open . external-ids:ovn-bridge-mappings=phys:br-phys
 ovn_attach n1 br-phys 192.168.0.2
 
 # One Aggregation Switch connected to two Logical networks (routers).
-ovn-nbctl ls-add sw-agg
-ovn-nbctl lsp-add sw-agg sw-agg-ext \
+check ovn-nbctl ls-add sw-agg
+check ovn-nbctl lsp-add sw-agg sw-agg-ext \
     -- lsp-set-addresses sw-agg-ext 00:00:00:00:00:01
 
-ovn-nbctl lsp-add sw-agg sw-rtr1                   \
+check ovn-nbctl lsp-add sw-agg sw-rtr1             \
     -- lsp-set-type sw-rtr1 router                 \
     -- lsp-set-addresses sw-rtr1 00:00:00:00:01:00 \
     -- lsp-set-options sw-rtr1 router-port=rtr1-sw
-ovn-nbctl lsp-add sw-agg sw-rtr2                   \
+check ovn-nbctl lsp-add sw-agg sw-rtr2             \
     -- lsp-set-type sw-rtr2 router                 \
     -- lsp-set-addresses sw-rtr2 00:00:00:00:02:00 \
     -- lsp-set-options sw-rtr2 router-port=rtr2-sw
 
 # Localnet port on the Aggregation Switch.
-ovn-nbctl lsp-add sw-agg sw-agg-ln
-ovn-nbctl lsp-set-addresses sw-agg-ln unknown
-ovn-nbctl lsp-set-type sw-agg-ln localnet
-ovn-nbctl lsp-set-options sw-agg-ln network_name=phys
+check ovn-nbctl lsp-add sw-agg sw-agg-ln
+check ovn-nbctl lsp-set-addresses sw-agg-ln unknown
+check ovn-nbctl lsp-set-type sw-agg-ln localnet
+check ovn-nbctl lsp-set-options sw-agg-ln network_name=phys
 
 # Configure L3 interface IPv4 & IPv6 on both routers.
-ovn-nbctl lr-add rtr1
-ovn-nbctl lrp-add rtr1 rtr1-sw 00:00:00:00:01:00 10.0.0.1/24 10::1/64
+check ovn-nbctl lr-add rtr1
+check ovn-nbctl lrp-add rtr1 rtr1-sw 00:00:00:00:01:00 10.0.0.1/24 10::1/64
 
-ovn-nbctl lrp-add rtr1 rtr1-sw1 00:00:01:00:00:00 20.0.0.1/24 20::1/64
+check ovn-nbctl lrp-add rtr1 rtr1-sw1 00:00:01:00:00:00 20.0.0.1/24 20::1/64
 
-ovn-nbctl lr-add rtr2
-ovn-nbctl lrp-add rtr2 rtr2-sw 00:00:00:00:02:00 10.0.0.2/24 10::2/64
+check ovn-nbctl lr-add rtr2
+check ovn-nbctl lrp-add rtr2 rtr2-sw 00:00:00:00:02:00 10.0.0.2/24 10::2/64
 
 # Configure router gateway ports.
-ovn-nbctl lrp-set-gateway-chassis rtr1-sw hv1 20
-ovn-nbctl lrp-set-gateway-chassis rtr2-sw hv1 20
+check ovn-nbctl lrp-set-gateway-chassis rtr1-sw hv1 20
+check ovn-nbctl lrp-set-gateway-chassis rtr2-sw hv1 20
 
 # One private network behind rtr1 with two VMs.
-ovn-nbctl ls-add sw1
-ovn-nbctl lsp-add sw1 sw1-p1 \
+check ovn-nbctl ls-add sw1
+check ovn-nbctl lsp-add sw1 sw1-p1 \
     -- lsp-set-addresses sw1-p1 00:00:00:01:00:00
-ovn-nbctl lsp-add sw1 sw1-p2 \
+check ovn-nbctl lsp-add sw1 sw1-p2 \
     -- lsp-set-addresses sw1-p2 00:00:00:02:00:00
-ovn-nbctl lsp-add sw1 sw1-rtr1                       \
+check ovn-nbctl lsp-add sw1 sw1-rtr1                 \
     -- lsp-set-type sw1-rtr1 router                  \
     -- lsp-set-addresses sw1-rtr1 00:00:01:00:00:00  \
     -- lsp-set-options sw1-rtr1 router-port=rtr1-sw1
 
 # Bind a "VM" connected to sw-agg on hv1.
 as hv1
-ovs-vsctl -- add-port br-int hv1-vif0 -- \
+check ovs-vsctl -- add-port br-int hv1-vif0 -- \
     set interface hv1-vif0 external-ids:iface-id=sw-agg-ext \
     options:tx_pcap=hv1/vif0-tx.pcap \
     options:rxq_pcap=hv1/vif0-rx.pcap \
@@ -18550,7 +18537,7 @@ ovs-vsctl -- add-port br-int hv1-vif0 -- \
 
 # Bind a "VM" connected to sw1 on hv1.
 as hv1
-ovs-vsctl -- add-port br-int hv1-vif1 -- \
+check ovs-vsctl -- add-port br-int hv1-vif1 -- \
     set interface hv1-vif1 external-ids:iface-id=sw1-p1 \
     options:tx_pcap=hv1/vif1-tx.pcap \
     options:rxq_pcap=hv1/vif1-rx.pcap \
@@ -18558,19 +18545,18 @@ ovs-vsctl -- add-port br-int hv1-vif1 -- \
 
 # Bind a "VM" connected to sw1 on hv2.
 as hv2
-ovs-vsctl -- add-port br-int hv1-vif2 -- \
+check ovs-vsctl -- add-port br-int hv1-vif2 -- \
     set interface hv1-vif2 external-ids:iface-id=sw1-p2 \
     options:tx_pcap=hv1/vif2-tx.pcap \
     options:rxq_pcap=hv1/vif2-rx.pcap \
     ofport-request=3
 
 OVN_POPULATE_ARP
-ovn-nbctl --wait=hv sync
+check ovn-nbctl --wait=hv sync
 
 ovn-sbctl dump-flows > sbflows
 AT_CAPTURE_FILE([sbflows])
 
-sw_dp_uuid=$(ovn-sbctl --bare --columns _uuid list datapath_binding sw-agg)
 sw_dp_key=$(ovn-sbctl --bare --columns tunnel_key list datapath_binding sw-agg)
 r1_dp_key=$(ovn-sbctl --bare --columns tunnel_key list datapath_binding rtr1)
 
@@ -18625,16 +18611,16 @@ OVS_WAIT_UNTIL([
 ])
 
 # Configure load balancing on both routers.
-ovn-nbctl lb-add lb1-v4 10.0.0.11 42.42.42.1
-ovn-nbctl lb-add lb1-v6 10::11 42::1
-ovn-nbctl lr-lb-add rtr1 lb1-v4
-ovn-nbctl lr-lb-add rtr1 lb1-v6
+check ovn-nbctl lb-add lb1-v4 10.0.0.11 42.42.42.1
+check ovn-nbctl lb-add lb1-v6 10::11 42::1
+check ovn-nbctl lr-lb-add rtr1 lb1-v4
+check ovn-nbctl lr-lb-add rtr1 lb1-v6
 
-ovn-nbctl lb-add lb2-v4 10.0.0.22 42.42.42.2
-ovn-nbctl lb-add lb2-v6 10::22 42::2
-ovn-nbctl lr-lb-add rtr2 lb2-v4
-ovn-nbctl lr-lb-add rtr2 lb2-v6
-ovn-nbctl --wait=hv sync
+check ovn-nbctl lb-add lb2-v4 10.0.0.22 42.42.42.2
+check ovn-nbctl lb-add lb2-v6 10::22 42::2
+check ovn-nbctl lr-lb-add rtr2 lb2-v4
+check ovn-nbctl lr-lb-add rtr2 lb2-v6
+check ovn-nbctl --wait=hv sync
 
 # Inject ARP request for first router owned VIP address.
 send_arp_request 1 0 ${src_mac} $(ip_to_hex 10 0 0 254) $(ip_to_hex 10 0 0 11)
@@ -18681,18 +18667,21 @@ OVS_WAIT_UNTIL([
 ])
 
 # Configure NAT on both routers.
-ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.111 42.42.42.1
-ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::111 42::1
-ovn-nbctl lr-nat-add rtr2 dnat_and_snat 10.0.0.222 42.42.42.2
-ovn-nbctl lr-nat-add rtr2 dnat_and_snat 10::222 42::2
-ovn-nbctl --wait=hv sync
+check ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.111 42.42.42.1
+check ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::111 42::1
+check ovn-nbctl lr-nat-add rtr2 dnat_and_snat 10.0.0.222 42.42.42.2
+check ovn-nbctl lr-nat-add rtr2 dnat_and_snat 10::222 42::2
+check ovn-nbctl --wait=hv sync
 
 # Configure FIP1 and FIP2 on rtr1 for sw1-p1 and sw1-p2.
-ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.121 20.0.0.11 sw1-p1 00:00:00:01:00:00
-ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::121 20::11 sw1-p1 00:00:00:01:00:00
-ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.122 20.0.0.12 sw1-p2 00:00:00:02:00:00
-ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::122 20::12 sw1-p2 00:00:00:02:00:00
-ovn-nbctl --wait=hv sync
+check ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.121 20.0.0.11 sw1-p1 00:00:00:01:00:00
+check ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::121 20::11 sw1-p1 00:00:00:01:00:00
+check ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10.0.0.122 20.0.0.12 sw1-p2 00:00:00:02:00:00
+check ovn-nbctl lr-nat-add rtr1 dnat_and_snat 10::122 20::12 sw1-p2 00:00:00:02:00:00
+check ovn-nbctl --wait=hv sync
+
+ovn-sbctl dump-flows > sbflows2
+AT_CAPTURE_FILE([sbflows2])
 
 # Inject ARP request for first router owned NAT address.
 send_arp_request 1 0 ${src_mac} $(ip_to_hex 10 0 0 254) $(ip_to_hex 10 0 0 111)
