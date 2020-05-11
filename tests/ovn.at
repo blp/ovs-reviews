@@ -16514,15 +16514,20 @@ AT_CAPTURE_FILE([rcv])
 check_packets() {
     > exp
     > rcv
+    if test "$1" = --uniq; then
+        sort="sort -u"; shift
+    else
+        sort=sort
+    fi
     for tuple in "$@"; do
         set $tuple; pcap=$1 type=$2
         echo "--- $pcap" | tee -a exp >> rcv
-        sort "$type" >> exp
-        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | sort >> rcv
+        $sort "$type" >> exp
+        $PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" $pcap | $sort >> rcv
         echo | tee -a exp >> rcv
     done
 
-    $at_diff exp rcv >/dev/null
+    $at_diff exp rcv # >/dev/null
 }
 
 OVN_POPULATE_ARP
@@ -16679,15 +16684,24 @@ check ovn-nbctl --wait=hv set Logical_Switch sw2 \
 AT_CAPTURE_FILE([sbflows4])
 ovn-sbctl dump-flows > sbflows4
 
-# Wait for 1 query interval (1 sec) and check that two queries are generated.
+# Check that multiple queries are generated over time.
 > expected
 store_mld_query 0000000002fe 200000000000000000000000000000fe expected
-store_mld_query 0000000002fe 200000000000000000000000000000fe expected
-
-OVS_WAIT_UNTIL(
-  [check_packets 'hv1/vif3-tx.pcap expected' \
-                 'hv2/vif3-tx.pcap expected'],
-  [$at_diff -F'^---' exp rcv])
+for count in 1 2 3; do
+    as hv1 reset_pcap_file hv1-vif1 hv1/vif1
+    as hv1 reset_pcap_file hv1-vif2 hv1/vif2
+    as hv1 reset_pcap_file hv1-vif3 hv1/vif3
+    as hv1 reset_pcap_file hv1-vif4 hv1/vif4
+    as hv2 reset_pcap_file hv2-vif1 hv2/vif1
+    as hv2 reset_pcap_file hv2-vif2 hv2/vif2
+    as hv2 reset_pcap_file hv2-vif3 hv2/vif3
+    as hv2 reset_pcap_file hv2-vif4 hv2/vif4
+    OVS_WAIT_UNTIL(
+      [check_packets --uniq \
+                     'hv1/vif3-tx.pcap expected' \
+                     'hv2/vif3-tx.pcap expected'],
+      [$at_diff -F'^---' exp rcv])
+done
 
 # Disable multicast querier on sw2.
 check ovn-nbctl set Logical_Switch sw2 \
