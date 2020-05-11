@@ -5388,7 +5388,7 @@ for (RouterLBVIP(
                         Some{(ip_address_, port_, addr_family_)} -> vec_push(conds,
                             "(${ipX}.src == ${ip_address_}" ++
                             if (port_ != 0) {
-                                " && ${proto}.src == ${port_}) || "
+                                " && ${proto}.src == ${port_})"
                             } else {
                                 ")"
                             })
