@@ -85,7 +85,7 @@ static const char *sb_input_relations[] = {
     "SSL",
     "Address_Set",
     "Port_Group",
-    "Logical_Flow",
+    //"Logical_Flow",
     "Multicast_Group",
     "Meter",
     "Meter_Band",
@@ -124,6 +124,24 @@ static const char *record_file;
 static const char *ovnnb_db;
 static const char *ovnsb_db;
 static const char *unixctl_path;
+
+/* Frequently used table ids. */
+table_id WARNING_TABLE_ID;
+
+/* Initialize frequently used table ids. */
+static void init_table_ids(void) {
+    WARNING_TABLE_ID = ddlog_get_table_id("Warning");
+}
+
+/*
+ * Accumulates DDlog delta to be sent to OVSDB.
+ *
+ * FIXME: There is currently no global northd state descriptor shared by NB and
+ * SB connections.  We should probably introduce it and move this variable there
+ * instead of declaring it as a global variable.
+ */
+static ddlog_delta *delta;
+
 
 /* Connection state machine.
  *
@@ -436,11 +454,32 @@ northd_send_monitor_request(struct northd_ctx *ctx, struct northd_db *db)
     const struct shash_node **nodes = shash_sort(&schema->tables);
 
     for (int i = 0; i < n; i++) {
-        struct json *monitor_request_array = json_array_create_empty();
-        json_array_add(monitor_request_array, json_object_create());
 
         struct ovsdb_table_schema *table = nodes[i]->data;
-        json_object_put(monitor_requests, table->name, monitor_request_array);
+
+        /* Only subscribe to input relations we care about. */
+        bool found = false;
+        if (!strcmp(db->name, "OVN_Northbound")) {
+            for (int j = 0; j < ARRAY_SIZE(nb_input_relations); j++) {
+                if (!strcmp(table->name, nb_input_relations[j])) {
+                    found = true;
+                    break;
+                }
+            }
+        } else {
+            for (int j = 0; j < ARRAY_SIZE(sb_input_relations); j++) {
+                if (!strcmp(table->name, sb_input_relations[j])) {
+                    found = true;
+                    break;
+                }
+            }
+        };
+        if (found) {
+            struct json *monitor_request_array = json_array_create_empty();
+            json_array_add(monitor_request_array, json_object_create());
+
+            json_object_put(monitor_requests, table->name, monitor_request_array);
+        }
     }
     free(nodes);
 
@@ -798,36 +837,6 @@ northd_update_probe_interval(struct northd_ctx *nb, struct northd_ctx *sb)
     jsonrpc_session_set_probe_interval(sb->session, probe_interval);
 }
 
-static bool
-northd_warning_cb(uintptr_t new_warnings_, const ddlog_record *rec)
-{
-    struct sset *new_warnings = (struct sset *) new_warnings_;
-
-    size_t len;
-    const char *s = ddlog_get_str_with_length(rec, &len);
-    sset_add_len(new_warnings, s, len);
-    return true;
-}
-
-static void
-northd_issue_warnings(const ddlog_prog ddlog)
-{
-    static struct sset old_warnings = SSET_INITIALIZER(&old_warnings);
-
-    struct sset new_warnings = SSET_INITIALIZER(&new_warnings);
-    ddlog_dump_table(ddlog, ddlog_get_table_id("Warning"),
-                     northd_warning_cb, (uintptr_t) &new_warnings);
-
-    const char *s;
-    SSET_FOR_EACH (s, &new_warnings) {
-        if (!sset_contains(&old_warnings, s)) {
-            VLOG_WARN("%s", s);
-        }
-    }
-    sset_swap(&new_warnings, &old_warnings);
-    sset_destroy(&new_warnings);
-}
-
 /* Arranges for poll_block() to wake up when northd_run() has something to
  * do or when activity occurs on a transaction on 'ctx'. */
 static void
@@ -842,18 +851,48 @@ northd_wait(struct northd_ctx *ctx)
 
 /* ddlog-specific actions. */
 
+/* Generate OVSDB update command for delta-plus, delta-minus, and delta-update
+ * tables. */
 static void
-ddlog_table_update(struct ds *ds, ddlog_prog ddlog,
+ddlog_table_update_deltas(struct ds *ds, ddlog_prog ddlog,
                    const char *db, const char *table)
 {
     int error;
     char *updates;
 
-    error = ddlog_dump_ovsdb_delta(ddlog, db, table, &updates);
+    error = ddlog_dump_ovsdb_delta_tables(ddlog, delta, db, table, &updates);
     if (error) {
         VLOG_INFO("DDlog error %d dumping delta for table %s", error, table);
         return;
     }
+
+    if (!strlen(updates)) {
+        ddlog_free_json(updates);
+        return;
+    }
+
+    ds_put_cstr(ds, updates);
+    ds_put_char(ds, ',');
+    ddlog_free_json(updates);
+}
+
+/* Generate OVSDB update command for a direct-output table;
+ * clear  */
+static void
+ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
+                   const char *db, const char *table)
+{
+    int error;
+    char *updates;
+
+    error = ddlog_dump_ovsdb_output_table(ddlog, delta, db, table, &updates);
+    if (error) {
+        VLOG_INFO("xxx ddlog_table_update_output (%s) error: %d", table, error);
+        return;
+    }
+    char *table_name = xasprintf("%s.Out_%s", db, table);
+    ddlog_delta_clear_table(delta, ddlog_get_table_id(table_name));
+    free(table_name);
 
     if (!strlen(updates)) {
         ddlog_free_json(updates);
@@ -870,26 +909,26 @@ get_sb_ops(struct northd_ctx *ctx)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
 
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "SB_Global");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Datapath_Binding");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Port_Binding");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Logical_Flow");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Meter");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Meter_Band");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Multicast_Group");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Gateway_Chassis");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Port_Group");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "MAC_Binding");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "DHCP_Options");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "DHCPv6_Options");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Address_Set");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "DNS");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Role");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Permission");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "IP_Multicast");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Southbound", "Service_Monitor");
+    ddlog_table_update_output(&ds, ctx->ddlog, "OVN_Southbound", "Logical_Flow");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "SB_Global");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Datapath_Binding");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Port_Binding");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Meter");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Meter_Band");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Multicast_Group");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Gateway_Chassis");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Port_Group");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "MAC_Binding");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "DHCP_Options");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "DHCPv6_Options");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Address_Set");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "DNS");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Role");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Permission");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "IP_Multicast");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Service_Monitor");
 
     ds_chomp(&ds, ',');
 
@@ -911,9 +950,9 @@ get_nb_ops(struct northd_ctx *ctx)
 {
     struct ds ds = DS_EMPTY_INITIALIZER;
 
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Northbound",
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Northbound",
                        "Logical_Switch_Port");
-    ddlog_table_update(&ds, ctx->ddlog, "OVN_Northbound", "NB_Global");
+    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Northbound", "NB_Global");
 
     ds_chomp(&ds, ',');
 
@@ -927,6 +966,39 @@ get_nb_ops(struct northd_ctx *ctx)
     free(ops_s);
 
     return ops;
+}
+
+static void warning_cb(
+    uintptr_t arg OVS_UNUSED,
+    table_id table OVS_UNUSED,
+    const ddlog_record *rec,
+    bool polarity)
+{
+    size_t len;
+    const char *s = ddlog_get_str_with_length(rec, &len);
+    if (polarity) {
+       VLOG_WARN("New warning: %.*s", (int)len, s);
+    } else {
+       VLOG_WARN("Warning cleared: %.*s", (int)len, s);
+    }
+}
+
+static int ddlog_commit(ddlog_prog ddlog) {
+    ddlog_delta *new_delta = ddlog_transaction_commit_dump_changes(ddlog);
+    if (!delta) {
+        VLOG_WARN("xxx Couldn't commit transaction");
+        return -1;
+    }
+
+    /* Remove warnings from delta and output them straight away. */
+    ddlog_delta *warnings = ddlog_delta_remove_table(new_delta, WARNING_TABLE_ID);
+    ddlog_delta_enumerate(warnings, warning_cb, 0);
+    ddlog_free_delta(warnings);
+
+    /* Merge changes into `delta`. */
+    ddlog_delta_union(delta, new_delta);
+
+    return 0;
 }
 
 static void
@@ -952,8 +1024,11 @@ ddlog_handle_update(struct northd_ctx *ctx, bool northbound,
     }
     free(updates_s);
 
-    if (ddlog_transaction_commit(ctx->ddlog)) {
-        VLOG_WARN("DDlog failed to commit transaction");
+    /* Commit changes to DDlog.  Invoke `change_cb` for each modified output
+     * record.  This call will block until `change_cb` has been called for each
+     * update.
+     */
+    if (ddlog_commit(ctx->ddlog)) {
         goto error;
     }
 
@@ -968,7 +1043,7 @@ ddlog_clear_nb(struct northd_ctx *ctx)
 {
     int ret;
 
-    for (int i = 0; i < ARRAY_SIZE(nb_input_relations) - 1; i++) {
+    for (int i = 0; i < ARRAY_SIZE(nb_input_relations); i++) {
         char *table;
         table = xasprintf("OVN_Northbound.%s", nb_input_relations[i]);
         ret = ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table));
@@ -985,7 +1060,7 @@ ddlog_clear_sb(struct northd_ctx *ctx)
 {
     int ret;
 
-    for (int i = 0; i < ARRAY_SIZE(sb_input_relations) - 1; i++) {
+    for (int i = 0; i < ARRAY_SIZE(sb_input_relations); i++) {
         char *table;
         table = xasprintf("OVN_Southbound.%s", sb_input_relations[i]);
         ret = ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table));
@@ -1036,8 +1111,7 @@ ddlog_handle_reconnect(struct northd_ctx *ctx, bool northbound,
         goto error;
     }
 
-    if ((res = ddlog_transaction_commit(ctx->ddlog))) {
-        VLOG_WARN("DDlog failed to commi transaction following reconnection");
+    if ((res = ddlog_commit(ctx->ddlog))) {
         goto error;
     }
 
@@ -1168,6 +1242,9 @@ main(int argc, char *argv[])
     int retval;
     bool exiting;
 
+    init_table_ids();
+    delta = ddlog_new_delta();
+
     fatal_ignore_sigpipe();
     ovs_cmdl_proctitle_init(argc, argv);
     set_program_name(argv[0]);
@@ -1198,7 +1275,7 @@ main(int argc, char *argv[])
     daemonize_complete();
 
     ddlog_prog ddlog;
-    ddlog = ddlog_run(1, true, NULL, 0, ddlog_print_error);
+    ddlog = ddlog_run(1, false, NULL, 0, ddlog_print_error);
     if (!ddlog) {
         ovs_fatal(0, "DDlog instance could not be created");
     }
@@ -1267,9 +1344,6 @@ main(int argc, char *argv[])
         northd_run(sb_ctx, run_deltas);
         northd_wait(sb_ctx);
 
-        if (run_deltas) {
-            northd_issue_warnings(ddlog);
-        }
         northd_update_probe_interval(nb_ctx, sb_ctx);
 
         unixctl_server_run(unixctl);
