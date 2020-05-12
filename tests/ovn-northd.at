@@ -773,59 +773,52 @@ OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- ovn-northd pause and resume])
 ovn_start
 
-AT_CHECK([test xfalse = x`as northd ovn-appctl -t NORTHD_TYPE is-paused`])
-AT_CHECK([as northd ovn-appctl -t NORTHD_TYPE status], [0], [Status: active
+get_northd_status() {
+    as northd ovn-appctl -t NORTHD_TYPE is-paused
+    as northd ovn-appctl -t NORTHD_TYPE status
+    as northd-backup ovn-appctl -t NORTHD_TYPE is-paused
+    as northd-backup ovn-appctl -t NORTHD_TYPE status
+}
+
+OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
+Status: active
+false
+Status: standby
 ])
-AT_CHECK([test xfalse = x`as northd-backup ovn-appctl -t NORTHD_TYPE \
-is-paused`])
-AT_CHECK([as northd-backup ovn-appctl -t NORTHD_TYPE status], [0],
-[Status: standby
-])
 
-ovn-nbctl ls-add sw0
-
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 0 = $?])
-
-ovn-nbctl ls-del sw0
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 1 = $?])
+# Check that ovn-northd is active, by verifying that it creates and
+# destroys southbound datapaths as one would expect.
+check_row_count Datapath_Binding 0
+check ovn-nbctl --wait=sb ls-add sw0
+check_row_count Datapath_Binding 1
+check ovn-nbctl --wait=sb ls-del sw0
+check_row_count Datapath_Binding 0
 
 # Now pause the ovn-northd
-as northd ovs-appctl -t NORTHD_TYPE pause
-as northd-backup ovs-appctl -t NORTHD_TYPE pause
-AT_CHECK([test xtrue = x`as northd ovn-appctl -t NORTHD_TYPE is-paused`])
-AT_CHECK([as northd ovn-appctl -t NORTHD_TYPE status], [0], [Status: paused
-])
-AT_CHECK([test xtrue = x`as northd-backup ovn-appctl -t NORTHD_TYPE is-paused`])
-AT_CHECK([as northd-backup ovn-appctl -t NORTHD_TYPE status], [0],
-[Status: paused
+check as northd ovs-appctl -t NORTHD_TYPE pause
+check as northd-backup ovs-appctl -t NORTHD_TYPE pause
+AT_CHECK([get_northd_status], [0], [true
+Status: paused
+true
+Status: paused
 ])
 
-ovn-nbctl ls-add sw0
-
-# There should be no logical flows for sw0 datapath.
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 1 = $?])
+# Now ovn-northd won't respond by adding a datapath, because it's paused.
+check ovn-nbctl ls-add sw0
+sleep 5
+check_row_count Datapath_Binding 0
 
 # Now resume ovn-northd!
-as northd ovs-appctl -t NORTHD_TYPE resume
-as northd-backup ovs-appctl -t NORTHD_TYPE resume
-AT_CHECK([test xfalse = x`as northd ovn-appctl -t NORTHD_TYPE is-paused`])
-AT_CHECK([as northd ovn-appctl -t NORTHD_TYPE status], [0], [Status: active
-])
-AT_CHECK([test xfalse = x`as northd-backup ovn-appctl -t NORTHD_TYPE \
-is-paused`])
-AT_CHECK([as northd-backup ovn-appctl -t NORTHD_TYPE status], [0],
-[Status: standby
+check as northd ovs-appctl -t NORTHD_TYPE resume
+check as northd-backup ovs-appctl -t NORTHD_TYPE resume
+OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
+Status: active
+false
+Status: standby
 ])
 
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 0 = $?])
+check ovn-nbctl --wait=sb sync
+check_row_count Datapath_Binding 1
 
 AT_CLEANUP
 ])
