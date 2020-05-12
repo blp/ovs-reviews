@@ -34,12 +34,12 @@ hash_name(const char *name)
 }
 
 static struct sset_node *
-sset_find__(const struct sset *set, const char *name, size_t hash)
+sset_find__(const struct sset *set, const char *name, size_t hash, size_t length)
 {
     struct sset_node *node;
 
     HMAP_FOR_EACH_WITH_HASH (node, hmap_node, hash, &set->map) {
-        if (!strcmp(node->name, name)) {
+        if (!strncmp(node->name, name, length) && node->name[length] == '\0') {
             return node;
         }
     }
@@ -50,7 +50,8 @@ static struct sset_node *
 sset_add__(struct sset *set, const char *name, size_t length, size_t hash)
 {
     struct sset_node *node = xmalloc(length + sizeof *node);
-    memcpy(node->name, name, length + 1);
+    memcpy(node->name, name, length);
+    node->name[length] = '\0';
     hmap_insert(&set->map, &node->hmap_node, hash);
     return node;
 }
@@ -164,17 +165,25 @@ sset_count(const struct sset *set)
     return hmap_count(&set->map);
 }
 
+/* Adds 'name', which is 'length' bytes long, to 'set'.  If 'name' is new,
+ * returns the new sset_node; otherwise (if a copy of 'name' already existed in
+ * 'set'), returns NULL. */
+struct sset_node *
+sset_add_len(struct sset *set, const char *name, size_t length)
+{
+    uint32_t hash = hash_name__(name, length);
+
+    return (sset_find__(set, name, hash, length)
+            ? NULL
+            : sset_add__(set, name, length, hash));
+}
+
 /* Adds 'name' to 'set'.  If 'name' is new, returns the new sset_node;
  * otherwise (if a copy of 'name' already existed in 'set'), returns NULL. */
 struct sset_node *
 sset_add(struct sset *set, const char *name)
 {
-    size_t length = strlen(name);
-    uint32_t hash = hash_name__(name, length);
-
-    return (sset_find__(set, name, hash)
-            ? NULL
-            : sset_add__(set, name, length, hash));
+    return sset_add_len(set, name, strlen(name));
 }
 
 /* Adds a copy of 'name' to 'set' and frees 'name'.
@@ -269,7 +278,7 @@ sset_pop(struct sset *set)
 struct sset_node *
 sset_find(const struct sset *set, const char *name)
 {
-    return sset_find__(set, name, hash_name(name));
+    return sset_find__(set, name, hash_name(name), strlen(name));
 }
 
 /* Returns true if 'set' contains a copy of 'name', false otherwise. */
@@ -290,7 +299,8 @@ sset_equals(const struct sset *a, const struct sset *b)
     }
 
     HMAP_FOR_EACH (node, hmap_node, &a->map) {
-        if (!sset_find__(b, node->name, node->hmap_node.hash)) {
+        if (!sset_find__(b, node->name, node->hmap_node.hash,
+                         strlen(node->name))) {
             return false;
         }
     }

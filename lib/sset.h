@@ -55,6 +55,7 @@ size_t sset_count(const struct sset *);
 
 /* Insertion. */
 struct sset_node *sset_add(struct sset *, const char *);
+struct sset_node *sset_add_len(struct sset *, const char *, size_t len);
 struct sset_node *sset_add_and_free(struct sset *, char *);
 void sset_add_assert(struct sset *, const char *);
 void sset_add_array(struct sset *, char **, size_t n);
