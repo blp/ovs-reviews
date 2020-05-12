@@ -47,10 +47,10 @@ m4_define([OVN_CLEANUP],[
     OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
     as northd
-    OVS_APP_EXIT_AND_WAIT([$NORTHD_TYPE])
+    OVS_APP_EXIT_AND_WAIT([[$NORTHD_TYPE]])
 
     as northd-backup
-    OVS_APP_EXIT_AND_WAIT([$NORTHD_TYPE])
+    OVS_APP_EXIT_AND_WAIT([[$NORTHD_TYPE]])
 
     OVN_CLEANUP_VSWITCH([main])
 ])
@@ -69,10 +69,10 @@ m4_define([OVN_CLEANUP_AZ],[
     OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
     as $1/northd
-    OVS_APP_EXIT_AND_WAIT([$NORTHD_TYPE])
+    OVS_APP_EXIT_AND_WAIT([[$NORTHD_TYPE]])
 
     as $1/northd-backup
-    OVS_APP_EXIT_AND_WAIT([$NORTHD_TYPE])
+    OVS_APP_EXIT_AND_WAIT([[$NORTHD_TYPE]])
 
     as $1/ic
     OVS_APP_EXIT_AND_WAIT([ovn-ic])

@@ -780,6 +780,17 @@ get_northd_status() {
     as northd-backup ovn-appctl -t NORTHD_TYPE status
 }
 
+# Pause the backup, to force the main northd to become active (otherwise
+# there's no guarantee, ovn_start is racy).
+check as northd-backup ovs-appctl -t NORTHD_TYPE pause
+OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
+Status: active
+true
+Status: paused
+])
+
+# Resume the backup.
+check as northd-backup ovs-appctl -t NORTHD_TYPE resume
 OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
 Status: active
 false
