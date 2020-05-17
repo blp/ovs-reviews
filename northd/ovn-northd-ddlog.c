@@ -256,14 +256,19 @@ static struct json * get_sb_ops(struct northd_ctx *);
 static int ddlog_handle_reconnect(struct northd_ctx *ctx, bool northbound,
                                   const struct json *table_updates);
 
-static bool
-debug_dump_callback(uintptr_t arg OVS_UNUSED, const ddlog_record *rec)
+static void debug_dump_cb(
+    uintptr_t arg OVS_UNUSED,
+    table_id table OVS_UNUSED,
+    const ddlog_record *rec,
+    bool polarity)
 {
-    char *str = ddlog_dump_record(rec);
-    VLOG_INFO("%s", str);
-    ddlog_string_free(str);
-
-    return true;
+    size_t len;
+    const char *s = ddlog_get_str_with_length(rec, &len);
+    if (polarity) {
+        VLOG_INFO("%.*s", (int)len, s);
+    } else {
+        VLOG_ERR("Error: Record appears with negative polarity in output snapshot: %.*s", (int)len, s);
+    }
 }
 
 /* Debug-dump DDlog table.
@@ -272,7 +277,7 @@ debug_dump_callback(uintptr_t arg OVS_UNUSED, const ddlog_record *rec)
  * this function, one would add the `output` qualifier to the table of interest
  * and re-compile the DDlog program. */
 OVS_UNUSED static void
-ddlog_table_debug_dump(ddlog_prog ddlog, const char *table)
+ddlog_table_debug_dump(const char *table)
 {
     table_id tid = ddlog_get_table_id(table);
     if (tid == -1) {
@@ -280,7 +285,9 @@ ddlog_table_debug_dump(ddlog_prog ddlog, const char *table)
         return;
     }
     VLOG_INFO("Dump %s", table);
-    ddlog_dump_table(ddlog, tid, debug_dump_callback, 0);
+
+    ddlog_delta *table_delta = ddlog_delta_get_table(delta, tid);
+    ddlog_delta_enumerate(table_delta, debug_dump_cb, 0);
 }
 
 /* Debug-dump all tables of interest. */
@@ -295,11 +302,11 @@ ddlog_debug_dump(ddlog_prog ddlog OVS_UNUSED)
 #endif
 
 #if 0
-    ddlog_table_debug_dump(ddlog, "lswitch.SwitchPortIPv4Address");
-    ddlog_table_debug_dump(ddlog, "OVN_Southbound.Out_Port_Binding");
-    ddlog_table_debug_dump(ddlog, "helpers.SwitchRouterPeer");
-    ddlog_table_debug_dump(ddlog, "lrouter.RouterPortPeer");
-    ddlog_table_debug_dump(ddlog, "lrouter.RouterPort");
+    ddlog_table_debug_dump("lswitch.SwitchPortIPv4Address");
+    ddlog_table_debug_dump("OVN_Southbound.Out_Port_Binding");
+    ddlog_table_debug_dump("helpers.SwitchRouterPeer");
+    ddlog_table_debug_dump("lrouter.RouterPortPeer");
+    ddlog_table_debug_dump("lrouter.RouterPort");
 #endif
 }
 
@@ -810,9 +817,12 @@ northd_run(struct northd_ctx *ctx, bool run_deltas)
     }
 }
 
-static bool
-northd_update_probe_interval_cb(uintptr_t probe_intervalp_,
-                                const ddlog_record *rec)
+static void
+northd_update_probe_interval_cb(
+    uintptr_t probe_intervalp_,
+    table_id table OVS_UNUSED,
+    const ddlog_record *rec,
+    bool polarity OVS_UNUSED)
 {
     int *probe_intervalp = (int *) probe_intervalp_;
 
@@ -820,7 +830,6 @@ northd_update_probe_interval_cb(uintptr_t probe_intervalp_,
     if (x > 1000) {
         *probe_intervalp = x;
     }
-    return true;
 }
 
 static void
@@ -828,10 +837,9 @@ northd_update_probe_interval(struct northd_ctx *nb, struct northd_ctx *sb)
 {
     /* Default probe interval for NB and SB DB connections. */
     int probe_interval = 5000;
-    ddlog_dump_table(nb->ddlog,
-                     ddlog_get_table_id("Northd_Probe_Interval"),
-                     northd_update_probe_interval_cb,
-                     (uintptr_t) &probe_interval);
+    table_id tid = ddlog_get_table_id("Northd_Probe_Interval");
+    ddlog_delta *probe_delta = ddlog_delta_get_table(delta, tid);
+    ddlog_delta_enumerate(probe_delta, northd_update_probe_interval_cb, (uintptr_t) &probe_interval);
 
     jsonrpc_session_set_probe_interval(nb->session, probe_interval);
     jsonrpc_session_set_probe_interval(sb->session, probe_interval);
@@ -977,9 +985,9 @@ static void warning_cb(
     size_t len;
     const char *s = ddlog_get_str_with_length(rec, &len);
     if (polarity) {
-       VLOG_WARN("New warning: %.*s", (int)len, s);
+        VLOG_WARN("New warning: %.*s", (int)len, s);
     } else {
-       VLOG_WARN("Warning cleared: %.*s", (int)len, s);
+        VLOG_WARN("Warning cleared: %.*s", (int)len, s);
     }
 }
 
@@ -1243,7 +1251,6 @@ main(int argc, char *argv[])
     bool exiting;
 
     init_table_ids();
-    delta = ddlog_new_delta();
 
     fatal_ignore_sigpipe();
     ovs_cmdl_proctitle_init(argc, argv);
@@ -1275,7 +1282,7 @@ main(int argc, char *argv[])
     daemonize_complete();
 
     ddlog_prog ddlog;
-    ddlog = ddlog_run(1, false, NULL, 0, ddlog_print_error);
+    ddlog = ddlog_run(1, false, NULL, 0, ddlog_print_error, &delta);
     if (!ddlog) {
         ovs_fatal(0, "DDlog instance could not be created");
     }
