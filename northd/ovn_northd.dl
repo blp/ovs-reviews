@@ -2263,7 +2263,7 @@ for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
     Flow(.logical_datapath = sw.ls._uuid,
          .stage            = switch_stage(OUT, ACL),
          .priority         = 34000,
-         .__match          = "outport == json_string_escape(${lsp.name}) "
+         .__match          = "outport == ${json_string_escape(lsp.name)} "
                              "&& eth.src == ${server_mac} "
                              "&& ip4.src == ${server_id} && udp && udp.src == 67 "
                              "&& udp.dst == 68",
