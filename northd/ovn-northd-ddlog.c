@@ -126,7 +126,7 @@ static const char *ovnsb_db;
 static const char *unixctl_path;
 
 /* Frequently used table ids. */
-table_id WARNING_TABLE_ID;
+static table_id WARNING_TABLE_ID;
 
 /* Initialize frequently used table ids. */
 static void init_table_ids(void) {
