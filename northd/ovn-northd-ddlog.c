@@ -103,6 +103,7 @@ static const char *sb_input_relations[] = {
     "HA_Chassis_Group",
     "Controller_Event",
     "Service_Monitor",
+    "IGMP_Group",
 };
 
 struct northd_status {
