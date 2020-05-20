@@ -56,6 +56,7 @@ static const char *nb_input_relations[] = {
     "Logical_Switch",
     "Logical_Switch_Port",
     "Address_Set",
+    "Forwarding_Group",
     "Port_Group",
     "Load_Balancer",
     "ACL",
