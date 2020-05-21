@@ -51,61 +51,8 @@
 
 VLOG_DEFINE_THIS_MODULE(ovn_northd);
 
-static const char *nb_input_relations[] = {
-    "NB_Global",
-    "Logical_Switch",
-    "Logical_Switch_Port",
-    "Address_Set",
-    "Forwarding_Group",
-    "Port_Group",
-    "Load_Balancer",
-    "ACL",
-    "QoS",
-    "Meter",
-    "Meter_Band",
-    "Logical_Router",
-    "Logical_Router_Policy",
-    "Logical_Router_Port",
-    "Logical_Router_Static_Route",
-    "NAT",
-    "DHCP_Options",
-    "Connection",
-    "DNS",
-    "SSL",
-    "Gateway_Chassis",
-    "HA_Chassis",
-    "HA_Chassis_Group",
-    "Load_Balancer_Health_Check",
-};
-
-static const char *sb_input_relations[] = {
-    "SB_Global",
-    "Chassis",
-    "Encap",
-    "Connection",
-    "SSL",
-    "Address_Set",
-    "Port_Group",
-    //"Logical_Flow",
-    "Multicast_Group",
-    "Meter",
-    "Meter_Band",
-    "Datapath_Binding",
-    "Port_Binding",
-    "MAC_Binding",
-    "DHCP_Options",
-    "DHCPv6_Options",
-    "DNS",
-    "RBAC_Role",
-    "RBAC_Permission",
-    "Gateway_Chassis",
-    "IP_Multicast",
-    "HA_Chassis",
-    "HA_Chassis_Group",
-    "Controller_Event",
-    "Service_Monitor",
-    "IGMP_Group",
-};
+#include "northd/ovn-northd-ddlog-nb.inc"
+#include "northd/ovn-northd-ddlog-sb.inc"
 
 struct northd_status {
     bool had_lock;
@@ -222,6 +169,9 @@ struct northd_ctx {
     struct northd_db data;
 
     ddlog_prog ddlog;
+    const char **input_relations;
+    const char **output_relations;
+    const char **output_only_relations;
 
     /* Session state.
      *
@@ -252,8 +202,7 @@ static bool northd_db_parse_lock_notify(struct northd_db *,
 
 static void ddlog_handle_update(struct northd_ctx *, bool northbound,
                                 const struct json *);
-static struct json * get_nb_ops(struct northd_ctx *);
-static struct json * get_sb_ops(struct northd_ctx *);
+static struct json *get_database_ops(struct northd_ctx *);
 
 static int ddlog_handle_reconnect(struct northd_ctx *ctx, bool northbound,
                                   const struct json *table_updates);
@@ -313,7 +262,10 @@ ddlog_debug_dump(ddlog_prog ddlog OVS_UNUSED)
 }
 
 static struct northd_ctx *
-northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog)
+northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog,
+                  const char **input_relations,
+                  const char **output_relations,
+                  const char **output_only_relations)
 {
     struct northd_ctx *ctx;
 
@@ -321,6 +273,10 @@ northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog)
     ctx->session = jsonrpc_session_open(server, true);
     ctx->state_seqno = UINT_MAX;
     ctx->request_id = NULL;
+
+    ctx->input_relations = input_relations;
+    ctx->output_relations = output_relations;
+    ctx->output_only_relations = output_only_relations;
 
     ctx->data.ctx = ctx;
     ctx->data.name = xstrdup(database);
@@ -461,33 +417,16 @@ northd_send_monitor_request(struct northd_ctx *ctx, struct northd_db *db)
      * xxx ovsdb_idl_send_monitor_request(). */
     size_t n = shash_count(&schema->tables);
     const struct shash_node **nodes = shash_sort(&schema->tables);
-
     for (int i = 0; i < n; i++) {
-
         struct ovsdb_table_schema *table = nodes[i]->data;
 
         /* Only subscribe to input relations we care about. */
-        bool found = false;
-        if (!strcmp(db->name, "OVN_Northbound")) {
-            for (int j = 0; j < ARRAY_SIZE(nb_input_relations); j++) {
-                if (!strcmp(table->name, nb_input_relations[j])) {
-                    found = true;
-                    break;
-                }
+        for (const char **p = ctx->input_relations; *p; p++) {
+            if (!strcmp(table->name, *p)) {
+                json_object_put(monitor_requests, table->name,
+                                json_array_create_1(json_object_create()));
+                break;
             }
-        } else {
-            for (int j = 0; j < ARRAY_SIZE(sb_input_relations); j++) {
-                if (!strcmp(table->name, sb_input_relations[j])) {
-                    found = true;
-                    break;
-                }
-            }
-        };
-        if (found) {
-            struct json *monitor_request_array = json_array_create_empty();
-            json_array_add(monitor_request_array, json_object_create());
-
-            json_object_put(monitor_requests, table->name, monitor_request_array);
         }
     }
     free(nodes);
@@ -803,18 +742,9 @@ northd_run(struct northd_ctx *ctx, bool run_deltas)
     }
 
     if (run_deltas && !ctx->request_id) {
-        if (!strcmp(ctx->data.name, "OVN_Northbound")) {
-            struct json *ops = get_nb_ops(ctx);
-            if (ops) {
-                northd_send_transact(ctx->data.ctx, ops);
-            }
-        } else if (!strcmp(ctx->data.name, "OVN_Southbound")) {
-            struct json *ops = get_sb_ops(ctx);
-            if (ops) {
-                northd_send_transact(ctx->data.ctx, ops);
-            }
-        } else {
-            OVS_NOT_REACHED();
+        struct json *ops = get_database_ops(ctx);
+        if (ops) {
+            northd_send_transact(ctx->data.ctx, ops);
         }
     }
 }
@@ -865,7 +795,7 @@ northd_wait(struct northd_ctx *ctx)
  * tables. */
 static void
 ddlog_table_update_deltas(struct ds *ds, ddlog_prog ddlog,
-                   const char *db, const char *table)
+                          const char *db, const char *table)
 {
     int error;
     char *updates;
@@ -915,65 +845,31 @@ ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
 }
 
 static struct json *
-get_sb_ops(struct northd_ctx *ctx)
+get_database_ops(struct northd_ctx *ctx)
 {
-    struct ds ds = DS_EMPTY_INITIALIZER;
+    struct ds ops_s = DS_EMPTY_INITIALIZER;
+    ds_put_char(&ops_s, '[');
+    json_string_escape(ctx->data.name, &ops_s);
+    ds_put_char(&ops_s, ',');
+    size_t start_len = ops_s.length;
 
-    ddlog_table_update_output(&ds, ctx->ddlog, "OVN_Southbound", "Logical_Flow");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "SB_Global");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Datapath_Binding");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Port_Binding");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Meter");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Meter_Band");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Multicast_Group");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Gateway_Chassis");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Port_Group");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "MAC_Binding");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "DHCP_Options");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "DHCPv6_Options");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Address_Set");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "DNS");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Role");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "RBAC_Permission");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "IP_Multicast");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "HA_Chassis_Group");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Southbound", "Service_Monitor");
-
-    ds_chomp(&ds, ',');
-
-    if (!ds.length) {
-        return NULL;
+    for (const char **p = ctx->output_relations; *p; p++) {
+        ddlog_table_update_deltas(&ops_s, ctx->ddlog, ctx->data.name, *p);
     }
-    char *ops_s;
-    ops_s = xasprintf("[\"OVN_Southbound\",%s]", ds_steal_cstr(&ds));
-
-    struct json *ops = json_from_string(ops_s);
-    free(ops_s);
-    VLOG_DBG("xxx sb postops: %s", json_to_string(ops, JSSF_PRETTY));
-
-    return ops;
-}
-
-static struct json *
-get_nb_ops(struct northd_ctx *ctx)
-{
-    struct ds ds = DS_EMPTY_INITIALIZER;
-
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Northbound",
-                       "Logical_Switch_Port");
-    ddlog_table_update_deltas(&ds, ctx->ddlog, "OVN_Northbound", "NB_Global");
-
-    ds_chomp(&ds, ',');
-
-    if (!ds.length) {
-        return NULL;
+    for (const char **p = ctx->output_only_relations; *p; p++) {
+        ddlog_table_update_output(&ops_s, ctx->ddlog, ctx->data.name, *p);
     }
-    char *ops_s;
-    ops_s = xasprintf("[\"OVN_Northbound\",%s]", ds_steal_cstr(&ds));
 
-    struct json *ops = json_from_string(ops_s);
-    free(ops_s);
+    struct json *ops;
+    if (ops_s.length > start_len) {
+        ds_chomp(&ops_s, ',');
+        ds_put_char(&ops_s, ']');
+        ops = json_from_string(ds_cstr(&ops_s));
+    } else {
+        ops = NULL;
+    }
+
+    ds_destroy(&ops_s);
 
     return ops;
 }
@@ -1302,10 +1198,12 @@ main(int argc, char *argv[])
         }
     }
 
-    struct northd_ctx *nb_ctx = northd_ctx_create(ovnnb_db, "OVN_Northbound",
-                                                  ddlog);
-    struct northd_ctx *sb_ctx = northd_ctx_create(ovnsb_db, "OVN_Southbound",
-                                                  ddlog);
+    struct northd_ctx *nb_ctx = northd_ctx_create(
+        ovnnb_db, "OVN_Northbound", ddlog,
+        nb_input_relations, nb_output_relations, nb_output_only_relations);
+    struct northd_ctx *sb_ctx = northd_ctx_create(
+        ovnsb_db, "OVN_Southbound", ddlog,
+        sb_input_relations, sb_output_relations, sb_output_only_relations);
 
     /* Main loop. */
     exiting = false;

@@ -16,12 +16,15 @@ EXTRA_DIST += \
 	northd/helpers.dl northd/ipam.dl northd/multicast.dl \
 	northd/docs/design.md  northd/docs/debugging.md \
 	northd/docs/new-feature-tutorial.md \
-	northd/nb2ddlog northd/sb2ddlog
+	northd/ovn-nb.dlopts northd/ovn-sb.dlopts \
+	northd/ovsdb2ddlog2c
 
 if DDLOG
 bin_PROGRAMS += northd/ovn-northd-ddlog
 northd_ovn_northd_ddlog_SOURCES = \
 	northd/ovn-northd-ddlog.c \
+	northd/ovn-northd-ddlog-sb.inc \
+	northd/ovn-northd-ddlog-nb.inc \
 	northd/ovn_northd_ddlog/ddlog.h
 northd_ovn_northd_ddlog_LDADD = \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
@@ -29,15 +32,21 @@ northd_ovn_northd_ddlog_LDADD = \
 	$(OVSDB_LIBDIR)/libovsdb.la \
 	$(OVS_LIBDIR)/libopenvswitch.la
 
-northd/OVN_Northbound.dl: ovn-nb.ovsschema northd/nb2ddlog
-	$(AM_V_GEN)$(srcdir)/northd/nb2ddlog $(srcdir)/ovn-nb.ovsschema > $@.tmp
-	$(AM_V_at)mv $@.tmp $@
+nb_opts = $$(cat $(srcdir)/northd/ovn-nb.dlopts)
+northd/OVN_Northbound.dl: ovn-nb.ovsschema northd/ovn-nb.dlopts
+	$(AM_V_GEN)ovsdb2ddlog -f $< --output-file $@ $(nb_opts)
+northd/ovn-northd-ddlog-nb.inc: ovn-nb.ovsschema northd/ovn-nb.dlopts
+	$(AM_V_GEN)$(run_python) $(srcdir)/northd/ovsdb2ddlog2c -p nb_ -f $< --output-file $@ $(nb_opts)
 
-northd/OVN_Southbound.dl: ovn-sb.ovsschema northd/sb2ddlog
-	$(AM_V_GEN)$(srcdir)/northd/sb2ddlog $(srcdir)/ovn-sb.ovsschema > $@.tmp
-	$(AM_V_at)mv $@.tmp $@
+sb_opts = $$(cat $(srcdir)/northd/ovn-sb.dlopts)
+northd/OVN_Southbound.dl: ovn-sb.ovsschema northd/ovn-sb.dlopts
+	$(AM_V_GEN)ovsdb2ddlog -f $< --output-file $@ $(sb_opts)
+northd/ovn-northd-ddlog-sb.inc: ovn-sb.ovsschema northd/ovn-sb.dlopts
+	$(AM_V_GEN)$(run_python) $(srcdir)/northd/ovsdb2ddlog2c -p sb_ -f $< --output-file $@ $(sb_opts)
 
-CLEANFILES += northd/OVN_Northbound.dl northd/OVN_Southbound.dl
+BUILT_SOURCES += \
+	northd/ovn-northd-ddlog-sb.inc \
+	northd/ovn-northd-ddlog-nb.inc
 
 northd/ovn_northd_ddlog/ddlog.h: northd/ddlog.stamp
 
@@ -91,15 +100,20 @@ $(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.
 	cd northd/ovn_northd_ddlog && \
 	RUSTC='$(RUSTC)' RUSTFLAGS="$(RUSTFLAGS)" \
 	    cargo build --release $(CARGO_VERBOSE) $(cargo_build)
+endif
 
 CLEAN_LOCAL += clean-ddlog
 clean-ddlog:
 	rm -rf northd/ovn_northd_ddlog
 
 CLEANFILES += \
-	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
+	northd/ddlog.stamp \
 	northd/ovn_northd_ddlog/ddlog.h \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a \
-	northd/ovn_northd_ddlog/target/release/ovn_northd_cli \
-	northd/ddlog.stamp
-endif
+	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
+	northd/ovn_northd_ddlog/target/release/ovn_northd_cli
+CLEANFILES += \
+	northd/OVN_Northbound.dl \
+	northd/OVN_Southbound.dl \
+	northd/ovn-northd-ddlog-nb.inc \
+	northd/ovn-northd-ddlog-sb.inc
