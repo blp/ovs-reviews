@@ -130,7 +130,7 @@ relation &Switch(
     has_dns_records:   bool,
     has_localnet_port: bool,
     localnet_port_name: Option<string>,
-    subnet:            Option<(ovs_be32/*subnet*/, ovs_be32/*mask*/, bit<32>/*start_ipv4*/, bit<32>/*total_ipv4s*/)>,
+    subnet:            Option<(in_addr/*subnet*/, in_addr/*mask*/, bit<32>/*start_ipv4*/, bit<32>/*total_ipv4s*/)>,
     ipv6_prefix:       Option<in6_addr>,
     mcast_cfg:         Ref<McastSwitchCfg>
 )
@@ -163,7 +163,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
         None -> false
     },
     mcast_cfg in &McastSwitchCfg(.datapath = ls._uuid),
-    var subnet: Option<(ovs_be32, ovs_be32, bit<32>, bit<32>)> =
+    var subnet: Option<(in_addr, in_addr, bit<32>, bit<32>)> =
         match (map_get(ls.other_config, "subnet")) {
             None -> None,
             Some{subnet_str} -> {
@@ -173,11 +173,12 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
                         None
                     },
                     Right{(subnet, mask)} -> {
-                        if (mask == oVS_BE32_MAX() or not ip_is_cidr(mask)) {
+                        if (ip_count_cidr_bits(mask) == Some{8'd32}
+                            or not ip_is_cidr(mask)) {
                             warn("bad 'subnet' ${subnet_str}");
                             None
                         } else {
-                            Some{(subnet, mask, ntohl(subnet) + 1, ~ntohl(mask))}
+                            Some{(subnet, mask, iptohl(subnet) + 1, ~iptohl(mask))}
                         }
                     }
                 }
@@ -398,7 +399,7 @@ relation &SwitchPort(
     static_addresses:           Vec<lport_addresses>,
     dynamic_address:            Option<lport_addresses>,
     static_dynamic_mac:         Option<eth_addr>,
-    static_dynamic_ipv4:        Option<ovs_be32>,
+    static_dynamic_ipv4:        Option<in_addr>,
     static_dynamic_ipv6:        Option<in6_addr>,
     ps_addresses:               Vec<lport_addresses>,
     ps_eth_addresses:           Vec<string>,
@@ -473,7 +474,7 @@ relation &SwitchPort(
         Some{lport_addr} -> extract_lsp_addresses(lport_addr)
     },
     (var static_dynamic_mac: Option<eth_addr>,
-     var static_dynamic_ipv4: Option<ovs_be32>,
+     var static_dynamic_ipv4: Option<in_addr>,
      var static_dynamic_ipv6: Option<in6_addr>,
      var has_dyn_lsp_addr: bool) = {
         var dynamic_address_request: Option<dynamic_address_request> = None;

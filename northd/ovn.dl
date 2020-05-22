@@ -1,49 +1,48 @@
 import ovsdb
 
-extern type eth_addr
 
 /* Logical port is enabled if it does not have an enabled flag or the flag is true */
 function is_enabled(s: Set<bool>): bool = {
     set_nth(s, 0) != Some{false}
 }
 
-function be32_prefix_mask(plen: bit<32>): ovs_be32 =
-{
-    htonl((64'h00000000ffffffff << (32'd32 - plen))[31:0])
-}
+/* Ethernet addresses. */
+extern type eth_addr
 
 extern function eth_addr_zero(): eth_addr
 extern function eth_addr2string(addr: eth_addr): string
+extern function scan_eth_addr(s: string): Option<eth_addr>
+extern function scan_eth_addr_prefix(s: string): Option<bit<64>>
+extern function eth_addr_from_string(s: string): Option<eth_addr>
+extern function eth_addr_to_uint64(ea: eth_addr): bit<64>
+extern function eth_addr_from_uint64(x: bit<64>): eth_addr
+extern function eth_addr_mark_random(ea: eth_addr): eth_addr
 
-function ip_fmt(ip: ovs_be32): string = {
-    "${ntohl(ip) >> 32'd24}.${(ntohl(ip) >> 32'd16) & 32'hff}.${(ntohl(ip) >> 32'd8) & 32'hff}.${ntohl(ip) & 32'hff}"
+function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
+    eth_addr_to_uint64(eth_addr_mark_random(eth_addr_from_uint64(hash64(seed ++ variant))))
 }
 
-function ip_is_cidr(netmask: ovs_be32): bool = {
-    var x = ~ntohl(netmask);
-    (x & (x + 1)) == 0
+extern function inet_ntop(addr: in_addr): string
+function in_addr2string(ip: in_addr): string = {
+    inet_ntop(ip)
 }
 
-function ip_is_local_multicast(ip: ovs_be32): bool {
-    (ip & htonl(32'hffffff00)) == htonl(32'he0000000)
-}
+extern function ip_is_cidr(netmask: in_addr): bool
+extern function ip_is_local_multicast(ip: in_addr): bool
 
 /*
  * parse IPv4 address list of the form:
  * "10.0.0.4 10.0.0.10 10.0.0.20..10.0.0.50 10.0.0.100..10.0.0.110"
  */
-extern function parse_ip_list(ips: string): Either<string, Vec<(ovs_be32, Option<ovs_be32>)>>
+extern function parse_ip_list(ips: string): Either<string, Vec<(in_addr, Option<in_addr>)>>
 
+extern type in_addr
 extern type in6_addr
 
-typedef ovs_be32 = bit<32>
-
-function oVS_BE32_MAX(): ovs_be32 = 32'hffffffff
-
 typedef ipv4_netaddr = IPV4NetAddr {
-    addr: ovs_be32,            /* 192.168.10.123 */
-    mask: ovs_be32,            /* 255.255.255.0 */
-    network: ovs_be32,         /* 192.168.10.0 */
+    addr: in_addr,             /* 192.168.10.123 */
+    mask: in_addr,             /* 255.255.255.0 */
+    network: in_addr,          /* 192.168.10.0 */
     plen: bit<32>,             /* CIDR Prefix: 24. */
 
     addr_s: string,            /* "192.168.10.123" */
@@ -83,7 +82,7 @@ function lport_addresses2string(addr: lport_addresses): string = {
     string_join(addrs, " ")
 }
 
-typedef v46_ip = IPv4 { ipv4: bit<32> } | IPv6 { ipv6: in6_addr }
+typedef v46_ip = IPv4 { ipv4: in_addr } | IPv6 { ipv6: in6_addr }
 
 function ip46_parse_cidr(s: string) : Option<(v46_ip, bit<32>)> = {
     match (ip_parse_cidr(s)) {
@@ -120,21 +119,21 @@ function ip46_parse(s: string) : Option<v46_ip> = {
 }
 function v46_ip2string(ip46: v46_ip) : string = {
     match (ip46) {
-        IPv4{ipv4} -> ip_fmt(ipv4),
-        IPv6{ipv6} -> inet6_ntop(ipv6)
+        IPv4{ipv4} -> "${ipv4}",
+        IPv6{ipv6} -> "${ipv6}"
     }
 }
 
 function ip46_get_network(ip46: v46_ip, plen: bit<32>) : v46_ip {
     match (ip46) {
-        IPv4{ipv4} -> IPv4{ipv4 & be32_prefix_mask(plen)},
+        IPv4{ipv4} -> IPv4{ip_bitand(ipv4, ip_create_mask(plen))},
         IPv6{ipv6} -> IPv6{ipv6_addr_bitand(ipv6, ipv6_create_mask(plen))}
     }
 }
 
 function ip46_is_all_ones(ip46: v46_ip) : bool {
     match (ip46) {
-        IPv4{ipv4} -> ipv4 == oVS_BE32_MAX(),
+        IPv4{ipv4} -> ipv4 == ip_create_mask(32),
         IPv6{ipv6} -> ipv6 == ipv6_create_mask(128)
     }
 }
@@ -191,22 +190,20 @@ extern function ipv6_is_all_hosts(a: in6_addr): bool
 extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
 extern function ipv6_is_cidr(ip6: in6_addr): bool
 extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
-extern function scan_eth_addr(s: string): Option<eth_addr>
-extern function scan_eth_addr_prefix(s: string): Option<bit<64>>
-extern function scan_static_dynamic_ip(s: string): Option<ovs_be32>
+extern function scan_static_dynamic_ip(s: string): Option<in_addr>
 extern function json_string_escape(s: string): string
-extern function ip_parse(s: string): Option<ovs_be32>
-extern function ip_parse_masked(s: string): Either<string/*err*/, (ovs_be32/*host_ip*/, ovs_be32/*mask*/)>
-extern function ip_parse_cidr(s: string): Either<string/*err*/, (ovs_be32/*ip*/, bit<32>/*plen*/)>
-extern function ip_count_cidr_bits(ip: ovs_be32): Option<bit<8>>
-extern function eth_addr_from_string(s: string): Option<eth_addr>
-extern function eth_addr_to_uint64(ea: eth_addr): bit<64>
-extern function eth_addr_from_uint64(x: bit<64>): eth_addr
-extern function eth_addr_mark_random(ea: eth_addr): eth_addr
-
-function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
-    eth_addr_to_uint64(eth_addr_mark_random(eth_addr_from_uint64(hash64(seed ++ variant))))
-}
+extern function ip_parse(s: string): Option<in_addr>
+extern function ip_parse_masked(s: string): Either<string/*err*/, (in_addr/*host_ip*/, in_addr/*mask*/)>
+extern function ip_parse_cidr(s: string): Either<string/*err*/, (in_addr/*ip*/, bit<32>/*plen*/)>
+extern function ip_count_cidr_bits(ip: in_addr): Option<bit<8>>
+extern function ip_bitxor(a: in_addr, b: in_addr): in_addr
+extern function ip_bitand(a: in_addr, b: in_addr): in_addr
+extern function ip_mask_is_any(mask: in_addr): bool
+extern function ip_create_mask(mask: bit<32>): in_addr
+extern function ip_is_zero(a: in_addr): bool
+extern function ip_host_is_zero(addr: in_addr, mask: in_addr): bool
+extern function iptohl(addr: in_addr): bit<32>
+extern function hltoip(addr: bit<32>): in_addr
 
 /*
  * C functions imported from <arpa/inet.h>
