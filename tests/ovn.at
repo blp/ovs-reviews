@@ -14489,6 +14489,8 @@ test_ip_packet_larger() {
 ovn-nbctl show
 ovn-sbctl show
 
+ovn-nbctl --wait=hv sync
+
 AT_CHECK([as hv1 ovs-ofctl dump-flows br-int  \
 | grep "check_pkt_larger" | wc -l], [0], [[0
 ]])
