@@ -3,8 +3,8 @@ import ovsdb
 extern type eth_addr
 
 /* Logical port is enabled if it does not have an enabled flag or the flag is true */
-function is_enabled(s: Set<bool>): bool = {
-    set_nth(s, 0) != Some{false}
+function is_enabled(s: Option<bool>): bool = {
+    s != Some{false}
 }
 
 function be32_prefix_mask(plen: bit<32>): ovs_be32 =

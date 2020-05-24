@@ -265,14 +265,14 @@ function parse_ip_port_mapping(value: Option<string>): Option<svc_monitor> {
     Some{(var ip, var port, var addr_family)} = ip_address_and_port_from_lb_key(backend),
     (var svc_monitor) = parse_ip_port_mapping(map_get(lbvip.lb.ip_port_mappings, ip)).
 
-function is_online(status: Set<string>): bool = {
-    match (set_nth(status, 0)) {
+function is_online(status: Option<string>): bool = {
+    match (status) {
         Some{s} -> s == "online",
         _ -> true
     }
 }
-function default_protocol(protocol: Set<string>): string = {
-    match (set_nth(protocol, 0)) {
+function default_protocol(protocol: Option<string>): string = {
+    match (protocol) {
         Some{x} -> x,
         None -> "tcp"
     }
@@ -299,7 +299,7 @@ relation &LBVIPBackendStatus(
     var logical_port = svc_monitor.port_name,
     not sb.Service_Monitor(.port = port as bit<64>,
                            .ip = ip,
-                           .protocol = set_singleton(protocol),
+                           .protocol = Some{protocol},
                            .logical_port = logical_port).
 
 /* SwitchPortDHCPv4Options: many-to-one relation between logical switches and DHCPv4 options */
@@ -310,7 +310,7 @@ relation SwitchPortDHCPv4Options(
 SwitchPortDHCPv4Options(port, options) :-
     port in &SwitchPort(.lsp = lsp),
     port.lsp.__type != "external",
-    Some{var dhcpv4_uuid} = set_nth(lsp.dhcpv4_options, 0),
+    Some{var dhcpv4_uuid} = lsp.dhcpv4_options,
     options in &DHCP_OptionsRef[nb.DHCP_Options{._uuid = dhcpv4_uuid}].
 
 /* SwitchPortDHCPv6Options: many-to-one relation between logical switches and DHCPv4 options */
@@ -321,7 +321,7 @@ relation SwitchPortDHCPv6Options(
 SwitchPortDHCPv6Options(port, options) :-
     port in &SwitchPort(.lsp = lsp),
     port.lsp.__type != "external",
-    Some{var dhcpv6_uuid} = set_nth(lsp.dhcpv6_options, 0),
+    Some{var dhcpv6_uuid} = lsp.dhcpv6_options,
     options in &DHCP_OptionsRef[nb.DHCP_Options{._uuid = dhcpv6_uuid}].
 
 /* SwitchQoS: many-to-one relation between logical switches and nb.QoS */
@@ -349,7 +349,7 @@ SwitchPortUp(lsp, up) :-
     var up =
         if (__type == "router") {
             true
-        } else if (is_none(set_nth(chassis, 0))) {
+        } else if (is_none(chassis)) {
             false
         } else {
             true
@@ -364,7 +364,7 @@ relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, ha_chassis_group_uuid: uuid)
 SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid(ls_uuid)) :-
     lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
     lsp.__type == "external",
-    var ha_chassis_group_uuid = FlatMap(lsp.ha_chassis_group),
+    Some{var ha_chassis_group_uuid} = lsp.ha_chassis_group,
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
     /* If the group is empty, then HA_Chassis_Group record will not be created in SB,
      * and so we should not create a reference to the group in Port_Binding table,
@@ -468,7 +468,7 @@ relation &SwitchPort(
         };
         ps_eth_addresses
     },
-    var dynamic_address: Option<lport_addresses> = match (set_nth(lsp.dynamic_addresses, 0)) {
+    var dynamic_address: Option<lport_addresses> = match (lsp.dynamic_addresses) {
         None -> None,
         Some{lport_addr} -> extract_lsp_addresses(lport_addr)
     },
@@ -495,13 +495,13 @@ relation &SwitchPort(
                                    (is_some(subnet) or is_some(ipv6_prefix) or
                                     map_get(other_config, "mac_only") == Some{"true"}),
     var needs_dynamic_ipv6address = has_dyn_lsp_addr and is_none(peer) and is_some(ipv6_prefix) and is_none(static_dynamic_ipv6),
-    var parent_name: Option<string> = match (set_nth(lsp.parent_name, 0)) {
+    var parent_name: Option<string> = match (lsp.parent_name) {
         None -> None,
         Some{pname} -> if (pname == "") { None } else { Some{pname} }
     },
     /* Port needs dynamic tag if it has a parent and its `tag_request` is 0. */
     var needs_dynamic_tag = is_some(parent_name) and
-                            set_nth(lsp.tag_request, 0) == Some{0: integer},
+                            lsp.tag_request == Some{0: integer},
     SwitchPortHAChassisGroup(.lsp_uuid = lsp._uuid,
                              .ha_chassis_group_uuid = ha_chassis_group_uuid).
 

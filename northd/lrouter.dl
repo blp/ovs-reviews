@@ -52,9 +52,9 @@ relation PeerLogicalRouter(a: uuid, b: uuid)
 PeerLogicalRouter(lrp_uuid, peer._uuid) :-
   LogicalRouterPort(lrp_uuid, _),
   lrp in nb.Logical_Router_Port(._uuid = lrp_uuid),
-  var peer_name = FlatMap(lrp.peer),
+  Some{var peer_name} = lrp.peer,
   peer in nb.Logical_Router_Port(.name = peer_name),
-  peer.peer == set_singleton(lrp.name), // 'peer' must point back to 'lrp'
+  peer.peer == Some{lrp.name}, // 'peer' must point back to 'lrp'
   lrp_uuid != peer._uuid.		        // No reflexive pointers.
 
 /*
@@ -73,7 +73,7 @@ FirstHopLogicalRouter(lrouter, lswitch) :-
   lsp in nb.Logical_Switch_Port(._uuid = lsp_uuid),
   lsp.__type == "router",
   map_get(lsp.options, "router-port") == Some{lrp.name},
-  set_is_empty(lrp.peer).
+  is_none(lrp.peer).
 
 /*
  * Reachable routers.
@@ -100,7 +100,7 @@ ReachableLogicalRouter(a, a) :- ReachableLogicalRouter(a, _).
 // ha_chassis_group and gateway_chassis may not both be present.
 Warning[message] :-
     lrp in nb.Logical_Router_Port(),
-    not set_is_empty(lrp.ha_chassis_group),
+    is_some(lrp.ha_chassis_group),
     not set_is_empty(lrp.gateway_chassis),
     var message = "Both ha_chassis_group and gateway_chassis configured on "
     "port ${lrp.name}; ignoring the latter".
@@ -108,7 +108,7 @@ Warning[message] :-
 // A distributed gateway port cannot also be an L3 gateway router.
 Warning[message] :-
     lrp in nb.Logical_Router_Port(),
-    not set_is_empty(lrp.ha_chassis_group)
+    is_some(lrp.ha_chassis_group)
         or not set_is_empty(lrp.gateway_chassis),
     map_contains_key(lrp.options, "chassis"),
     var message = "Bad configuration: distributed gateway port configured on "
@@ -126,7 +126,7 @@ DistributedGatewayPortCandidate(lr_uuid, lrp_uuid) :-
     LogicalRouterPort(lrp_uuid, lr._uuid),
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid),
     not map_contains_key(lrp.options, "chassis"),
-    var has_hcg = not set_is_empty(lrp.ha_chassis_group),
+    var has_hcg = is_some(lrp.ha_chassis_group),
     var has_gc = not set_is_empty(lrp.gateway_chassis),
     has_hcg or has_gc.
 Warning[message] :-
@@ -167,7 +167,7 @@ relation HAChassis(hacg_uuid: uuid,
 HAChassis(ha_chassis_group_uuid(lrp._uuid),
           chassis_name, priority, external_ids) :-
     DistributedGatewayPort(.lrp = lrp),
-    set_is_empty(lrp.ha_chassis_group),
+    is_none(lrp.ha_chassis_group),
     var gw_chassis_uuid = FlatMap(lrp.gateway_chassis),
     nb.Gateway_Chassis(._uuid = gw_chassis_uuid,
                        .chassis_name = chassis_name,
@@ -176,7 +176,7 @@ HAChassis(ha_chassis_group_uuid(lrp._uuid),
 HAChassis(ha_chassis_group_uuid(ha_chassis_group._uuid),
           chassis_name, priority, external_ids) :-
     DistributedGatewayPort(.lrp = lrp),
-    var ha_chassis_group_uuid = FlatMap(lrp.ha_chassis_group),
+    Some{var ha_chassis_group_uuid} = lrp.ha_chassis_group,
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
     nb.HA_Chassis(._uuid = ha_chassis_uuid,
@@ -199,12 +199,12 @@ relation HAChassisGroup(uuid: uuid,
                         external_ids: Map<string,string>)
 HAChassisGroup(ha_chassis_group_uuid(lrp._uuid), lrp.name, map_empty()) :-
     DistributedGatewayPort(.lrp = lrp),
-    set_is_empty(lrp.ha_chassis_group),
+    is_none(lrp.ha_chassis_group),
     not set_is_empty(lrp.gateway_chassis).
 HAChassisGroup(ha_chassis_group_uuid(ha_chassis_group_uuid),
                name, external_ids) :-
     DistributedGatewayPort(.lrp = lrp),
-    var ha_chassis_group_uuid = FlatMap(lrp.ha_chassis_group),
+    Some{var ha_chassis_group_uuid} = lrp.ha_chassis_group,
     nb.HA_Chassis_Group(._uuid = hacg_uuid,
                         .name = name,
                         .external_ids = external_ids).
@@ -216,12 +216,12 @@ relation LogicalRouterHAChassisGroup(lr_uuid: uuid,
                                      hacg_uuid: uuid)
 LogicalRouterHAChassisGroup(lr_uuid, ha_chassis_group_uuid(lrp._uuid)) :-
     DistributedGatewayPort(lrp, lr_uuid),
-    set_is_empty(lrp.ha_chassis_group),
+    is_none(lrp.ha_chassis_group),
     set_size(lrp.gateway_chassis) > 64'd0.
 LogicalRouterHAChassisGroup(lr_uuid,
                             ha_chassis_group_uuid(ha_chassis_group_uuid)) :-
     DistributedGatewayPort(lrp, lr_uuid),
-    var ha_chassis_group_uuid = FlatMap(lrp.ha_chassis_group),
+    Some{var ha_chassis_group_uuid} = lrp.ha_chassis_group,
     nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid).
 
 
@@ -341,7 +341,7 @@ relation RouterRouterPeer(rport1: uuid, rport2: uuid, rport2_name: string)
 
 RouterRouterPeer(rport1, rport2, peer_name) :-
     nb.Logical_Router_Port(._uuid = rport1, .peer = peer),
-    Some{var peer_name} = set_nth(peer, 0),
+    Some{var peer_name} = peer,
     nb.Logical_Router_Port(._uuid = rport2, .name = peer_name).
 
 /* Router port can peer with anothe router port, a switch port or have
@@ -462,9 +462,9 @@ relation &StaticRoute(lrsr: nb.Logical_Router_Static_Route,
 &StaticRoute(.lrsr        = lrsr,
              .key         = RouteKey{policy, ip_prefix, plen},
              .nexthop     = nexthop,
-             .output_port = output_port) :-
+             .output_port = lrsr.output_port) :-
     lrsr in nb.Logical_Router_Static_Route(),
-    var policy = route_policy_from_string(set_nth(lrsr.policy, 0)),
+    var policy = route_policy_from_string(lrsr.policy),
     Some{(var nexthop, var nexthop_plen)} = ip46_parse_cidr(lrsr.nexthop),
     match (nexthop) {
         IPv4{_} -> nexthop_plen == 32,
@@ -475,8 +475,7 @@ relation &StaticRoute(lrsr: nb.Logical_Router_Static_Route,
         (IPv4{_}, IPv4{_}) -> true,
         (IPv6{_}, IPv6{_}) -> true,
         _ -> false
-    },
-    var output_port = set_nth(lrsr.output_port, 0).
+    }.
 
 /* Returns the IP address of the router port 'op' that
  * overlaps with 'ip'.  If one is not found, returns None. */

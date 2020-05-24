@@ -81,11 +81,11 @@ relation OutProxy_Port_Binding (
     logical_port: string,
     __type: string,
     gateway_chassis: Set<uuid>,
-    ha_chassis_group: Set<uuid>,
+    ha_chassis_group: Option<uuid>,
     options: Map<string,string>,
     datapath: uuid,
-    parent_port: Set<string>,
-    tag: Set<integer>,
+    parent_port: Option<string>,
+    tag: Option<integer>,
     mac: Set<string>,
     nat_addresses: Set<string>,
     external_ids: Map<string,string>
@@ -96,7 +96,7 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .logical_port       = lsp.name,
                       .__type             = lsp.__type,
                       .gateway_chassis    = set_empty(),
-                      .ha_chassis_group   = option2set(sp.ha_chassis_group_uuid),
+                      .ha_chassis_group   = sp.ha_chassis_group_uuid,
                       .options            = lsp.options,
                       .datapath           = sw.ls._uuid,
                       .parent_port        = lsp.parent_name,
@@ -106,9 +106,9 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .external_ids       = eids) :-
     sp in &SwitchPort(.lsp = lsp, .sw = &sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
-    var tag: Set<integer> = match (opt_tag) {
+    var tag: Option<integer> = match (opt_tag) {
         None -> lsp.tag,
-        Some{t} -> set_singleton(t)
+        Some{t} -> Some{t}
     },
     lsp.__type != "router",
     var eids = {
@@ -126,11 +126,11 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .logical_port       = lsp.name,
                       .__type             = __type,
                       .gateway_chassis    = set_empty(),
-                      .ha_chassis_group   = set_empty(),
+                      .ha_chassis_group   = None,
                       .options            = options,
                       .datapath           = sw.ls._uuid,
                       .parent_port        = lsp.parent_name,
-                      .tag                = set_empty(),
+                      .tag                = None,
                       .mac                = lsp.addresses,
                       .nat_addresses      = nat_addresses,
                       .external_ids       = eids) :-
@@ -223,11 +223,11 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
                       .logical_port       = lrp.name,
                       .__type             = __type,
                       .gateway_chassis    = set_empty(),
-                      .ha_chassis_group   = set_empty(),
+                      .ha_chassis_group   = None,
                       .options            = options,
                       .datapath           = router.lr._uuid,
-                      .parent_port        = set_empty(),
-                      .tag                = set_empty(), // always empty for router ports
+                      .parent_port        = None,
+                      .tag                = None, // always empty for router ports
                       .mac                = set_singleton("${lrp.mac} ${set_space_sep(lrp.networks)}"),
                       .nat_addresses      = set_empty(),
                       .external_ids       = lrp.external_ids) :-
@@ -324,12 +324,12 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                             /* Determine whether this NAT rule satisfies the conditions for
                              * distributed NAT processing. */
                             if (has_redirect and nat.__type == "dnat_and_snat" and
-                                (not set_is_empty(nat.logical_port)) and (not set_is_empty(nat.external_mac))) {
+                                is_some(nat.logical_port) and is_some(nat.external_mac)) {
                                 /* Distributed NAT rule. */
-                                match (eth_addr_from_string(set_space_sep(nat.external_mac))) {
+                                match (eth_addr_from_string(option_unwrap_or_default(nat.external_mac))) {
                                     Some{emac} -> {
                                         set_insert(addresses,
-                                                   "${emac} ${nat.external_ip} is_chassis_resident(${json_string_escape(set_space_sep(nat.logical_port))})")
+                                                   "${emac} ${nat.external_ip} is_chassis_resident(${json_string_escape(option_unwrap_or_default(nat.logical_port))})")
                                     },
                                     None -> ()
                                 }
@@ -422,11 +422,11 @@ OutProxy_Port_Binding(// lrp._uuid is already in use; generate a new UUID by
                       .logical_port       = chassis_redirect_name(lrp.name),
                       .__type             = "chassisredirect",
                       .gateway_chassis    = set_empty(),
-                      .ha_chassis_group   = set_singleton(hacg_uuid),
+                      .ha_chassis_group   = Some{hacg_uuid},
                       .options            = options,
                       .datapath           = lr_uuid,
-                      .parent_port        = set_empty(),
-                      .tag                = set_empty(),  //always empty for router ports
+                      .parent_port        = None,
+                      .tag                = None,  //always empty for router ports
                       .mac                = set_singleton("${lrp.mac} ${set_space_sep(lrp.networks)}"),
                       .nat_addresses      = set_empty(),
                       .external_ids       = lrp.external_ids) :-
@@ -477,7 +477,7 @@ RefChassis(lr_uuid, chassis_uuid) :-
     LogicalSwitchPort(lsp_uuid, ls_uuid),
     nb.Logical_Switch_Port(._uuid = lsp_uuid, .name = lsp_name),
     sb.Port_Binding(.logical_port = lsp_name, .chassis = chassis_uuids),
-    var chassis_uuid = FlatMap(chassis_uuids).
+    Some{var chassis_uuid} = chassis_uuids.
 relation RefChassisSet0(lr_uuid: uuid, chassis_uuids: Set<uuid>)
 RefChassisSet0(lr_uuid, chassis_uuids) :-
     RefChassis(lr_uuid, chassis_uuid),
@@ -512,8 +512,8 @@ sb.Out_HA_Chassis_Group(hacg_uuid, hacg_name, ha_chassis, ref_chassis, eids) :-
 sb.Out_HA_Chassis(ha_chassis_uuid(chassis_name), chassis, priority, eids) :-
     HAChassis(_, chassis_name, priority, eids),
     chassis_rec in sb.Chassis(.name = chassis_name),
-    var chassis = set_singleton(chassis_rec._uuid).
-sb.Out_HA_Chassis(ha_chassis_uuid(chassis_name), set_empty(), priority, eids) :-
+    var chassis = Some{chassis_rec._uuid}.
+sb.Out_HA_Chassis(ha_chassis_uuid(chassis_name), None, priority, eids) :-
     HAChassis(_, chassis_name, priority, eids),
     not chassis_rec in sb.Chassis(.name = chassis_name).
 
@@ -523,10 +523,10 @@ HAChassisToChassis(name, Some{chassis}) :-
 HAChassisToChassis(name, None) :-
     nb.HA_Chassis(.chassis_name = name),
     not sb.Chassis(.name = name).
-sb.Out_HA_Chassis(ha_chassis_uuid(ha_chassis.chassis_name), option2set(chassis), priority, eids) :-
+sb.Out_HA_Chassis(ha_chassis_uuid(ha_chassis.chassis_name), chassis, priority, eids) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var ha_chassis_group_uuid = FlatMap(sp.lsp.ha_chassis_group),
+    Some{var ha_chassis_group_uuid} = sp.lsp.ha_chassis_group,
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
     ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid, .priority = priority, .external_ids = eids),
@@ -535,7 +535,7 @@ sb.Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
     var ls_uuid = sp.sw.ls._uuid,
-    var ha_chassis_group_uuid = FlatMap(sp.lsp.ha_chassis_group),
+    Some{var ha_chassis_group_uuid} = sp.lsp.ha_chassis_group,
     ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid, .name = name,
                                             .external_ids = eids),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
@@ -1194,16 +1194,16 @@ sb.Out_RBAC_Role (
 nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
                            .tag                    = tag,
                            .dynamic_addresses      = dynamic_addresses,
-                           .up                     = set_singleton(up)) :-
+                           .up                     = Some{up}) :-
     SwitchPortNewDynamicAddress(&SwitchPort{.lsp = lsp, .up = up}, opt_dyn_addr),
-    var dynamic_addresses: Set<string> = match (opt_dyn_addr) {
-        None -> set_empty(),
-        Some{dyn_addr} -> set_singleton("${dyn_addr}")
+    var dynamic_addresses: Option<string> = match (opt_dyn_addr) {
+        None -> None,
+        Some{dyn_addr} -> Some{"${dyn_addr}"}
     },
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
-    var tag: Set<integer> = match (opt_tag) {
+    var tag: Option<integer> = match (opt_tag) {
         None -> lsp.tag,
-        Some{t} -> set_singleton(t)
+        Some{t} -> Some{t}
     }.
 
 relation LRPIPv6Prefix0(lrp_uuid: uuid, ipv6_prefix: string)
@@ -1720,7 +1720,7 @@ HasEventElbMeter(false) :-
 function build_empty_lb_event_flow(key: string, lb: nb.Load_Balancer,
                                    meter: bool):
          Option<(string, string)> = {
-    var __proto = if (set_nth(lb.protocol, 0) == Some{"tcp"}) {
+    var __proto = if (lb.protocol == Some{"tcp"}) {
         "tcp"
     } else {
         "udp"
@@ -1850,12 +1850,12 @@ function build_acl_log(acl: nb.ACL): string =
         ""
     } else {
         var strs: Vec<string> = vec_empty();
-        match (set_nth(acl.name, 0)) {
+        match (acl.name) {
             None -> (),
             Some{name} -> vec_push(strs, "name=${json_string_escape(name)}")
         };
         /* If a severity level isn't specified, default to "info". */
-        match (set_nth(acl.severity, 0)) {
+        match (acl.severity) {
             None -> vec_push(strs, "severity=info"),
             Some{severity} -> vec_push(strs, "severity=${severity}")
         };
@@ -1874,7 +1874,7 @@ function build_acl_log(acl: nb.ACL): string =
             },
             _ -> ()
         };
-        match (set_nth(acl.meter, 0)) {
+        match (acl.meter) {
             None -> (),
             Some{meter} -> vec_push(strs, "meter=${json_string_escape(meter)}")
         };
@@ -2475,10 +2475,10 @@ for (&Switch(.ls = ls)) {
 function get_match_for_lb_key(ip_address: string,
                               port: bit<16>,
                               addr_family: bit<32>,
-                              protocol: Set<string>,
+                              protocol: Option<string>,
                               redundancy: bool): string = {
     var port_match = if (port != 0) {
-        var proto = if (set_nth(protocol, 0) == Some{"udp"}) {
+        var proto = if (protocol == Some{"udp"}) {
             "udp"
         } else {
             "tcp"
@@ -2578,7 +2578,7 @@ function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
     };
 
     if (lbvip.vip_port != 0) {
-        var proto = match (set_nth(lb.protocol, 0)) {
+        var proto = match (lb.protocol) {
             Some{value} -> value,
             None -> "tcp"
         };
@@ -2902,7 +2902,7 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name)
 }
 
 function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
-    set_nth(lsp.up, 0) == Some{true}
+    lsp.up == Some{true}
 }
 
 /* Ingress table ARP_ND_RSP: ARP/ND responder, reply for known IPs.
@@ -3220,14 +3220,14 @@ for (lsp in &SwitchPort
           * and if it doesn't belong to an HA chassis group ignore it. */
          and (lsp.lsp.__type != "external"
               or (lsp.sw.has_localnet_port
-                  and not set_is_empty(lsp.lsp.ha_chassis_group))))
+                  and is_some(lsp.lsp.ha_chassis_group))))
 {
     for (lps in LogicalSwitchPort(.lport = lsp.lsp._uuid, .lswitch = lsuuid)) {
         var json_key = json_string_escape(lsp.lsp.name) in
         (var pfx, var sfx) = match_dhcp_input(lsp) in
         {
             /* DHCPv4 options enabled for this port */
-            Some{var dhcpv4_options_uuid} = set_nth(lsp.lsp.dhcpv4_options, 0) in
+            Some{var dhcpv4_options_uuid} = lsp.lsp.dhcpv4_options in
             {
                 for (dhcpv4_options in nb.DHCP_Options(._uuid = dhcpv4_options_uuid)) {
                     for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea_s = ea_s, .addr = addr)) {
@@ -3284,7 +3284,7 @@ for (lsp in &SwitchPort
             };
 
             /* DHCPv6 options enabled for this port */
-            Some{var dhcpv6_options_uuid} = set_nth(lsp.lsp.dhcpv6_options, 0) in
+            Some{var dhcpv6_options_uuid} = lsp.lsp.dhcpv6_options in
             {
                 for (dhcpv6_options in nb.DHCP_Options(._uuid = dhcpv6_options_uuid)) {
                     for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea_s = ea_s, .addr = addr)) {
@@ -3652,8 +3652,9 @@ Flow(.logical_datapath = sw.ls._uuid,
     var eth_src_vec = {
         var eth_src_vec = vec_singleton(rp.networks.ea_s);
         for (nat in rp.router.nats) {
-            for (mac in nat.external_mac) {
-                vec_push(eth_src_vec, mac)
+            match (nat.external_mac) {
+                Some{mac} -> vec_push(eth_src_vec, mac),
+                None -> ()
             }
         };
         eth_src_vec
@@ -3778,8 +3779,8 @@ for (&SwitchPort(.lsp = lsp,
         if (is_redirect) {
             for (LogicalRouterNAT(.lr = lr._uuid, .nat = &nat)) {
                 if (nat.__type == "dnat_and_snat") {
-                    Some{var lport} = set_nth(nat.logical_port, 0) in
-                    Some{var emac} = set_nth(nat.external_mac, 0) in
+                    Some{var lport} = nat.logical_port in
+                    Some{var emac} = nat.external_mac in
                     Some{var nat_mac} = eth_addr_from_string(emac) in
                     var __match = "eth.dst == ${nat_mac} && is_chassis_resident(${json_string_escape(lport)})" in
                     Flow(.logical_datapath = sw.ls._uuid,
@@ -4431,7 +4432,7 @@ for (&RouterPort(.lrp = lrp,
             IPv6{_} -> "nd.tll"
         } in
         (var __match2, var actions2) = if is_redirect {
-            match ((set_nth(nat.external_mac, 0), set_nth(nat.logical_port, 0))) {
+            match ((nat.external_mac, nat.logical_port)) {
                 (Some{external_mac}, Some{logical_port}) -> {
                     match (eth_addr_from_string(external_mac)) {
                         Some{mac} -> {
@@ -4848,7 +4849,7 @@ for (&Router(.lr = lr,
          * satisfies the conditions for distributed NAT processing. */
         Some{var mac: Option<eth_addr>} =
             if (is_some(l3dgw_port) and nat.__type == "dnat_and_snat") {
-                match ((set_nth(nat.logical_port, 0), set_nth(nat.external_mac, 0))) {
+                match ((nat.logical_port, nat.external_mac)) {
                     (Some{_}, Some{external_mac}) -> {
                         match (eth_addr_from_string(external_mac)) {
                             Some{mac} -> Some { Some{mac} },
@@ -5112,7 +5113,7 @@ for (&Router(.lr = lr,
              * resident. */
             Some{var mac_addr} = mac in
             Some{var gwport} = l3dgw_port in
-            Some{var logical_port} = set_nth(nat.logical_port, 0) in
+            Some{var logical_port} = nat.logical_port in
             var __match =
                 "eth.dst == ${mac_addr} && inport == ${json_string_escape(gwport.name)}"
                 " && is_chassis_resident(${json_string_escape(logical_port)})" in
@@ -5146,7 +5147,7 @@ for (&Router(.lr = lr,
             Some{var gwport} = l3dgw_port in
             /* Distributed router. */
             Some{var port} = match (mac) {
-                Some{_} -> match (set_nth(nat.logical_port, 0)) {
+                Some{_} -> match (nat.logical_port) {
                                Some{name} -> Some{json_string_escape(name)},
                                None -> None: Option<string>
                            },
@@ -5295,7 +5296,7 @@ for (RouterLBVIP(
     } else {
         "ip6"
     } in
-    var proto = match (set_nth(lb.protocol, 0)) {
+    var proto = match (lb.protocol) {
         Some{proto} -> proto,
         _ -> "tcp"
     } in {
@@ -5590,7 +5591,7 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
 /* Logical router ingress table ND_RA_OPTIONS and ND_RA_RESPONSE: IPv6 Router
  * Adv (RA) options and response. */
 // FIXME: do these rules apply to derived ports?
-for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = set_empty()},
+for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = None},
                                  .router = &router,
                                  .json_name = json_name,
                                  .networks = networks,
@@ -5696,8 +5697,8 @@ Flow(.logical_datapath = r.lr._uuid,
     r in &Router(.l3dgw_port = Some{l3dgw_port}),
     var nat = FlatMap(r.nats),
     nat.__type == "dnat_and_snat",
-    var external_mac = FlatMap(nat.external_mac),
-    var logical_port = FlatMap(nat.logical_port),
+    Some{var external_mac} = nat.external_mac,
+    Some{var logical_port} = nat.logical_port,
     (var ipx, var xx) = match (string_contains(nat.logical_ip, ".")) {
         true -> ("ip4", ""),
         false -> ("ip6", "xx")
@@ -5992,7 +5993,7 @@ Flow(.logical_datapath = r.lr._uuid,
     policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "reroute",
     out_port in &RouterPort(.router = r),
-    Some{var nexthop_s} = set_nth(policy.nexthop, 0),
+    Some{var nexthop_s} = policy.nexthop,
     Some{var nexthop} = ip46_parse(nexthop_s),
     Some{var src_ip} = find_lrp_member_ip(out_port.networks, nexthop),
     /*
@@ -6157,8 +6158,8 @@ for (SwitchPortIPv6Address(
  *
  * This is meant for sets of 0 or 1 elements, like the OVSDB integration
  * with DDlog uses. */
-function is_empty_set_or_string(s: Set<string>): bool = {
-    match (set_nth(s, 0)) {
+function is_empty_set_or_string(s: Option<string>): bool = {
+    match (s) {
         None -> true,
         Some{""} -> true,
         _ -> false
@@ -6183,7 +6184,7 @@ Flow(.logical_datapath = peer.router.lr._uuid,
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
     Some{var virtual_ip} = ip_parse(virtual_ip_s),
     pb in sb.Port_Binding(.logical_port = sp.lsp.name),
-    is_empty_set_or_string(pb.virtual_parent) or set_is_empty(pb.chassis),
+    is_empty_set_or_string(pb.virtual_parent) or is_none(pb.chassis),
     sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
     Some{_} = find_lrp_member_ip(peer.networks, IPv4{virtual_ip}).
 Flow(.logical_datapath = peer.router.lr._uuid,
@@ -6197,8 +6198,8 @@ Flow(.logical_datapath = peer.router.lr._uuid,
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
     Some{var virtual_ip} = ip_parse(virtual_ip_s),
     pb in sb.Port_Binding(.logical_port = sp.lsp.name),
-    not (is_empty_set_or_string(pb.virtual_parent) or set_is_empty(pb.chassis)),
-    Some{var virtual_parent} = set_nth(pb.virtual_parent, 0),
+    not (is_empty_set_or_string(pb.virtual_parent) or is_none(pb.chassis)),
+    Some{var virtual_parent} = pb.virtual_parent,
     vp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = virtual_parent}),
     var address = FlatMap(vp.static_addresses),
     sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
@@ -6711,7 +6712,7 @@ PortRequiresQID(pb._uuid, chassis) :-
     pb.__type != "localnet",
     port_has_qos_params(pb.options),
     sb.Port_Binding(._uuid = pb._uuid, .chassis = chassis_set),
-    Some{var chassis} = set_nth(chassis_set, 0).
+    Some{var chassis} = chassis_set.
 PortRequiresQID(pb._uuid, pb._uuid) :-
     pb in OutProxy_Port_Binding(),
     pb.__type == "localnet",
@@ -6729,7 +6730,7 @@ relation AllocatedQIDs(chassis: uuid, allocated_ids: Map<uuid, integer>)
 AllocatedQIDs(chassis, allocated_ids) :-
     pb in sb.Port_Binding(),
     pb.__type != "localnet",
-    Some{var chassis} = set_nth(pb.chassis, 0),
+    Some{var chassis} = pb.chassis,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
     Some{var qid: bit<64>} = parse_dec_u64(qid_str),
     var allocated_ids = Aggregate((chassis), group2map((pb._uuid, qid))).
@@ -6789,11 +6790,11 @@ relation SwitchPortReservedTag(parent_name: string, tags: integer)
 SwitchPortReservedTag(parent_name, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = needs_dynamic_tag, .parent_name = Some{parent_name}),
     Some{var tag} = if (needs_dynamic_tag) {
-        set_nth(lsp.tag, 0)
+        lsp.tag
     } else {
-        match (set_nth(lsp.tag_request, 0)) {
+        match (lsp.tag_request) {
             Some{req} -> Some{req},
-            None      -> set_nth(lsp.tag, 0)
+            None      -> lsp.tag
         }
     }.
 
@@ -6814,7 +6815,7 @@ relation SwitchPortAllocatedTags(lsp_uuid: uuid, tag: Option<integer>)
 
 SwitchPortAllocatedTags(lsp_uuid, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true, .parent_name = Some{parent_name}),
-    set_is_empty(lsp.tag),
+    is_none(lsp.tag),
     var lsps_need_tag = Aggregate((parent_name), group2vec(lsp._uuid)),
     SwitchPortReservedTags(parent_name, reserved),
     var dyn_tags = allocate_opt(reserved,
@@ -6834,7 +6835,7 @@ relation SwitchPortNewDynamicTag(port: uuid, tag: Option<integer>)
 /* Case 1 */
 SwitchPortNewDynamicTag(lsp._uuid, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = false),
-    var tag: Option<integer> = match (set_nth(lsp.tag_request, 0)) {
+    var tag: Option<integer> = match (lsp.tag_request) {
         Some{0} -> None,
         treq    -> treq
     }.
@@ -6842,26 +6843,26 @@ SwitchPortNewDynamicTag(lsp._uuid, tag) :-
 /* Case 2 */
 SwitchPortNewDynamicTag(lsp._uuid, Some{tag}) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true),
-    Some{var tag} = set_nth(lsp.tag, 0).
+    Some{var tag} = lsp.tag.
 
 /* Case 3 */
 SwitchPortNewDynamicTag(lsp._uuid, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true),
-    set_is_empty(lsp.tag),
+    is_none(lsp.tag),
     SwitchPortAllocatedTags(lsp._uuid, tag).
 
 /* IP_Multicast table (only applicable for Switches). */
 sb.Out_IP_Multicast(._uuid = cfg.datapath,
                     .datapath = cfg.datapath,
-                    .enabled = set_singleton(cfg.enabled),
-                    .querier = set_singleton(cfg.querier),
+                    .enabled = Some{cfg.enabled},
+                    .querier = Some{cfg.querier},
                     .eth_src = cfg.eth_src,
                     .ip4_src = cfg.ip4_src,
                     .ip6_src = cfg.ip6_src,
-                    .table_size = set_singleton(cfg.table_size),
-                    .idle_timeout = set_singleton(cfg.idle_timeout),
-                    .query_interval = set_singleton(cfg.query_interval),
-                    .query_max_resp = set_singleton(cfg.query_max_resp)) :-
+                    .table_size = Some{cfg.table_size},
+                    .idle_timeout = Some{cfg.idle_timeout},
+                    .query_interval = Some{cfg.query_interval},
+                    .query_max_resp = Some{cfg.query_max_resp}) :-
     &McastSwitchCfg[cfg].
 
 
@@ -6871,7 +6872,7 @@ PortExists(name) :- nb.Logical_Router_Port(.name = name).
 
 sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip, lbvipbackend.port, protocol)),
                        .ip = lbvipbackend.ip,
-                       .protocol = set_singleton(protocol),
+                       .protocol = Some{protocol},
                        .port = lbvipbackend.port as integer,
                        .logical_port = svc_monitor.port_name,
                        .src_mac = eth_addr2string(svc_monitor_mac),
