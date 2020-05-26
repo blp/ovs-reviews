@@ -1,49 +1,202 @@
 import ovsdb
 
-extern type eth_addr
 
 /* Logical port is enabled if it does not have an enabled flag or the flag is true */
 function is_enabled(s: Option<bool>): bool = {
     s != Some{false}
 }
 
-function be32_prefix_mask(plen: bit<32>): ovs_be32 =
-{
-    htonl((64'h00000000ffffffff << (32'd32 - plen))[31:0])
-}
+/*
+ * Ethernet addresses
+ */
+extern type eth_addr
 
 extern function eth_addr_zero(): eth_addr
 extern function eth_addr2string(addr: eth_addr): string
+extern function scan_eth_addr(s: string): Option<eth_addr>
+extern function scan_eth_addr_prefix(s: string): Option<bit<64>>
+extern function eth_addr_from_string(s: string): Option<eth_addr>
+extern function eth_addr_to_uint64(ea: eth_addr): bit<64>
+extern function eth_addr_from_uint64(x: bit<64>): eth_addr
+extern function eth_addr_mark_random(ea: eth_addr): eth_addr
 
-function ip_fmt(ip: ovs_be32): string = {
-    "${ntohl(ip) >> 32'd24}.${(ntohl(ip) >> 32'd16) & 32'hff}.${(ntohl(ip) >> 32'd8) & 32'hff}.${ntohl(ip) & 32'hff}"
+function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
+    eth_addr_to_uint64(eth_addr_mark_random(eth_addr_from_uint64(hash64(seed ++ variant))))
 }
 
-function ip_is_cidr(netmask: ovs_be32): bool = {
-    var x = ~ntohl(netmask);
+/*
+ * IPv4 addresses
+ */
+
+extern type in_addr
+
+function in_addr2string(ip: in_addr): string = {
+    var x = iptohl(ip);
+    "${x >> 32'd24}.${(x >> 32'd16) & 32'hff}.${(x >> 32'd8) & 32'hff}.${x & 32'hff}"
+}
+
+function ip_is_cidr(netmask: in_addr): bool {
+    var x = ~iptohl(netmask);
     (x & (x + 1)) == 0
 }
-
-function ip_is_local_multicast(ip: ovs_be32): bool {
-    (ip & htonl(32'hffffff00)) == htonl(32'he0000000)
+function ip_is_local_multicast(ip: in_addr): bool {
+    (iptohl(ip) & 32'hffffff00) == 32'he0000000
 }
+
+function ip_create_mask(plen: bit<32>): in_addr {
+    hltoip((64'h00000000ffffffff << (32'd32 - plen))[31:0])
+}
+
+function ip_bitxor(a: in_addr, b: in_addr): in_addr {
+    hltoip(iptohl(a) ^ iptohl(b))
+}
+
+function ip_bitand(a: in_addr, b: in_addr): in_addr {
+    hltoip(iptohl(a) & iptohl(b))
+}
+
+function ip_host(addr: in_addr, mask: in_addr): in_addr {
+    hltoip(iptohl(addr) & ~iptohl(mask))
+}
+
+function ip_host_is_zero(addr: in_addr, mask: in_addr): bool {
+    ip_is_zero(ip_host(addr, mask))
+}
+
+function ip_is_zero(a: in_addr): bool {
+    iptohl(a) == 32'd0
+}
+
+extern function ip_parse(s: string): Option<in_addr>
+extern function ip_parse_masked(s: string): Either<string/*err*/, (in_addr/*host_ip*/, in_addr/*mask*/)>
+extern function ip_parse_cidr(s: string): Either<string/*err*/, (in_addr/*ip*/, bit<32>/*plen*/)>
+extern function ip_count_cidr_bits(ip: in_addr): Option<bit<8>>
+
+/* True if both 'ips' are in the same network as defined by netmask 'mask',
+ * false otherwise. */
+function ip_same_network(ips: (in_addr, in_addr), mask: in_addr): bool {
+    ((iptohl(ips.0) ^ iptohl(ips.1)) & iptohl(mask)) == 0
+}
+
+extern function iptohl(addr: in_addr): bit<32>
+extern function hltoip(addr: bit<32>): in_addr
+extern function scan_static_dynamic_ip(s: string): Option<in_addr>
 
 /*
  * parse IPv4 address list of the form:
  * "10.0.0.4 10.0.0.10 10.0.0.20..10.0.0.50 10.0.0.100..10.0.0.110"
  */
-extern function parse_ip_list(ips: string): Either<string, Vec<(ovs_be32, Option<ovs_be32>)>>
+extern function parse_ip_list(ips: string): Either<string, Vec<(in_addr, Option<in_addr>)>>
 
+/*
+ * IPv6 addresses
+ */
 extern type in6_addr
 
-typedef ovs_be32 = bit<32>
+extern function in6_generate_lla(ea: eth_addr): in6_addr
+extern function in6_generate_eui64(ea: eth_addr, prefix: in6_addr): in6_addr
+extern function in6_is_lla(addr: in6_addr): bool
+extern function in6_addr_solicited_node(ip6: in6_addr): in6_addr
 
-function oVS_BE32_MAX(): ovs_be32 = 32'hffffffff
+extern function ipv6_string_mapped(addr: in6_addr): string
+extern function ipv6_parse_masked(s: string): Either<string/*err*/, (in6_addr/*ip*/, in6_addr/*mask*/)>
+extern function ipv6_parse(s: string): Option<in6_addr>
+extern function ipv6_parse_cidr(s: string): Either<string/*err*/, (in6_addr/*ip*/, bit<32>/*plen*/)>
+extern function ipv6_bitxor(a: in6_addr, b: in6_addr): in6_addr
+extern function ipv6_bitand(a: in6_addr, b: in6_addr): in6_addr
+extern function ipv6_create_mask(mask: bit<32>): in6_addr
+extern function ipv6_is_zero(a: in6_addr): bool
+extern function ipv6_is_v4mapped(a: in6_addr): bool
+extern function ipv6_is_routable_multicast(a: in6_addr): bool
+extern function ipv6_is_all_hosts(a: in6_addr): bool
+
+/* True if both 'ips' are in the same network as defined by netmask 'mask',
+ * false otherwise. */
+function ipv6_same_network(ips: (in6_addr, in6_addr), mask: in6_addr): bool {
+    ipv6_is_zero(ipv6_bitand(ipv6_bitxor(ips.0, ips.1), mask))
+}
+
+extern function ipv6_host_is_zero(addr: in6_addr, mask: in6_addr): bool
+extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
+extern function ipv6_is_cidr(ip6: in6_addr): bool
+extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
+
+extern function inet6_ntop(addr: in6_addr): string
+function in6_addr2string(addr: in6_addr): string = {
+    inet6_ntop(addr)
+}
+
+/*
+ * IPv4 | IPv6 addresses
+ */
+
+typedef v46_ip = IPv4 { ipv4: in_addr } | IPv6 { ipv6: in6_addr }
+
+function ip46_parse_cidr(s: string) : Option<(v46_ip, bit<32>)> = {
+    match (ip_parse_cidr(s)) {
+        Right{(ipv4, plen)} -> return Some{(IPv4{ipv4}, plen)},
+        _ -> ()
+    };
+    match (ipv6_parse_cidr(s)) {
+        Right{(ipv6, plen)} -> return Some{(IPv6{ipv6}, plen)},
+        _ -> ()
+    };
+    None
+}
+function ip46_parse_masked(s: string) : Option<(v46_ip, v46_ip)> = {
+    match (ip_parse_masked(s)) {
+        Right{(ipv4, mask)} -> return Some{(IPv4{ipv4}, IPv4{mask})},
+        _ -> ()
+    };
+    match (ipv6_parse_masked(s)) {
+        Right{(ipv6, mask)} -> return Some{(IPv6{ipv6}, IPv6{mask})},
+        _ -> ()
+    };
+    None
+}
+function ip46_parse(s: string) : Option<v46_ip> = {
+    match (ip_parse(s)) {
+        Some{ipv4} -> return Some{IPv4{ipv4}},
+        _ -> ()
+    };
+    match (ipv6_parse(s)) {
+        Some{ipv6} -> return Some{IPv6{ipv6}},
+        _ -> ()
+    };
+    None
+}
+function v46_ip2string(ip46: v46_ip) : string = {
+    match (ip46) {
+        IPv4{ipv4} -> "${ipv4}",
+        IPv6{ipv6} -> "${ipv6}"
+    }
+}
+
+function ip46_get_network(ip46: v46_ip, plen: bit<32>) : v46_ip {
+    match (ip46) {
+        IPv4{ipv4} -> IPv4{ip_bitand(ipv4, ip_create_mask(plen))},
+        IPv6{ipv6} -> IPv6{ipv6_bitand(ipv6, ipv6_create_mask(plen))}
+    }
+}
+
+function ip46_is_all_ones(ip46: v46_ip) : bool {
+    match (ip46) {
+        IPv4{ipv4} -> ipv4 == ip_create_mask(32),
+        IPv6{ipv6} -> ipv6 == ipv6_create_mask(128)
+    }
+}
+
+function ip46_count_cidr_bits(ip46: v46_ip) : Option<bit<8>> {
+    match (ip46) {
+        IPv4{ipv4} -> ip_count_cidr_bits(ipv4),
+        IPv6{ipv6} -> ipv6_count_cidr_bits(ipv6)
+    }
+}
 
 typedef ipv4_netaddr = IPV4NetAddr {
-    addr: ovs_be32,            /* 192.168.10.123 */
-    mask: ovs_be32,            /* 255.255.255.0 */
-    network: ovs_be32,         /* 192.168.10.0 */
+    addr: in_addr,             /* 192.168.10.123 */
+    mask: in_addr,             /* 255.255.255.0 */
+    network: in_addr,          /* 192.168.10.0 */
     plen: bit<32>,             /* CIDR Prefix: 24. */
 
     addr_s: string,            /* "192.168.10.123" */
@@ -83,71 +236,7 @@ function lport_addresses2string(addr: lport_addresses): string = {
     string_join(addrs, " ")
 }
 
-typedef v46_ip = IPv4 { ipv4: bit<32> } | IPv6 { ipv6: in6_addr }
-
-function ip46_parse_cidr(s: string) : Option<(v46_ip, bit<32>)> = {
-    match (ip_parse_cidr(s)) {
-        Right{(ipv4, plen)} -> return Some{(IPv4{ipv4}, plen)},
-        _ -> ()
-    };
-    match (ipv6_parse_cidr(s)) {
-        Right{(ipv6, plen)} -> return Some{(IPv6{ipv6}, plen)},
-        _ -> ()
-    };
-    None
-}
-function ip46_parse_masked(s: string) : Option<(v46_ip, v46_ip)> = {
-    match (ip_parse_masked(s)) {
-        Right{(ipv4, mask)} -> return Some{(IPv4{ipv4}, IPv4{mask})},
-        _ -> ()
-    };
-    match (ipv6_parse_masked(s)) {
-        Right{(ipv6, mask)} -> return Some{(IPv6{ipv6}, IPv6{mask})},
-        _ -> ()
-    };
-    None
-}
-function ip46_parse(s: string) : Option<v46_ip> = {
-    match (ip_parse(s)) {
-        Some{ipv4} -> return Some{IPv4{ipv4}},
-        _ -> ()
-    };
-    match (ipv6_parse(s)) {
-        Some{ipv6} -> return Some{IPv6{ipv6}},
-        _ -> ()
-    };
-    None
-}
-function v46_ip2string(ip46: v46_ip) : string = {
-    match (ip46) {
-        IPv4{ipv4} -> ip_fmt(ipv4),
-        IPv6{ipv6} -> inet6_ntop(ipv6)
-    }
-}
-
-function ip46_get_network(ip46: v46_ip, plen: bit<32>) : v46_ip {
-    match (ip46) {
-        IPv4{ipv4} -> IPv4{ipv4 & be32_prefix_mask(plen)},
-        IPv6{ipv6} -> IPv6{ipv6_addr_bitand(ipv6, ipv6_create_mask(plen))}
-    }
-}
-
-function ip46_is_all_ones(ip46: v46_ip) : bool {
-    match (ip46) {
-        IPv4{ipv4} -> ipv4 == oVS_BE32_MAX(),
-        IPv6{ipv6} -> ipv6 == ipv6_create_mask(128)
-    }
-}
-
-function ip46_count_cidr_bits(ip46: v46_ip) : Option<bit<8>> {
-    match (ip46) {
-        IPv4{ipv4} -> ip_count_cidr_bits(ipv4),
-        IPv6{ipv6} -> ipv6_count_cidr_bits(ipv6)
-    }
-}
-
 /* Standard libc address family values */
-/* FIXME: sparse/sys/socket.h defines different AF constants. Do we have to support that? */
 function aF_INET(): bit<32> = 2
 function aF_INET6(): bit<32> = 10
 
@@ -171,50 +260,7 @@ extern function split_addresses(addr: string): (Set<string>, Set<string>)
 /*
  * C functions imported from OVS
  */
-extern function in6_generate_lla(ea: eth_addr): in6_addr
-extern function in6_generate_eui64(ea: eth_addr, prefix: in6_addr): in6_addr
-extern function in6_is_lla(addr: in6_addr): bool
-extern function in6_addr_solicited_node(ip6: in6_addr): in6_addr
-
-extern function ipv6_string_mapped(addr: in6_addr): string
-extern function ipv6_parse_masked(s: string): Either<string/*err*/, (in6_addr/*ip*/, in6_addr/*mask*/)>
-extern function ipv6_parse(s: string): Option<in6_addr>
-extern function ipv6_parse_cidr(s: string): Either<string/*err*/, (in6_addr/*ip*/, bit<32>/*plen*/)>
-extern function ipv6_addr_bitxor(a: in6_addr, b: in6_addr): in6_addr
-extern function ipv6_addr_bitand(a: in6_addr, b: in6_addr): in6_addr
-extern function ipv6_mask_is_any(mask: in6_addr): bool
-extern function ipv6_create_mask(mask: bit<32>): in6_addr
-extern function ipv6_is_zero(a: in6_addr): bool
-extern function ipv6_is_v4mapped(a: in6_addr): bool
-extern function ipv6_is_routable_multicast(a: in6_addr): bool
-extern function ipv6_is_all_hosts(a: in6_addr): bool
-extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
-extern function ipv6_is_cidr(ip6: in6_addr): bool
-extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
-extern function scan_eth_addr(s: string): Option<eth_addr>
-extern function scan_eth_addr_prefix(s: string): Option<bit<64>>
-extern function scan_static_dynamic_ip(s: string): Option<ovs_be32>
 extern function json_string_escape(s: string): string
-extern function ip_parse(s: string): Option<ovs_be32>
-extern function ip_parse_masked(s: string): Either<string/*err*/, (ovs_be32/*host_ip*/, ovs_be32/*mask*/)>
-extern function ip_parse_cidr(s: string): Either<string/*err*/, (ovs_be32/*ip*/, bit<32>/*plen*/)>
-extern function ip_count_cidr_bits(ip: ovs_be32): Option<bit<8>>
-extern function eth_addr_from_string(s: string): Option<eth_addr>
-extern function eth_addr_to_uint64(ea: eth_addr): bit<64>
-extern function eth_addr_from_uint64(x: bit<64>): eth_addr
-extern function eth_addr_mark_random(ea: eth_addr): eth_addr
-
-function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
-    eth_addr_to_uint64(eth_addr_mark_random(eth_addr_from_uint64(hash64(seed ++ variant))))
-}
-
-/*
- * C functions imported from <arpa/inet.h>
- */
-extern function inet6_ntop(addr: in6_addr): string
-function in6_addr2string(addr: in6_addr): string = {
-    inet6_ntop(addr)
-}
 
 /* Returns the number of 1-bits in `x`, between 0 and 64 inclusive */
 extern function count_1bits(x: bit<64>): bit<8>

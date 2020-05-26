@@ -28,7 +28,7 @@ function mAC_ADDR_SPACE(): bit<64>  = 64'hffffff
  */
 typedef dynamic_address_request = DynamicAddressRequest{
     mac: Option<eth_addr>,
-    ip4: Option<ovs_be32>,
+    ip4: Option<in_addr>,
     ip6: Option<in6_addr>
 }
 function parse_dynamic_address_request(s: string): Option<dynamic_address_request> {
@@ -77,7 +77,7 @@ function parse_dynamic_address_request(s: string): Option<dynamic_address_reques
  * (4) addresses associated with router ports peered with the switch.
  * (5) static IP component of "dynamic" `lsp.addresses`.
  *
- * Addresses are kept in host-endian format (i.e., bit<32> vs ovs_be32).
+ * Addresses are kept in host-endian format (i.e., bit<32> vs in_addr).
  */
 relation SwitchIPv4ReservedAddress(lswitch: uuid, addr: bit<32>)
 
@@ -99,10 +99,10 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
                 Right{ranges} -> {
                     for (range in ranges) {
                         (var ip_start, var ip_end) = range;
-                        var start = ntohl(ip_start);
+                        var start = iptohl(ip_start);
                         var end = match (ip_end) {
                             None -> start,
-                            Some{ip} -> ntohl(ip)
+                            Some{ip} -> iptohl(ip)
                         };
                         start = max(start_ipv4, start);
                         end = min(start_ipv4 + total_ipv4s - 32'd1, end);
@@ -134,7 +134,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
     var addrs = {
         var addrs: Set<bit<32>> = set_empty();
         for (addr in lport_addrs.ipv4_addrs) {
-            var addr_host_endian = ntohl(addr.addr);
+            var addr_host_endian = iptohl(addr.addr);
             if (addr_host_endian >= start_ipv4 and addr_host_endian < start_ipv4 + total_ipv4s) {
                 set_insert(addrs, addr_host_endian)
             } else ()
@@ -153,7 +153,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
     var addrs = {
         var addrs: Set<bit<32>> = set_empty();
         for (addr in rport.networks.ipv4_addrs) {
-            var addr_host_endian = ntohl(addr.addr);
+            var addr_host_endian = iptohl(addr.addr);
             if (addr_host_endian >= start_ipv4 and addr_host_endian < start_ipv4 + total_ipv4s) {
                 set_insert(addrs, addr_host_endian)
             } else ()
@@ -164,7 +164,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
 
 /* Add reserved address group (5) */
 SwitchIPv4ReservedAddress(.lswitch = sw.ls._uuid,
-                          .addr    = ntohl(ip_addr)) :-
+                          .addr    = iptohl(ip_addr)) :-
     &SwitchPort(.sw = &sw, .lsp = lsp, .static_dynamic_ipv4 = Some{ip_addr}).
 
 /* Aggregate all reserved addresses for each switch. */
@@ -180,7 +180,7 @@ SwitchIPv4ReservedAddresses(lswitch_uuid, set_empty()) :-
 
 /* Allocate dynamic IP addresses for ports that require them:
  */
-relation SwitchPortAllocatedIPv4DynAddress(lsport: uuid, dyn_addr: bit<32>)
+relation SwitchPortAllocatedIPv4DynAddress(lsport: uuid, dyn_addr: in_addr)
 
 SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
     /* Aggregate all ports of a switch that need a dynamic IP address */
@@ -222,14 +222,14 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
                             vec_push(need_addr, deref(port).lsp._uuid)
                         },
                         Some{addr} -> {
-                            var haddr = ntohl(addr.addr);
+                            var haddr = iptohl(addr.addr);
                             if (haddr < start_ipv4 or haddr >= start_ipv4 + total_ipv4s) {
                                 /* existing dynamic address is no longer valid */
                                 //warn("need_addr(${deref(port).lsp._uuid})");
                                 vec_push(need_addr, deref(port).lsp._uuid)
                             } else if (set_contains(used_addrs, haddr)) {
                                 vec_push(need_addr, deref(port).lsp._uuid);
-                                warn("Duplicate IP set on switch ${deref(port).lsp.name}: ${ip_fmt(addr.addr)}")
+                                warn("Duplicate IP set on switch ${deref(port).lsp.name}: ${addr.addr}")
                             } else {
                                 /* has valid dynamic address -- record it in used_addrs */
                                 set_insert(used_addrs, haddr)
@@ -246,28 +246,29 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
         allocate(used_addrs, need_addr, start_ipv4, start_ipv4 + total_ipv4s - 32'd1)
     },
     var port_address = FlatMap(dyn_addresses),
-    (var lsport, var dyn_addr) = port_address.
+    (var lsport, var dyn_addr_bits) = port_address,
+    var dyn_addr = hltoip(dyn_addr_bits).
 
 /* Compute new dynamic IPv4 address assignment:
  * - port does not need dynamic IP - use static_dynamic_ip if any
  * - a new address has been allocated for port - use this address
  * - otherwise, use existing dynamic IP
  */
-relation SwitchPortNewIPv4DynAddress(lsport: uuid, dyn_addr: Option<ovs_be32>)
+relation SwitchPortNewIPv4DynAddress(lsport: uuid, dyn_addr: Option<in_addr>)
 
 SwitchPortNewIPv4DynAddress(lsp._uuid, ip_addr) :-
     &SwitchPort(.sw = &sw,
                 .needs_dynamic_ipv4address = false,
                 .static_dynamic_ipv4 = static_dynamic_ipv4,
                 .lsp = lsp),
-    var ip_addr: Option<ovs_be32> = {
+    var ip_addr: Option<in_addr> = {
         match (static_dynamic_ipv4) {
             None -> { None },
             Some{addr} -> {
                 match (sw.subnet) {
                     None -> { None },
                     Some{(_, _, start_ipv4, total_ipv4s)} -> {
-                        var haddr = ntohl(addr);
+                        var haddr = iptohl(addr);
                         if (haddr < start_ipv4 or haddr >= start_ipv4 + total_ipv4s) {
                             /* new static ip is not valid */
                             None
@@ -280,13 +281,13 @@ SwitchPortNewIPv4DynAddress(lsp._uuid, ip_addr) :-
         }
     }.
 
-SwitchPortNewIPv4DynAddress(lsport, Some{htonl(addr)}) :-
+SwitchPortNewIPv4DynAddress(lsport, Some{addr}) :-
     SwitchPortAllocatedIPv4DynAddress(lsport, addr).
 
 SwitchPortNewIPv4DynAddress(lsp._uuid, addr) :-
     &SwitchPort(.needs_dynamic_ipv4address = true, .lsp = lsp, .dynamic_address = cur_address),
     not SwitchPortAllocatedIPv4DynAddress(lsp._uuid, _),
-    var addr: Option<ovs_be32> = match (cur_address) {
+    var addr: Option<in_addr> = match (cur_address) {
         None -> None,
         Some{dynaddr} -> {
             match (vec_nth(dynaddr.ipv4_addrs, 0)) {
@@ -380,7 +381,7 @@ SwitchPortAllocatedMACDynAddress(lsport, dyn_addr) :-
                 None       -> Some { mac_prefix | 64'd1 },
                 Some{addr} -> {
                     /* The tentative MAC's suffix will be in the interval (1, 0xfffffe). */
-                    var mac_suffix: bit<24> = ntohl(addr)[23:0] % ((mAC_ADDR_SPACE() - 64'd1)[23:0]) + 24'd1;
+                    var mac_suffix: bit<24> = iptohl(addr)[23:0] % ((mAC_ADDR_SPACE() - 64'd1)[23:0]) + 24'd1;
                     Some{ mac_prefix | ((0: bit<40>) ++ mac_suffix) }
                 }
             };
@@ -481,7 +482,7 @@ SwitchPortNewDynamicAddress(port, lport_address) :-
     },
     var ip4_addr = match (opt_ip4_addr) {
                         None -> "",
-                        Some{ip4} -> " ${ip_fmt(ip4)}"
+                        Some{ip4} -> " ${ip4}"
                     },
     var addr_string = "${mac_addr}${ip6_addr}${ip4_addr}",
     var lport_address = extract_addresses(addr_string).

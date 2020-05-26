@@ -149,13 +149,13 @@ pub fn ovn_in6_addr_solicited_node(ip6: &ovn_in6_addr) -> ovn_in6_addr
     res
 }
 
-pub fn ovn_ipv6_addr_bitand(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
+pub fn ovn_ipv6_bitand(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
     unsafe {
         ipv6_addr_bitand(a as *const ovn_in6_addr, b as *const ovn_in6_addr)
     }
 }
 
-pub fn ovn_ipv6_addr_bitxor(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
+pub fn ovn_ipv6_bitxor(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
     unsafe {
         ipv6_addr_bitxor(a as *const ovn_in6_addr, b as *const ovn_in6_addr)
     }
@@ -169,8 +169,8 @@ pub fn ovn_ipv6_string_mapped(addr: &ovn_in6_addr) -> String {
     }
 }
 
-pub fn ovn_ipv6_mask_is_any(mask: &ovn_in6_addr) -> bool {
-    *mask == ovn_in6addr_any
+pub fn ovn_ipv6_is_zero(addr: &ovn_in6_addr) -> bool {
+    *addr == ovn_in6addr_any
 }
 
 pub fn ovn_ipv6_count_cidr_bits(ip6: &ovn_in6_addr) -> std_Option<u8> {
@@ -287,11 +287,6 @@ pub fn ovn_ipv6_create_mask(mask: &u32) -> ovn_in6_addr
 }
 
 
-pub fn ovn_ipv6_is_zero(a: &ovn_in6_addr) -> bool
-{
-    unsafe{ipv6_is_zero(a as *const ovn_in6_addr)}
-}
-
 pub fn ovn_ipv6_is_routable_multicast(a: &ovn_in6_addr) -> bool
 {
     unsafe{ipv6_addr_is_routable_multicast(a as *const ovn_in6_addr)}
@@ -316,7 +311,17 @@ pub fn ovn_ipv6_multicast_to_ethernet(ip6: &ovn_in6_addr) -> ovn_eth_addr
     eth
 }
 
-pub fn ovn_ip_parse_masked(s: &String) -> std_Either<String, (ovn_ovs_be32, ovn_ovs_be32)>
+pub type ovn_in_addr = u32;
+pub type ovn_ovs_be32 = u32;
+
+pub fn ovn_iptohl(addr: &ovn_in_addr) -> u32 {
+    std_ntohl(addr)
+}
+pub fn ovn_hltoip(addr: &u32) -> ovn_in_addr {
+    std_htonl(addr)
+}
+
+pub fn ovn_ip_parse_masked(s: &String) -> std_Either<String, (ovn_in_addr, ovn_in_addr)>
 {
     unsafe {
         let mut ip: ovn_ovs_be32 = 0;
@@ -332,7 +337,7 @@ pub fn ovn_ip_parse_masked(s: &String) -> std_Either<String, (ovn_ovs_be32, ovn_
     }
 }
 
-pub fn ovn_ip_parse_cidr(s: &String) -> std_Either<String, (ovn_ovs_be32, u32)>
+pub fn ovn_ip_parse_cidr(s: &String) -> std_Either<String, (ovn_in_addr, u32)>
 {
     unsafe {
         let mut ip: ovn_ovs_be32 = 0;
@@ -348,7 +353,7 @@ pub fn ovn_ip_parse_cidr(s: &String) -> std_Either<String, (ovn_ovs_be32, u32)>
     }
 }
 
-pub fn ovn_ip_parse(s: &String) -> std_Option<ovn_ovs_be32>
+pub fn ovn_ip_parse(s: &String) -> std_Option<ovn_in_addr>
 {
     unsafe {
         let mut ip: ovn_ovs_be32 = 0;
@@ -360,7 +365,7 @@ pub fn ovn_ip_parse(s: &String) -> std_Option<ovn_ovs_be32>
     }
 }
 
-pub fn ovn_ip_count_cidr_bits(address: &ovn_ovs_be32) -> std_Option<u8> {
+pub fn ovn_ip_count_cidr_bits(address: &ovn_in_addr) -> std_Option<u8> {
     unsafe {
         match (ovn_ip_is_cidr(address)) {
             true => std_Option::std_Some{x: ip_count_cidr_bits(*address) as u8},
@@ -414,7 +419,7 @@ pub fn ovn_scan_eth_addr_prefix(s: &String) -> std_Option<u64> {
     }
 }
 
-pub fn ovn_scan_static_dynamic_ip(s: &String) -> std_Option<ovn_ovs_be32> {
+pub fn ovn_scan_static_dynamic_ip(s: &String) -> std_Option<ovn_in_addr> {
     let mut ip0: u8 = 0;
     let mut ip1: u8 = 0;
     let mut ip2: u8 = 0;
@@ -774,7 +779,7 @@ named!(parse_ipv4_address_list<nom::types::CompleteStr, Vec<(String, Option<Stri
               ranges: many0!(parse_ipv4_range) >>
               (ranges)));
 
-pub fn ovn_parse_ip_list(ips: &String) -> std_Either<String, std_Vec<(ovn_ovs_be32, std_Option<ovn_ovs_be32>)>>
+pub fn ovn_parse_ip_list(ips: &String) -> std_Either<String, std_Vec<(ovn_in_addr, std_Option<ovn_in_addr>)>>
 {
     match parse_ipv4_address_list(nom::types::CompleteStr(ips.as_str())) {
         Err(e) => {
