@@ -320,7 +320,7 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                 match (ip_parse_masked(nat.external_ip)) {
                     Left{_} -> (),
                     Right{(ip, mask)} -> {
-                        if (mask == ip_create_mask(32)) {
+                        if (mask == oVS_BE32_MAX()) {
                             /* Determine whether this NAT rule satisfies the conditions for
                              * distributed NAT processing. */
                             if (has_redirect and nat.__type == "dnat_and_snat" and
@@ -2736,8 +2736,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                  * address in the subnet.
                  */
                 vec_push(addrs,
-                         if (addr.plen == 32
-                             or not ip_host_is_zero(addr.addr, addr.mask)) {
+                         if (addr.plen == 32 or ((addr.addr & ~addr.mask) != 0)) {
                              addr.addr_s
                          } else {
                              /* host portion is zero */
@@ -2830,8 +2829,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                          * non-zero, the host can only use the specified
                          * address in the arp.spa.  If zero, the host is allowed
                          * to use any address in the subnet. */
-                        if (addr.plen == 32 or
-                            not ip_host_is_zero(addr.addr, addr.mask)) {
+                        if (addr.plen == 32 or (addr.addr & ~addr.mask) != 0) {
                             vec_push(spas, addr.addr_s)
                         } else {
                             vec_push(spas, "${addr.network_s}/${addr.plen}")
@@ -3061,7 +3059,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 function build_dhcpv4_action(
     lsp_json_key: string,
     dhcpv4_options: nb.DHCP_Options,
-    offer_ip: in_addr) : Option<(string, string, string)> =
+    offer_ip: ovs_be32) : Option<(string, string, string)> =
 {
     match (ip_parse_masked(dhcpv4_options.cidr)) {
         Left{err} -> {
@@ -3069,7 +3067,7 @@ function build_dhcpv4_action(
             None
         },
         Right{(var host_ip, var mask)} -> {
-            if (not ip_is_zero(ip_bitand(ip_bitxor(offer_ip, host_ip), mask))) {
+            if (((offer_ip ^ host_ip) & mask) != 0) {
                /* the offer ip of the logical port doesn't belong to the cidr
                 * defined in the DHCPv4 options.
                 */
@@ -3084,7 +3082,7 @@ function build_dhcpv4_action(
 
                         /* server_mac is not DHCPv4 option, delete it from the smap. */
                         map_remove(options_map, "server_mac");
-                        map_insert(options_map, "netmask", "${mask}");
+                        map_insert(options_map, "netmask", ip_fmt(mask));
 
                         /* We're not using SMAP_FOR_EACH because we want a consistent order of the
                          * options on different architectures (big or little endian, SSE4.2) */
@@ -3093,14 +3091,14 @@ function build_dhcpv4_action(
                             (var k, var v) = node;
                             vec_push(options, "${k} = ${v}")
                         };
-                        var options_action = "${rEGBIT_DHCP_OPTS_RESULT()} = put_dhcp_opts(offerip = ${offer_ip}, " ++
+                        var options_action = "${rEGBIT_DHCP_OPTS_RESULT()} = put_dhcp_opts(offerip = ${ip_fmt(offer_ip)}, " ++
                                              string_join(options, ", ") ++ "); next;";
                         var response_action = "eth.dst = eth.src; eth.src = ${server_mac}; "
                                               "ip4.src = ${server_ip}; udp.src = 67; "
                                               "udp.dst = 68; outport = inport; flags.loopback = 1; "
                                               "output;";
 
-                        var ipv4_addr_match = "ip4.src == ${offer_ip} && ip4.dst == {${server_ip}, 255.255.255.255}";
+                        var ipv4_addr_match = "ip4.src == ${ip_fmt(offer_ip)} && ip4.dst == {${server_ip}, 255.255.255.255}";
                         Some{(options_action, response_action, ipv4_addr_match)}
                     },
                     _ -> {
@@ -3887,7 +3885,7 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
                  * address in the subnet.
                  */
                 vec_push(addrs,
-                         if (addr.plen == 32 or not ip_host_is_zero(addr.addr, addr.mask)) {
+                         if (addr.plen == 32 or ((addr.addr & ~addr.mask) != 0)) {
                              addr.addr_s ++
                                 if (addr.plen != 32) { ", ${addr.bcast_s}" } else { "" }
                          } else {
@@ -4468,7 +4466,7 @@ for (&RouterPort(.lrp = lrp,
         } in
         var actions3 = match (ip) {
             IPv4{ipv4} -> "arp.tpa = arp.spa; "
-                          "arp.spa = ${ipv4}; ",
+                          "arp.spa = ${ip_fmt(ipv4)}; ",
             IPv6{ipv6} -> "ip6.src = ${ipv6}; "
                           "nd.target = ${ipv6}; "
         } in
@@ -6177,7 +6175,7 @@ function is_empty_set_or_string(s: Set<string>): bool = {
 Flow(.logical_datapath = peer.router.lr._uuid,
      .stage            = router_stage(IN, ARP_RESOLVE),
      .priority         = 100,
-     .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
+     .__match          = "outport == ${peer.json_name} && reg0 == ${ip_fmt(virtual_ip)}",
      .actions          = "eth.dst = 00:00:00:00:00:00; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
@@ -6191,7 +6189,7 @@ Flow(.logical_datapath = peer.router.lr._uuid,
 Flow(.logical_datapath = peer.router.lr._uuid,
      .stage            = router_stage(IN, ARP_RESOLVE),
      .priority         = 100,
-     .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
+     .__match          = "outport == ${peer.json_name} && reg0 == ${ip_fmt(virtual_ip)}",
      .actions          = "eth.dst = ${address.ea_s}; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
