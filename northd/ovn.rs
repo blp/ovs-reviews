@@ -586,12 +586,7 @@ impl ipv4_netaddr {
     pub unsafe fn to_ddlog(&self) -> ovn_ipv4_netaddr {
         ovn_ipv4_netaddr{
             addr:       self.addr,
-            mask:       self.mask,
-            network:    self.network,
             plen:       self.plen,
-            addr_s:     cstr2string(&self.addr_s as *const raw::c_char),
-            network_s:  cstr2string(&self.network_s as *const raw::c_char),
-            bcast_s:    cstr2string(&self.bcast_s as *const raw::c_char)
         }
     }
 }

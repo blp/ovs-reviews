@@ -337,7 +337,7 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                                  * will be added separately. */
                                 var is_router_ip = false;
                                 for (ipv4 in rport.networks.ipv4_addrs) {
-                                    if (nat.external_ip == ipv4.addr_s) {
+                                    if (ip_parse(nat.external_ip) == Some{ipv4.addr}) {
                                         is_router_ip = true;
                                         break
                                     }
@@ -386,7 +386,7 @@ function get_garp_nat_addresses(rport: RouterPort): string = {
     var garp_info: Vec<string> = vec_empty();
     vec_push(garp_info, rport.networks.ea_s);
     for (ipv4_addr in rport.networks.ipv4_addrs) {
-        vec_push(garp_info, ipv4_addr.addr_s)
+        vec_push(garp_info, "${ipv4_addr.addr}")
     };
     if (rport.router.redirect_port_name != "") {
         vec_push(garp_info,
@@ -636,7 +636,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
         None -> set_empty(),
         Some{lpaddress} -> match (vec_nth(lpaddress.ipv4_addrs, 0)) {
             None -> set_empty(),
-            Some{addr} -> set_singleton(addr.addr_s)
+            Some{addr} -> set_singleton("${addr.addr}")
         }
     },
     //PortDynamicAddresses(.lsport = port_uuid, .ip4addrs = dynamic),
@@ -2719,14 +2719,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                  * address.  If zero, the host is allowed to use any
                  * address in the subnet.
                  */
-                vec_push(addrs,
-                         if (addr.plen == 32
-                             or not ip_host_is_zero(addr.addr, addr.mask)) {
-                             addr.addr_s
-                         } else {
-                             /* host portion is zero */
-                             "${addr.network_s}/${addr.plen}"
-                         })
+                vec_push(addrs, ipv4_netaddr_match_host_or_network(addr))
             };
             addrs
         } in
@@ -2810,16 +2803,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                 if (not vec_is_empty(ps.ipv4_addrs)) {
                     var spas: Vec<string> = vec_empty();
                     for (addr in ps.ipv4_addrs) {
-                        /* When the netmask is applied, if the host portion is
-                         * non-zero, the host can only use the specified
-                         * address in the arp.spa.  If zero, the host is allowed
-                         * to use any address in the subnet. */
-                        if (addr.plen == 32 or
-                            not ip_host_is_zero(addr.addr, addr.mask)) {
-                            vec_push(spas, addr.addr_s)
-                        } else {
-                            vec_push(spas, "${addr.network_s}/${addr.plen}")
-                        }
+                        vec_push(spas, ipv4_netaddr_match_host_or_network(addr))
                     };
                     prefix ++ " && arp.spa == {${string_join(spas, \", \")}}"
                 } else {
@@ -2929,14 +2913,14 @@ for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = lsp, .sw = &sw, .json_name
         lsp.__type != "external" and lsp.__type != "virtual" and
         not set_contains(lsp.addresses, "unknown"))
 {
-    var __match = "arp.tpa == ${addr.addr_s} && arp.op == 1" in
+    var __match = "arp.tpa == ${addr.addr} && arp.op == 1" in
     var actions = "eth.dst = eth.src; "
                   "eth.src = ${ea_s}; "
                   "arp.op = 2; /* ARP reply */ "
                   "arp.tha = arp.sha; "
                   "arp.sha = ${ea_s}; "
                   "arp.tpa = arp.spa; "
-                  "arp.spa = ${addr.addr_s}; "
+                  "arp.spa = ${addr.addr}; "
                   "outport = inport; "
                   "flags.loopback = 1; "
                   "output;" in
@@ -3562,7 +3546,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
                           "eth.src == ${lp_addr.ea_s} && "
                           "!is_chassis_resident(${sp.json_name}) && "
-                          "arp.tpa == ${rp_addr.addr_s} && arp.op == 1"),
+                          "arp.tpa == ${rp_addr.addr} && arp.op == 1"),
      .actions          = "drop;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
@@ -3657,7 +3641,7 @@ function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = 
     (var all_ips_v4, var all_ips_v6)
         = get_router_load_balancer_ips(deref(rp.router));
     for (a in rp.networks.ipv4_addrs) {
-        set_insert(all_ips_v4, a.addr_s)
+        set_insert(all_ips_v4, "${a.addr}")
     };
     for (a in rp.networks.ipv6_addrs) {
         set_insert(all_ips_v6, a.addr_s)
@@ -3870,14 +3854,10 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
                  * address.  If zero, the host is allowed to use any
                  * address in the subnet.
                  */
-                vec_push(addrs,
-                         if (addr.plen == 32 or not ip_host_is_zero(addr.addr, addr.mask)) {
-                             addr.addr_s ++
-                                if (addr.plen != 32) { ", ${addr.bcast_s}" } else { "" }
-                         } else {
-                             /* host portion is zero */
-                             "${addr.network_s}/${addr.plen}"
-                         })
+                vec_push(addrs, ipv4_netaddr_match_host_or_network(addr));
+                if (addr.plen < 32 and not ip_is_zero(ipv4_netaddr_host(addr))) {
+                    vec_push(addrs, "${ipv4_netaddr_bcast(addr)}")
+                }
             };
             addrs
         } in
@@ -4075,7 +4055,7 @@ Flow(.logical_datapath = router.lr._uuid,
     },
     var has_redirect_port = router.redirect_port_name != "",
     var __match = "inport == ${rp.json_name} && " ++
-                  "arp.spa == ${address.network_s}/${address.plen} && " ++
+                  "arp.spa == ${ipv4_netaddr_match_network(address)} && " ++
                   "arp.op == 1" ++
                   if (is_l3dgw_port and has_redirect_port) {
                       " && is_chassis_resident(${router.redirect_port_name})"
@@ -4171,9 +4151,9 @@ function format_v4_networks(networks: lport_addresses, add_bcast: bool): string 
 {
     var addrs: Vec<string> = vec_empty();
     for (addr in networks.ipv4_addrs) {
-        vec_push(addrs, addr.addr_s);
+        vec_push(addrs, "${addr.addr}");
         if (add_bcast) {
-            vec_push(addrs, addr.bcast_s)
+            vec_push(addrs, "${ipv4_netaddr_bcast(addr)}")
         } else ()
     };
     if (vec_len(addrs) == 64'd1) {
@@ -4303,7 +4283,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
                              "icmp4.type = 11; /* Time exceeded */ "
                              "icmp4.code = 0; /* TTL exceeded in transit */ "
                              "ip4.dst = ip4.src; "
-                             "ip4.src = ${addr.addr_s}; "
+                             "ip4.src = ${addr.addr}; "
                              "ip.ttl = 255; "
                              "next; };",
          .external_ids     = stage_hint(lrp._uuid));
@@ -4312,8 +4292,8 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
      * IP address. */
     for (AddChassisResidentCheck(lrp._uuid, add_chassis_resident_check)) {
         var __match =
-            "inport == ${json_name} && arp.spa == ${addr.network_s}/${addr.plen} "
-            "&& arp.tpa == ${addr.addr_s}"
+            "inport == ${json_name} && arp.spa == ${ipv4_netaddr_match_network(addr)} "
+            "&& arp.tpa == ${addr.addr}"
             " && arp.op == 1" ++
             if (add_chassis_resident_check) {
                 " && is_chassis_resident(${router.redirect_port_name})"
@@ -4325,7 +4305,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
             "arp.tha = arp.sha; "
             "arp.sha = ${networks.ea_s}; "
             "arp.tpa = arp.spa; "
-            "arp.spa = ${addr.addr_s}; "
+            "arp.spa = ${addr.addr}; "
             "outport = ${json_name}; "
             "flags.loopback = 1; "
             "output;" in
@@ -4479,7 +4459,7 @@ for (RouterPortNetworksIPv4Addr(
          .addr = addr))
 {
     /* UDP/TCP port unreachable. */
-    var __match = "ip4 && ip4.dst == ${addr.addr_s} && !ip.later_frag && udp" in
+    var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag && udp" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 80,
@@ -4493,7 +4473,7 @@ for (RouterPortNetworksIPv4Addr(
                              "next; };",
          .external_ids     = stage_hint(lrp._uuid));
 
-    var __match = "ip4 && ip4.dst == ${addr.addr_s} && !ip.later_frag && tcp" in
+    var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag && tcp" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 80,
@@ -4504,7 +4484,7 @@ for (RouterPortNetworksIPv4Addr(
                              "next; };",
          .external_ids     = stage_hint(lrp._uuid));
 
-    var __match = "ip4 && ip4.dst == ${addr.addr_s} && !ip.later_frag" in
+    var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 70,
@@ -4555,7 +4535,7 @@ for (&RouterPort(.lrp = lrp,
         for (ip in networks.ipv4_addrs) {
             /* Packets to SNAT IPs should not be dropped. */
             if (not set_contains(snat_ips, IPv4{ip.addr})) {
-                vec_push(ip4s, ip.addr_s)
+                vec_push(ip4s, "${ip.addr}")
             }
         };
         if (not vec_is_empty(ip4s)) {
@@ -6092,7 +6072,7 @@ for (SwitchPortIPv4Address(
         Flow(.logical_datapath = peer_router.lr._uuid,
              .stage            = router_stage(IN, ARP_RESOLVE),
              .priority         = 100,
-             .__match          = "outport == ${peer.json_name} && reg0 == ${addr.addr_s}",
+             .__match          = "outport == ${peer.json_name} && reg0 == ${addr.addr}",
              .actions          = "eth.dst = ${ea_s}; next;",
              .external_ids     = stage_hint(lsp._uuid))
     }
@@ -6270,7 +6250,7 @@ Flow(.logical_datapath = lr._uuid,
                          "${rEGBIT_EGRESS_LOOPBACK()} = 1; "
                          "eth.dst = ${rp.networks.ea_s}; "
                          "ip4.dst = ip4.src; "
-                         "ip4.src = ${first_ipv4.addr_s}; "
+                         "ip4.src = ${first_ipv4.addr}; "
                          "ip.ttl = 255; "
                          "icmp4.type = 3; /* Destination Unreachable. */ "
                          "icmp4.code = 4; /* Frag Needed and DF was Set. */ "

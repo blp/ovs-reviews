@@ -55,6 +55,10 @@ function ip_bitand(a: in_addr, b: in_addr): in_addr {
     hltoip(iptohl(a) & iptohl(b))
 }
 
+function ip_network(addr: in_addr, mask: in_addr): in_addr {
+    hltoip(iptohl(addr) & iptohl(mask))
+}
+
 function ip_host(addr: in_addr, mask: in_addr): in_addr {
     hltoip(iptohl(addr) & ~iptohl(mask))
 }
@@ -65,6 +69,10 @@ function ip_host_is_zero(addr: in_addr, mask: in_addr): bool {
 
 function ip_is_zero(a: in_addr): bool {
     iptohl(a) == 32'd0
+}
+
+function ip_bcast(addr: in_addr, mask: in_addr): in_addr {
+   hltoip(iptohl(addr) | ~iptohl(mask))
 }
 
 extern function ip_parse(s: string): Option<in_addr>
@@ -209,13 +217,46 @@ function ip46_xxreg(ip46: v46_ip) : string {
 
 typedef ipv4_netaddr = IPV4NetAddr {
     addr: in_addr,             /* 192.168.10.123 */
-    mask: in_addr,             /* 255.255.255.0 */
-    network: in_addr,          /* 192.168.10.0 */
-    plen: bit<32>,             /* CIDR Prefix: 24. */
+    plen: bit<32>              /* CIDR Prefix: 24. */
+}
 
-    addr_s: string,            /* "192.168.10.123" */
-    network_s: string,         /* "192.168.10.0" */
-    bcast_s: string            /* "192.168.10.255" */
+/* Returns the netmask. */
+function ipv4_netaddr_mask(na: ipv4_netaddr): in_addr {
+    ip_create_mask(na.plen)
+}
+
+/* Returns the broadcast address. */
+function ipv4_netaddr_bcast(na: ipv4_netaddr): in_addr {
+    ip_bcast(na.addr, ipv4_netaddr_mask(na))
+}
+
+/* Returns the network (with the host bits zeroed). */
+function ipv4_netaddr_network(na: ipv4_netaddr): in_addr {
+    ip_network(na.addr, ipv4_netaddr_mask(na))
+}
+
+/* Returns the host (with the network bits zeroed). */
+function ipv4_netaddr_host(na: ipv4_netaddr): in_addr {
+    ip_host(na.addr, ipv4_netaddr_mask(na))
+}
+
+/* Match on the host, if the host part is nonzero, or on the network
+ * otherwise. */
+function ipv4_netaddr_match_host_or_network(na: ipv4_netaddr): string {
+    if (na.plen < 32 and ip_is_zero(ipv4_netaddr_host(na))) {
+        "${na.addr}/${na.plen}"
+    } else {
+        "${na.addr}"
+    }
+}
+
+/* Match on the network. */
+function ipv4_netaddr_match_network(na: ipv4_netaddr): string {
+    if (na.plen < 32) {
+        "${ipv4_netaddr_network(na)}/${na.plen}"
+    } else {
+        "${na.addr}"
+    }
 }
 
 typedef ipv6_netaddr = IPV6NetAddr {
@@ -240,7 +281,7 @@ typedef lport_addresses = LPortAddress {
 function lport_addresses2string(addr: lport_addresses): string = {
     var addrs: Vec<string> = vec_singleton(addr.ea_s);
     for (ip4 in addr.ipv4_addrs) {
-        vec_push(addrs, ip4.addr_s)
+        vec_push(addrs, "${ip4.addr}")
     };
 
     for (ip6 in addr.ipv6_addrs) {

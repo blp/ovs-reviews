@@ -484,7 +484,7 @@ function find_lrp_member_ip(networks: lport_addresses, ip: v46_ip): Option<v46_i
     match (ip) {
         IPv4{ip4} -> {
             for (na in networks.ipv4_addrs) {
-                if (ip_same_network((na.network, ip4), na.mask)) {
+                if (ip_same_network((na.addr, ip4), ipv4_netaddr_mask(na))) {
                     /* There should be only 1 interface that matches the
                      * supplied IP.  Otherwise, it's a configuration error,
                      * because subnets of a router's interfaces should NOT
