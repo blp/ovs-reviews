@@ -1735,11 +1735,7 @@ function build_empty_lb_event_flow(key: string, lb: nb.Load_Balancer,
         Some{(ip_address_, port_)} -> {
             __action = __action ++ "load_balancer = \"${__uuid}\", \
                        \vip = \"${ip_address_}";
-            var ipX = match (ip_address_) {
-                IPv4{_} -> "ip4",
-                IPv6{_} -> "ip6"
-            };
-            __match = "${ipX}.dst == ${ip_address_}";
+            __match = "${ip46_ipX(ip_address_)}.dst == ${ip_address_}";
             if (port_ != 0) {
                 __action = __action ++ ":${port_}\");";
                 __match = __match ++ " && ${__proto} && ${__proto}.dst == ${port_}"
@@ -2554,10 +2550,7 @@ function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
                            l4_dir: string, l3_dst: Option<v46_ip>): string = {
     var lbvip = lbvipbackend.lbvip;
     var lb = lbvip.lb;
-    var ipX = match (lbvip.vip_addr) {
-        IPv4{_} -> "ip4",
-        IPv6{_} -> "ip6"
-    };
+    var ipX = ip46_ipX(lbvip.vip_addr);
 
     var __match: Vec<string> = vec_with_capacity(3);
 
@@ -2619,7 +2612,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     set_contains(sw.ls.load_balancer, lb._uuid),
     var __match = get_hairpin_match(lbvipbackend, "src", None),
     var matches = Aggregate((lbvip, lb, sw), group2vec(__match)),
-    var ipX = ipX(lbvip.vip_addr),
+    var ipX = ip46_ipX(lbvip.vip_addr),
     var __match = "(" ++ string_join(matches, " || ") ++ ") && "
                   "${ipX}.dst == ${lbvip.vip_addr}",
     var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat;".
@@ -3512,11 +3505,12 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
      * RFC 4291, section 2.7.1: Skip groups that correspond to all
      * hosts.
      */
-    (var skip_address, var ipX) = match (ip46_parse(address)) {
-        Some{IPv4{ipv4}} -> (ip_is_local_multicast(ipv4), "ip4"),
-        Some{IPv6{ipv6}} -> (ipv6_is_all_hosts(ipv6), "ip6"),
-        _ -> (true, "")
+    Some{var ip} = ip46_parse(address) in
+    (var skip_address) = match (ip) {
+        IPv4{ipv4} -> ip_is_local_multicast(ipv4),
+        IPv6{ipv6} -> ipv6_is_all_hosts(ipv6)
     } in
+    var ipX = ip46_ipX(ip) in
     for (SwitchMcastFloodRelayPorts(&sw, relay_ports) if not skip_address) {
         for (SwitchMcastFloodPorts(&sw, flood_ports)) {
             var flood_relay = not set_is_empty(relay_ports) in
@@ -4821,10 +4815,8 @@ for (&Router(.lr = lr,
 {
     for (LogicalRouterNAT(.lr = lr._uuid, .nat = &nat)) {
         Some{var external_ip} = ip46_parse(nat.external_ip) in
-        (var is_v6, var ipX, var xx) = match (external_ip) {
-            IPv4{_} -> (false, "ip4", ""),
-            IPv6{_} -> (true, "ip6", "xx")
-        } in
+        var ipX = ip46_ipX(external_ip) in
+        var xxreg = ip46_xxreg(external_ip) in
         /* Check the validity of nat->logical_ip. 'logical_ip' can
          * be a subnet when the type is "snat". */
         Some{(_, var mask)} = ip46_parse_masked(nat.logical_ip) in
@@ -4981,7 +4973,7 @@ for (&Router(.lr = lr,
                     };
 
                     var __match = "outport == ${gwport_name} && "
-                                  "${xx}reg0 == ${nat.external_ip}" in
+                                  "${xxreg}reg0 == ${nat.external_ip}" in
                     var dst_mac = match (mac) {
                         Some{value} -> "${value}",
                         None -> gwport.mac
@@ -5174,10 +5166,7 @@ for (&Router(.lr = lr,
         /* If a packet with destination IP address as that of the
          * gateway router (as set in options:dnat_force_snat_ip) is seen,
          * UNSNAT it. */
-        var ipX = match (dnat_force_snat_ip) {
-            IPv4{_} -> "ip4",
-            IPv6{_} -> "ip6"
-        } in
+        var ipX = ip46_ipX(dnat_force_snat_ip) in
         Flow(.logical_datapath = lr._uuid,
              .stage            = router_stage(IN, UNSNAT),
              .priority         = 110,
@@ -5201,10 +5190,7 @@ for (&Router(.lr = lr,
         /* If a packet with destination IP address as that of the
          * gateway router (as set in options:lb_force_snat_ip) is seen,
          * UNSNAT it. */
-        var ipX = match (lb_force_snat_ip) {
-            IPv4{_} -> "ip4",
-            IPv6{_} -> "ip6"
-        } in
+        var ipX = ip46_ipX(lb_force_snat_ip) in
         Flow(.logical_datapath = lr._uuid,
              .stage            = router_stage(IN, UNSNAT),
              .priority         = 100,
@@ -5282,10 +5268,7 @@ for (RouterLBVIP(
 
     /* vip contains IP:port or just IP. */
     Some{(var ip_address, var port)} = ip_address_and_port_from_lb_key(vip) in
-    var ipX = match (ip_address) {
-        IPv4{_} -> "ip4",
-        IPv6{_} -> "ip6"
-    } in
+    var ipX = ip46_ipX(ip_address) in
     var proto = match (lb.protocol) {
         Some{proto} -> proto,
         _ -> "tcp"
@@ -5389,7 +5372,7 @@ for (RouterLBVIP(
             } in
             not vec_is_empty(conds) in
             var undnat_match =
-                "${ipX(ip_address)} && (" ++ string_join(conds, " || ") ++
+                "${ip46_ipX(ip_address)} && (" ++ string_join(conds, " || ") ++
                 ") && outport == ${json_string_escape(gwport.name)} && "
                 "is_chassis_resident(${redirect_port_name})" in
             var action =
@@ -5688,16 +5671,15 @@ Flow(.logical_datapath = r.lr._uuid,
     nat.__type == "dnat_and_snat",
     Some{var external_mac} = nat.external_mac,
     Some{var logical_port} = nat.logical_port,
-    (var ipx, var xx) = match (string_contains(nat.logical_ip, ".")) {
-        true -> ("ip4", ""),
-        false -> ("ip6", "xx")
-    },
-    var __match = "${ipx}.src == ${nat.logical_ip} && "
+    Some{var logical_ip} = ip46_parse(nat.logical_ip),
+    var ipX = ip46_ipX(logical_ip),
+    var xxreg = ip46_xxreg(logical_ip),
+    var __match = "${ipX}.src == ${nat.logical_ip} && "
                   "is_chassis_resident(${json_string_escape(logical_port)})",
     var actions = "outport = ${json_string_escape(l3dgw_port.name)}; "
                   "eth.src = ${external_mac}; "
-                  "${xx}reg0 = ${ipx}.dst; "
-                  "${xx}reg1 = ${nat.external_ip}; "
+                  "${xxreg}0 = ${ipX}.dst; "
+                  "${xxreg}1 = ${nat.external_ip}; "
                   "next;".
 
 /* Proxy table that stores per-port routes.
@@ -5711,10 +5693,7 @@ relation Route(key:         route_key,       // matching criteria
 
 function build_route_match(key: route_key) : (string, bit<32>) =
 {
-    (var ipx) = match (key.ip_prefix) {
-        IPv4{_} -> "ip4",
-        IPv6{_} -> "ip6"
-    };
+    var ipX = ip46_ipX(key.ip_prefix);
 
     (var dir, var priority) = match (key.policy) {
         SrcIp -> ("src", key.plen * 32'd2),
@@ -5722,7 +5701,7 @@ function build_route_match(key: route_key) : (string, bit<32>) =
     };
 
     var network = ip46_get_network(key.ip_prefix, key.plen);
-    var __match = "${ipx}.${dir} == ${network}/${key.plen}";
+    var __match = "${ipX}.${dir} == ${network}/${key.plen}";
 
     (__match, priority)
 }
@@ -5731,10 +5710,8 @@ for (Route(.port        = port,
            .src_ip      = src_ip,
            .gateway     = gateway))
 {
-    (var ipx, var xx) = match (key.ip_prefix) {
-        IPv4{_} -> ("ip4", ""),
-        IPv6{_} -> ("ip6", "xx")
-    } in
+    var ipX = ip46_ipX(key.ip_prefix) in
+    var xxreg = ip46_xxreg(key.ip_prefix) in 
     /* IPv6 link-local addresses must be scoped to the local router port. */
     var inport_match = match (key.ip_prefix) {
         IPv6{prefix} -> if (in6_is_lla(prefix)) {
@@ -5754,13 +5731,13 @@ for (Route(.port        = port,
     var __match = inport_match ++ ip_match in
     var nexthop = match (gateway) {
         Some{gw} -> "${gw}",
-        None     -> "${ipx}.dst"
+        None     -> "${ipX}.dst"
     } in
     var actions =
         "ip.ttl--; "
         "${rEG_ECMP_GROUP_ID()} = 0; "
-        "${xx}reg0 = ${nexthop}; "
-        "${xx}reg1 = ${src_ip}; "
+        "${xxreg}0 = ${nexthop}; "
+        "${xxreg}1 = ${src_ip}; "
         "eth.src = ${port.networks.ea_s}; "
         "outport = ${port.json_name}; "
         "flags.loopback = 1; "
@@ -5868,11 +5845,11 @@ Flow(.logical_datapath = router.lr._uuid,
     EcmpGroup(group_id, router, key, dsts),
     var member_id_and_dst = FlatMap(numbered_vec(dsts)),
     (var member_id, var dst) = member_id_and_dst,
-    var xx = match (dst.nexthop) { IPv4{_} -> "", IPv6{_} -> "xx" },
+    var xxreg = ip46_xxreg(dst.nexthop),
     var __match = "${rEG_ECMP_GROUP_ID()} == ${group_id} && "
                   "${rEG_ECMP_MEMBER_ID()} == ${member_id}",
-    var actions = "${xx}reg0 = ${dst.nexthop}; "
-                  "${xx}reg1 = ${dst.src_ip}; "
+    var actions = "${xxreg}0 = ${dst.nexthop}; "
+                  "${xxreg}1 = ${dst.src_ip}; "
                   "eth.src = ${dst.port.networks.ea_s}; "
                   "outport = ${dst.port.json_name}; "
                   "next;".
@@ -5907,10 +5884,8 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
                 ""
             }
         } in
-        var ipX = match (ipv6_parse(address)) {
-            Some{ipv6} -> "ip6",
-            _ -> "ip4"
-        } in
+        Some{var ip} = ip46_parse(address) in
+        var ipX = ip46_ipX(ip) in
         Flow(.logical_datapath = rtr.lr._uuid,
              .stage            = router_stage(IN, IP_ROUTING),
              .priority         = 500,
@@ -5991,9 +5966,9 @@ Flow(.logical_datapath = r.lr._uuid,
                  " priority %"PRId64" nexthop %s",
                  rule->priority, rule->nexthop);
     */
-    var xx = match (src_ip) { IPv4{_} -> "", IPv6{_} -> "xx" },
-    var actions = ("${xx}reg0 = ${nexthop}; "
-                   "${xx}reg1 = ${src_ip}; "
+    var xxreg = ip46_xxreg(src_ip),
+    var actions = ("${xxreg}0 = ${nexthop}; "
+                   "${xxreg}1 = ${src_ip}; "
                    "eth.src = ${out_port.networks.ea_s}; "
                    "outport = ${out_port.json_name}; "
                    "next;").

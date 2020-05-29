@@ -193,10 +193,17 @@ function ip46_count_cidr_bits(ip46: v46_ip) : Option<bit<8>> {
     }
 }
 
-function ipX(ip46: v46_ip) : string {
+function ip46_ipX(ip46: v46_ip) : string {
     match (ip46) {
         IPv4{_} -> "ip4",
         IPv6{_} -> "ip6"
+    }
+}
+
+function ip46_xxreg(ip46: v46_ip) : string {
+    match (ip46) {
+        IPv4{_} -> "reg",
+        IPv6{_} -> "xxreg"
     }
 }
 
