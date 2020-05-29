@@ -306,14 +306,13 @@ function ipv6_netaddr_match_network(na: ipv6_netaddr): string {
 }
 
 typedef lport_addresses = LPortAddress {
-    ea_s: string,
     ea: eth_addr,
     ipv4_addrs: Vec<ipv4_netaddr>,
     ipv6_addrs: Vec<ipv6_netaddr>
 }
 
 function lport_addresses2string(addr: lport_addresses): string = {
-    var addrs: Vec<string> = vec_singleton(addr.ea_s);
+    var addrs: Vec<string> = vec_singleton("${addr.ea}");
     for (ip4 in addr.ipv4_addrs) {
         vec_push(addrs, "${ip4.addr}")
     };

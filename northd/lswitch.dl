@@ -464,7 +464,7 @@ relation &SwitchPort(
     var ps_eth_addresses = {
         var ps_eth_addresses: Vec<string> = vec_empty();
         for (ps_addr in ps_addresses) {
-            vec_push(ps_eth_addresses, ps_addr.ea_s)
+            vec_push(ps_eth_addresses, "${ps_addr.ea}")
         };
         ps_eth_addresses
     },
@@ -555,20 +555,20 @@ SwitchPortAddresses(port, addrs) :-
 
 /* All static and dynamic IPv4 addresses associated with a port */
 relation SwitchPortIPv4Address(port: Ref<SwitchPort>,
-                               ea_s:   string,
+                               ea:     eth_addr,
                                addr:   ipv4_netaddr)
 
-SwitchPortIPv4Address(port, ea_s, addr) :-
-    SwitchPortAddresses(port, LPortAddress{.ea_s = ea_s, .ipv4_addrs = addrs}),
+SwitchPortIPv4Address(port, ea, addr) :-
+    SwitchPortAddresses(port, LPortAddress{.ea = ea, .ipv4_addrs = addrs}),
     var addr = FlatMap(addrs).
 
 /* All static and dynamic IPv6 addresses associated with a port */
 relation SwitchPortIPv6Address(port:   Ref<SwitchPort>,
-                               ea_s:   string,
+                               ea:     eth_addr,
                                addr:   ipv6_netaddr)
 
-SwitchPortIPv6Address(port, ea_s, addr) :-
-    SwitchPortAddresses(port, LPortAddress{.ea_s = ea_s, .ipv6_addrs = addrs}),
+SwitchPortIPv6Address(port, ea, addr) :-
+    SwitchPortAddresses(port, LPortAddress{.ea = ea, .ipv6_addrs = addrs}),
     var addr = FlatMap(addrs).
 
 /* Service monitoring. */

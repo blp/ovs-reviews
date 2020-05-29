@@ -672,7 +672,6 @@ impl lport_addresses {
             ipv6_addrs.push((&*self.ipv6_addrs.offset(i as isize)).to_ddlog())
         }
         let res = ovn_lport_addresses {
-            ea_s:       cstr2string(&self.ea_s as *const raw::c_char),
             ea:         self.ea.clone(),
             ipv4_addrs: ipv4_addrs,
             ipv6_addrs: ipv6_addrs
