@@ -164,6 +164,14 @@ pub fn ovn_ipv6_bitxor(a: &ovn_in6_addr, b: &ovn_in6_addr) -> ovn_in6_addr {
     }
 }
 
+pub fn ovn_ipv6_bitnot(a: &ovn_in6_addr) -> ovn_in6_addr {
+    let mut result: ovn_in6_addr = Default::default();
+    for i in 0..16 {
+        result.x[i] = !a.x[i]
+    }
+    result
+}
+
 pub fn ovn_ipv6_string_mapped(addr: &ovn_in6_addr) -> String {
     let mut addr_str = [0 as i8; INET6_ADDRSTRLEN];
     unsafe {
@@ -623,13 +631,7 @@ impl ipv6_netaddr {
     pub unsafe fn to_ddlog(&self) -> ovn_ipv6_netaddr {
         ovn_ipv6_netaddr{
             addr:       self.addr.clone(),
-            mask:       self.mask.clone(),
-            sn_addr:    self.sn_addr.clone(),
-            network:    self.network.clone(),
-            plen:       self.plen,
-            addr_s:     cstr2string(&self.addr_s as *const raw::c_char),
-            sn_addr_s:  cstr2string(&self.sn_addr_s as *const raw::c_char),
-            network_s:  cstr2string(&self.network_s as *const raw::c_char)
+            plen:       self.plen
         }
     }
 }

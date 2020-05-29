@@ -112,16 +112,25 @@ extern function ipv6_parse(s: string): Option<in6_addr>
 extern function ipv6_parse_cidr(s: string): Either<string/*err*/, (in6_addr/*ip*/, bit<32>/*plen*/)>
 extern function ipv6_bitxor(a: in6_addr, b: in6_addr): in6_addr
 extern function ipv6_bitand(a: in6_addr, b: in6_addr): in6_addr
+extern function ipv6_bitnot(a: in6_addr): in6_addr
 extern function ipv6_create_mask(mask: bit<32>): in6_addr
 extern function ipv6_is_zero(a: in6_addr): bool
 extern function ipv6_is_v4mapped(a: in6_addr): bool
 extern function ipv6_is_routable_multicast(a: in6_addr): bool
 extern function ipv6_is_all_hosts(a: in6_addr): bool
 
+function ipv6_network(addr: in6_addr, mask: in6_addr): in6_addr {
+    ipv6_bitand(addr, mask)
+}
+
+function ipv6_host(addr: in6_addr, mask: in6_addr): in6_addr {
+    ipv6_bitand(addr, ipv6_bitnot(mask))
+}
+
 /* True if both 'ips' are in the same network as defined by netmask 'mask',
  * false otherwise. */
 function ipv6_same_network(ips: (in6_addr, in6_addr), mask: in6_addr): bool {
-    ipv6_is_zero(ipv6_bitand(ipv6_bitxor(ips.0, ips.1), mask))
+    ipv6_network(ips.0, mask) == ipv6_network(ips.1, mask)
 }
 
 extern function ipv6_host_is_zero(addr: in6_addr, mask: in6_addr): bool
@@ -261,14 +270,39 @@ function ipv4_netaddr_match_network(na: ipv4_netaddr): string {
 
 typedef ipv6_netaddr = IPV6NetAddr {
     addr: in6_addr,          /* fc00::1 */
-    mask: in6_addr,          /* ffff:ffff:ffff:ffff:: */
-    sn_addr: in6_addr,       /* ff02:1:ff00::1 */
-    network: in6_addr,       /* fc00:: */
-    plen: bit<32>,           /* CIDR Prefix: 64 */
+    plen: bit<32>            /* CIDR Prefix: 64 */
+}
 
-    addr_s: string,          /* "fc00::1" */
-    sn_addr_s: string,       /* "ff02:1:ff00::1" */
-    network_s: string        /* "fc00::" */
+/* Returns the netmask. */
+function ipv6_netaddr_mask(na: ipv6_netaddr): in6_addr {
+    ipv6_create_mask(na.plen)
+}
+
+/* Returns the network (with the host bits zeroed). */
+function ipv6_netaddr_network(na: ipv6_netaddr): in6_addr {
+    ipv6_network(na.addr, ipv6_netaddr_mask(na))
+}
+
+/* Returns the host (with the network bits zeroed). */
+function ipv6_netaddr_host(na: ipv6_netaddr): in6_addr {
+    ipv6_host(na.addr, ipv6_netaddr_mask(na))
+}
+
+function ipv6_netaddr_solicited_node(na: ipv6_netaddr): in6_addr {
+    in6_addr_solicited_node(na.addr)
+}
+
+function ipv6_netaddr_is_lla(na: ipv6_netaddr): bool {
+    return in6_is_lla(ipv6_netaddr_network(na))
+}
+
+/* Match on the network. */
+function ipv6_netaddr_match_network(na: ipv6_netaddr): string {
+    if (na.plen < 128) {
+        "${ipv6_netaddr_network(na)}/${na.plen}"
+    } else {
+        "${na.addr}"
+    }
 }
 
 typedef lport_addresses = LPortAddress {
@@ -285,7 +319,7 @@ function lport_addresses2string(addr: lport_addresses): string = {
     };
 
     for (ip6 in addr.ipv6_addrs) {
-        vec_push(addrs, ip6.addr_s)
+        vec_push(addrs, "${ip6.addr}")
     };
 
     string_join(addrs, " ")

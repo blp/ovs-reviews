@@ -344,7 +344,7 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
                                 };
                                 if (not is_router_ip) {
                                     for (ipv6 in rport.networks.ipv6_addrs) {
-                                        if (nat.external_ip == ipv6.addr_s) {
+                                        if (ipv6_parse(nat.external_ip) == Some{ipv6.addr}) {
                                             is_router_ip = true;
                                             break
                                         }
@@ -662,7 +662,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip6addrs)) :-
         None -> set_empty(),
         Some{lpaddress} -> match (vec_nth(lpaddress.ipv6_addrs, 0)) {
             None -> set_empty(),
-            Some{addr} -> set_singleton(addr.addr_s)
+            Some{addr} -> set_singleton("${addr.addr}")
         }
     },
     //PortDynamicAddresses(.lsport = port_uuid, .ip6addrs = dynamic),
@@ -2962,11 +2962,11 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
         (lsp_is_up(lsp) or lsp.__type == "router" or lsp.__type == "localport") and
         lsp.__type != "external" and lsp.__type != "virtual")
 {
-    var __match = "nd_ns && ip6.dst == {${addr.addr_s}, ${addr.sn_addr_s}} && nd.target == ${addr.addr_s}" in
+    var __match = "nd_ns && ip6.dst == {${addr.addr}, ${ipv6_netaddr_solicited_node(addr)}} && nd.target == ${addr.addr}" in
     var actions = "${if (lsp.__type == \"router\") \"nd_na_router\" else \"nd_na\"} { "
                   "eth.src = ${ea_s}; "
-                  "ip6.src = ${addr.addr_s}; "
-                  "nd.target = ${addr.addr_s}; "
+                  "ip6.src = ${addr.addr}; "
+                  "nd.target = ${addr.addr}; "
                   "nd.tll = ${ea_s}; "
                   "outport = inport; "
                   "flags.loopback = 1; "
@@ -3562,8 +3562,8 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
                           "eth.src == ${lp_addr.ea_s} && "
                           "!is_chassis_resident(${sp.json_name}) && "
-                          "nd_ns && ip6.dst == {${rp_addr.addr_s}, ${rp_addr.sn_addr_s}} && "
-                          "nd.target == ${rp_addr.addr_s}"),
+                          "nd_ns && ip6.dst == {${rp_addr.addr}, ${ipv6_netaddr_solicited_node(rp_addr)}} && "
+                          "nd.target == ${rp_addr.addr}"),
      .actions          = "drop;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
@@ -3644,7 +3644,7 @@ function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = 
         set_insert(all_ips_v4, "${a.addr}")
     };
     for (a in rp.networks.ipv6_addrs) {
-        set_insert(all_ips_v6, a.addr_s)
+        set_insert(all_ips_v6, "${a.addr}")
     };
     for (nat in rp.router.nats) {
         if (nat.__type != "snat") {
@@ -4167,10 +4167,10 @@ function format_v6_networks(networks: lport_addresses): string =
 {
     var addrs: Vec<string> = vec_empty();
     for (addr in networks.ipv6_addrs) {
-        vec_push(addrs, addr.addr_s)
+        vec_push(addrs, "${addr.addr}")
     };
     if (vec_len(addrs) == 64'd1) {
-        string_join(addrs , ", ")
+        string_join(addrs, ", ")
     } else {
         "{" ++ string_join(addrs , ", ") ++ "}"
     }
@@ -4549,7 +4549,7 @@ for (&RouterPort(.lrp = lrp,
         for (ip in networks.ipv6_addrs) {
             /* Packets to SNAT IPs should not be dropped. */
             if (not set_contains(snat_ips, IPv6{ip.addr})) {
-                vec_push(ip6s, ip.addr_s)
+                vec_push(ip6s, "${ip.addr}")
             }
         };
         if (not vec_is_empty(ip6s)) {
@@ -4575,7 +4575,7 @@ for (&RouterPort(.lrp = lrp,
 Flow(.logical_datapath = rp.router.lr._uuid,
      .stage            = router_stage(IN, IP_INPUT),
      .priority         = 100,
-     .__match          = "ip6.dst == ${ipv6_addr.addr_s} "
+     .__match          = "ip6.dst == ${ipv6_addr.addr} "
                          "&& udp.src == 547 && udp.dst == 546",
      .actions          = "reg0 = 0; handle_dhcpv6_reply;",
      .external_ids     = stage_hint(rp.lrp._uuid)) :-
@@ -4619,8 +4619,8 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.lrp = lrp,
                                 .addr = addr))
 {
     var __match =
-        "inport == ${json_name} && nd_ns && ip6.dst == {${addr.addr_s}, ${addr.sn_addr_s}} "
-        "&& nd.target == ${addr.addr_s}" ++
+        "inport == ${json_name} && nd_ns && ip6.dst == {${addr.addr}, ${ipv6_netaddr_solicited_node(addr)}} "
+        "&& nd.target == ${addr.addr}" ++
         if (is_redirect) {
             /* Traffic with eth.src = l3dgw_port->lrp_networks.ea_s
              * should only be sent from the "redirect-chassis", so that
@@ -4631,8 +4631,8 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.lrp = lrp,
         } else { "" } in
     var actions = "nd_na_router { "
                   "eth.src = ${networks.ea_s}; "
-                  "ip6.src = ${addr.addr_s}; "
-                  "nd.target = ${addr.addr_s}; "
+                  "ip6.src = ${addr.addr}; "
+                  "nd.target = ${addr.addr}; "
                   "nd.tll = ${networks.ea_s}; "
                   "outport = inport; "
                   "flags.loopback = 1; "
@@ -4655,7 +4655,7 @@ for (RouterPortNetworksIPv6Addr(
                             .json_name = json_name},
         .addr = addr))
 {
-    var __match = "ip6 && ip6.dst == ${addr.addr_s} && !ip.later_frag && tcp" in
+    var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag && tcp" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 80,
@@ -4666,7 +4666,7 @@ for (RouterPortNetworksIPv6Addr(
                              "next; };",
          .external_ids     = stage_hint(lrp._uuid));
 
-    var __match = "ip6 && ip6.dst == ${addr.addr_s} && !ip.later_frag && udp" in
+    var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag && udp" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 80,
@@ -4680,7 +4680,7 @@ for (RouterPortNetworksIPv6Addr(
                              "next; };",
          .external_ids     = stage_hint(lrp._uuid));
 
-    var __match = "ip6 && ip6.dst == ${addr.addr_s} && !ip.later_frag" in
+    var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 70,
@@ -4701,15 +4701,15 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.router = &router,
                                                     .json_name = json_name},
                                 .addr = addr)
      /* skip link-local address */
-     if (not in6_is_lla(addr.network)))
+     if (not ipv6_netaddr_is_lla(addr)))
 {
     var __match = "inport == ${json_name} && ip6 && "
-                  "ip6.src == ${addr.network_s}/${addr.plen} && "
+                  "ip6.src == ${ipv6_netaddr_match_network(addr)} && "
                   "ip.ttl == {0, 1} && !ip.later_frag" in
     var actions = "icmp6 {"
                   "eth.dst <-> eth.src; "
                   "ip6.dst = ip6.src; "
-                  "ip6.src = ${addr.addr_s}; "
+                  "ip6.src = ${addr.addr}; "
                   "ip.ttl = 255; "
                   "icmp6.type = 3; /* Time exceeded */ "
                   "icmp6.code = 0; /* TTL exceeded in transit */ "
@@ -5502,10 +5502,10 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
 
     var prefixes: Vec<string> = vec_empty();
     for (addrs in port.networks.ipv6_addrs) {
-        if (in6_is_lla(addrs.network)) {
-            map_insert(options, "ipv6_ra_src_addr", addrs.addr_s)
+        if (ipv6_netaddr_is_lla(addrs)) {
+            map_insert(options, "ipv6_ra_src_addr", "${addrs.addr}")
         } else {
-            vec_push(prefixes, "${addrs.network_s}/${addrs.plen}")
+            vec_push(prefixes, ipv6_netaddr_match_network(addrs))
         }
     };
     match (map_get(port.sb_options, "ipv6_ra_pd_list")) {
@@ -5569,8 +5569,8 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = None}
                 var add_rs_response_flow = false;
                 var prefix = "";
                 for (addr in networks.ipv6_addrs) {
-                    if (not in6_is_lla(addr.network)) {
-                        prefix = prefix ++ ", prefix = ${addr.network_s}/${addr.plen}";
+                    if (not ipv6_netaddr_is_lla(addr)) {
+                        prefix = prefix ++ ", prefix = ${ipv6_netaddr_match_network(addr)}";
                         add_rs_response_flow = true
                     } else ()
                 };
@@ -6091,7 +6091,7 @@ for (SwitchPortIPv6Address(
         Flow(.logical_datapath = peer_router.lr._uuid,
              .stage            = router_stage(IN, ARP_RESOLVE),
              .priority         = 100,
-             .__match          = "outport == ${peer.json_name} && xxreg0 == ${addr.addr_s}",
+             .__match          = "outport == ${peer.json_name} && xxreg0 == ${addr.addr}",
              .actions          = "eth.dst = ${ea_s}; next;",
              .external_ids     = stage_hint(lsp._uuid))
     }

@@ -496,7 +496,7 @@ function find_lrp_member_ip(networks: lport_addresses, ip: v46_ip): Option<v46_i
         },
         IPv6{ip6} -> {
             for (na in networks.ipv6_addrs) {
-                if (ipv6_same_network((na.network, ip6), na.mask)) {
+                if (ipv6_same_network((na.addr, ip6), ipv6_netaddr_mask(na))) {
                     /* There should be only 1 interface that matches the
                      * supplied IP.  Otherwise, it's a configuration error,
                      * because subnets of a router's interfaces should NOT
