@@ -41,6 +41,9 @@ const INET6_ADDRSTRLEN: usize = 46;
 const INET_ADDRSTRLEN:  usize = 16;
 const ETH_ADDR_STRLEN:  usize = 17;
 
+const AF_INET: usize = 2;
+const AF_INET6: usize = 10;
+
 /* Implementation for externs declared in ovn.dl */
 
 #[repr(C)]
@@ -441,21 +444,26 @@ pub fn ovn_scan_static_dynamic_ip(s: &String) -> std_Option<ovn_in_addr> {
 }
 
 pub fn ovn_ip_address_and_port_from_lb_key(k: &String) ->
-    std_Option<(String, u16, u32)> {
-        unsafe {
+    std_Option<(ovn_v46_ip, u16)>
+{
+    unsafe {
         let mut ip_address: *mut raw::c_char = ptr::null_mut();
         let mut port: libc::uint16_t = 0;
         let mut addr_family: raw::c_int = 0;
 
         ip_address_and_port_from_lb_key(string2cstr(k).as_ptr(), &mut ip_address as *mut *mut raw::c_char,
-                                &mut port as *mut libc::uint16_t, &mut addr_family as *mut raw::c_int);
-        if (ip_address == ptr::null_mut()) {
-            std_Option::std_None
-        } else {
-            let res = (cstr2string(ip_address), port as u16, addr_family as u32);
-            free(ip_address as *mut raw::c_void);
-            std_Option::std_Some{x: res}
+                                        &mut port as *mut libc::uint16_t, &mut addr_family as *mut raw::c_int);
+        if (ip_address != ptr::null_mut()) {
+            match (ovn_ip46_parse(&cstr2string(ip_address))) {
+                std_Option::std_Some{x: ip46} => {
+                    let res = (ip46, port as u16);
+                    free(ip_address as *mut raw::c_void);
+                    return std_Option::std_Some{x: res}
+                },
+                _ => ()
+            }
         }
+        std_Option::std_None
     }
 }
 
@@ -479,7 +487,7 @@ pub fn ovn_str_to_int(s: &String, base: &u16) -> std_Option<u64> {
 pub fn ovn_inet6_ntop(addr: &ovn_in6_addr) -> String {
     let mut buf = [0 as i8; INET6_ADDRSTRLEN];
     unsafe {
-        let res = inet_ntop(ovn_aF_INET6() as raw::c_int, addr as *const ovn_in6_addr as *const raw::c_void,
+        let res = inet_ntop(AF_INET6 as raw::c_int, addr as *const ovn_in6_addr as *const raw::c_void,
                             &mut buf[0] as *mut raw::c_char, INET6_ADDRSTRLEN as libc::socklen_t);
         if res == ptr::null() {
             warn(format!("inet_ntop({:?}) failed", *addr).as_ref());

@@ -212,21 +212,19 @@ SwitchHasLBVIP(sw) :- SwitchLBVIP(.sw = sw).
 relation &LBVIP(
     lb: Ref<nb.Load_Balancer>,
     vip_key: string,
-    vip_addr: string,
+    vip_addr: v46_ip,
     vip_port: bit<16>,
-    addr_family: bit<32>,
     backend_ips: string)
 
 &LBVIP(.lb = lb,
        .vip_key = vip_key,
        .vip_addr = vip_addr,
        .vip_port = vip_port,
-       .addr_family = addr_family,
        .backend_ips = backend_ips) :-
     LoadBalancerRef[lb],
     var vip = FlatMap(lb.vips),
     (var vip_key, var backend_ips) = vip,
-    Some{(var vip_addr, var vip_port, var addr_family)} = ip_address_and_port_from_lb_key(vip_key).
+    Some{(var vip_addr, var vip_port)} = ip_address_and_port_from_lb_key(vip_key).
 
 typedef svc_monitor = SvcMonitor{
     port_name: string,          // Might name a switch or router port.
@@ -235,36 +233,37 @@ typedef svc_monitor = SvcMonitor{
 
 relation &LBVIPBackend(
     lbvip: Ref<LBVIP>,
-    ip: string,
+    ip: v46_ip,
     port: bit<16>,
-    addr_family: bit<32>,
     svc_monitor: Option<svc_monitor>)
 
-function parse_ip_port_mapping(value: Option<string>): Option<svc_monitor> {
-    var strs: Vec<string> = match (value) {
-        Some{s} -> string_split(s, ":"),
-        None -> return None
-    };
+function parse_ip_port_mapping(mappings: Map<string,string>, ip: v46_ip)
+    : Option<svc_monitor> {
+    for (kv in mappings) {
+        (var key, var value) = kv;
+        if (ip46_parse(key) == Some{ip}) {
+            var strs = string_split(value, ":");
+            if (vec_len(strs) != 64'd2) {
+                return None
+            };
 
-    if (vec_len(strs) != 64'd2) {
-        return None
+            return match ((vec_nth(strs, 0), vec_nth(strs, 1))) {
+                (Some{port_name}, Some{src_ip}) -> Some{SvcMonitor{port_name, src_ip}},
+                _ -> None
+            }
+        }
     };
-
-    match ((vec_nth(strs, 0), vec_nth(strs, 1))) {
-        (Some{port_name}, Some{src_ip}) -> Some{SvcMonitor{port_name, src_ip}},
-        _ -> None
-    }
+    return None
 }
 
 &LBVIPBackend(.lbvip = lbvip,
               .ip = ip,
               .port = port,
-              .addr_family = addr_family,
               .svc_monitor = svc_monitor) :-
     LBVIP[lbvip],
     var backend = FlatMap(string_split(lbvip.backend_ips, ",")),
-    Some{(var ip, var port, var addr_family)} = ip_address_and_port_from_lb_key(backend),
-    (var svc_monitor) = parse_ip_port_mapping(map_get(lbvip.lb.ip_port_mappings, ip)).
+    Some{(var ip, var port)} = ip_address_and_port_from_lb_key(backend),
+    (var svc_monitor) = parse_ip_port_mapping(lbvip.lb.ip_port_mappings, ip).
 
 function is_online(status: Option<string>): bool = {
     match (status) {
@@ -280,14 +279,14 @@ function default_protocol(protocol: Option<string>): string = {
 }
 relation &LBVIPBackendStatus(
     port: bit<16>,
-    ip: string,
+    ip: v46_ip,
     protocol: string,
     logical_port: string,
     up: bool)
 &LBVIPBackendStatus(port, ip, protocol, logical_port, up) :-
     sm in sb.Service_Monitor(),
     var port = sm.port as bit<16>,
-    var ip = sm.ip,
+    Some{var ip} = ip46_parse(sm.ip),
     var protocol = default_protocol(sm.protocol),
     var logical_port = sm.logical_port,
     var up = is_online(sm.status).
@@ -299,7 +298,7 @@ relation &LBVIPBackendStatus(
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
     var logical_port = svc_monitor.port_name,
     not sb.Service_Monitor(.port = port as bit<64>,
-                           .ip = ip,
+                           .ip = "${ip}",
                            .protocol = Some{protocol},
                            .logical_port = logical_port).
 

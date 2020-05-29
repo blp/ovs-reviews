@@ -283,12 +283,8 @@ function get_router_load_balancer_ips(router: Router) :
             /* node->key contains IP:port or just IP. */
             match (ip_address_and_port_from_lb_key(vip)) {
                 None -> (),
-                Some{(ip_address, _, addr_family)}
-                    -> if (addr_family == aF_INET()) {
-                           set_insert(all_ips_v4, ip_address)
-                       } else {
-                           set_insert(all_ips_v6, ip_address)
-                       }
+                Some{(IPv4{ipv4}, _)} -> set_insert(all_ips_v4, "${ipv4}"),
+                Some{(IPv6{ipv6}, _)} -> set_insert(all_ips_v6, "${ipv6}")
             }
         }
     };
@@ -1736,14 +1732,14 @@ function build_empty_lb_event_flow(key: string, lb: nb.Load_Balancer,
     var __match = "";
 
     match (ip_address_and_port_from_lb_key(key)) {
-        Some{(ip_address_, port_, addr_family_)} -> {
+        Some{(ip_address_, port_)} -> {
             __action = __action ++ "load_balancer = \"${__uuid}\", \
                        \vip = \"${ip_address_}";
-            if (addr_family_ == aF_INET()) {
-                __match = "ip4.dst == ${ip_address_}"
-            } else {
-                __match = "ip6.dst == ${ip_address_}"
+            var ipX = match (ip_address_) {
+                IPv4{_} -> "ip4",
+                IPv6{_} -> "ip6"
             };
+            __match = "${ipX}.dst == ${ip_address_}";
             if (port_ != 0) {
                 __action = __action ++ ":${port_}\");";
                 __match = __match ++ " && ${__proto} && ${__proto}.dst == ${port_}"
@@ -1779,21 +1775,16 @@ Flow(.logical_datapath = sw.ls._uuid,
 /* 'REGBIT_CONNTRACK_DEFRAG' is set to let the pre-stateful table send
  * packet to conntrack for defragmentation. */
 
-function make_ip_dst_match(ip_address: string, addr_family: bit<32>): string = {
-    if (addr_family == aF_INET()) {
-        "ip4.dst == ${ip_address}"
-    } else {
-        "ip6.dst == ${ip_address}"
-    }
-}
-
 for (SwitchLBVIP(.sw = &sw, .lb = lb, .vip = vip)) {
     /* Ignore L4 port information in the key because fragmented packets
      * may not have L4 information.  The pre-stateful table will send
      * the packet through ct() action to de-fragment. In stateful
      * table, we will eventually look at L4 information. */
-    Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
-    var ip_dst_match = make_ip_dst_match(ip_address, addr_family) in
+    Some{(var ip_address, _)} = ip_address_and_port_from_lb_key(vip) in
+    var ip_dst_match = match (ip_address) {
+        IPv4{ipv4} -> "ip4.dst == ${ipv4}",
+        IPv6{ipv6} -> "ip6.dst == ${ipv6}"
+    } in
     Flow(.logical_datapath = sw.ls._uuid,
          .stage            = switch_stage(IN, PRE_LB),
          .priority         = 100,
@@ -2472,9 +2463,8 @@ for (&Switch(.ls = ls)) {
  * a higher priority rule for load balancing below also commits the
  * connection, so it is okay if we do not hit the above match on
  * REGBIT_CONNTRACK_COMMIT. */
-function get_match_for_lb_key(ip_address: string,
+function get_match_for_lb_key(ip_address: v46_ip,
                               port: bit<16>,
-                              addr_family: bit<32>,
                               protocol: Option<string>,
                               redundancy: bool): string = {
     var port_match = if (port != 0) {
@@ -2489,8 +2479,10 @@ function get_match_for_lb_key(ip_address: string,
         ""
     };
 
-    var ipX = if (addr_family == aF_INET()) { "ip4" } else { "ip6" };
-    var ip_match = "${ipX}.dst == ${ip_address}";
+    var ip_match = match (ip_address) {
+        IPv4{ipv4} -> "ip4.dst == ${ipv4}",
+        IPv6{ipv6} -> "ip6.dst == ${ipv6}"
+    };
 
     if (redundancy) { "ip && " } else { "" } ++ ip_match ++ port_match
 }
@@ -2521,7 +2513,7 @@ Flow(.logical_datapath = sw.ls._uuid,
                               .protocol = default_protocol(lb.protocol),
                               .logical_port = svc_monitor.port_name),
     var bses = Aggregate((sw, lbvip, lb), group2set(bs)),
-    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, false),
+    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
     var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
     var up_backends = {
         var up_backends: Set<string> = set_empty();
@@ -2549,7 +2541,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     var lbvip = lbvipbackend.lbvip,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
-    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, false),
+    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
     var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
     var actions = ct_lb(lbvip.backend_ips, lb.selection_fields).
 
@@ -2559,13 +2551,12 @@ Flow(.logical_datapath = sw.ls._uuid,
  */
 
 function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
-                           l4_dir: string, l3_dst: Option<string>): string = {
+                           l4_dir: string, l3_dst: Option<v46_ip>): string = {
     var lbvip = lbvipbackend.lbvip;
     var lb = lbvip.lb;
-    var ipX = if (lbvip.addr_family == aF_INET()) {
-        "ip4"
-    } else {
-        "ip6"
+    var ipX = match (lbvip.vip_addr) {
+        IPv4{_} -> "ip4",
+        IPv6{_} -> "ip6"
     };
 
     var __match: Vec<string> = vec_with_capacity(3);
@@ -2628,7 +2619,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     set_contains(sw.ls.load_balancer, lb._uuid),
     var __match = get_hairpin_match(lbvipbackend, "src", None),
     var matches = Aggregate((lbvip, lb, sw), group2vec(__match)),
-    var ipX = if (lbvip.addr_family == aF_INET()) { "ip4" } else { "ip6" },
+    var ipX = ipX(lbvip.vip_addr),
     var __match = "(" ++ string_join(matches, " || ") ++ ") && "
                   "${ipX}.dst == ${lbvip.vip_addr}",
     var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat;".
@@ -4360,38 +4351,38 @@ for (&RouterPort(.lrp = lrp,
                  .is_redirect = is_redirect))
 {
     for (RouterLBVIP(.router = &Router{.lr = nb.Logical_Router{._uuid= lr._uuid}}, .vip = vip)) {
-        Some{(var ip_address, _, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
-        var __match = if (addr_family == aF_INET()) {
-               "inport == ${json_name} && arp.tpa == ${ip_address} && arp.op == 1"
-            } else {
-               "inport == ${json_name} && nd_ns && nd.target == ${ip_address}"
+        Some{(var ip_address, _)} = ip_address_and_port_from_lb_key(vip) in
+        var __match =
+            "inport == ${json_name} && " ++
+            match (ip_address) {
+                IPv4{ipv4} -> "arp.tpa == ${ipv4} && arp.op == 1",
+                IPv6{ipv6} -> "nd_ns && nd.target == ${ipv6}"
             } ++
             if (is_redirect) {
                 " && is_chassis_resident(${router.redirect_port_name})"
             } else {
                 ""
             } in
-        var actions = if (addr_family == aF_INET()) {
-            "eth.dst = eth.src; "
-            "eth.src = ${networks.ea_s}; "
-            "arp.op = 2; /* ARP reply */ "
-            "arp.tha = arp.sha; "
-            "arp.sha = ${networks.ea_s}; "
-            "arp.tpa = arp.spa; "
-            "arp.spa = ${ip_address}; "
-            "outport = ${json_name}; "
-            "flags.loopback = 1; "
-            "output;"
-        } else {
-            "nd_na { "
-            "eth.src = ${networks.ea_s}; "
-            "ip6.src = ${ip_address}; "
-            "nd.target = ${ip_address}; "
-            "nd.tll = ${networks.ea_s}; "
-            "outport = inport; "
-            "flags.loopback = 1; "
-            "output; "
-            "};"
+        var actions = match (ip_address) {
+            IPv4{ipv4} -> "eth.dst = eth.src; "
+                          "eth.src = ${networks.ea_s}; "
+                          "arp.op = 2; /* ARP reply */ "
+                          "arp.tha = arp.sha; "
+                          "arp.sha = ${networks.ea_s}; "
+                          "arp.tpa = arp.spa; "
+                          "arp.spa = ${ipv4}; "
+                          "outport = ${json_name}; "
+                          "flags.loopback = 1; "
+                          "output;",
+            IPv6{ipv6} -> "nd_na { "
+                          "eth.src = ${networks.ea_s}; "
+                          "ip6.src = ${ipv6}; "
+                          "nd.target = ${ipv6}; "
+                          "nd.tll = ${networks.ea_s}; "
+                          "outport = inport; "
+                          "flags.loopback = 1; "
+                          "output; "
+                          "};"
         } in
         Flow(.logical_datapath = lr._uuid,
              .stage            = router_stage(IN, IP_INPUT),
@@ -5250,9 +5241,9 @@ for (&Router(.lr = lr,
     }
 }
 
-function nats_contain_vip(nats: Vec<Ref<nb.NAT>>, vip: string): bool {
+function nats_contain_vip(nats: Vec<Ref<nb.NAT>>, vip: v46_ip): bool {
     for (nat in nats) {
-        if (nat.external_ip == vip) {
+        if (ip46_parse(nat.external_ip) == Some{vip}) {
             return true
         }
     };
@@ -5290,11 +5281,10 @@ for (RouterLBVIP(
     /* A set to hold all ips that need defragmentation and tracking. */
 
     /* vip contains IP:port or just IP. */
-    Some{(var ip_address, var port, var addr_family)} = ip_address_and_port_from_lb_key(vip) in
-    var ipX = if (addr_family == aF_INET()) {
-        "ip4"
-    } else {
-        "ip6"
+    Some{(var ip_address, var port)} = ip_address_and_port_from_lb_key(vip) in
+    var ipX = match (ip_address) {
+        IPv4{_} -> "ip4",
+        IPv6{_} -> "ip6"
     } in
     var proto = match (lb.protocol) {
         Some{proto} -> proto,
@@ -5386,7 +5376,7 @@ for (RouterLBVIP(
                 for (ip_str in string_split(backends, ",")) {
                     match (ip_address_and_port_from_lb_key(ip_str)) {
                         None -> () /* FIXME: put a break here */,
-                        Some{(ip_address_, port_, addr_family_)} -> vec_push(conds,
+                        Some{(ip_address_, port_)} -> vec_push(conds,
                             "(${ipX}.src == ${ip_address_}" ++
                             if (port_ != 0) {
                                 " && ${proto}.src == ${port_})"
@@ -5399,8 +5389,7 @@ for (RouterLBVIP(
             } in
             not vec_is_empty(conds) in
             var undnat_match =
-                if (addr_family == aF_INET()) { "ip4 && (" } else { "ip6 && (" }    ++
-                string_join(conds, " || ")                                          ++
+                "${ipX(ip_address)} && (" ++ string_join(conds, " || ") ++
                 ") && outport == ${json_string_escape(gwport.name)} && "
                 "is_chassis_resident(${redirect_port_name})" in
             var action =
@@ -5443,7 +5432,7 @@ Flow(.logical_datapath = r.lr._uuid,
     var bses = Aggregate((r, lbvip, lb), group2set(bs)),
     var __match
         = "ct.new && " ++
-          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, true) ++
+          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true) ++
           match (r.l3dgw_port) {
               Some{gwport} -> " && is_chassis_resident(${r.redirect_port_name})",
               _ -> ""
@@ -5481,7 +5470,7 @@ Flow(.logical_datapath = r.lr._uuid,
     set_contains(r.lr.load_balancer, lb._uuid),
     var __match
         = "ct.new && " ++
-          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lbvip.addr_family, lb.protocol, true) ++
+          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true) ++
           match (r.l3dgw_port) {
               Some{gwport} -> " && is_chassis_resident(${r.redirect_port_name})",
               _ -> ""
@@ -6871,7 +6860,7 @@ PortExists(name) :- nb.Logical_Switch_Port(.name = name).
 PortExists(name) :- nb.Logical_Router_Port(.name = name).
 
 sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip, lbvipbackend.port, protocol)),
-                       .ip = lbvipbackend.ip,
+                       .ip = "${lbvipbackend.ip}",
                        .protocol = Some{protocol},
                        .port = lbvipbackend.port as integer,
                        .logical_port = svc_monitor.port_name,

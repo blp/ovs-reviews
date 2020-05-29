@@ -193,6 +193,13 @@ function ip46_count_cidr_bits(ip46: v46_ip) : Option<bit<8>> {
     }
 }
 
+function ipX(ip46: v46_ip) : string {
+    match (ip46) {
+        IPv4{_} -> "ip4",
+        IPv6{_} -> "ip6"
+    }
+}
+
 typedef ipv4_netaddr = IPV4NetAddr {
     addr: in_addr,             /* 192.168.10.123 */
     mask: in_addr,             /* 255.255.255.0 */
@@ -236,10 +243,6 @@ function lport_addresses2string(addr: lport_addresses): string = {
     string_join(addrs, " ")
 }
 
-/* Standard libc address family values */
-function aF_INET(): bit<32> = 2
-function aF_INET6(): bit<32> = 10
-
 /*
  * Logging
  */
@@ -266,7 +269,7 @@ extern function json_string_escape(s: string): string
 extern function count_1bits(x: bit<64>): bit<8>
 
 /* For a 'key' of the form "IP:port" or just "IP", returns
- * (IP address, port, address family) tuple. */
-extern function ip_address_and_port_from_lb_key(k: string): Option<(string, bit<16>, bit<32>)>
+ * (v46_ip, port) tuple. */
+extern function ip_address_and_port_from_lb_key(k: string): Option<(v46_ip, bit<16>)>
 
 extern function str_to_int(s: string, base: bit<16>): Option<integer>
