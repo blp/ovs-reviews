@@ -421,6 +421,7 @@ enum nx_continuation_prop_type {
     NXCPT_ACTIONS,
     NXCPT_ACTION_SET,
     NXCPT_ODP_PORT,
+    NXCPT_ELMO,
 };
 
 /* Only NXT_PACKET_IN2 (not NXT_RESUME) should include NXCPT_USERDATA, so this
@@ -509,6 +510,11 @@ ofputil_put_packet_in_private(const struct ofputil_packet_in_private *pin,
 
     if (pin->odp_port) {
         ofpprop_put_u32(msg, NXCPT_ODP_PORT, odp_to_u32(pin->odp_port));
+    }
+
+    if (pin->elmo) {
+        put_actions_property(msg, NXCPT_ELMO, version,
+                             &pin->elmo->ofpact, pin->elmo->ofpact.len);
     }
 
     if (msg->size > inner_ofs) {
@@ -794,6 +800,39 @@ parse_actions_property(struct ofpbuf *property, enum ofp_version version,
                                          version, NULL, NULL, ofpacts);
 }
 
+static enum ofperr
+parse_elmo_property(struct ofpbuf *property, enum ofp_version version,
+                    struct ofpact_push_elmo **elmop)
+{
+    struct ofpbuf elmo_buf;
+    ofpbuf_init(&elmo_buf, 0);
+
+    enum ofperr error = parse_actions_property(property, version, &elmo_buf);
+    if (error) {
+        goto exit;
+    }
+
+    if (!elmo_buf.size) {
+        VLOG_WARN_RL(&rl, "elmo property is empty");
+        error = OFPERR_OFPBPC_BAD_LEN;
+        goto exit;
+    }
+
+    struct ofpact *ofpact = elmo_buf.data;
+    if (ofpact->type != OFPACT_PUSH_ELMO) {
+        VLOG_WARN_RL(&rl, "elmo property does not contain push_elmo action");
+        error = OFPERR_OFPBPC_BAD_VALUE;
+        goto exit;
+    }
+
+    free(*elmop);
+    *elmop = ofpbuf_steal_data(&elmo_buf);
+
+exit:
+    ofpbuf_uninit(&elmo_buf);
+    return error;
+}
+
 /* This is like ofputil_decode_packet_in(), except that it decodes the
  * continuation data into 'pin'.  The format of this data is supposed to be
  * opaque to any process other than ovs-vswitchd, so this function should not
@@ -886,6 +925,10 @@ ofputil_decode_packet_in_private(const struct ofp_header *oh, bool loose,
             pin->odp_port = u32_to_odp(value);
             break;
          }
+
+        case NXCPT_ELMO:
+            error = parse_elmo_property(&payload, oh->version, &pin->elmo);
+            break;
 
         default:
             error = OFPPROP_UNKNOWN(loose, "continuation", type);
@@ -1024,6 +1067,12 @@ ofputil_packet_in_private_format(struct ds *s,
 
     if (pin->odp_port) {
         ds_put_format(s, " continuation.odp_port=%"PRIu32, pin->odp_port);
+        ds_put_char(s, '\n');
+    }
+
+    if (pin->elmo) {
+        ds_put_cstr(s, " continuation.elmo=");
+        ofpacts_format(&pin->elmo->ofpact, pin->elmo->ofpact.len, &fp);
         ds_put_char(s, '\n');
     }
 

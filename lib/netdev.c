@@ -927,13 +927,18 @@ netdev_init_tnl_build_header_params(struct netdev_tnl_build_header_params *param
                                     const struct flow *tnl_flow,
                                     const struct in6_addr *src,
                                     struct eth_addr dmac,
-                                    struct eth_addr smac)
+                                    struct eth_addr smac,
+                                    uint8_t elmo_gpe_next_type,
+                                    const uint8_t *elmo_data, size_t elmo_len)
 {
     params->flow = tnl_flow;
     params->dmac = dmac;
     params->smac = smac;
     params->s_ip = src;
     params->is_ipv6 = !IN6_IS_ADDR_V4MAPPED(src);
+    params->elmo_gpe_next_type = elmo_gpe_next_type;
+    params->elmo_data = elmo_data;
+    params->elmo_len = elmo_len;
 }
 
 int netdev_build_header(const struct netdev *netdev,

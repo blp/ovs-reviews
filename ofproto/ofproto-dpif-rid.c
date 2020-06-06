@@ -135,6 +135,10 @@ frozen_state_hash(const struct frozen_state *state)
         hash = hash_bytes(state->stack, state->stack_size, hash);
     }
     hash = hash_int(state->mirrors, hash);
+    if (state->elmo) {
+        hash = hash_bytes64(ALIGNED_CAST(const uint64_t *, state->elmo),
+                            state->elmo->ofpact.len, hash);
+    }
     if (state->action_set_len) {
         hash = hash_bytes64(ALIGNED_CAST(const uint64_t *, state->action_set),
                             state->action_set_len, hash);
@@ -160,6 +164,8 @@ frozen_state_equal(const struct frozen_state *a, const struct frozen_state *b)
             && a->mirrors == b->mirrors
             && a->conntracked == b->conntracked
             && a->was_mpls == b->was_mpls
+            && ofpact_equal((const struct ofpact *) a->elmo,
+                            (const struct ofpact *) b->elmo)
             && ofpacts_equal(a->ofpacts, a->ofpacts_len,
                              b->ofpacts, b->ofpacts_len)
             && ofpacts_equal(a->action_set, a->action_set_len,
@@ -204,6 +210,7 @@ frozen_state_clone(struct frozen_state *new, const struct frozen_state *old)
     new->stack = (new->stack_size
                   ? xmemdup(new->stack, new->stack_size)
                   : NULL);
+    new->elmo = new->elmo ? xmemdup(new->elmo, new->elmo->ofpact.len) : NULL;
     new->ofpacts = (new->ofpacts_len
                     ? xmemdup(new->ofpacts, new->ofpacts_len)
                     : NULL);
@@ -219,6 +226,7 @@ static void
 frozen_state_free(struct frozen_state *state)
 {
     free(state->stack);
+    free(state->elmo);
     free(state->ofpacts);
     free(state->action_set);
     free(state->userdata);

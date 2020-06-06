@@ -1063,5 +1063,14 @@ struct nx_zone_id {
     ovs_be16 zone_id;           /* Connection tracking zone. */
 };
 OFP_ASSERT(sizeof(struct nx_zone_id) == 8);
+
+enum {
+    NXHTN_OPENVSWITCH = 0x2320, /* ns_type is one of NXPT_*. */
+};
+
+enum {
+    NXPT_ELMO_UPSTREAM = 1,
+    NXPT_ELMO_DOWNSTREAM = 2
+};
 
 #endif /* openflow/nicira-ext.h */

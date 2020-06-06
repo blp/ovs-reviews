@@ -364,6 +364,12 @@ enum ofp_raw_action_type {
     /* NX1.0+(50): struct nx_action_delete_field. VLMFF */
     NXAST_RAW_DELETE_FIELD,
 
+    /* NX1.0+(252): struct nx_action_push_elmo, ... */
+    NXAST_RAW_PUSH_ELMO,
+
+    /* NX1.0+(253): void. */
+    NXAST_RAW_POP_ELMO,
+
 /* ## ------------------ ## */
 /* ## Debugging actions. ## */
 /* ## ------------------ ## */
@@ -504,6 +510,8 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
     case OFPACT_DELETE_FIELD:
+    case OFPACT_PUSH_ELMO:
+    case OFPACT_POP_ELMO:
         return ofpact_next(ofpact);
 
     case OFPACT_CLONE:
@@ -4787,6 +4795,347 @@ check_DEC_NSH_TTL(const struct ofpact_null *a OVS_UNUSED,
     return 0;
 }
 
+struct nx_action_push_elmo {
+    ovs_be16 type;         /* OFPAT_VENDOR. */
+    ovs_be16 len;          /* Total size including any property TLVs. */
+    ovs_be32 vendor;       /* NX_VENDOR_ID. */
+    ovs_be16 subtype;      /* NXAST_PUSH_ELMO. */
+    uint8_t n_up;
+    uint8_t n_down;
+    uint8_t pad[4];
+    /* Followed by ofpact_elmo_header_len(n_up, n_down) bytes:
+     * - 4-byte upstream header, if n_up > 0.
+     * - n_up * 4 bytes of upstream bitmaps.
+     * - 4-byte downstream header, if n_down > 0.
+     * - n_down * 8 bytes of downstream p-rules.
+     */
+};
+OFP_ASSERT(sizeof(struct nx_action_push_elmo) == 16);
+
+const struct elmo_upstream_header *
+ofpact_push_elmo_get_upstream(const struct ofpact_push_elmo *pe)
+{
+    return (pe->n_up
+            ? ALIGNED_CAST(const struct elmo_upstream_header *, pe->header)
+            : NULL);
+}
+
+const struct elmo_downstream_header *
+ofpact_push_elmo_get_downstream(const struct ofpact_push_elmo *pe)
+{
+    if (!pe->n_down) {
+        return NULL;
+    }
+
+    const uint8_t *p = (const void *) pe->header;
+    if (pe->n_up) {
+        p += elmo_upstream_header_len(pe->n_up);
+    }
+    return ALIGNED_CAST(const struct elmo_downstream_header *, p);
+}
+
+static enum ofperr
+decode_NXAST_RAW_PUSH_ELMO(const struct nx_action_push_elmo *nape,
+                           enum ofp_version ofp_version OVS_UNUSED,
+                           struct ofpbuf *ofpacts)
+{
+    /* Check header length. */
+    size_t header_len = elmo_header_len(nape->n_up, nape->n_down);
+    if (ntohs(nape->len) != ROUND_UP(sizeof *nape + header_len, 8)) {
+        return OFPERR_OFPBAC_BAD_LEN;
+    }
+    if (!is_all_zeros(nape->pad, sizeof nape->pad)) {
+        return OFPERR_NXBAC_MUST_BE_ZERO;
+    }
+
+    /* At least an upstream or downstream header must be present. */
+    if (!nape->n_up && !nape->n_down) {
+        return OFPERR_OFPBAC_BAD_ARGUMENT;
+    }
+
+    /* Check upstream header, if present, is valid. */
+    if (nape->n_up) {
+        const struct elmo_upstream_header *euh = (const void *) (nape + 1);
+        if (nape->n_up != euh->num_of_up_rules
+            || euh->next_proto != (nape->n_down
+                                   ? ELMO_UPSTREAM_NP_DP
+                                   : ELMO_UPSTREAM_NP_ETHER)) {
+            return OFPERR_OFPBAC_BAD_ARGUMENT;
+        }
+    }
+
+    /* Check downstream header, if present, is valid. */
+    if (nape->n_down) {
+        const struct elmo_downstream_header *edh
+            = (const void *) ((const uint8_t *) (nape + 1)
+                              + elmo_upstream_header_len(nape->n_up));
+        if (nape->n_down != edh->num_of_p_rules
+            || edh->next_proto != ELMO_DOWNSTREAM_NP_ETHER) {
+            return OFPERR_OFPBAC_BAD_ARGUMENT;
+        }
+    }
+
+    struct ofpact_push_elmo *pe = ofpact_put_PUSH_ELMO(ofpacts);
+    ofpbuf_put(ofpacts, nape + 1, elmo_header_len(nape->n_up, nape->n_down));
+    pe = ofpacts->header;
+    pe->n_up = nape->n_up;
+    pe->n_down = nape->n_down;
+    ofpact_finish_PUSH_ELMO(ofpacts, &pe);
+
+    return 0;
+}
+
+static void
+encode_PUSH_ELMO(const struct ofpact_push_elmo *pe,
+                 enum ofp_version ofp_version OVS_UNUSED,
+                 struct ofpbuf *out)
+{
+    size_t start_ofs = out->size;
+    struct nx_action_push_elmo *nape = put_NXAST_PUSH_ELMO(out);
+    nape->n_up = pe->n_up;
+    nape->n_down = pe->n_down;
+    ofpbuf_put(out, pe->header, elmo_header_len(pe->n_up, pe->n_down));
+    pad_ofpat(out, start_ofs);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_elmo_upstream(char *arg, struct ofpact_push_elmo *pe,
+                    struct ofpbuf *ofpacts)
+{
+    struct elmo_upstream_header *euh = ofpbuf_put_zeros(ofpacts, sizeof *euh);
+    euh->next_proto = ELMO_UPSTREAM_NP_ETHER;
+
+    char *key, *value;
+    while (ofputil_parse_key_value(&arg, &key, &value)) {
+        if (!strcmp(key, "left")) {
+            char *error = str_to_u8(value, "left", &euh->ups_left);
+            if (error) {
+                return error;
+            }
+        } else if (!strcmp(key, "multicast")) {
+            euh->multicast = 1;
+        } else if (!strcmp(key, "bm")) {
+            if (euh->num_of_up_rules++ == 255) {
+                return xstrdup("too many upstream rules");
+            }
+
+            int n = 0;
+            int up_bm, down_bm;
+            if (!ovs_scan_len(value, &n, "%i , %i ", &up_bm, &down_bm)
+                || value[n] != '\0') {
+                return xasprintf("%s: bad elmo upstream bitmap syntax", value);
+            }
+
+            struct elmo_upstream_rule upr = { htons(up_bm), htons(down_bm) };
+            ofpbuf_put(ofpacts, &upr, sizeof upr);
+        } else {
+            return xasprintf("%s: unknown elmo upstream field", key);
+        }
+    }
+
+    if (euh->num_of_up_rules == 0) {
+        return xstrdup("elmo upstream header requires at least one bitmap");
+    }
+    pe->n_up = euh->num_of_up_rules;
+
+    if (euh->ups_left > euh->num_of_up_rules) {
+        return xasprintf("can't have more ups left (%"PRIu8") than present "
+                         "(%"PRIu8")", euh->ups_left, euh->num_of_up_rules);
+    }
+
+    return NULL;
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_elmo_downstream(char *arg, struct ofpact_push_elmo *pe,
+                      struct ofpbuf *ofpacts)
+{
+    if (pe->n_up) {
+        struct elmo_upstream_header *euh = (void *) pe->header;
+        euh->next_proto = ELMO_UPSTREAM_NP_DP;
+    }
+
+    struct elmo_downstream_header *edh = ofpbuf_put_zeros(ofpacts, sizeof *edh);
+    edh->next_proto = ELMO_DOWNSTREAM_NP_ETHER;
+
+    char *key, *value;
+    while (ofputil_parse_key_value(&arg, &key, &value)) {
+        if (!strcmp(key, "p")) {
+            if (edh->num_of_p_rules++ == 255) {
+                return xstrdup("too many downstream p-rules");
+            }
+
+            int n = 0;
+            int switch_id, bitmap;
+            if (!ovs_scan_len(value, &n, "%i , %i ", &switch_id, &bitmap)
+                || value[n] != '\0') {
+                return xasprintf("%s: bad elmo downstream p-rule syntax",
+                                 value);
+            }
+
+            if (switch_id >= (1u << 24)) {
+                return xasprintf("bad downstream switch ID %d", switch_id);
+            }
+
+            struct {
+                ovs_be32 switch_id;
+                ovs_be32 bitmap;
+            } p_rule = { htonl(switch_id), htonl(bitmap) };
+            ofpbuf_put(ofpacts, &p_rule, sizeof p_rule);
+        } else {
+            return xasprintf("%s: unknown elmo downstream field", key);
+        }
+    }
+    if (edh->num_of_p_rules == 0) {
+        return xstrdup("elmo downstream header requires at least one p-rule");
+    }
+    pe->n_down = edh->num_of_p_rules;
+    return NULL;
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_PUSH_ELMO(char *arg, const struct ofpact_parse_params *pp)
+{
+    *pp->usable_protocols &= OFPUTIL_P_OF13_UP;
+
+    struct ofpact_push_elmo *pe;
+    ofpact_put_PUSH_ELMO(pp->ofpacts);
+    ofpbuf_prealloc_tailroom(pp->ofpacts, elmo_header_len(255, 255));
+    pe = pp->ofpacts->header;
+
+    char *key, *value;
+    if (!ofputil_parse_key_value(&arg, &key, &value)) {
+        return xstrdup("upstream or downstream elmo header is required");
+    }
+    if (!strcmp(key, "upstream")) {
+        char *error = parse_elmo_upstream(value, pe, pp->ofpacts);
+        if (error) {
+            return error;
+        }
+
+        ofputil_parse_key_value(&arg, &key, &value);
+    }
+    if (key && !strcmp(key, "downstream")) {
+        char *error = parse_elmo_downstream(value, pe, pp->ofpacts);
+        if (error) {
+            return error;
+        }
+
+        ofputil_parse_key_value(&arg, &key, &value);
+    }
+    if (key) {
+        return xasprintf("%s: unexpected elmo header (only \"upstream\" and "
+                         "\"downstream\" are allowed, in that order)", key);
+    }
+
+    ofpact_finish_PUSH_ELMO(pp->ofpacts, &pe);
+    return NULL;
+}
+
+static void
+format_PUSH_ELMO(const struct ofpact_push_elmo *pe,
+                 const struct ofpact_format_params *fp)
+{
+    ds_put_format(fp->s, "%spush_elmo(%s", colors.paren, colors.end);
+    if (pe->n_up) {
+        const struct elmo_upstream_header *euh
+            = ofpact_push_elmo_get_upstream(pe);
+
+        ds_put_format(fp->s, "%supstream(%s", colors.paren, colors.end);
+        ds_put_format(fp->s, "%sleft=%s%"PRIu8,
+                      colors.param, colors.end, euh->ups_left);
+        if (euh->multicast & 1) {
+            ds_put_format(fp->s, ",%smulticast%s", colors.param, colors.end);
+        }
+        for (size_t i = 0; i < euh->num_of_up_rules; i++) {
+            const struct elmo_upstream_rule *up_rule = &euh->up_rules[i];
+            ds_put_format(fp->s,
+                          ",%sbm(%s"
+                          "%s%#"PRIx16"%s,"
+                          "%s%#"PRIx16"%s"
+                          "%s)%s",
+                          colors.paren, colors.end,
+                          colors.param, ntohs(up_rule->up_bm), colors.end,
+                          colors.param, ntohs(up_rule->down_bm), colors.end,
+                          colors.paren, colors.end);
+        }
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
+
+        if (pe->n_down) {
+            ds_put_char(fp->s, ',');
+        }
+    }
+    if (pe->n_down) {
+        const struct elmo_downstream_header *edh
+            = ofpact_push_elmo_get_downstream(pe);
+
+        ds_put_format(fp->s, "%sdownstream(%s", colors.paren, colors.end);
+        for (size_t i = 0; i < edh->num_of_p_rules; i++) {
+            const struct elmo_downstream_rule *p_rule = &edh->p_rules[i];
+            ovs_be32 switch_id = get_16aligned_be32(&p_rule->switch_id);
+            ovs_be32 bitmap = get_16aligned_be32(&p_rule->bitmap);
+            if (i) {
+                ds_put_char(fp->s, ',');
+            }
+            ds_put_format(fp->s,
+                          "%sp(%s"
+                          "%s%"PRIu32"%s,"
+                          "%s%#"PRIx32"%s"
+                          "%s)%s",
+                          colors.paren, colors.end,
+                          colors.param, ntohl(switch_id), colors.end,
+                          colors.param, ntohl(bitmap), colors.end,
+                          colors.paren, colors.end);
+        }
+        ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
+    }
+    ds_put_format(fp->s, "%s)%s", colors.paren, colors.end);
+}
+
+static enum ofperr
+check_PUSH_ELMO(const struct ofpact_push_elmo *a OVS_UNUSED,
+                struct ofpact_check_params *cp OVS_UNUSED)
+{
+    return 0;
+}
+
+/* Action pop_elmo */
+
+static enum ofperr
+decode_NXAST_RAW_POP_ELMO(struct ofpbuf *out)
+{
+    ofpact_put_POP_ELMO(out);
+    return 0;
+}
+
+static void
+encode_POP_ELMO(const struct ofpact_null *null OVS_UNUSED,
+                enum ofp_version ofp_version OVS_UNUSED, struct ofpbuf *out)
+{
+    put_NXAST_POP_ELMO(out);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_POP_ELMO(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
+{
+    ofpact_put_POP_ELMO(pp->ofpacts);
+    return NULL;
+}
+
+static void
+format_POP_ELMO(const struct ofpact_null *a OVS_UNUSED,
+                   const struct ofpact_format_params *fp)
+{
+    ds_put_format(fp->s, "%spop_elmo%s", colors.special, colors.end);
+}
+
+static enum ofperr
+check_POP_ELMO(const struct ofpact_null *a OVS_UNUSED,
+                  struct ofpact_check_params *cp OVS_UNUSED)
+{
+    return 0;
+}
+
 /* Action structures for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE, and
  * NXAST_RESUBMIT_TABLE_CT.
  *
@@ -7854,6 +8203,8 @@ ofpact_copy(struct ofpbuf *out, const struct ofpact *a)
     SLOT(OFPACT_POP_MPLS)                       \
     SLOT(OFPACT_DECAP)                          \
     SLOT(OFPACT_ENCAP)                          \
+    SLOT(OFPACT_POP_ELMO)                       \
+    SLOT(OFPACT_PUSH_ELMO)                      \
     SLOT(OFPACT_PUSH_MPLS)                      \
     SLOT(OFPACT_PUSH_VLAN)                      \
     SLOT(OFPACT_DEC_TTL)                        \
@@ -8157,6 +8508,8 @@ ovs_instruction_type_from_ofpact_type(enum ofpact_type type,
     case OFPACT_NAT:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_PUSH_ELMO:
+    case OFPACT_POP_ELMO:
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
     case OFPACT_DELETE_FIELD:
@@ -9069,6 +9422,8 @@ ofpact_outputs_to_port(const struct ofpact *ofpact, ofp_port_t port)
     case OFPACT_NAT:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_PUSH_ELMO:
+    case OFPACT_POP_ELMO:
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
     case OFPACT_DELETE_FIELD:
@@ -9110,6 +9465,14 @@ ofpacts_output_to_group(const struct ofpact *ofpacts, size_t ofpacts_len,
     }
 
     return false;
+}
+
+/* Returns true if actions 'a' and 'b' are bytewise identical (or if they are
+ * both null). */
+bool
+ofpact_equal(const struct ofpact *a, const struct ofpact *b)
+{
+    return a ? b && a->len == b->len && !memcmp(a, b, a->len) : !b;
 }
 
 /* Returns true if the 'a_len' bytes of actions in 'a' and the 'b_len' bytes of

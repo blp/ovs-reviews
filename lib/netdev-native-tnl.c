@@ -846,6 +846,46 @@ netdev_gtpu_build_header(const struct netdev *netdev,
     return 0;
 }
 
+static bool
+pop_elmo_downstream_header(struct dp_packet *packet)
+{
+    struct elmo_downstream_header *edh = dp_packet_try_pull(
+        packet, ELMO_DOWNSTREAM_HEADER_LEN);
+    if (!edh || !dp_packet_try_pull(packet, edh->num_of_p_rules * 8)) {
+        VLOG_WARN_RL(&err_rl, "truncated Elmo downstream header");
+        return false;
+    }
+
+    if (edh->next_proto == ELMO_DOWNSTREAM_NP_ETHER) {
+        return true;
+    } else {
+        VLOG_WARN_RL(&err_rl, "Elmo downstream header has invalid next_proto "
+                     "%"PRIu8, edh->next_proto);
+        return false;
+    }
+}
+
+static bool
+pop_elmo_upstream_header(struct dp_packet *packet)
+{
+    struct elmo_upstream_header *euh = dp_packet_try_pull(
+        packet, ELMO_UPSTREAM_HEADER_LEN);
+    if (!euh || !dp_packet_try_pull(packet, euh->num_of_up_rules * 4)) {
+        VLOG_WARN_RL(&err_rl, "truncated Elmo upstream header");
+        return false;
+    }
+
+    if (euh->next_proto == ELMO_UPSTREAM_NP_DP) {
+        return pop_elmo_downstream_header(packet);
+    } else if (euh->next_proto == ELMO_UPSTREAM_NP_ETHER) {
+        return true;
+    } else {
+        VLOG_WARN_RL(&err_rl, "Elmo upstream header has invalid next_proto "
+                     "%"PRIu8, euh->next_proto);
+        return false;
+    }
+}
+
 struct dp_packet *
 netdev_vxlan_pop_header(struct dp_packet *packet)
 {
@@ -853,8 +893,6 @@ netdev_vxlan_pop_header(struct dp_packet *packet)
     struct flow_tnl *tnl = &md->tunnel;
     struct vxlanhdr *vxh;
     unsigned int hlen;
-    ovs_be32 vx_flags;
-    enum packet_type next_pt = PT_ETH;
 
     ovs_assert(packet->l3_ofs > 0);
     ovs_assert(packet->l4_ofs > 0);
@@ -869,31 +907,16 @@ netdev_vxlan_pop_header(struct dp_packet *packet)
         goto err;
     }
 
-    vx_flags = get_16aligned_be32(&vxh->vx_flags);
+    uint8_t next_protocol = VXLAN_GPE_NP_ETHERNET;
+    ovs_be32 vx_flags = get_16aligned_be32(&vxh->vx_flags);
     if (vx_flags & htonl(VXLAN_HF_GPE)) {
         vx_flags &= htonl(~VXLAN_GPE_USED_BITS);
         /* Drop the OAM packets */
         if (vxh->vx_gpe.flags & VXLAN_GPE_FLAGS_O) {
             goto err;
         }
-        switch (vxh->vx_gpe.next_protocol) {
-        case VXLAN_GPE_NP_IPV4:
-            next_pt = PT_IPV4;
-            break;
-        case VXLAN_GPE_NP_IPV6:
-            next_pt = PT_IPV6;
-            break;
-        case VXLAN_GPE_NP_NSH:
-            next_pt = PT_NSH;
-            break;
-        case VXLAN_GPE_NP_ETHERNET:
-            next_pt = PT_ETH;
-            break;
-        default:
-            goto err;
-        }
+        next_protocol = vxh->vx_gpe.next_protocol;
     }
-
     if (vx_flags != htonl(VXLAN_FLAGS) ||
        (get_16aligned_be32(&vxh->vx_vni) & htonl(0xff))) {
         VLOG_WARN_RL(&err_rl, "invalid vxlan flags=%#x vni=%#x\n",
@@ -904,8 +927,35 @@ netdev_vxlan_pop_header(struct dp_packet *packet)
     tnl->tun_id = htonll(ntohl(get_16aligned_be32(&vxh->vx_vni)) >> 8);
     tnl->flags |= FLOW_TNL_F_KEY;
 
-    packet->packet_type = htonl(next_pt);
     dp_packet_reset_packet(packet, hlen + VXLAN_HLEN);
+    enum packet_type next_pt = PT_ETH;
+    switch (next_protocol) {
+    case VXLAN_GPE_NP_IPV4:
+        next_pt = PT_IPV4;
+        break;
+    case VXLAN_GPE_NP_IPV6:
+        next_pt = PT_IPV6;
+        break;
+    case VXLAN_GPE_NP_NSH:
+        next_pt = PT_NSH;
+        break;
+    case VXLAN_GPE_NP_ETHERNET:
+        break;
+    case VXLAN_GPE_NP_ELMO_UP:
+        if (!pop_elmo_upstream_header(packet)) {
+            goto err;
+        }
+        break;
+    case VXLAN_GPE_NP_ELMO_DP:
+        if (!pop_elmo_downstream_header(packet)) {
+            goto err;
+        }
+        break;
+    default:
+        goto err;
+    }
+
+    packet->packet_type = htonl(next_pt);
     if (next_pt != PT_ETH) {
         packet->l3_ofs = 0;
     }
@@ -931,7 +981,8 @@ netdev_vxlan_build_header(const struct netdev *netdev,
 
     vxh = udp_build_header(tnl_cfg, data, params);
 
-    if (tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GPE)) {
+    bool gpe = tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GPE);
+    if (gpe) {
         put_16aligned_be32(&vxh->vx_flags, htonl(VXLAN_FLAGS | VXLAN_HF_GPE));
         put_16aligned_be32(&vxh->vx_vni,
                            htonl(ntohll(params->flow->tunnel.tun_id) << 8));
@@ -966,6 +1017,20 @@ netdev_vxlan_build_header(const struct netdev *netdev,
     ovs_mutex_unlock(&dev->mutex);
     data->header_len += sizeof *vxh;
     data->tnl_type = OVS_VPORT_TYPE_VXLAN;
+
+    if (params->elmo_data
+        && gpe && params->flow->packet_type == htonl(PT_ETH)) {
+        data->header_len += params->elmo_len;
+        if (data->header_len > TNL_PUSH_HEADER_SIZE) {
+            VLOG_WARN_RL(&err_rl, "elmo header too big (%u > %d)",
+                         data->header_len, TNL_PUSH_HEADER_SIZE);
+            goto drop;
+        }
+
+        memcpy(vxh + 1, params->elmo_data, params->elmo_len);
+        vxh->vx_gpe.next_protocol = params->elmo_gpe_next_type;
+    }
+
     return 0;
 
 drop:

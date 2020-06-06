@@ -95,6 +95,8 @@ struct vl_mff_map;
     OFPACT(POP_MPLS,        ofpact_pop_mpls,    ofpact, "pop_mpls")     \
     OFPACT(DEC_NSH_TTL,     ofpact_null,        ofpact, "dec_nsh_ttl")  \
     OFPACT(DELETE_FIELD,    ofpact_delete_field, ofpact, "delete_field") \
+    OFPACT(PUSH_ELMO,       ofpact_push_elmo,   header, "push_elmo")    \
+    OFPACT(POP_ELMO,        ofpact_null,        ofpact, "pop_elmo")     \
                                                                         \
     /* Generic encap & decap */                                         \
     OFPACT(ENCAP,           ofpact_encap,       props, "encap")         \
@@ -1126,6 +1128,23 @@ struct ofpact_decap {
     );
 };
 
+/* OFPACT_PUSH_ELMO. */
+struct ofpact_push_elmo {
+    OFPACT_PADDED_MEMBERS(
+        struct ofpact ofpact;
+
+        uint8_t n_up;
+        uint8_t n_down;
+    );
+
+    uint8_t header[];    /* elmo_header_len(n_up, n_down) bytes long. */
+};
+
+const struct elmo_upstream_header *ofpact_push_elmo_get_upstream(
+    const struct ofpact_push_elmo *);
+const struct elmo_downstream_header *ofpact_push_elmo_get_downstream(
+    const struct ofpact_push_elmo *);
+
 /* Converting OpenFlow to ofpacts. */
 enum ofperr ofpacts_pull_openflow_actions(struct ofpbuf *openflow,
                                           unsigned int actions_len,
@@ -1176,6 +1195,7 @@ bool ofpacts_output_to_port(const struct ofpact[], size_t ofpacts_len,
                             ofp_port_t port);
 bool ofpacts_output_to_group(const struct ofpact[], size_t ofpacts_len,
                              uint32_t group_id);
+bool ofpact_equal(const struct ofpact *a, const struct ofpact *b);
 bool ofpacts_equal(const struct ofpact a[], size_t a_len,
                    const struct ofpact b[], size_t b_len);
 bool ofpacts_equal_stringwise(const struct ofpact a[], size_t a_len,

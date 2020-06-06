@@ -1,4 +1,4 @@
-m4_divert_push([PREPARE_TESTS])
+OVS_START_SHELL_HELPERS
 [
 # Strips out uninteresting parts of ovs-ofctl output, as well as parts
 # that vary from one run to another.
@@ -99,6 +99,75 @@ sim_add () {
 
    # Start ovs-vswitchd
    as $1 start_daemon ovs-vswitchd --enable-dummy=system -vvconn -vofproto_dpif -vunixctl
+}
+
+# Interconnection networks.
+#
+# When multiple sandboxed Open vSwitch instances exist, one will inevitably
+# want to connect them together.  These commands allow for that.  Conceptually,
+# an interconnection network is a switch for which these functions make it easy
+# to plug into other switches in other sandboxed Open vSwitch instances.
+# Interconnection networks are implemented as bridges in a switch named "main",
+# so to use interconnection networks please avoid working with that switch
+# directly.
+
+# net_add NETWORK
+#
+# Creates a new interconnection network named NETWORK.
+net_add () {
+    test -d "$ovs_base"/main || sim_add main || return 1
+    as main ovs-vsctl add-br "$1"
+}
+
+# net_attach NETWORK BRIDGE
+#
+# Adds a new port to BRIDGE in the default sandbox (as set with as()) and plugs
+# it into the NETWORK interconnection network.  NETWORK must already have been
+# created by a previous invocation of net_add.  The default sandbox must not be
+# "main".
+net_attach () {
+    local net=$1 bridge=$2
+
+    local port=${sandbox}_$bridge
+    check as main ovs-vsctl \
+        -- add-port $net $port \
+        -- set Interface $port options:pstream="punix:$ovs_base/main/$port.sock" options:rxq_pcap="$ovs_base/main/$port-rx.pcap" options:tx_pcap="$ovs_base/main/$port-tx.pcap"
+
+    check ovs-vsctl \
+        -- set Interface $bridge options:tx_pcap="$ovs_base/$sandbox/$bridge-tx.pcap" options:rxq_pcap="$ovs_base/$sandbox/$bridge-rx.pcap" \
+        -- add-port $bridge ${bridge}_$net \
+        -- set Interface ${bridge}_$net options:stream="unix:$ovs_base/main/$port.sock" options:rxq_pcap="$ovs_base/$sandbox/${bridge}_$net-rx.pcap" options:tx_pcap="$ovs_base/$sandbox/${bridge}_$net-tx.pcap"
+}
+
+# net_add_ip BRIDGE IP [MASKLEN]
+#
+# Adds (simulated) IP address IP (with network mask length MASKLEN, which
+# defaults to 24) to BRIDGE in the default sandbox.
+net_add_ip () {
+    local bridge=$1 ip=$2 masklen=${3-24}
+
+    mac=`ovs-vsctl get Interface $bridge mac_in_use | sed s/\"//g`
+    arp_table="$arp_table $sandbox,$bridge,$ip,$mac"
+    AT_CHECK([ovs-appctl netdev-dummy/ip4addr $bridge $ip/$masklen], 0, [ignore])
+    AT_CHECK([ovs-appctl ovs/route/add $ip/$masklen $bridge], 0, [ignore])
+}
+
+# This pre-populates the ARP tables of all of the networks that have been
+# created with net_add_ip.  That means that packets sent from one hypervisor
+# to another never get dropped or delayed by ARP resolution, which makes
+# testing easier.
+net_populate_arp() {
+    for e1 in $arp_table; do
+        set `echo $e1 | sed 's/,/ /g'`; sb1=$1 br1=$2 ip=$3 mac=$4
+        for e2 in $arp_table; do
+            set `echo $e2 | sed 's/,/ /g'`; sb2=$1 br2=$2
+            if test $sb1,$br1 != $sb2,$br2; then
+                AT_CHECK([as $sb2 ovs-appctl tnl/neigh/set $br2 $ip $mac], [0],
+                         [OK
+])
+            fi
+        done
+    done
 }
 
 # "as $1" sets the OVS_*DIR environment variables to point to $ovs_base/$1.
@@ -300,8 +369,7 @@ add_of_ports () {
 add_pmd_of_ports () {
     add_of_ports__ dummy-pmd $@
 }
-
-m4_divert_pop([PREPARE_TESTS])
+OVS_END_SHELL_HELPERS
 
 # OVS_VSWITCHD_STOP([WHITELIST])
 #

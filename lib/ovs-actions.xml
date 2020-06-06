@@ -1173,6 +1173,73 @@ for <var>i</var> in [1,<var>n_slaves</var>]:
         introduced in Open vSwitch 2.8.
       </conformance>
     </action>
+
+    <action name="PUSH_ELMO">
+      <h2>The <code>push_elmo</code> action</h2>
+      <syntax><code>push_elmo(</code>...<code>)</code></syntax>
+
+      <p>
+        This action inserts an Elmo upstream or downstream header, or both,
+        into the packet.  This encapsulation is effective only only for sending
+        the packet through an VXLAN-GPE tunnel using native tunneling with the
+        OVS userspace datapath.  Only one Elmo header or pair of headers may be
+        added at a time: executing <code>push_elmo</code> a second time
+        replaces the previous header or headers.
+      </p>
+
+      <p>
+        The argument to <code>push_elmo</code> may contain
+        <code>upstream(</code>...<code>)</code>,
+        <code>downstream(</code>...<code>)</code>, or both (in that order,
+        separated by a comma):
+      </p>
+
+      <dl>
+        <dt><code>upstream(left=<var>n</var>, </code>[<code>multicast,</code>] <code>bm(<var>upstream</var>, <var>downstream</var>)</code>...<code>))</code></dt>
+        <dd>
+          Specifies an Elmo upstream header that contains one or more pairs of
+          bitmaps (each specified as a 16-bit hexadecimal integer prefixed by
+          <code>0x</code>), with <var>n</var> of them remaining to be
+          processed.  The multicast bit is set to 1 if <code>multicast</code>
+          is included.
+        </dd>
+
+        <dt><code>downstream(p(<var>switch-ID</var>, <var>bitmap</var>)</code>...<code>))</code></dt>
+        <dd>
+          Specifies an Elmo downstream header that contains one or more
+          p-rules, each with a switch ID (as an 24-bit integers) and a bitmap
+          (as a 32-bit hexadecimal integer prefixed by <code>0x</code>).
+        </dd>
+      </dl>
+
+      <p>
+        Example: <code>push_elmo(upstream(left=1, bm(0x1234, 0x5678),
+        bm(0xaa55, 0xeebb))), downstream(p(5, 0xaa55eebb),
+        p(3, 0x11223344)))</code>
+      </p>
+
+      <conformance>
+        This action is an Open vSwitch extension to OpenFlow 1.3 and later.
+        It is not part of any upstream version of Open vSwitch.
+      </conformance>
+    </action>
+
+    <action name="POP_ELMO">
+      <h2>The <code>pop_elmo</code> action</h2>
+      <syntax><code>pop_elmo</code></syntax>
+
+      <p>
+        This action reverses the action of <code>push_elmo</code>, by removing
+        Elmo upstream or downstream headers, if any, that were added.  This
+        takes effect regardless of the number of times <code>push_elmo</code>
+        was executed.
+      </p>
+
+      <conformance>
+        This action is an Open vSwitch extension to OpenFlow 1.3 and later.
+        It is not part of any upstream version of Open vSwitch.
+      </conformance>
+    </action>
   </group>
 
   <group title="Field Modification Actions">

@@ -634,6 +634,52 @@ format_udp_tnl_push_header(struct ds *ds, const struct udp_header *udp)
     return udp + 1;
 }
 
+static const void *
+format_elmo_downstream_tnl_push_header(const void *header, struct ds *ds)
+{
+    const struct elmo_downstream_header *edh
+        = ALIGNED_CAST(const struct elmo_downstream_header *, header);
+
+    ds_put_format(ds, ",elmo_downstream(");
+    for (size_t i = 0; i < edh->num_of_p_rules; i++) {
+        const struct elmo_downstream_rule *p_rule = &edh->p_rules[i];
+        ovs_be32 switch_id = get_16aligned_be32(&p_rule->switch_id);
+        ovs_be32 bitmap = get_16aligned_be32(&p_rule->bitmap);
+        if (i) {
+            ds_put_char(ds, ',');
+        }
+        ds_put_format(ds, "p(%"PRIu32",%#"PRIx32")",
+                      ntohl(switch_id), ntohl(bitmap));
+    }
+    ds_put_char(ds, ')');
+
+    return ((uint8_t *) edh
+            + elmo_downstream_header_len(edh->num_of_p_rules));
+}
+
+static const void *
+format_elmo_upstream_tnl_push_header(const void *header, struct ds *ds)
+{
+    const struct elmo_upstream_header *euh
+        = ALIGNED_CAST(const struct elmo_upstream_header *, header);
+    ds_put_format(ds, ",elmo_upstream(left=%"PRIu8, euh->ups_left);
+    if (euh->multicast & 1) {
+        ds_put_cstr(ds, ",multicast");
+    }
+    for (size_t i = 0; i < euh->num_of_up_rules; i++) {
+        const struct elmo_upstream_rule *up_rule = &euh->up_rules[i];
+        ds_put_format(ds, ",bm(%#"PRIx16",%#"PRIx16")",
+                      ntohs(up_rule->up_bm), ntohs(up_rule->down_bm));
+    }
+    ds_put_char(ds, ')');
+
+    const void *next = ((uint8_t *) euh
+                        + elmo_upstream_header_len(euh->num_of_up_rules));
+    return (euh->next_proto == ELMO_UPSTREAM_NP_DP
+            ? format_elmo_downstream_tnl_push_header(next, ds)
+            : next);
+}
+
 static void
 format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
 {
@@ -690,9 +736,22 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
 
         vxh = format_udp_tnl_push_header(ds, udp);
 
-        ds_put_format(ds, "vxlan(flags=0x%"PRIx32",vni=0x%"PRIx32")",
-                      ntohl(get_16aligned_be32(&vxh->vx_flags)),
-                      ntohl(get_16aligned_be32(&vxh->vx_vni)) >> 8);
+        uint32_t vx_flags = ntohl(get_16aligned_be32(&vxh->vx_flags));
+        uint32_t vx_vni = ntohl(get_16aligned_be32(&vxh->vx_vni)) >> 8;
+        if (!(vx_flags & VXLAN_HF_GPE)) {
+            ds_put_format(ds, "vxlan(flags=0x%"PRIx32",vni=0x%"PRIx32")",
+                          vx_flags, vx_vni);
+        } else {
+            uint8_t gpe_next_proto = vxh->vx_gpe.next_protocol;
+            ds_put_format(ds, "vxlan_gpe(flags=0x%"PRIx8","
+                          "next_proto=%"PRIu8",vni=0x%"PRIx32")",
+                          vxh->vx_gpe.flags, gpe_next_proto, vx_vni);
+            if (gpe_next_proto == VXLAN_GPE_NP_ELMO_UP) {
+                format_elmo_upstream_tnl_push_header(vxh + 1, ds);
+            } else if (gpe_next_proto == VXLAN_GPE_NP_ELMO_DP) {
+                format_elmo_downstream_tnl_push_header(vxh + 1, ds);
+            }
+        }
     } else if (data->tnl_type == OVS_VPORT_TYPE_GENEVE) {
         const struct genevehdr *gnh;
 

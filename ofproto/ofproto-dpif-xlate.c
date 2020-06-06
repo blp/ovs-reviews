@@ -399,6 +399,10 @@ struct xlate_ctx {
     /* Pointer to an embedded NAT action in a conntrack action, or NULL. */
     struct ofpact_nat *ct_nat_action;
 
+    /* Pointer to an action that embeds an Elmo header to be inserted into
+     * outgoing VXLAN-GPE packets, or NULL if none. */
+    const struct ofpact_push_elmo *elmo;
+
     /* OpenFlow 1.1+ action set.
      *
      * 'action_set' accumulates "struct ofpact"s added by OFPACT_WRITE_ACTIONS.
@@ -3677,7 +3681,13 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
                  ETH_ADDR_ARGS(smac), ipv6_string_mapped(buf_sip6, &s_ip6),
                  ETH_ADDR_ARGS(dmac), buf_dip6);
 
-    netdev_init_tnl_build_header_params(&tnl_params, flow, &s_ip6, dmac, smac);
+    netdev_init_tnl_build_header_params(
+        &tnl_params, flow, &s_ip6, dmac, smac,
+        (!ctx->elmo ? 0
+         : ctx->elmo->n_up ? VXLAN_GPE_NP_ELMO_UP
+         : VXLAN_GPE_NP_ELMO_DP),
+        ctx->elmo ? ctx->elmo->header : NULL,
+        ctx->elmo ? elmo_header_len(ctx->elmo->n_up, ctx->elmo->n_down) : 0);
     err = tnl_port_build_header(xport->ofport, &tnl_push_data, &tnl_params);
     if (err) {
         return err;
@@ -4849,6 +4859,7 @@ xlate_controller_action(struct xlate_ctx *ctx, int len,
         .mirrors = ctx->mirrors,
         .conntracked = ctx->conntracked,
         .was_mpls = ctx->was_mpls,
+        .elmo = CONST_CAST(struct ofpact_push_elmo *, ctx->elmo),
         .ofpacts = NULL,
         .ofpacts_len = 0,
         .action_set = NULL,
@@ -4925,6 +4936,7 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
         .conntracked = ctx->conntracked,
         .was_mpls = ctx->was_mpls,
         .xport_uuid = ctx->xin->xport_uuid,
+        .elmo = CONST_CAST(struct ofpact_push_elmo *, ctx->elmo),
         .ofpacts = ctx->frozen_actions.data,
         .ofpacts_len = ctx->frozen_actions.size,
         .action_set = ctx->action_set.data,
@@ -4973,6 +4985,7 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
 
     /* Undo changes done by freezing. */
     ctx_cancel_freeze(ctx);
+
     return recirc_id;
 }
 
@@ -5700,6 +5713,8 @@ reversible_actions(const struct ofpact *ofpacts, size_t ofpacts_len)
         case OFPACT_WRITE_METADATA:
         case OFPACT_CHECK_PKT_LARGER:
         case OFPACT_DELETE_FIELD:
+        case OFPACT_PUSH_ELMO:
+        case OFPACT_POP_ELMO:
             break;
 
         case OFPACT_CT:
@@ -6003,6 +6018,8 @@ freeze_unroll_actions(const struct ofpact *a, const struct ofpact *end,
         case OFPACT_CLONE:
         case OFPACT_ENCAP:
         case OFPACT_DECAP:
+        case OFPACT_PUSH_ELMO:
+        case OFPACT_POP_ELMO:
         case OFPACT_DEBUG_RECIRC:
         case OFPACT_DEBUG_SLOW:
         case OFPACT_CT:
@@ -6657,6 +6674,8 @@ recirc_for_mpls(const struct ofpact *a, struct xlate_ctx *ctx)
     case OFPACT_CLONE:
     case OFPACT_ENCAP:
     case OFPACT_DECAP:
+    case OFPACT_PUSH_ELMO:
+    case OFPACT_POP_ELMO:
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_UNROLL_XLATE:
     case OFPACT_CT:
@@ -7095,6 +7114,14 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
 
         case OFPACT_ENCAP:
             xlate_generic_encap_action(ctx, ofpact_get_ENCAP(a));
+            break;
+
+        case OFPACT_PUSH_ELMO:
+            ctx->elmo = ofpact_get_PUSH_ELMO(a);
+            break;
+
+        case OFPACT_POP_ELMO:
+            ctx->elmo = NULL;
             break;
 
         case OFPACT_DECAP: {
@@ -7577,6 +7604,13 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         /* Restore mirror state. */
         ctx.mirrors = state->mirrors;
 
+        /* Restore push_elmo state. */
+        if (state->elmo) {
+            xlate_report_actions(&ctx, OFT_THAW, "Restoring Elmo header",
+                                 &state->elmo->ofpact, state->elmo->ofpact.len);
+            ctx.elmo = state->elmo;
+        }
+
         /* Restore action set, if any. */
         if (state->action_set_len) {
             xlate_report_actions(&ctx, OFT_THAW, "Restoring action set",
@@ -7904,6 +7938,7 @@ xlate_resume(struct ofproto_dpif *ofproto,
         .mirrors = pin->mirrors,
         .conntracked = pin->conntracked,
         .xport_uuid = UUID_ZERO,
+        .elmo = pin->elmo,
 
         /* When there are no actions, xlate_actions() will search the flow
          * table.  We don't want it to do that (we want it to resume), so

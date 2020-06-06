@@ -143,6 +143,9 @@ struct ofputil_packet_in_private {
 
     /* NXCPT_ODP_PORT. */
     odp_port_t odp_port;
+
+    /* NXCPT_ELMO. */
+    struct ofpact_push_elmo *elmo;
 };
 
 struct ofpbuf *ofputil_encode_packet_in_private(

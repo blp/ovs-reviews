@@ -391,7 +391,14 @@ dnl Check VXLAN GPE tunnel push
 AT_CHECK([ovs-ofctl add-flow int-br action=8])
 AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(2),eth(src=f8:bc:12:44:34:b6,dst=aa:55:aa:55:00:01),eth_type(0x0800),ipv4(src=1.1.3.88,dst=1.1.3.112,proto=47,tos=0,ttl=64,frag=no)'], [0], [stdout])
 AT_CHECK([tail -1 stdout], [0],
-  [Datapath actions: clone(tnl_push(tnl_port(4789),header(size=50,type=4,eth(dst=f8:bc:12:44:34:b6,src=aa:55:aa:55:00:00,dl_type=0x0800),ipv4(src=1.1.2.88,dst=1.1.2.92,proto=17,tos=0,ttl=64,frag=0x4000),udp(src=0,dst=4789,csum=0x0),vxlan(flags=0xc000003,vni=0x159)),out_port(100)),1)
+  [Datapath actions: clone(tnl_push(tnl_port(4789),header(size=50,type=4,eth(dst=f8:bc:12:44:34:b6,src=aa:55:aa:55:00:00,dl_type=0x0800),ipv4(src=1.1.2.88,dst=1.1.2.92,proto=17,tos=0,ttl=64,frag=0x4000),udp(src=0,dst=4789,csum=0x0),vxlan_gpe(flags=0xc,next_proto=3,vni=0x159)),out_port(100)),1)
+])
+
+dnl Check VXLAN GPE with Elmo tunnel push
+AT_CHECK([ovs-ofctl -O OpenFlow13 add-flow int-br 'action=push_elmo(upstream(left=1,bm(1,2),bm(2,3)),downstream(p(1,2))),8'])
+AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(2),eth(src=f8:bc:12:44:34:b6,dst=aa:55:aa:55:00:01),eth_type(0x0800),ipv4(src=1.1.3.88,dst=1.1.3.112,proto=47,tos=0,ttl=64,frag=no)'], [0], [stdout])
+AT_CHECK([tail -1 stdout], [0],
+  [Datapath actions: clone(tnl_push(tnl_port(4789),header(size=74,type=4,eth(dst=f8:bc:12:44:34:b6,src=aa:55:aa:55:00:00,dl_type=0x0800),ipv4(src=1.1.2.88,dst=1.1.2.92,proto=17,tos=0,ttl=64,frag=0x4000),udp(src=0,dst=4789,csum=0x0),vxlan_gpe(flags=0xc,next_proto=16,vni=0x159),elmo_upstream(left=1,bm(0x1,0x2),bm(0x2,0x3)),elmo_downstream(p(1,0x2))),out_port(100)),1)
 ])
 
 dnl Check VXLAN tunnel push set tunnel id by flow and checksum
@@ -644,4 +651,253 @@ NXST_FLOW reply:
 ])
 
 OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+OVS_START_SHELL_HELPERS
+test_end_to_end_tunnels() {
+    local tunnel_config=$1 encap_action=$2
+    # Create OVS instances hv1 and hv2 with bridges br-phys connected to an
+    # interconnection network n1 between them.  Give hv[12] IP addresses
+    # 192.168.0.1 and 192.168.0.2 on their respective br-phys instances.
+    #
+    # Also on hv[12], create an isolated bridge br-int HV and add a port vif[12].
+    #
+    # Set up flows so that a packet received on vif1 will be encapsulated into
+    # a tunnel and sent to hv2, where it is decapsulated and output to vif2.
+    # Similarly, a packet received on vif2 will be encapsulated into the reverse
+    # tunnel and sent to hv1, where is it decapsulated and output to vif1.
+    net_add n1
+    for x in '1 2' '2 1'; do
+        set $x; i=$1 j=$2
+
+        sim_add hv$i
+        as hv$i
+        check ovs-vsctl add-br br-phys \
+                     -- set bridge br-phys \
+                            other_config:hwaddr=\"00:23:20:00:00:0$i\" \
+                     -- add-br br-int \
+                     -- set bridge br-int fail-mode=secure \
+                                          other-config:disable-in-band=true \
+                     -- add-port br-int vif$i \
+                     -- set interface vif$i \
+                            options:rxq_pcap="$ovs_base/hv$i/vif$i-rx.pcap" \
+                            options:tx_pcap="$ovs_base/hv$i/vif$i-tx.pcap" \
+                     -- add-port br-int tunnel$i \
+                     -- set interface tunnel$i \
+                            $tunnel_config options:remote_ip=192.168.0.$j
+        net_attach n1 br-phys
+        net_add_ip br-phys 192.168.0.$i
+
+        tee flows.txt <<EOF
+in_port=vif$i, actions=${encap_action+$encap_action,}tunnel$i
+in_port=tunnel$i, actions=vif$i
+EOF
+        check ovs-ofctl -O OpenFlow13 add-flows br-int flows.txt
+    done
+
+    net_populate_arp
+
+    AS_CASE([$encap_action],
+        [*pause*],
+        [# Start controllers to resume paused packets.
+         AT_CHECK([as hv1 ovs-ofctl -vvconn monitor br-int resume --detach --no-chdir --pidfile=ovs-ofctl1.pid 2> ofctl_monitor1.log])
+         AT_CHECK([as hv2 ovs-ofctl -vvconn monitor br-int resume --detach --no-chdir --pidfile=ovs-ofctl2.pid 2> ofctl_monitor2.log])])
+
+    # Now actually send packets in both directions.
+    #
+    # The packet ffffffffffff000000000000123411 follows this path:
+    # hv1/vif1-rx.pcap (bare) -> hv1/br-phys_n1-tx.pcap (encapsulated)
+    # hv2/br-phys_n1-rx.pcap (encapsulated) -> hv2/vif2-tx.pcap (bare)
+    #
+    # The packet ffffffffffff000000000000123422 follows this path:
+    # hv2/vif2-rx.pcap (bare) -> hv2/br-phys_n1-tx.pcap (encapsulated)
+    # hv1/br-phys_n1-rx.pcap (encapsulated) -> hv1/vif1-tx.pcap (bare)
+    for x in '1 2' '2 1'; do
+        set $x; i=$1 j=$2
+        as hv$i
+        packet=ffffffffffff0000000000001234$i$i
+        ovs-appctl netdev-dummy/receive vif$i $packet
+        ovs-appctl ofproto/trace br-int in_port=vif$i $packetq
+    done
+}
+
+check_tunnel_output() {
+    sed < expected.in > expected '/^#/d
+s/ | //g
+s/|//g'
+    check_packets() {
+        > received
+        for pcap in \
+            hv1/vif1-rx hv1/br-phys_n1-tx hv2/br-phys_n1-rx hv2/vif2-tx \
+            hv2/vif2-rx hv2/br-phys_n1-tx hv1/br-phys_n1-rx hv1/vif1-tx
+        do
+            (echo "--- $pcap"; ovs-pcap $pcap.pcap; echo) >> received
+        done
+
+        $at_diff expected received >/dev/null
+    }
+    OVS_WAIT_UNTIL([check_packets], [$at_diff -F'^---' expected received])
+}
+OVS_END_SHELL_HELPERS
+
+AT_SETUP([VXLAN end-to-end tunnel encap and decap])
+AT_KEYWORDS([end to end encapsulation decapsulation])
+test_end_to_end_tunnels type=vxlan
+AT_DATA([expected.in], [dnl
+--- hv1/vif1-rx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv1/br-phys_n1-tx
+# outer Ethernet               | IPv4                                     | UDP              | VXLAN            | inner Ethernet
+002320000002|002320000001|0800 | 45000033000040004011b966c0a80001c0a80002 | 83a912b5001f0000 | 0800000000000000 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/br-phys_n1-rx
+002320000002|002320000001|0800 | 45000033000040004011b966c0a80001c0a80002 | 83a912b5001f0000 | 0800000000000000 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-tx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-rx
+ffffffffffff|000000000000|1234 | 22
+
+--- hv2/br-phys_n1-tx
+002320000001|002320000002|0800 | 45000033000040004011b966c0a80002c0a80001 | 83a912b5001f0000 | 0800000000000000 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/br-phys_n1-rx
+002320000001|002320000002|0800 | 45000033000040004011b966c0a80002c0a80001 | 83a912b5001f0000 | 0800000000000000 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/vif1-tx
+ffffffffffff|000000000000|1234 | 22
+
+])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+check_tunnel_output
+AT_CLEANUP
+
+AT_SETUP([VXLAN-GPE end-to-end tunnel encap and decap])
+AT_KEYWORDS([end to end encapsulation decapsulation VXLAN GPE VXLAN-GPE])
+test_end_to_end_tunnels "type=vxlan options:exts=gpe"
+AT_DATA([expected.in], [dnl
+--- hv1/vif1-rx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv1/br-phys_n1-tx
+# outer Ethernet               | IPv4                                     | UDP              | VXLAN            | inner Ethernet
+002320000002|002320000001|0800 | 45000033000040004011b966c0a80001c0a80002 | 83a912b5001f0000 | 0c00000300000000 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/br-phys_n1-rx
+002320000002|002320000001|0800 | 45000033000040004011b966c0a80001c0a80002 | 83a912b5001f0000 | 0c00000300000000 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-tx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-rx
+ffffffffffff|000000000000|1234 | 22
+
+--- hv2/br-phys_n1-tx
+002320000001|002320000002|0800 | 45000033000040004011b966c0a80002c0a80001 | 83a912b5001f0000 | 0c00000300000000 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/br-phys_n1-rx
+002320000001|002320000002|0800 | 45000033000040004011b966c0a80002c0a80001 | 83a912b5001f0000 | 0c00000300000000 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/vif1-tx
+ffffffffffff|000000000000|1234 | 22
+
+])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+check_tunnel_output
+AT_CLEANUP
+
+OVS_START_SHELL_HELPERS
+test_elmo() {
+    test_end_to_end_tunnels \
+        "type=vxlan options:exts=gpe" \
+        "push_elmo(upstream(left=1,bm(1,2),bm(3,4)))${1+,$1}"
+    AT_DATA([expected.in], [dnl
+--- hv1/vif1-rx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv1/br-phys_n1-tx
+# outer Ethernet               | IPv4                                     | UDP              | VXLAN            | Elmo upstream              | inner Ethernet                 | L3
+002320000002|002320000001|0800 | 4500003f000040004011b95ac0a80001c0a80002 | 83a912b5002b0000 | 0c00001000000000 | 02010500|00010002|00030004 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/br-phys_n1-rx
+002320000002|002320000001|0800 | 4500003f000040004011b95ac0a80001c0a80002 | 83a912b5002b0000 | 0c00001000000000 | 02010500|00010002|00030004 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-tx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-rx
+ffffffffffff|000000000000|1234 | 22
+
+--- hv2/br-phys_n1-tx
+002320000001|002320000002|0800 | 4500003f000040004011b95ac0a80002c0a80001 | 83a912b5002b0000 | 0c00001000000000 | 02010500|00010002|00030004 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/br-phys_n1-rx
+002320000001|002320000002|0800 | 4500003f000040004011b95ac0a80002c0a80001 | 83a912b5002b0000 | 0c00001000000000 | 02010500|00010002|00030004 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/vif1-tx
+ffffffffffff|000000000000|1234 | 22
+
+])
+    check_tunnel_output
+}
+OVS_END_SHELL_HELPERS
+
+AT_SETUP([Elmo end-to-end tunnel encap and decap])
+AT_KEYWORDS([end to end encapsulation decapsulation VXLAN GPE VXLAN-GPE])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+test_elmo
+AT_CLEANUP
+
+AT_SETUP([Elmo end-to-end tunnel encap and decap with recirculation])
+AT_KEYWORDS([end to end encapsulation decapsulation VXLAN GPE VXLAN-GPE])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+test_elmo debug_recirc
+AT_CLEANUP
+
+AT_SETUP([Elmo end-to-end tunnel encap and decap with continuations])
+AT_KEYWORDS([end to end encapsulation decapsulation VXLAN GPE VXLAN-GPE continuation pause resume])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+test_elmo 'controller(pause)'
+AT_CLEANUP
+
+AT_SETUP([GRE end-to-end tunnel encap and decap])
+AT_KEYWORDS([end to end encapsulation decapsulation])
+test_end_to_end_tunnels 'type=gre options:key=0x87654321'
+AT_DATA([expected.in], [dnl
+--- hv1/vif1-rx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv1/br-phys_n1-tx
+# outer Ethernet               | IPv4                                         | GRE              | inner Ethernet                 | L3
+002320000002|002320000001|0800 | 4500002b0000400040|2f|b950|c0a80001|c0a80002 | 2000655887654321 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/br-phys_n1-rx
+002320000002|002320000001|0800 | 4500002b0000400040|2f|b950|c0a80001|c0a80002 | 2000655887654321 | ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-tx
+ffffffffffff|000000000000|1234 | 11
+
+--- hv2/vif2-rx
+ffffffffffff|000000000000|1234 | 22
+
+--- hv2/br-phys_n1-tx
+002320000001|002320000002|0800 | 4500002b0000400040|2f|b950|c0a80002|c0a80001 | 2000655887654321 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/br-phys_n1-rx
+002320000001|002320000002|0800 | 4500002b0000400040|2f|b950|c0a80002|c0a80001 | 2000655887654321 | ffffffffffff|000000000000|1234 | 22
+
+--- hv1/vif1-tx
+ffffffffffff|000000000000|1234 | 22
+
+])
+AT_CAPTURE_FILE([expected])
+AT_CAPTURE_FILE([received])
+check_tunnel_output
 AT_CLEANUP

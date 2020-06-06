@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "compiler.h"
+#include "openflow/nicira-ext.h"
 #include "openvswitch/geneve.h"
 #include "openvswitch/packets.h"
 #include "openvswitch/types.h"
@@ -1571,6 +1572,8 @@ BUILD_ASSERT_DECL(sizeof(struct vxlanhdr) == 8);
 #define VXLAN_GPE_NP_IPV6      0x02
 #define VXLAN_GPE_NP_ETHERNET  0x03
 #define VXLAN_GPE_NP_NSH       0x04
+#define VXLAN_GPE_NP_ELMO_UP   0x10
+#define VXLAN_GPE_NP_ELMO_DP   0x11
 
 #define VXLAN_F_GPE  0x4000
 #define VXLAN_HF_GPE 0x04000000
@@ -1611,9 +1614,101 @@ enum packet_type {
     PT_MPLS = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_MPLS),
     PT_MPLS_MC = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_MPLS_MCAST),
     PT_NSH  = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_NSH),
+    PT_ELMO_UPSTREAM = PACKET_TYPE(NXHTN_OPENVSWITCH, NXPT_ELMO_UPSTREAM),
+    PT_ELMO_DOWNSTREAM = PACKET_TYPE(NXHTN_OPENVSWITCH, NXPT_ELMO_DOWNSTREAM),
     PT_UNKNOWN = PACKET_TYPE(0xffff, 0xffff),   /* Unknown packet type. */
 };
 
+/*
+Elmo upstream header (UP base):
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   Num of UPs  |    UPs left   |   next_proto  |   Reserved  |M|
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+Elmo upstream bitmap (UP):
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|        Upstream bitmap        |       Downstream bitmap       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+Elmo downstream header (DP base):
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   Num of DPs  |   next_proto  |            Reserved           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+Elmo downstream P-Rule (DP):
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|    Reserved   |                   Switch ID                   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                             Bitmap                            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
+#define ELMO_UPSTREAM_RULE_LEN 4
+struct elmo_upstream_rule {
+    ovs_be16 up_bm;
+    ovs_be16 down_bm;
+};
+BUILD_ASSERT_DECL(ELMO_UPSTREAM_RULE_LEN == sizeof(struct elmo_upstream_rule));
+
+#define ELMO_UPSTREAM_HEADER_LEN 4
+#define ELMO_UPSTREAM_NP_DP 1
+#define ELMO_UPSTREAM_NP_ETHER 5
+struct elmo_upstream_header {
+    uint8_t num_of_up_rules;
+    uint8_t ups_left;
+    uint8_t next_proto;         /* One of ELMO_UPSTREAM_NP_*. */
+    uint8_t multicast;
+    struct elmo_upstream_rule up_rules[/* num_of_up_rules */];
+};
+BUILD_ASSERT_DECL(ELMO_UPSTREAM_HEADER_LEN
+                  == sizeof(struct elmo_upstream_header));
+
+static inline size_t
+elmo_upstream_header_len(uint8_t n_up)
+{
+    return n_up ? ELMO_UPSTREAM_HEADER_LEN + ELMO_UPSTREAM_RULE_LEN * n_up : 0;
+}
+
+struct elmo_downstream_rule {
+    ovs_16aligned_be32 switch_id;
+    ovs_16aligned_be32 bitmap;
+};
+
+#define ELMO_DOWNSTREAM_HEADER_LEN 4
+#define ELMO_DOWNSTREAM_NP_ETHER 5
+struct elmo_downstream_header {
+    uint8_t num_of_p_rules;
+    uint8_t next_proto;         /* ELMO_DOWNSTREAM_NP_*. */
+    uint8_t pad[2];
+    struct elmo_downstream_rule p_rules[/* num_of_p_rules */];
+};
+BUILD_ASSERT_DECL(ELMO_DOWNSTREAM_HEADER_LEN
+                  == sizeof(struct elmo_downstream_header));
+
+static inline size_t
+elmo_downstream_header_len(uint8_t n_down)
+{
+    return n_down ? ELMO_DOWNSTREAM_HEADER_LEN + 8 * n_down : 0;
+}
+
+/* Returns the number of bytes in Elmo headers if there are 'n_up' upstream
+ * bitmaps and 'n_down' downstream p-rules. */
+static inline size_t
+elmo_header_len(uint8_t n_up, uint8_t n_down)
+{
+    return elmo_upstream_header_len(n_up) + elmo_downstream_header_len(n_down);
+}
+
+void elmo_header_format(uint8_t vxlan_gpe_proto,
+                        const void *header, size_t length,
+                        struct ds *);
 
 void ipv6_format_addr(const struct in6_addr *addr, struct ds *);
 void ipv6_format_addr_bracket(const struct in6_addr *addr, struct ds *,

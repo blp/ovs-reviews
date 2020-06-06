@@ -206,6 +206,9 @@ struct netdev_tnl_build_header_params {
     struct eth_addr dmac;
     struct eth_addr smac;
     bool is_ipv6;
+    uint8_t elmo_gpe_next_type;
+    const uint8_t *elmo_data;
+    size_t elmo_len;
 };
 
 void
@@ -213,7 +216,9 @@ netdev_init_tnl_build_header_params(struct netdev_tnl_build_header_params *param
                                     const struct flow *tnl_flow,
                                     const struct in6_addr *src,
                                     struct eth_addr dmac,
-                                    struct eth_addr smac);
+                                    struct eth_addr smac,
+                                    uint8_t elmo_gpe_next_type,
+                                    const uint8_t *elmo_data, size_t elmo_len);
 
 int netdev_build_header(const struct netdev *, struct ovs_action_push_tnl *data,
                         const struct netdev_tnl_build_header_params *params);

@@ -469,6 +469,13 @@ enum ofp_header_type_namespaces {
     OFPHTN_IP_PROTO = 2,        /* ns_type is a IP protocol number. */
     OFPHTN_UDP_TCP_PORT = 3,    /* ns_type is a TCP or UDP port. */
     OFPHTN_IPV4_OPTION = 4,     /* ns_type is an IPv4 option number. */
+
+    /* OpenFlow 1.5 defines the following, but it is unusable because
+     * OXM_OF_PACKET_TYPE is only 32 bits and therefore there's no place to
+     * keep or to match on the experimenter ID.  Broken design.  Instead we
+     * define NXHTN_OPENVSWITCH in nicira-ext.h. */
+    /* OFPHTN_EXPERIMENTER = 0xffff */
+
     OFPHTN_N_TYPES
 };
 
