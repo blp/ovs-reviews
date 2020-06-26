@@ -20,32 +20,27 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "bitmap.h"
 #include "command-line.h"
 #include "daemon.h"
-#include "dirs.h"
 #include "fatal-signal.h"
 #include "hash.h"
 #include "jsonrpc.h"
+#include "lib/ovn-util.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
-#include "ovn/lex.h"
-#include "lib/chassis-index.h"
-#include "ovn/logical-fields.h"
-#include "lib/ovn-l7.h"
-#include "lib/ovn-util.h"
-#include "ovn/actions.h"
 #include "openvswitch/poll-loop.h"
+#include "openvswitch/vlog.h"
+#include "ovsdb-data.h"
 #include "ovsdb-error.h"
+#include "ovsdb-parser.h"
+#include "ovsdb-types.h"
 #include "ovsdb/ovsdb.h"
 #include "ovsdb/table.h"
-#include "sset.h"
-#include "stream.h"
 #include "stream-ssl.h"
+#include "stream.h"
 #include "unixctl.h"
 #include "util.h"
 #include "uuid.h"
-#include "openvswitch/vlog.h"
 
 #include "northd/ovn_northd_ddlog/ddlog.h"
 
@@ -100,10 +95,19 @@ static ddlog_delta *delta;
  * reconnects, or if the FSM receives a "monitor_canceled" notification for a
  * table it is monitoring, the FSM starts over again in the same way. */
 #define STATES                                                          \
-    /* Waits for "get_schema" reply, then sends "monitor"               \
-     * request whose details are informed by the schema, and            \
-     * transitions to S_DATA_MONITOR_REQUESTED. */                      \
+    /* Waits for "get_schema" reply.  Once received, if there are any   \
+     * output-only tables, sends "transact" request for their data      \
+     * and transitions to S_OUTPUT_ONLY_DATA_REQUESTED.  If there are   \
+     * no output-only tables, instead sends "monitor" request whose     \
+     * details are informed by the schema, and transitions to           \
+     * S_DATA_MONITOR_REQUESTED. */                                     \
     STATE(S_DATA_SCHEMA_REQUESTED)                                      \
+                                                                        \
+    /* Waits for reply to "transact" request for data in output-only    \
+     * tables.  Once received, sends "monitor" request whose details    \
+     * are informed by the schema, and transitions to                   \
+     * S_DATA_MONITOR_REQUESTED. */                                     \
+    STATE(S_OUTPUT_ONLY_DATA_REQUESTED)                                 \
                                                                         \
     /* Waits for "monitor" reply.  If successful, replaces the          \
      * contents by the data carried in the reply and transitions to     \
@@ -156,6 +160,7 @@ struct northd_db {
     char *name;
     struct json *monitor_id;
     struct json *schema;
+    struct json *output_only_data;
     enum northd_monitoring monitoring;
 
     /* Database locking. */
@@ -201,11 +206,10 @@ static bool northd_db_parse_lock_notify(struct northd_db *,
                                         const struct json *params,
                                         bool new_has_lock);
 
-static void ddlog_handle_update(struct northd_ctx *, const struct json *);
+static void northd_db_handle_update(struct northd_ctx *, bool clear,
+                                    const struct json *table_updates);
 static struct json *get_database_ops(struct northd_ctx *);
-
-static int ddlog_handle_reconnect(struct northd_ctx *ctx,
-                                  const struct json *table_updates);
+static int ddlog_clear(struct northd_ctx *);
 
 static struct northd_ctx *
 northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog,
@@ -240,6 +244,7 @@ northd_db_destroy(struct northd_db *db)
 {
     json_destroy(db->monitor_id);
     json_destroy(db->schema);
+    json_destroy(db->output_only_data);
 }
 
 static void
@@ -327,16 +332,6 @@ northd_send_transact(struct northd_ctx *ctx, struct json *ddlog_ops)
 }
 
 static void
-northd_db_handle_update(struct northd_db *db, const struct json *table_updates)
-{
-    ddlog_handle_update(db->ctx, table_updates);
-
-    /* This update may have implications for the other side, so
-     * immediately wake to check for more changes to be applied. */
-    poll_immediate_wake();
-}
-
-static void
 northd_send_monitor_request(struct northd_ctx *ctx, struct northd_db *db)
 {
     struct ovsdb_schema *schema;
@@ -380,14 +375,28 @@ northd_send_monitor_request(struct northd_ctx *ctx, struct northd_db *db)
             NULL));
 }
 
+/* Sends the database server a request for all the row UUIDs in output-only
+ * tables. */
 static void
-northd_restart_fsm(struct northd_ctx *ctx)
+northd_send_output_only_data_request(struct northd_ctx *ctx)
 {
-    northd_send_schema_request(ctx, &ctx->data);
-    ctx->state = S_DATA_SCHEMA_REQUESTED;
+    json_destroy(ctx->data.output_only_data);
+    ctx->data.output_only_data = NULL;
 
-    /* xxx This isn't the proper way to call it.  Just fixing build issue. */
-    ddlog_handle_reconnect(ctx, NULL);
+    struct json *ops = json_array_create_1(json_string_create(ctx->data.name));
+    for (size_t i = 0; ctx->output_only_relations[i]; i++) {
+        const char *table = ctx->output_only_relations[i];
+        struct json *op = json_object_create();
+        json_object_put_string(op, "op", "select");
+        json_object_put_string(op, "table", table);
+        json_object_put(op, "columns",
+                        json_array_create_1(json_string_create("_uuid")));
+        json_object_put(op, "where", json_array_create_empty());
+        json_array_add(ops, op);
+    }
+
+    northd_send_request(ctx,
+                        jsonrpc_create_request("transact", ops, NULL));
 }
 
 static void
@@ -411,6 +420,18 @@ northd_process_response(struct northd_ctx *ctx, struct jsonrpc_msg *msg)
     case S_DATA_SCHEMA_REQUESTED:
         json_destroy(ctx->data.schema);
         ctx->data.schema = json_clone(msg->result);
+        if (ctx->output_only_relations[0]) {
+            northd_send_output_only_data_request(ctx);
+            northd_transition(ctx, S_OUTPUT_ONLY_DATA_REQUESTED);
+        } else {
+            northd_send_monitor_request(ctx, &ctx->data);
+            northd_transition(ctx, S_DATA_MONITOR_REQUESTED);
+        }
+        break;
+
+    case S_OUTPUT_ONLY_DATA_REQUESTED:
+        ctx->data.output_only_data = msg->result;
+        msg->result = NULL;
         northd_send_monitor_request(ctx, &ctx->data);
         northd_transition(ctx, S_DATA_MONITOR_REQUESTED);
         break;
@@ -418,7 +439,7 @@ northd_process_response(struct northd_ctx *ctx, struct jsonrpc_msg *msg)
     case S_DATA_MONITOR_REQUESTED:
         ctx->data.monitoring = NORTHD_MONITORING;
         northd_transition(ctx, S_MONITORING);
-        northd_db_handle_update(&ctx->data, msg->result);
+        northd_db_handle_update(ctx, true, msg->result);
         break;
 
     case S_MONITORING:
@@ -435,15 +456,15 @@ northd_process_response(struct northd_ctx *ctx, struct jsonrpc_msg *msg)
 }
 
 static bool
-northd_db_handle_update_rpc(struct northd_db *db,
+northd_db_handle_update_rpc(struct northd_ctx *ctx,
                             const struct jsonrpc_msg *msg)
 {
     if (msg->type == JSONRPC_NOTIFY) {
         if (!strcmp(msg->method, "update")
             && msg->params->type == JSON_ARRAY
             && msg->params->array.n == 2
-            && json_equal(msg->params->array.elems[0], db->monitor_id)) {
-            northd_db_handle_update(db, msg->params->array.elems[1]);
+            && json_equal(msg->params->array.elems[0], ctx->data.monitor_id)) {
+            northd_db_handle_update(ctx, false, msg->params->array.elems[1]);
             return true;
         }
     }
@@ -626,7 +647,7 @@ northd_process_msg(struct northd_ctx *ctx, struct jsonrpc_msg *msg)
     }
 
     /* Process database contents updates. */
-    if (northd_db_handle_update_rpc(&ctx->data, msg)) {
+    if (northd_db_handle_update_rpc(ctx, msg)) {
         return;
     }
 
@@ -662,7 +683,9 @@ northd_run(struct northd_ctx *ctx, bool run_deltas)
         seqno = jsonrpc_session_get_seqno(ctx->session);
         if (ctx->state_seqno != seqno) {
             ctx->state_seqno = seqno;
-            northd_restart_fsm(ctx);
+
+            northd_send_schema_request(ctx, &ctx->data);
+            ctx->state = S_DATA_SCHEMA_REQUESTED;
 
             if (ctx->data.lock_name) {
                 jsonrpc_session_send(
@@ -758,7 +781,7 @@ ddlog_table_update_deltas(struct ds *ds, ddlog_prog ddlog,
  * clear  */
 static void
 ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
-                   const char *db, const char *table)
+                          const char *db, const char *table)
 {
     int error;
     char *updates;
@@ -781,6 +804,190 @@ ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
     ds_put_char(ds, ',');
     ddlog_free_json(updates);
 }
+
+/* A set of UUIDs.
+ *
+ * Not fully abstracted: the client still uses plain struct hmap, for
+ * example. */
+
+/* A node within a set of uuids. */
+struct uuidset_node {
+    struct hmap_node hmap_node;
+    struct uuid uuid;
+};
+
+static void uuidset_delete(struct hmap *uuidset, struct uuidset_node *);
+
+static void
+uuidset_destroy(struct hmap *uuidset)
+{
+    if (uuidset) {
+        struct uuidset_node *node, *next;
+
+        HMAP_FOR_EACH_SAFE (node, next, hmap_node, uuidset) {
+            uuidset_delete(uuidset, node);
+        }
+        hmap_destroy(uuidset);
+    }
+}
+
+static struct uuidset_node *
+uuidset_find(struct hmap *uuidset, const struct uuid *uuid)
+{
+    struct uuidset_node *node;
+
+    HMAP_FOR_EACH_WITH_HASH (node, hmap_node, uuid_hash(uuid), uuidset) {
+        if (uuid_equals(uuid, &node->uuid)) {
+            return node;
+        }
+    }
+
+    return NULL;
+}
+
+static void
+uuidset_insert(struct hmap *uuidset, const struct uuid *uuid)
+{
+    if (!uuidset_find(uuidset, uuid)) {
+        struct uuidset_node *node = xmalloc(sizeof *node);
+        node->uuid = *uuid;
+        hmap_insert(uuidset, &node->hmap_node, uuid_hash(&node->uuid));
+    }
+}
+
+static void
+uuidset_delete(struct hmap *uuidset, struct uuidset_node *node)
+{
+    hmap_remove(uuidset, &node->hmap_node);
+    free(node);
+}
+
+static struct ovsdb_error *
+parse_output_only_data(const struct json *txn_result, size_t index,
+                       struct hmap *uuidset)
+{
+    if (txn_result->type != JSON_ARRAY || txn_result->array.n <= index) {
+        return ovsdb_syntax_error(txn_result, NULL,
+                                  "transaction result missing for "
+                                  "output-only relation %"PRIuSIZE, index);
+    }
+
+    struct ovsdb_parser p;
+    ovsdb_parser_init(&p, txn_result->array.elems[0], "select result");
+    const struct json *rows = ovsdb_parser_member(&p, "rows", OP_ARRAY);
+    struct ovsdb_error *error = ovsdb_parser_finish(&p);
+    if (error) {
+        return error;
+    }
+
+    for (size_t i = 0; i < rows->array.n; i++) {
+        const struct json *row = rows->array.elems[i];
+
+        ovsdb_parser_init(&p, row, "row");
+        const struct json *uuid = ovsdb_parser_member(&p, "_uuid", OP_ARRAY);
+        error = ovsdb_parser_finish(&p);
+        if (error) {
+            return error;
+        }
+
+        struct ovsdb_base_type base_type = OVSDB_BASE_UUID_INIT;
+        union ovsdb_atom atom;
+        error = ovsdb_atom_from_json(&atom, &base_type, uuid, NULL);
+        if (error) {
+            return error;
+        }
+        uuidset_insert(uuidset, &atom.uuid);
+    }
+
+    return NULL;
+}
+
+static bool
+get_ddlog_uuid(const ddlog_record *rec, struct uuid *uuid)
+{
+    if (!ddlog_is_int(rec)) {
+        return false;
+    }
+
+    __uint128_t u128 = ddlog_get_u128(rec);
+    uuid->parts[0] = u128 >> 96;
+    uuid->parts[1] = u128 >> 64;
+    uuid->parts[2] = u128 >> 32;
+    uuid->parts[3] = u128;
+    return true;
+}
+
+struct dump_index_data {
+    ddlog_prog prog;
+    struct hmap *rows_present;
+    const char *table;
+    struct ds *ops_s;
+};
+
+static void OVS_UNUSED
+index_cb(uintptr_t data_, const ddlog_record *rec)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+    struct dump_index_data *data = (struct dump_index_data *) data_;
+
+    /* Extract the rec's row UUID as 'uuid'. */
+    const ddlog_record *rec_uuid = ddlog_get_named_struct_field(rec, "_uuid");
+    if (!rec_uuid) {
+        VLOG_WARN_RL(&rl, "%s: row has no _uuid column", data->table);
+        return;
+    }
+    struct uuid uuid;
+    if (!get_ddlog_uuid(rec_uuid, &uuid)) {
+        VLOG_WARN_RL(&rl, "%s: _uuid column has unexpected type", data->table);
+        return;
+    }
+
+    /* If a row with the given UUID was already in the database, then
+     * send a operation to update it; otherwise, send an operation to
+     * insert it.  */
+    struct uuidset_node *node = uuidset_find(data->rows_present, &uuid);
+    char *s = NULL;
+    int ret;
+    if (node) {
+        uuidset_delete(data->rows_present, node);
+        ret = ddlog_into_ovsdb_update_str(data->prog, data->table, rec, &s);
+    } else {
+        ret = ddlog_into_ovsdb_insert_str(data->prog, data->table, rec, &s);
+    }
+    if (ret) {
+        VLOG_WARN_RL(&rl, "%s: ddlog could not convert row into database op",
+                     data->table);
+        return;
+    }
+    ds_put_format(data->ops_s, "%s,", s);
+    ddlog_free_json(s);
+}
+
+static struct json *
+where_uuid_equals(const struct uuid *uuid)
+{
+    return
+        json_array_create_1(
+            json_array_create_3(
+                json_string_create("_uuid"),
+                json_string_create("=="),
+                json_array_create_2(
+                    json_string_create("uuid"),
+                    json_string_create_nocopy(
+                        xasprintf(UUID_FMT, UUID_ARGS(uuid))))));
+}
+
+static void
+add_delete_row_op(const char *table, const struct uuid *uuid, struct ds *ops_s)
+{
+    struct json *op = json_object_create();
+    json_object_put_string(op, "op", "delete");
+    json_object_put_string(op, "table", table);
+    json_object_put(op, "where", where_uuid_equals(uuid));
+    json_to_ds(op, 0, ops_s);
+    json_destroy(op);
+    ds_put_char(ops_s, ',');
+}
 
 static struct json *
 get_database_ops(struct northd_ctx *ctx)
@@ -794,8 +1001,93 @@ get_database_ops(struct northd_ctx *ctx)
     for (const char **p = ctx->output_relations; *p; p++) {
         ddlog_table_update_deltas(&ops_s, ctx->ddlog, ctx->data.name, *p);
     }
-    for (const char **p = ctx->output_only_relations; *p; p++) {
-        ddlog_table_update_output(&ops_s, ctx->ddlog, ctx->data.name, *p);
+
+    if (ctx->data.output_only_data) {
+        /*
+         * We just reconnected to the database (or connected for the first time
+         * in this execution).  We assume that the contents of the output-only
+         * tables might have changed (this is especially true the first time we
+         * connect to the database a given execution, of course; we can't
+         * assume that the tables have any particular contents in this case).
+         *
+         * ctx->data.output_only_data is a database reply that tells us the
+         * UUIDs of the rows that exist in the database.  Our strategy is to
+         * compare these UUIDs to the UUIDs of the rows that exist in the DDlog
+         * analogues of these tables, and then add, delete, or update rows as
+         * necessary.
+         *
+         * (ctx->data.output_only_data only gives row UUIDs, not full row
+         * contents.  That means that for rows that exist in OVSDB and in
+         * DDLog, we always send an update to set all the columns.  It wouldn't
+         * save bandwidth to do anything else, since we'd always have to send
+         * the full row contents in one direction and if there were differences
+         * we'd have to send the contents in both directions.  With this
+         * strategy we only send them in one direction even in the worst case.)
+         *
+         * (We can't just send an operation to delete all the rows and then
+         * re-add them all in the same transaction, because ovsdb-server
+         * rejecting deleting a row with a given UUID and the adding the same
+         * UUID back in a single transaction.)
+         */
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 2);
+
+        for (size_t i = 0; ctx->output_only_relations[i]; i++) {
+            const char *table = ctx->output_only_relations[i];
+
+            /* Parse the list of row UUIDs received from OVSDB. */
+            struct hmap rows_present = HMAP_INITIALIZER(&rows_present);
+            struct ovsdb_error *error = parse_output_only_data(
+                ctx->data.output_only_data, i, &rows_present);
+            if (error) {
+                char *s = ovsdb_error_to_string_free(error);
+                VLOG_WARN_RL(&rl, "%s", s);
+                free(s);
+                uuidset_destroy(&rows_present);
+                continue;
+            }
+
+            /* Get the index_id for the DDlog table.
+             *
+             * We require output-only tables to have an accompanying index
+             * named <table>_Index. */
+            char *index = xasprintf("%s_Index", table);
+            index_id idxid = ddlog_get_index_id(index);
+            if (idxid == -1) {
+                VLOG_WARN_RL(&rl, "%s: unknown index", index);
+                free(index);
+                uuidset_destroy(&rows_present);
+                continue;
+            }
+            free(index);
+
+            /* For each row in the index, update a corresponding OVSDB row, if
+             * there is one, otherwise insert a new row. */
+            struct dump_index_data cbdata = {
+                ctx->ddlog, &rows_present, table, &ops_s
+            };
+            ddlog_dump_index(ctx->ddlog, idxid, index_cb, (uintptr_t) &cbdata);
+
+            /* Any uuids remaining in 'rows_present' are rows that are in OVSDB
+             * but not DDlog.  Delete them from OVSDB. */
+            struct uuidset_node *node;
+            HMAP_FOR_EACH (node, hmap_node, &rows_present) {
+                add_delete_row_op(table, &node->uuid, &ops_s);
+            }
+            uuidset_destroy(&rows_present);
+
+            /* Discard any queued output to this table, since we just
+             * did a full sync to it. */
+            struct ds tmp = DS_EMPTY_INITIALIZER;
+            ddlog_table_update_output(&tmp, ctx->ddlog, ctx->data.name, table);
+            ds_destroy(&tmp);
+        }
+
+        json_destroy(ctx->data.output_only_data);
+        ctx->data.output_only_data = NULL;
+    } else {
+        for (const char **p = ctx->output_only_relations; *p; p++) {
+            ddlog_table_update_output(&ops_s, ctx->ddlog, ctx->data.name, *p);
+        }
     }
 
     struct json *ops;
@@ -846,7 +1138,8 @@ static int ddlog_commit(ddlog_prog ddlog) {
 }
 
 static void
-ddlog_handle_update(struct northd_ctx *ctx, const struct json *table_updates)
+northd_db_handle_update(struct northd_ctx *ctx, bool clear,
+                        const struct json *table_updates)
 {
     if (!table_updates) {
         return;
@@ -857,6 +1150,9 @@ ddlog_handle_update(struct northd_ctx *ctx, const struct json *table_updates)
         return;
     }
 
+    if (clear && ddlog_clear(ctx)) {
+        goto error;
+    }
     char *updates_s = json_to_string(table_updates, 0);
     if (ddlog_apply_ovsdb_updates(ctx->ddlog, ctx->prefix, updates_s)) {
         VLOG_WARN("DDlog failed to apply updates");
@@ -873,6 +1169,10 @@ ddlog_handle_update(struct northd_ctx *ctx, const struct json *table_updates)
         goto error;
     }
 
+    /* This update may have implications for the other side, so
+     * immediately wake to check for more changes to be applied. */
+    poll_immediate_wake();
+
     return;
 
 error:
@@ -882,63 +1182,19 @@ error:
 static int
 ddlog_clear(struct northd_ctx *ctx)
 {
+    int n_failures = 0;
     for (int i = 0; ctx->input_relations[i]; i++) {
         char *table = xasprintf("%s%s", ctx->prefix, ctx->input_relations[i]);
-        int ret = ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table));
-        free(table);
-        if (ret) {
-            return ret;
+        if (ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table))) {
+            n_failures++;
         }
+        free(table);
     }
-    return 0;
-}
-
-/* Invoked when an SB or NB connection is lost and later restored.
- * The database snapshot stored in DDlog may be stale at this point.
- * To re-synchronize DDlog with OVSDB, clear all SB (NB) relations
- * and re-populate them with a complete state snapshot stored in
- * `table_updates`.  If OVSDB state happens to be exactly the same
- * as before the disconnect, DDlog will not produce any outputs, and
- * re-synchonization is complete.  If, however, either NB or SB state
- * has changed, DDlog may produce a set of updates to one or both
- * databases. */
-static int
-ddlog_handle_reconnect(struct northd_ctx *ctx,
-                       const struct json *table_updates)
-{
-    int res;
-
-    if (!table_updates) {
-        return -1;
+    if (n_failures) {
+        VLOG_WARN("failed to clear %d tables in %s database",
+                  n_failures, ctx->data.name);
     }
-
-    if ((res = ddlog_transaction_start(ctx->ddlog))) {
-        VLOG_WARN("DDlog failed to start transaction following reconnection");
-        return res;
-    }
-
-    res = ddlog_clear(ctx);
-    if (res) {
-        goto error;
-    }
-
-    char *updates_s = json_to_string(table_updates, 0);
-    res = ddlog_apply_ovsdb_updates(ctx->ddlog, ctx->prefix, updates_s);
-    free(updates_s);
-    if (res) {
-        VLOG_WARN("DDlog failed to apply updates following reconnection");
-        goto error;
-    }
-
-    if ((res = ddlog_commit(ctx->ddlog))) {
-        goto error;
-    }
-
-    return 0;
-
-error:
-    ddlog_transaction_rollback(ctx->ddlog);
-    return res;
+    return n_failures;
 }
 
 /* Callback used by the ddlog engine to print error messages.  Note that

@@ -11,6 +11,8 @@ import ipam
 
 output relation Warning[string]
 
+index Logical_Flow_Index() on sb.Out_Logical_Flow()
+
 /* Meter_Band table */
 for (mb in nb.Meter_Band) {
     sb.Out_Meter_Band(._uuid = mb._uuid,
