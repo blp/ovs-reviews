@@ -347,8 +347,9 @@ wait_row_count() {
     local count=$1; shift
     local a=$1 b=$2 c=$3
     echo "Waiting until $count rows in $table${1+ with $*}..."
-    OVS_WAIT_UNTIL([test $count = $(count_rows $table $a $b $c)],
-                   [ovn-sbctl list $table])
+    OVS_WAIT_UNTIL([test $count = $(count_rows $table $a $b $c)],[
+      echo "Table $table has the following $(count_rows $table $a $b $c) matching rows, instead of expected $count:"
+      ovn-sbctl list $table])
 }
 OVS_END_SHELL_HELPERS
 
