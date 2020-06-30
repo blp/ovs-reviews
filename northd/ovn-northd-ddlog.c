@@ -169,6 +169,7 @@ struct northd_ctx {
     struct northd_db data;
 
     ddlog_prog ddlog;
+    char *prefix;
     const char **input_relations;
     const char **output_relations;
     const char **output_only_relations;
@@ -200,11 +201,10 @@ static bool northd_db_parse_lock_notify(struct northd_db *,
                                         const struct json *params,
                                         bool new_has_lock);
 
-static void ddlog_handle_update(struct northd_ctx *, bool northbound,
-                                const struct json *);
+static void ddlog_handle_update(struct northd_ctx *, const struct json *);
 static struct json *get_database_ops(struct northd_ctx *);
 
-static int ddlog_handle_reconnect(struct northd_ctx *ctx, bool northbound,
+static int ddlog_handle_reconnect(struct northd_ctx *ctx,
                                   const struct json *table_updates);
 
 static void debug_dump_cb(
@@ -270,6 +270,7 @@ northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog,
     struct northd_ctx *ctx;
 
     ctx = xzalloc(sizeof *ctx);
+    ctx->prefix = xasprintf("%s.", database);
     ctx->session = jsonrpc_session_open(server, true);
     ctx->state_seqno = UINT_MAX;
     ctx->request_id = NULL;
@@ -380,16 +381,9 @@ northd_send_transact(struct northd_ctx *ctx, struct json *ddlog_ops)
 }
 
 static void
-northd_db_handle_update(struct northd_db *db,
-                        const struct json *table_updates)
+northd_db_handle_update(struct northd_db *db, const struct json *table_updates)
 {
-    if (!strcmp(db->name, "OVN_Northbound")) {
-        ddlog_handle_update(db->ctx, true, table_updates);
-    } else if (!strcmp(db->name, "OVN_Southbound")) {
-        ddlog_handle_update(db->ctx, false, table_updates);
-    } else {
-        OVS_NOT_REACHED();
-    }
+    ddlog_handle_update(db->ctx, table_updates);
 
     /* This update may have implications for the other side, so
      * immediately wake to check for more changes to be applied. */
@@ -449,7 +443,7 @@ northd_restart_fsm(struct northd_ctx *ctx)
     ctx->state = S_DATA_SCHEMA_REQUESTED;
 
     /* xxx This isn't the proper way to call it.  Just fixing build issue. */
-    ddlog_handle_reconnect(ctx, true, NULL);
+    ddlog_handle_reconnect(ctx, NULL);
 }
 
 static void
@@ -908,8 +902,7 @@ static int ddlog_commit(ddlog_prog ddlog) {
 }
 
 static void
-ddlog_handle_update(struct northd_ctx *ctx, bool northbound,
-                    const struct json *table_updates)
+ddlog_handle_update(struct northd_ctx *ctx, const struct json *table_updates)
 {
     if (!table_updates) {
         return;
@@ -920,10 +913,8 @@ ddlog_handle_update(struct northd_ctx *ctx, bool northbound,
         return;
     }
 
-    const char *prefix = northbound ? "OVN_Northbound." : "OVN_Southbound.";
-
     char *updates_s = json_to_string(table_updates, 0);
-    if (ddlog_apply_ovsdb_updates(ctx->ddlog, prefix, updates_s)) {
+    if (ddlog_apply_ovsdb_updates(ctx->ddlog, ctx->prefix, updates_s)) {
         VLOG_WARN("DDlog failed to apply updates");
         free(updates_s);
         goto error;
@@ -945,31 +936,11 @@ error:
 }
 
 static int
-ddlog_clear_nb(struct northd_ctx *ctx)
+ddlog_clear(struct northd_ctx *ctx)
 {
-    int ret;
-
-    for (int i = 0; i < ARRAY_SIZE(nb_input_relations); i++) {
-        char *table;
-        table = xasprintf("OVN_Northbound.%s", nb_input_relations[i]);
-        ret = ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table));
-        free(table);
-        if (ret) {
-            return ret;
-        }
-    }
-    return 0;
-}
-
-static int
-ddlog_clear_sb(struct northd_ctx *ctx)
-{
-    int ret;
-
-    for (int i = 0; i < ARRAY_SIZE(sb_input_relations); i++) {
-        char *table;
-        table = xasprintf("OVN_Southbound.%s", sb_input_relations[i]);
-        ret = ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table));
+    for (int i = 0; ctx->input_relations[i]; i++) {
+        char *table = xasprintf("%s%s", ctx->prefix, ctx->input_relations[i]);
+        int ret = ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table));
         free(table);
         if (ret) {
             return ret;
@@ -988,7 +959,7 @@ ddlog_clear_sb(struct northd_ctx *ctx)
  * has changed, DDlog may produce a set of updates to one or both
  * databases. */
 static int
-ddlog_handle_reconnect(struct northd_ctx *ctx, bool northbound,
+ddlog_handle_reconnect(struct northd_ctx *ctx,
                        const struct json *table_updates)
 {
     int res;
@@ -1002,15 +973,13 @@ ddlog_handle_reconnect(struct northd_ctx *ctx, bool northbound,
         return res;
     }
 
-    res = northbound ? ddlog_clear_nb(ctx) : ddlog_clear_sb(ctx);
+    res = ddlog_clear(ctx);
     if (res) {
         goto error;
     }
 
-    const char *prefix = northbound ? "OVN_Northbound." : "OVN_Southbound.";
-
     char *updates_s = json_to_string(table_updates, 0);
-    res = ddlog_apply_ovsdb_updates(ctx->ddlog, prefix, updates_s);
+    res = ddlog_apply_ovsdb_updates(ctx->ddlog, ctx->prefix, updates_s);
     free(updates_s);
     if (res) {
         VLOG_WARN("DDlog failed to apply updates following reconnection");

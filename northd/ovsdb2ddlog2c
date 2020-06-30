@@ -114,6 +114,7 @@ if __name__ == "__main__":
             f.write("static const char *%s%s[] = {\n" % (prefix, name))
             for table in sorted(tables):
                 f.write("    \"%s\",\n" % table)
+            f.write("    NULL,\n")
             f.write("};\n\n")
         if schema_file is not None:
             f.close()
