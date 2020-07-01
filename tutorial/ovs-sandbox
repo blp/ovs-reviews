@@ -615,18 +615,22 @@ for i in $(seq $n_ics); do
             --ic-sb-db="$OVN_IC_SB_DB" --ic-nb-db="$OVN_IC_NB_DB"
 done
 
+northd_args=
 if $ddlog; then
-    OVN_NORTHD=ovn-northd-ddlog;
+    OVN_NORTHD=ovn-northd-ddlog
 else
-    OVN_NORTHD=ovn-northd;
+    OVN_NORTHD=ovn-northd
 fi
 
 for i in $(seq $n_northds); do
     if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
+    if $ddlog; then
+        northd_args=--ddlog-record=replay$inst.txt
+    fi
     rungdb $gdb_ovn_northd $gdb_ovn_northd_ex $OVN_NORTHD --detach \
-            --no-chdir --pidfile=ovn-northd${inst}.pid -vconsole:off \
-            --log-file=ovn-northd${inst}.log -vsyslog:off \
-            --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB"
+            --no-chdir --pidfile=$OVN_NORTHD$inst.pid -vconsole:off \
+            --log-file=$OVN_NORTHD$inst.log -vsyslog:off \
+            --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB" $northd_args
 done
 for i in $(seq $n_controllers); do
     if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
