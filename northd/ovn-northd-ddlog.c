@@ -800,7 +800,7 @@ ddlog_table_update_deltas(struct ds *ds, ddlog_prog ddlog,
         return;
     }
 
-    if (!strlen(updates)) {
+    if (!updates[0]) {
         ddlog_free_json(updates);
         return;
     }
@@ -828,7 +828,7 @@ ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
     ddlog_delta_clear_table(delta, ddlog_get_table_id(table_name));
     free(table_name);
 
-    if (!strlen(updates)) {
+    if (!updates[0]) {
         ddlog_free_json(updates);
         return;
     }
