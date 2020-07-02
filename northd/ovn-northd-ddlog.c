@@ -207,60 +207,6 @@ static struct json *get_database_ops(struct northd_ctx *);
 static int ddlog_handle_reconnect(struct northd_ctx *ctx,
                                   const struct json *table_updates);
 
-static void debug_dump_cb(
-    uintptr_t arg OVS_UNUSED,
-    table_id table OVS_UNUSED,
-    const ddlog_record *rec,
-    bool polarity)
-{
-    size_t len;
-    const char *s = ddlog_get_str_with_length(rec, &len);
-    if (polarity) {
-        VLOG_INFO("%.*s", (int)len, s);
-    } else {
-        VLOG_ERR("Error: Record appears with negative polarity in output snapshot: %.*s", (int)len, s);
-    }
-}
-
-/* Debug-dump DDlog table.
- *
- * `table` must be declared as `output relation` in DDlog. Typically, to use
- * this function, one would add the `output` qualifier to the table of interest
- * and re-compile the DDlog program. */
-OVS_UNUSED static void
-ddlog_table_debug_dump(const char *table)
-{
-    table_id tid = ddlog_get_table_id(table);
-    if (tid == -1) {
-        VLOG_ERR("Unknown output table %s", table);
-        return;
-    }
-    VLOG_INFO("Dump %s", table);
-
-    ddlog_delta *table_delta = ddlog_delta_get_table(delta, tid);
-    ddlog_delta_enumerate(table_delta, debug_dump_cb, 0);
-}
-
-/* Debug-dump all tables of interest. */
-static void
-ddlog_debug_dump(ddlog_prog ddlog OVS_UNUSED)
-{
-    /* Uncomment to enable DDlog profiling */
-#if 0
-    char *profile = ddlog_profile(ddlog);
-    VLOG_INFO("DDlog profile:\n%s", profile);
-    ddlog_string_free(profile);
-#endif
-
-#if 0
-    ddlog_table_debug_dump("lswitch.SwitchPortIPv4Address");
-    ddlog_table_debug_dump("OVN_Southbound.Out_Port_Binding");
-    ddlog_table_debug_dump("helpers.SwitchRouterPeer");
-    ddlog_table_debug_dump("lrouter.RouterPortPeer");
-    ddlog_table_debug_dump("lrouter.RouterPort");
-#endif
-}
-
 static struct northd_ctx *
 northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog,
                   const char **input_relations,
@@ -388,8 +334,6 @@ northd_db_handle_update(struct northd_db *db, const struct json *table_updates)
     /* This update may have implications for the other side, so
      * immediately wake to check for more changes to be applied. */
     poll_immediate_wake();
-
-    ddlog_debug_dump(db->ctx->ddlog);
 }
 
 static void
