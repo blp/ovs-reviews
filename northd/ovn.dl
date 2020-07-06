@@ -32,7 +32,7 @@ extern type in_addr
 
 function in_addr2string(ip: in_addr): string = {
     var x = iptohl(ip);
-    "${x >> 32'd24}.${(x >> 32'd16) & 32'hff}.${(x >> 32'd8) & 32'hff}.${x & 32'hff}"
+    "${x >> 24}.${(x >> 16) & 'hff}.${(x >> 8) & 'hff}.${x & 'hff}"
 }
 
 function ip_is_cidr(netmask: in_addr): bool {
@@ -44,7 +44,7 @@ function ip_is_local_multicast(ip: in_addr): bool {
 }
 
 function ip_create_mask(plen: bit<32>): in_addr {
-    hltoip((64'h00000000ffffffff << (32'd32 - plen))[31:0])
+    hltoip((64'h00000000ffffffff << (32 - plen))[31:0])
 }
 
 function ip_bitxor(a: in_addr, b: in_addr): in_addr {
@@ -68,7 +68,7 @@ function ip_host_is_zero(addr: in_addr, mask: in_addr): bool {
 }
 
 function ip_is_zero(a: in_addr): bool {
-    iptohl(a) == 32'd0
+    iptohl(a) == 0
 }
 
 function ip_bcast(addr: in_addr, mask: in_addr): in_addr {
@@ -312,7 +312,7 @@ typedef lport_addresses = LPortAddress {
 }
 
 function lport_addresses2string(addr: lport_addresses): string = {
-    var addrs: Vec<string> = vec_singleton("${addr.ea}");
+    var addrs = vec_singleton("${addr.ea}");
     for (ip4 in addr.ipv4_addrs) {
         vec_push(addrs, "${ip4.addr}")
     };

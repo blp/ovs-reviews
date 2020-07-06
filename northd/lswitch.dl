@@ -41,7 +41,7 @@ PortStaticAddresses(.lsport     = port_uuid,
                     .ip6addrs   = set_unions(ip6_addrs)) :-
     nb.Logical_Switch_Port(._uuid = port_uuid, .addresses = addresses),
     var address = FlatMap(if set_is_empty(addresses) set_singleton("") else addresses),
-    (var ip4addrs: Set<string>, var ip6addrs: Set<string>) = if (not is_dynamic_lsp_address(address)) {
+    (var ip4addrs, var ip6addrs) = if (not is_dynamic_lsp_address(address)) {
         split_addresses(address)
     } else { (set_empty(), set_empty()) },
     var static_addrs = Aggregate((port_uuid), group_unzip((ip4addrs, ip6addrs))),
@@ -163,7 +163,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
         None -> false
     },
     mcast_cfg in &McastSwitchCfg(.datapath = ls._uuid),
-    var subnet: Option<(in_addr, in_addr, bit<32>, bit<32>)> =
+    var subnet =
         match (map_get(ls.other_config, "subnet")) {
             None -> None,
             Some{subnet_str} -> {
@@ -173,7 +173,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
                         None
                     },
                     Right{(subnet, mask)} -> {
-                        if (ip_count_cidr_bits(mask) == Some{8'd32}
+                        if (ip_count_cidr_bits(mask) == Some{32}
                             or not ip_is_cidr(mask)) {
                             warn("bad 'subnet' ${subnet_str}");
                             None
@@ -184,7 +184,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
                 }
             }
         },
-    var ipv6_prefix: Option<in6_addr> =
+    var ipv6_prefix =
         match (map_get(ls.other_config, "ipv6_prefix")) {
             None -> None,
             Some{prefix} -> ipv6_parse_prefix(prefix)
@@ -243,7 +243,7 @@ function parse_ip_port_mapping(mappings: Map<string,string>, ip: v46_ip)
         (var key, var value) = kv;
         if (ip46_parse(key) == Some{ip}) {
             var strs = string_split(value, ":");
-            if (vec_len(strs) != 64'd2) {
+            if (vec_len(strs) != 2) {
                 return None
             };
 
@@ -440,7 +440,7 @@ relation &SwitchPort(
     SwitchPortUp(lsp._uuid, up),
     mcast_cfg in &McastPortCfg(.port = lsp._uuid, .router_port = false),
     var static_addresses = {
-        var static_addresses: Vec<lport_addresses> = vec_empty();
+        var static_addresses = vec_empty();
         for (addr in lsp.addresses) {
             if ((addr != "router") and (not is_dynamic_lsp_address(addr))) {
                 match (extract_lsp_addresses(addr)) {
@@ -452,7 +452,7 @@ relation &SwitchPort(
         static_addresses
     },
     var ps_addresses = {
-        var ps_addresses: Vec<lport_addresses> = vec_empty();
+        var ps_addresses = vec_empty();
         for (addr in lsp.port_security) {
             match (extract_lsp_addresses(addr)) {
                 None -> (),
@@ -462,21 +462,21 @@ relation &SwitchPort(
         ps_addresses
     },
     var ps_eth_addresses = {
-        var ps_eth_addresses: Vec<string> = vec_empty();
+        var ps_eth_addresses = vec_empty();
         for (ps_addr in ps_addresses) {
             vec_push(ps_eth_addresses, "${ps_addr.ea}")
         };
         ps_eth_addresses
     },
-    var dynamic_address: Option<lport_addresses> = match (lsp.dynamic_addresses) {
+    var dynamic_address = match (lsp.dynamic_addresses) {
         None -> None,
         Some{lport_addr} -> extract_lsp_addresses(lport_addr)
     },
-    (var static_dynamic_mac: Option<eth_addr>,
-     var static_dynamic_ipv4: Option<in_addr>,
-     var static_dynamic_ipv6: Option<in6_addr>,
-     var has_dyn_lsp_addr: bool) = {
-        var dynamic_address_request: Option<dynamic_address_request> = None;
+    (var static_dynamic_mac,
+     var static_dynamic_ipv4,
+     var static_dynamic_ipv6,
+     var has_dyn_lsp_addr) = {
+        var dynamic_address_request = None;
         for (addr in lsp.addresses) {
             dynamic_address_request = parse_dynamic_address_request(addr);
             if (is_some(dynamic_address_request)) {
@@ -495,13 +495,13 @@ relation &SwitchPort(
                                    (is_some(subnet) or is_some(ipv6_prefix) or
                                     map_get(other_config, "mac_only") == Some{"true"}),
     var needs_dynamic_ipv6address = has_dyn_lsp_addr and is_none(peer) and is_some(ipv6_prefix) and is_none(static_dynamic_ipv6),
-    var parent_name: Option<string> = match (lsp.parent_name) {
+    var parent_name = match (lsp.parent_name) {
         None -> None,
         Some{pname} -> if (pname == "") { None } else { Some{pname} }
     },
     /* Port needs dynamic tag if it has a parent and its `tag_request` is 0. */
     var needs_dynamic_tag = is_some(parent_name) and
-                            lsp.tag_request == Some{0: integer},
+                            lsp.tag_request == Some{0},
     SwitchPortHAChassisGroup(.lsp_uuid = lsp._uuid,
                              .ha_chassis_group_uuid = ha_chassis_group_uuid).
 
@@ -544,7 +544,7 @@ SwitchPortAddresses(port, dynamic_address) :-
 SwitchPortAddresses(port, addrs) :-
     port in &SwitchPort(.lsp = lsp, .peer = Some{&rport}),
     Some{var addrs} = {
-        var opt_addrs: Option<lport_addresses> = None;
+        var opt_addrs = None;
         for (addr in lsp.addresses) {
             if (addr == "router") {
                 opt_addrs = Some{rport.networks}
@@ -581,7 +581,7 @@ SwitchPortIPv6Address(port, ea, addr) :-
 function get_svc_monitor_mac(options: Map<string,string>, uuid: uuid)
     : eth_addr =
 {
-    var existing_mac: Option<eth_addr> = match (
+    var existing_mac = match (
         map_get(options, "svc_monitor_mac"))
     {
         Some{mac} -> scan_eth_addr(mac),
@@ -589,7 +589,7 @@ function get_svc_monitor_mac(options: Map<string,string>, uuid: uuid)
     };
     match (existing_mac) {
         Some{mac} -> mac,
-        None -> eth_addr_from_uint64(pseudorandom_mac(uuid, 16'h5678))
+        None -> eth_addr_from_uint64(pseudorandom_mac(uuid, 'h5678))
     }
 }
 function put_svc_monitor_mac(options: Map<string,string>,

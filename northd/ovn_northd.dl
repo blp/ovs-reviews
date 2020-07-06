@@ -42,7 +42,7 @@ OutProxy_Datapath_Binding(uuid, external_ids) :-
                       .other_config = other_config),
     var uuid_str = uuid2str(uuid),
     var external_ids = {
-        var eids: Map<string, string> = map_empty();
+        var eids = map_empty();
         map_insert(eids, "logical-switch", uuid_str);
         map_insert(eids, "name", name);
         match (map_get(ids, "neutron:network_name")) {
@@ -61,7 +61,7 @@ OutProxy_Datapath_Binding(uuid, external_ids) :-
     is_enabled(enabled),
     var uuid_str = uuid2str(uuid),
     var external_ids = {
-        var eids: Map<string, string> = map_empty();
+        var eids = map_empty();
         map_insert(eids, "logical-router", uuid_str);
         map_insert(eids, "name", name);
         match (map_get(ids, "neutron:router_name")) {
@@ -108,7 +108,7 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
                       .external_ids       = eids) :-
     sp in &SwitchPort(.lsp = lsp, .sw = &sw),
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
-    var tag: Option<integer> = match (opt_tag) {
+    var tag = match (opt_tag) {
         None -> lsp.tag,
         Some{t} -> Some{t}
     },
@@ -146,16 +146,16 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
         eids
     },
     Some{var router_port} = map_get(lsp.options, "router-port"),
-    var opt_chassis: Option<string> = match (peer) {
+    var opt_chassis = match (peer) {
         Some{rport} -> map_get(rport.router.lr.options, "chassis"),
         None -> None
     },
-    var l3dgw_port: Option<nb.Logical_Router_Port> = match (peer) {
+    var l3dgw_port = match (peer) {
         Some{rport} -> rport.router.l3dgw_port,
         None -> None
     },
     (var __type, var options) = {
-        var options: Map<string, string> = map_singleton("peer", router_port);
+        var options = map_singleton("peer", router_port);
         match (opt_chassis) {
             None -> {
                 ("patch", options)
@@ -166,7 +166,7 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
             }
         }
     },
-    var base_nat_addresses: Set<string> = {
+    var base_nat_addresses = {
         match (map_get(lsp.options, "nat-addresses")) {
             None -> { set_empty() },
             Some{"router"} -> match ((l3dgw_port, opt_chassis, peer)) {
@@ -205,7 +205,7 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
      * Note: Port_Binding.nat_addresses column is also used for
      * sending the GARPs for the router port IPs.
      * */
-    var garp_nat_addresses: Set<string> = match (peer) {
+    var garp_nat_addresses = match (peer) {
         Some{rport} -> match (
             (map_get_bool_def(rport.lrp.options, "reside-on-redirect-chassis",
                               false)
@@ -237,11 +237,11 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
     RouterPortRAOptionsComplete(lrp._uuid, options0),
     (var __type, var options1) = match (map_get(router.lr.options, "chassis")) {
         /* TODO: derived ports */
-        None -> ("patch", map_empty(): Map<string, string>),
+        None -> ("patch", map_empty()),
         Some{lrchassis} -> ("l3gateway", map_singleton("l3gateway-chassis", lrchassis))
     },
     var options2 = match (router_peer_name(peer)) {
-        None -> map_empty(): Map<string, string>,
+        None -> map_empty(),
         Some{peer_name} -> map_singleton("peer", peer_name)
     },
     var options3 = match ((peer, vec_is_empty(rp.networks.ipv6_addrs))) {
@@ -253,10 +253,10 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
                 map_singleton("ipv6_prefix_delegation", "${pd and enabled}"),
                 map_singleton("ipv6_prefix", "${p and enabled}"))
         },
-        _ -> map_empty(): Map<string,string>
+        _ -> map_empty()
     },
     PreserveIPv6RAPDList(lrp._uuid, ipv6_ra_pd_list),
-    var options4: Map<string,string> = match (ipv6_ra_pd_list) {
+    var options4 = match (ipv6_ra_pd_list) {
         None -> map_empty(),
         Some{value} -> map_singleton("ipv6_ra_pd_list", value)
     },
@@ -277,8 +277,8 @@ OutProxy_Port_Binding(._uuid              = lrp._uuid,
 function get_router_load_balancer_ips(router: Router) :
     (Set<string>, Set<string>) =
 {
-    var all_ips_v4: Set<string> = set_empty();
-    var all_ips_v6: Set<string> = set_empty();
+    var all_ips_v4 = set_empty();
+    var all_ips_v6 = set_empty();
     for (lb in router.lbs) {
         for (kv in deref(lb).vips) {
             (var vip, _) = kv;
@@ -303,7 +303,7 @@ function get_router_load_balancer_ips(router: Router) :
  */
 function get_nat_addresses(rport: RouterPort): Set<string> =
 {
-    var addresses: Set<string> = set_empty();
+    var addresses = set_empty();
     var router = deref(rport.router);
     var has_redirect = is_some(router.l3dgw_port);
     match (eth_addr_from_string(rport.lrp.mac)) {
@@ -385,7 +385,7 @@ function get_nat_addresses(rport: RouterPort): Set<string> =
 }
 
 function get_garp_nat_addresses(rport: RouterPort): string = {
-    var garp_info: Vec<string> = vec_empty();
+    var garp_info = vec_empty();
     vec_push(garp_info, "${rport.networks.ea}");
     for (ipv4_addr in rport.networks.ipv4_addrs) {
         vec_push(garp_info, "${ipv4_addr.addr}")
@@ -430,7 +430,7 @@ OutProxy_Port_Binding(// lrp._uuid is already in use; generate a new UUID by
                       .external_ids       = lrp.external_ids) :-
     DistributedGatewayPort(lrp, lr_uuid),
     LogicalRouterHAChassisGroup(lr_uuid, hacg_uuid),
-    var redirect_type: Map<string,string> = match (map_get(lrp.options, "redirect-type")) {
+    var redirect_type = match (map_get(lrp.options, "redirect-type")) {
         Some{var value} -> map_singleton("redirect-type", value),
         _ -> map_empty()
     },
@@ -634,7 +634,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
     PortStaticAddresses(.lsport = port_uuid, .ip4addrs = stat),
     SwitchPortNewDynamicAddress(&SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = port_uuid}},
                                 dyn_addr),
-    var dynamic: Set<string> = match (dyn_addr) {
+    var dynamic = match (dyn_addr) {
         None -> set_empty(),
         Some{lpaddress} -> match (vec_nth(lpaddress.ipv4_addrs, 0)) {
             None -> set_empty(),
@@ -642,7 +642,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
         }
     },
     //PortDynamicAddresses(.lsport = port_uuid, .ip4addrs = dynamic),
-    var port_ip4addrs: Set<string> = set_union(stat, dynamic),
+    var port_ip4addrs = set_union(stat, dynamic),
     var pg_ip4addrs = Aggregate((as_name), group2vec(port_ip4addrs)).
 
 sb.Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
@@ -660,7 +660,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip6addrs)) :-
     PortStaticAddresses(.lsport = port_uuid, .ip6addrs = stat),
     SwitchPortNewDynamicAddress(&SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = port_uuid}},
                                 dyn_addr),
-    var dynamic: Set<string> = match (dyn_addr) {
+    var dynamic = match (dyn_addr) {
         None -> set_empty(),
         Some{lpaddress} -> match (vec_nth(lpaddress.ipv6_addrs, 0)) {
             None -> set_empty(),
@@ -698,25 +698,25 @@ sb.Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()) :-
  */
 
 function mC_FLOOD():         (string, integer) =
-    ("_MC_flood", 64'd32768)
+    ("_MC_flood", 32768)
 
 function mC_UNKNOWN():       (string, integer) =
-    ("_MC_unknown", 64'd32769)
+    ("_MC_unknown", 32769)
 
 function mC_MROUTER_FLOOD(): (string, integer) =
-    ("_MC_mrouter_flood", 64'd32770)
+    ("_MC_mrouter_flood", 32770)
 
 function mC_MROUTER_STATIC(): (string, integer) =
-    ("_MC_mrouter_static", 64'd32771)
+    ("_MC_mrouter_static", 32771)
 
 function mC_STATIC(): (string, integer) =
-    ("_MC_static", 64'd32772)
+    ("_MC_static", 32772)
 
 function mC_IP_MCAST_MIN():  (string, integer) =
-    ("_MC_ip_mcast_min", 64'd32773)
+    ("_MC_ip_mcast_min", 32773)
 
 function mC_IP_MCAST_MAX():  (string, integer) =
-    ("_MC_ip_mcast_max", 64'd65535)
+    ("_MC_ip_mcast_max", 65535)
 
 
 // TODO: check that Multicast_Group.ports should not include derived ports
@@ -1091,7 +1091,7 @@ sb.Out_DHCPv6_Options (
  */
 
 function map_to_lowercase(m_in: Map<string,string>): Map<string,string> {
-    var m_out: Map<string,string> = map_empty();
+    var m_out = map_empty();
     for (node in m_in) {
         (var k, var v) = node;
         map_insert(m_out, string_to_lowercase(k), string_to_lowercase(v))
@@ -1117,7 +1117,7 @@ sb.Out_RBAC_Permission (
     .authorization  = set_singleton("name"),
     .insert_delete  = true,
     .update         = {
-            var s: Set<string> = set_empty();
+            var s = set_empty();
             set_insert(s, "nb_cfg");
             set_insert(s, "external_ids");
             set_insert(s, "encaps");
@@ -1132,7 +1132,7 @@ sb.Out_RBAC_Permission (
     .authorization  = set_singleton("chassis_name"),
     .insert_delete  = true,
     .update         = {
-            var s: Set<string> = set_empty();
+            var s = set_empty();
             set_insert(s, "type");
             set_insert(s, "options");
             set_insert(s, "ip");
@@ -1154,7 +1154,7 @@ sb.Out_RBAC_Permission (
     .authorization  = set_singleton(""),
     .insert_delete  = true,
     .update         = {
-            var s: Set<string> = set_empty();
+            var s = set_empty();
             set_insert(s, "logical_port");
             set_insert(s, "ip");
             set_insert(s, "mac");
@@ -1178,7 +1178,7 @@ sb.Out_RBAC_Role (
     ._uuid       = 128'ha406b472_5de8_4456_9f38_bf344c911b22,
     .name        = "ovn-controller",
     .permissions = {
-            var m: Map<string, uuid> = map_empty();
+            var m = map_empty();
             map_insert(m, "Chassis"     , 128'h7df3749a_1754_4a78_afa4_3abf526fe510);
             map_insert(m, "Encap"       , 128'h94bec860_431e_4d95_82e7_3b75d8997241);
             map_insert(m, "Port_Binding", 128'hd8ceff1a_2b11_48bd_802f_4a991aa4e908);
@@ -1194,12 +1194,12 @@ nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
                            .dynamic_addresses      = dynamic_addresses,
                            .up                     = Some{up}) :-
     SwitchPortNewDynamicAddress(&SwitchPort{.lsp = lsp, .up = up}, opt_dyn_addr),
-    var dynamic_addresses: Option<string> = match (opt_dyn_addr) {
+    var dynamic_addresses = match (opt_dyn_addr) {
         None -> None,
         Some{dyn_addr} -> Some{"${dyn_addr}"}
     },
     SwitchPortNewDynamicTag(lsp._uuid, opt_tag),
-    var tag: Option<integer> = match (opt_tag) {
+    var tag = match (opt_tag) {
         None -> lsp.tag,
         Some{t} -> Some{t}
     }.
@@ -1436,7 +1436,7 @@ Flow(.logical_datapath = sw.ls._uuid,
                   "output;".
 
 function escape_child_ports(child_port: Set<string>): string {
-    var escaped: Vec<string> = vec_with_capacity(set_size(child_port));
+    var escaped = vec_with_capacity(set_size(child_port));
     for (s in child_port) {
         vec_push(escaped, json_string_escape(s))
     };
@@ -1494,7 +1494,7 @@ function build_port_security_ipv6_flow(
     ea: eth_addr,
     ipv6_addrs: Vec<ipv6_netaddr>): string =
 {
-    var ip6_addrs: Vec<string> = vec_empty();
+    var ip6_addrs = vec_empty();
 
     /* Allow link-local address. */
     vec_push(ip6_addrs, ipv6_string_mapped(in6_generate_lla(ea)));
@@ -1838,7 +1838,7 @@ function build_acl_log(acl: nb.ACL): string =
     if (not acl.log) {
         ""
     } else {
-        var strs: Vec<string> = vec_empty();
+        var strs = vec_empty();
         match (acl.name) {
             None -> (),
             Some{name} -> vec_push(strs, "name=${json_string_escape(name)}")
@@ -2330,9 +2330,9 @@ for (SwitchQoS(.sw = &sw, .qos = &qos)) {
             }
         };
 
-        (var burst: bit<64>, var rate: bit<64>) = {
-            var rate: bit<64> = 0;
-            var burst: bit<64> = 0;
+        (var burst, var rate) = {
+            var rate = 0;
+            var burst = 0;
             for (bw in qos.bandwidth) {
                 /* FIXME: Can value_bandwidth be negative? */
                 (var key_bandwidth, var value_bandwidth) = bw;
@@ -2512,9 +2512,9 @@ Flow(.logical_datapath = sw.ls._uuid,
                               .logical_port = svc_monitor.port_name),
     var bses = Aggregate((sw, lbvip, lb), group2set(bs)),
     var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
-    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
     var up_backends = {
-        var up_backends: Set<string> = set_empty();
+        var up_backends = set_empty();
         for (bs in bses) {
             if (bs.up) {
                 set_insert(up_backends, "${bs.ip}:${bs.port}")
@@ -2540,7 +2540,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
     var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
-    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
     var actions = ct_lb(lbvip.backend_ips, lb.selection_fields).
 
 /* Also install flows that allow hairpinning of traffic (i.e., if
@@ -2554,7 +2554,7 @@ function get_hairpin_match(lbvipbackend: Ref<LBVIPBackend>,
     var lb = lbvip.lb;
     var ipX = ip46_ipX(lbvip.vip_addr);
 
-    var __match: Vec<string> = vec_with_capacity(3);
+    var __match = vec_with_capacity(3);
 
     vec_push(__match, "${ipX}.src == ${lbvipbackend.ip}");
 
@@ -2697,10 +2697,10 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name, .ps_eth_addresse
 */
 for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
      if is_enabled(port.lsp.enabled) and
-        (vec_len(ps.ipv4_addrs) > 64'd0 or vec_len(ps.ipv6_addrs) > 64'd0) and
+        (vec_len(ps.ipv4_addrs) > 0 or vec_len(ps.ipv6_addrs) > 0) and
         port.lsp.__type != "external")
 {
-    if (vec_len(ps.ipv4_addrs) > 64'd0) {
+    if (vec_len(ps.ipv4_addrs) > 0) {
         var dhcp_match = "inport == ${port.json_name}"
                          " && eth.src == ${ps.ea}"
                          " && ip4.src == 0.0.0.0"
@@ -2714,7 +2714,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                  .external_ids     = stage_hint(port.lsp._uuid))
         };
         var addrs = {
-            var addrs: Vec<string> = vec_empty();
+            var addrs = vec_empty();
             for (addr in ps.ipv4_addrs) {
                 /* When the netmask is applied, if the host portion is
                  * non-zero, the host can only use the specified
@@ -2737,7 +2737,7 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
                  .external_ids     = stage_hint(port.lsp._uuid))
         }
     };
-    if (vec_len(ps.ipv6_addrs) > 64'd0) {
+    if (vec_len(ps.ipv6_addrs) > 0) {
         var dad_match = "inport == ${port.json_name}"
                         " && eth.src == ${ps.ea}"
                         " && ip6.src == ::"
@@ -2800,10 +2800,10 @@ for (SwitchPortPSAddresses(.port = &port@SwitchPort{.sw = &sw}, .ps_addrs = ps)
     var no_ip = vec_is_empty(ps.ipv4_addrs) and vec_is_empty(ps.ipv6_addrs) in
     {
         if (not vec_is_empty(ps.ipv4_addrs) or no_ip) {
-            var __match: string = {
+            var __match = {
                 var prefix = "inport == ${port.json_name} && eth.src == ${ps.ea} && arp.sha == ${ps.ea}";
                 if (not vec_is_empty(ps.ipv4_addrs)) {
-                    var spas: Vec<string> = vec_empty();
+                    var spas = vec_empty();
                     for (addr in ps.ipv4_addrs) {
                         vec_push(spas, ipv4_netaddr_match_host_or_network(addr))
                     };
@@ -3058,7 +3058,7 @@ function build_dhcpv4_action(
 
                         /* We're not using SMAP_FOR_EACH because we want a consistent order of the
                          * options on different architectures (big or little endian, SSE4.2) */
-                        var options: Vec<string> = vec_empty();
+                        var options = vec_empty();
                         for (node in options_map) {
                             (var k, var v) = node;
                             vec_push(options, "${k} = ${v}")
@@ -3120,7 +3120,7 @@ function build_dhcpv6_action(
                                 /* Get the link local IP of the DHCPv6 server from the server MAC. */
                                 var server_ip = ipv6_string_mapped(in6_generate_lla(ea));
                                 var ia_addr = ipv6_string_mapped(offer_ip);
-                                var options: Vec<string> = vec_empty();
+                                var options = vec_empty();
 
                                 /* Check whether the dhcpv6 options should be configured as stateful.
                                  * Only reply with ia_addr option for dhcpv6 stateful address mode. */
@@ -3844,12 +3844,12 @@ for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = &sw)
 
 for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = &sw},
                            .ps_addrs = ps)
-     if (vec_len(ps.ipv4_addrs) > 64'd0 or vec_len(ps.ipv6_addrs) > 64'd0)
+     if (vec_len(ps.ipv4_addrs) > 0 or vec_len(ps.ipv6_addrs) > 0)
          and lsp.__type != "external")
 {
-    if (vec_len(ps.ipv4_addrs) > 64'd0) {
+    if (vec_len(ps.ipv4_addrs) > 0) {
         var addrs = {
-            var addrs: Vec<string> = vec_empty();
+            var addrs = vec_empty();
             for (addr in ps.ipv4_addrs) {
                 /* When the netmask is applied, if the host portion is
                  * non-zero, the host can only use the specified
@@ -3873,7 +3873,7 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
              .actions          = "next;",
              .external_ids     = stage_hint(lsp._uuid))
     };
-    if (vec_len(ps.ipv6_addrs) > 64'd0) {
+    if (vec_len(ps.ipv6_addrs) > 0) {
         var __match = "outport == ${json_name} && eth.dst == ${ps.ea}" ++
                       build_port_security_ipv6_flow(OUT, ps.ea, ps.ipv6_addrs) in
         Flow(.logical_datapath = sw.ls._uuid,
@@ -4151,14 +4151,14 @@ for (&Router(.lr = lr, .mcast_cfg = &mcast_cfg)) {
 
 function format_v4_networks(networks: lport_addresses, add_bcast: bool): string =
 {
-    var addrs: Vec<string> = vec_empty();
+    var addrs = vec_empty();
     for (addr in networks.ipv4_addrs) {
         vec_push(addrs, "${addr.addr}");
         if (add_bcast) {
             vec_push(addrs, "${ipv4_netaddr_bcast(addr)}")
         } else ()
     };
-    if (vec_len(addrs) == 64'd1) {
+    if (vec_len(addrs) == 1) {
         string_join(addrs , ", ")
     } else {
         "{" ++ string_join(addrs , ", ") ++ "}"
@@ -4167,11 +4167,11 @@ function format_v4_networks(networks: lport_addresses, add_bcast: bool): string 
 
 function format_v6_networks(networks: lport_addresses): string =
 {
-    var addrs: Vec<string> = vec_empty();
+    var addrs = vec_empty();
     for (addr in networks.ipv6_addrs) {
         vec_push(addrs, "${addr.addr}")
     };
-    if (vec_len(addrs) == 64'd1) {
+    if (vec_len(addrs) == 1) {
         string_join(addrs, ", ")
     } else {
         "{" ++ string_join(addrs , ", ") ++ "}"
@@ -4510,8 +4510,8 @@ for (&RouterPort(.lrp = lrp,
     /* A gateway router can have 2 SNAT IP addresses to force DNATed and
      * LBed traffic respectively to be SNATed.  In addition, there can be
      * a number of SNAT rules in the NAT table. */
-    var snat_ips: Set<v46_ip> = {
-        var snat_ips: Set<v46_ip> = set_empty();
+    var snat_ips = {
+        var snat_ips = set_empty();
         for (nat in nats) {
             if (deref(nat).__type == "snat") {
                 var ip = deref(nat).external_ip;
@@ -4533,7 +4533,7 @@ for (&RouterPort(.lrp = lrp,
         snat_ips
     } in
     var ip4s = {
-        var ip4s: Vec<string> = vec_empty();
+        var ip4s = vec_empty();
         for (ip in networks.ipv4_addrs) {
             /* Packets to SNAT IPs should not be dropped. */
             if (not set_contains(snat_ips, IPv4{ip.addr})) {
@@ -4543,11 +4543,11 @@ for (&RouterPort(.lrp = lrp,
         if (not vec_is_empty(ip4s)) {
             set_singleton("ip4.dst == {" ++ string_join(ip4s, ", ") ++ "}")
         } else {
-            set_empty(): Set<string>
+            set_empty()
         }
     } in
     var ip6s = {
-        var ip6s: Vec<string> = vec_empty();
+        var ip6s = vec_empty();
         for (ip in networks.ipv6_addrs) {
             /* Packets to SNAT IPs should not be dropped. */
             if (not set_contains(snat_ips, IPv6{ip.addr})) {
@@ -4557,7 +4557,7 @@ for (&RouterPort(.lrp = lrp,
         if (not vec_is_empty(ip6s)) {
             set_singleton("ip6.dst == {" ++ string_join(ip6s, ", ") ++ "}")
         } else {
-            set_empty(): Set<string>
+            set_empty()
         }
     } in
     var ips = set_union(ip4s, ip6s) in
@@ -4812,7 +4812,7 @@ for (&Router(.lr = lr,
         } in
         /* For distributed router NAT, determine whether this NAT rule
          * satisfies the conditions for distributed NAT processing. */
-        Some{var mac: Option<eth_addr>} =
+        Some{var mac} =
             if (is_some(l3dgw_port) and nat.__type == "dnat_and_snat") {
                 match ((nat.logical_port, nat.external_mac)) {
                     (Some{_}, Some{external_mac}) -> {
@@ -5030,7 +5030,7 @@ for (&Router(.lr = lr,
                     Some{var plen} = ip46_count_cidr_bits(mask) in
                     Flow(.logical_datapath = lr._uuid,
                          .stage            = router_stage(OUT, SNAT),
-                         .priority         = plen as bit<64> + 64'd1,
+                         .priority         = plen as bit<64> + 1,
                          .__match          = "ip && ${ipX}.src == ${nat.logical_ip}",
                          .actions          = actions,
                          .external_ids     = stage_hint(nat._uuid))
@@ -5060,8 +5060,8 @@ for (&Router(.lr = lr,
                      * nat->logical_ip with the longest mask gets a higher
                      * priority. */
                     Some{var plen} = ip46_count_cidr_bits(mask) in
-                    var priority = (plen as bit<64>) + 64'd1 in
-                    var centralized_boost = if (mac == None) {64'd128} else {64'd0} in
+                    var priority = (plen as bit<64>) + 1 in
+                    var centralized_boost = if (mac == None) 128 else 0 in
                     Flow(.logical_datapath = lr._uuid,
                          .stage            = router_stage(OUT, SNAT),
                          .priority         = priority + centralized_boost,
@@ -5120,8 +5120,8 @@ for (&Router(.lr = lr,
             } in
             var __match = "${ipX}.dst == ${nat.external_ip} && outport == ${json_string_escape(gwport.name)} && is_chassis_resident(${port})" in
             var regs = {
-                var regs: Vec<string> = vec_empty();
-                for (j in range(32'd0, mFF_N_LOG_REGS()-32'd1, 32'd1)) {
+                var regs = vec_empty();
+                for (j in range(0, mFF_N_LOG_REGS()-1, 01)) {
                     vec_push(regs, "reg${j} = 0; ")
                 };
                 regs
@@ -5283,9 +5283,9 @@ for (RouterLBVIP(
         var match1 = "ip && ${ipX}.dst == ${ip_address}" in
         (var prio, var match2) =
             if (port != 0) {
-                (120: integer, " && ${proto} && ${proto}.dst == ${port}")
+                (120, " && ${proto} && ${proto}.dst == ${port}")
             } else {
-                (110: integer, "")
+                (110, "")
             } in
         var __match = match1 ++ match2 ++
             match (l3dgw_port) {
@@ -5337,7 +5337,7 @@ for (RouterLBVIP(
              * router has a gateway router port associated.
              */
             var conds = {
-                var conds: Vec<string> = vec_empty();
+                var conds = vec_empty();
                 for (ip_str in string_split(backends, ",")) {
                     match (ip_address_and_port_from_lb_key(ip_str)) {
                         None -> () /* FIXME: put a break here */,
@@ -5402,9 +5402,9 @@ Flow(.logical_datapath = r.lr._uuid,
               Some{gwport} -> " && is_chassis_resident(${r.redirect_port_name})",
               _ -> ""
           },
-    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var priority = if (lbvip.vip_port != 0) 120 else 110,
     var up_backends = {
-        var up_backends: Set<string> = set_empty();
+        var up_backends = set_empty();
         for (bs in bses) {
             if (bs.up) {
                 set_insert(up_backends, "${bs.ip}:${bs.port}")
@@ -5440,7 +5440,7 @@ Flow(.logical_datapath = r.lr._uuid,
               Some{gwport} -> " && is_chassis_resident(${r.redirect_port_name})",
               _ -> ""
           },
-    var priority = if (lbvip.vip_port != 0) { 64'd120 } else { 64'd110 },
+    var priority = if (lbvip.vip_port != 0) 120 else 110,
     var actions = ct_lb(lbvip.backend_ips, lb.selection_fields).
 
 
@@ -5502,7 +5502,7 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
         map_insert(options, "ipv6_ra_mtu", "${mtu}")
     } else ();
 
-    var prefixes: Vec<string> = vec_empty();
+    var prefixes = vec_empty();
     for (addrs in port.networks.ipv6_addrs) {
         if (ipv6_netaddr_is_lla(addrs)) {
             map_insert(options, "ipv6_ra_src_addr", "${addrs.addr}")
@@ -5581,11 +5581,11 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = None}
         {
             var __match = "inport == ${json_name} && ip6.dst == ff02::2 && nd_rs" in
             /* As per RFC 2460, 1280 is minimum IPv6 MTU. */
-            var mtu: integer = match(map_get(lrp.ipv6_ra_configs, "mtu")) {
+            var mtu = match(map_get(lrp.ipv6_ra_configs, "mtu")) {
                     Some{mtu_s} -> {
                         match (str_to_int(mtu_s, 10)) {
                             None -> 0,
-                            Some{mtu} -> if (mtu >= 64'd1280) mtu else 0
+                            Some{mtu} -> if (mtu >= 1280) mtu else 0
                         }
                     },
                     None -> 0
@@ -5678,8 +5678,8 @@ function build_route_match(key: route_key) : (string, bit<32>) =
     var ipX = ip46_ipX(key.ip_prefix);
 
     (var dir, var priority) = match (key.policy) {
-        SrcIp -> ("src", key.plen * 32'd2),
-        DstIp -> ("dst", (key.plen * 32'd2) + 32'd1)
+        SrcIp -> ("src", key.plen * 2),
+        DstIp -> ("dst", (key.plen * 2) + 1)
     };
 
     var network = ip46_get_network(key.ip_prefix, key.plen);
@@ -5708,7 +5708,7 @@ for (Route(.port        = port,
     var dprio_bonus = if (set_is_empty(port.lrp.gateway_chassis)) {
         dROUTE_PRIO()
     } else {
-        32'd0
+        0
     } in
     var __match = inport_match ++ ip_match in
     var nexthop = match (gateway) {
@@ -5770,13 +5770,13 @@ Flow(.logical_datapath = r.lr._uuid,
 /* Convert the static routes to flows. */
 Route(key, dst.port, dst.src_ip, Some{dst.nexthop}) :-
     RouterStaticRoute(.router = &router, .key = key, .dsts = dsts),
-    set_size(dsts) == 64'd1,
+    set_size(dsts) == 1,
     Some{var dst} = set_nth(dsts, 0).
 
 /* Return a vector of pairs (1, set[0]), ... (n, set[n - 1]). */
 function numbered_vec(set: Set<'A>) : Vec<(bit<16>, 'A)> = {
-    var vec: Vec<(bit<16>, 'A)> = vec_with_capacity(set_size(set));
-    var i = 16'd1;
+    var vec = vec_with_capacity(set_size(set));
+    var i = 1;
     for (x in set) {
         vec_push(vec, (i, x));
         i = i + 1
@@ -5792,7 +5792,7 @@ relation EcmpGroup(
 
 EcmpGroup(group_id, router, key, dsts) :-
     RouterStaticRoute(.router = router, .key = key, .dsts = dsts),
-    set_size(dsts) > 64'd1,
+    set_size(dsts) > 1,
     var groups = Aggregate((), group2set((router, key, dsts))),
     var group_id_and_group = FlatMap(numbered_vec(groups)),
     (var group_id, (var router, var key, var dsts)) = group_id_and_group.
@@ -5806,8 +5806,8 @@ Flow(.logical_datapath = router.lr._uuid,
     EcmpGroup(group_id, router, key, dsts),
     (var __match, var priority) = build_route_match(key),
     var all_member_ids = {
-        var member_ids: Vec<string> = vec_with_capacity(set_size(dsts));
-        for (i in range(64'd1, set_size(dsts), 64'd1)) {
+        var member_ids = vec_with_capacity(set_size(dsts));
+        for (i in range(1, set_size(dsts), 1)) {
             vec_push(member_ids, "${i}")
         };
         string_join(member_ids, ", ")
@@ -6256,7 +6256,7 @@ Flow(.logical_datapath = lr._uuid,
                          "ip.ttl = 255; "
                          "icmp4.type = 3; /* Destination Unreachable. */ "
                          "icmp4.code = 4; /* Frag Needed and DF was Set. */ "
-                         "icmp4.frag_mtu = ${gw_mtu - 64'd18}; "
+                         "icmp4.frag_mtu = ${gw_mtu - 18}; "
                          "next(pipeline=ingress, table=0); "
                          "};",
      .external_ids     = stage_hint(rp.lrp._uuid)) :-
@@ -6473,14 +6473,14 @@ TunKeyAllocation(datapath, tunkey) :- AssignedTunKey(datapath, tunkey).
 TunKeyAllocation(datapath, tunkey) :-
     NotYetAllocatedTunKeys(unallocated),
     AllocatedTunKeys(allocated),
-    var allocation = FlatMap(allocate(allocated, unallocated, 64'h1, 64'hfffffffff)),
+    var allocation = FlatMap(allocate(allocated, unallocated, 1, 64'hfffffffff)),
     (var datapath, var tunkey) = allocation.
 
 // Case 2: AllocatedTunKeys relation is empty
 TunKeyAllocation(datapath, tunkey) :-
     NotYetAllocatedTunKeys(unallocated),
     not AllocatedTunKeys(_),
-    var allocation = FlatMap(allocate(set_empty():Set<bit<64>>, unallocated, 64'h1, 64'hfffffffff)),
+    var allocation = FlatMap(allocate(set_empty(), unallocated, 1, 64'hfffffffff)),
     (var datapath, var tunkey) = allocation.
 
 /*
@@ -6565,14 +6565,14 @@ PortTunKeyAllocation(port, tunkey) :- AssignedPortTunKey(_, port, tunkey).
 PortTunKeyAllocation(port, tunkey) :-
     AllocatedPortTunKeys(datapath, allocated),
     NotYetAllocatedPortTunKeys(datapath, unallocated),
-    var allocation = FlatMap(allocate(allocated, unallocated, 64'h1, 64'hffff)),
+    var allocation = FlatMap(allocate(allocated, unallocated, 1, 64'hffff)),
     (var port, var tunkey) = allocation.
 
 // Case 2: PortAllocatedTunKeys(datapath) relation is empty
 PortTunKeyAllocation(port, tunkey) :-
     NotYetAllocatedPortTunKeys(datapath, unallocated),
     not AllocatedPortTunKeys(datapath, _),
-    var allocation = FlatMap(allocate(set_empty(): Set<bit<64>>, unallocated, 64'h1, 64'hffff)),
+    var allocation = FlatMap(allocate(set_empty(), unallocated, 1, 64'hffff)),
     (var port, var tunkey) = allocation.
 
 /*
@@ -6625,7 +6625,7 @@ MulticastGroupTunKeyAllocation(datapath_uuid, group, tunkey) :-
     not AllocatedMulticastGroupTunKeys(datapath_uuid, _),
     (_, var min_key) = mC_IP_MCAST_MIN(),
     (_, var max_key) = mC_IP_MCAST_MAX(),
-    var allocation = FlatMap(allocate(set_empty(): Set<bit<64>>, unallocated,
+    var allocation = FlatMap(allocate(set_empty(), unallocated,
                                       min_key, max_key)),
     (var group, var tunkey) = allocation.
 
@@ -6678,14 +6678,14 @@ AllocatedQIDs(chassis, allocated_ids) :-
     pb.__type != "localnet",
     Some{var chassis} = pb.chassis,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
-    Some{var qid: bit<64>} = parse_dec_u64(qid_str),
+    Some{var qid} = parse_dec_u64(qid_str),
     var allocated_ids = Aggregate((chassis), group2map((pb._uuid, qid))).
 AllocatedQIDs(chassis, allocated_ids) :-
     pb in sb.Port_Binding(),
     pb.__type == "localnet",
     var chassis = pb._uuid,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
-    Some{var qid: bit<64>} = parse_dec_u64(qid_str),
+    Some{var qid} = parse_dec_u64(qid_str),
     var allocated_ids = Aggregate((chassis), group2map((pb._uuid, qid))).
 
 // allocate queue IDs to ports
@@ -6699,13 +6699,13 @@ QueueIDAllocation(port, None) :-
 QueueIDAllocation(port, Some{qid}) :-
     AggPortRequiresQID(chassis, ports),
     AllocatedQIDs(chassis, allocated_ids),
-    var allocations = FlatMap(adjust_allocation(allocated_ids, ports, 64'h1, 64'hf000)),
+    var allocations = FlatMap(adjust_allocation(allocated_ids, ports, 1, 64'hf000)),
     (var port, var qid) = allocations.
 
 QueueIDAllocation(port, Some{qid}) :-
     AggPortRequiresQID(chassis, ports),
     not AllocatedQIDs(chassis, _),
-    var allocations = FlatMap(adjust_allocation(map_empty(): Map<uuid, integer>, ports, 64'h1, 64'hf000)),
+    var allocations = FlatMap(adjust_allocation(map_empty(), ports, 1, 64'hf000)),
     (var port, var qid) = allocations.
 
 /*
@@ -6766,8 +6766,8 @@ SwitchPortAllocatedTags(lsp_uuid, tag) :-
     SwitchPortReservedTags(parent_name, reserved),
     var dyn_tags = allocate_opt(reserved,
                                 lsps_need_tag,
-                                1: integer, /* Tag 0 is invalid for nested containers. */
-                                4095: integer),
+                                1, /* Tag 0 is invalid for nested containers. */
+                                4095),
     var lsp_tag = FlatMap(dyn_tags),
     (var lsp_uuid, var tag) = lsp_tag.
 
@@ -6781,7 +6781,7 @@ relation SwitchPortNewDynamicTag(port: uuid, tag: Option<integer>)
 /* Case 1 */
 SwitchPortNewDynamicTag(lsp._uuid, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = false),
-    var tag: Option<integer> = match (lsp.tag_request) {
+    var tag = match (lsp.tag_request) {
         Some{0} -> None,
         treq    -> treq
     }.

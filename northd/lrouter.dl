@@ -23,7 +23,7 @@ LogicalRouterPortCandidate(lrp_uuid, lr_uuid) :-
 Warning[message] :-
     LogicalRouterPortCandidate(lrp_uuid, lr_uuid),
     var lrs = Aggregate((lrp_uuid), group2set(lr_uuid)),
-    set_size(lrs) > 64'd1,
+    set_size(lrs) > 1,
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid),
     var message = "Bad configuration: logical router port ${lrp.name} belongs "
     "to more than one logical router".
@@ -33,8 +33,8 @@ relation LogicalRouterPort(lport: uuid, lrouter: uuid)
 LogicalRouterPort(lrp_uuid, lr_uuid) :-
     LogicalRouterPortCandidate(lrp_uuid, lr_uuid),
     var lrs = Aggregate((lrp_uuid), group2set(lr_uuid)),
-    set_size(lrs) == 64'd1,
-    Some{var lr_uuid: uuid} = set_nth(lrs, 0).
+    set_size(lrs) == 1,
+    Some{var lr_uuid} = set_nth(lrs, 0).
 
 /*
  * Peer routers.
@@ -132,7 +132,7 @@ DistributedGatewayPortCandidate(lr_uuid, lrp_uuid) :-
 Warning[message] :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
     var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
-    set_size(lrps) > 64'd1,
+    set_size(lrps) > 1,
     lr in nb.Logical_Router(._uuid = lr_uuid),
     var message = "Bad configuration: multiple distributed gateway ports on "
     "logical router ${lr.name}; ignoring all of them".
@@ -146,7 +146,7 @@ relation DistributedGatewayPort(lrp: nb.Logical_Router_Port, lr_uuid: uuid)
 DistributedGatewayPort(lrp, lr_uuid) :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
     var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
-    set_size(lrps) == 64'd1,
+    set_size(lrps) == 1,
     Some{var lrp_uuid} = set_nth(lrps, 0),
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid).
 
@@ -217,7 +217,7 @@ relation LogicalRouterHAChassisGroup(lr_uuid: uuid,
 LogicalRouterHAChassisGroup(lr_uuid, ha_chassis_group_uuid(lrp._uuid)) :-
     DistributedGatewayPort(lrp, lr_uuid),
     is_none(lrp.ha_chassis_group),
-    set_size(lrp.gateway_chassis) > 64'd0.
+    set_size(lrp.gateway_chassis) > 0.
 LogicalRouterHAChassisGroup(lr_uuid,
                             ha_chassis_group_uuid(ha_chassis_group_uuid)) :-
     DistributedGatewayPort(lrp, lr_uuid),
@@ -558,7 +558,7 @@ RouterStaticRoute(router, key, dsts) :-
     /* output_port specified */
     port in &RouterPort(.lrp = nb.Logical_Router_Port{.name = oport},
                         .networks = networks),
-    Some{var src_ip: v46_ip} = match (find_lrp_member_ip(networks, nexthop)) {
+    Some{var src_ip} = match (find_lrp_member_ip(networks, nexthop)) {
         Some{src_ip} -> Some{src_ip},
         None -> {
             /* There are no IP networks configured on the router's port via
