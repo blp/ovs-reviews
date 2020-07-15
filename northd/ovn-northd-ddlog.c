@@ -715,7 +715,7 @@ northd_update_probe_interval_cb(
     uintptr_t probe_intervalp_,
     table_id table OVS_UNUSED,
     const ddlog_record *rec,
-    bool polarity OVS_UNUSED)
+    ssize_t weight OVS_UNUSED)
 {
     int *probe_intervalp = (int *) probe_intervalp_;
 
@@ -1108,11 +1108,11 @@ static void warning_cb(
     uintptr_t arg OVS_UNUSED,
     table_id table OVS_UNUSED,
     const ddlog_record *rec,
-    bool polarity)
+    ssize_t weight)
 {
     size_t len;
     const char *s = ddlog_get_str_with_length(rec, &len);
-    if (polarity) {
+    if (weight > 0) {
         VLOG_WARN("New warning: %.*s", (int)len, s);
     } else {
         VLOG_WARN("Warning cleared: %.*s", (int)len, s);
