@@ -22,7 +22,7 @@ LogicalRouterPortCandidate(lrp_uuid, lr_uuid) :-
     var lrp_uuid = FlatMap(ports).
 Warning[message] :-
     LogicalRouterPortCandidate(lrp_uuid, lr_uuid),
-    var lrs = Aggregate((lrp_uuid), group2set(lr_uuid)),
+    var lrs = Aggregate((lrp_uuid), group_to_set(lr_uuid)),
     set_size(lrs) > 1,
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid),
     var message = "Bad configuration: logical router port ${lrp.name} belongs "
@@ -32,7 +32,7 @@ Warning[message] :-
 relation LogicalRouterPort(lport: uuid, lrouter: uuid)
 LogicalRouterPort(lrp_uuid, lr_uuid) :-
     LogicalRouterPortCandidate(lrp_uuid, lr_uuid),
-    var lrs = Aggregate((lrp_uuid), group2set(lr_uuid)),
+    var lrs = Aggregate((lrp_uuid), group_to_set(lr_uuid)),
     set_size(lrs) == 1,
     Some{var lr_uuid} = set_nth(lrs, 0).
 
@@ -131,7 +131,7 @@ DistributedGatewayPortCandidate(lr_uuid, lrp_uuid) :-
     has_hcg or has_gc.
 Warning[message] :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
-    var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
+    var lrps = Aggregate((lr_uuid), group_to_set(lrp_uuid)),
     set_size(lrps) > 1,
     lr in nb.Logical_Router(._uuid = lr_uuid),
     var message = "Bad configuration: multiple distributed gateway ports on "
@@ -145,7 +145,7 @@ Warning[message] :-
 relation DistributedGatewayPort(lrp: nb.Logical_Router_Port, lr_uuid: uuid)
 DistributedGatewayPort(lrp, lr_uuid) :-
     DistributedGatewayPortCandidate(lr_uuid, lrp_uuid),
-    var lrps = Aggregate((lr_uuid), group2set(lrp_uuid)),
+    var lrps = Aggregate((lr_uuid), group_to_set(lrp_uuid)),
     set_size(lrps) == 1,
     Some{var lrp_uuid} = set_nth(lrps, 0),
     lrp in nb.Logical_Router_Port(._uuid = lrp_uuid).
@@ -252,7 +252,7 @@ relation LogicalRouterNATs(lr: uuid, nat: Vec<Ref<nb.NAT>>)
 
 LogicalRouterNATs(lr, nats) :-
      LogicalRouterNAT(lr, nat),
-     var nats = Aggregate((lr), group2vec(nat)).
+     var nats = Aggregate((lr), group_to_vec(nat)).
 
 LogicalRouterNATs(lr, vec_empty()) :-
     nb.Logical_Router(._uuid = lr),
@@ -269,7 +269,7 @@ relation LogicalRouterLBs(lr: uuid, nat: Vec<Ref<nb.Load_Balancer>>)
 
 LogicalRouterLBs(lr, lbs) :-
      LogicalRouterLB(lr, lb),
-     var lbs = Aggregate((lr), group2vec(lb)).
+     var lbs = Aggregate((lr), group_to_vec(lb)).
 
 LogicalRouterLBs(lr, vec_empty()) :-
     nb.Logical_Router(._uuid = lr),
@@ -548,7 +548,7 @@ RouterStaticRoute(router, key, dsts) :-
                         .networks = networks),
     Some{var src_ip} = find_lrp_member_ip(networks, nexthop),
     var dst = RouteDst{nexthop, src_ip, port},
-    var dsts = Aggregate((router, key), group2set(dst)).
+    var dsts = Aggregate((router, key), group_to_set(dst)).
 
 RouterStaticRoute(router, key, dsts) :-
     RouterStaticRoute_(.router = router,

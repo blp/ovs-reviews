@@ -31,7 +31,7 @@ LogicalSwitchUnknownPorts(ls_uuid, port_ids) :-
     &SwitchPort(.lsp = lsp, .sw = &Switch{.ls = ls}),
     is_enabled(lsp.enabled) and set_contains(lsp.addresses, "unknown"),
     var ls_uuid = ls._uuid,
-    var port_ids = Aggregate((ls_uuid), group2set(lsp._uuid)).
+    var port_ids = Aggregate((ls_uuid), group_to_set(lsp._uuid)).
 
 /* PortStaticAddresses: static IP addresses associated with each Logical_Switch_Port */
 relation PortStaticAddresses(lsport: uuid, ip4addrs: Set<string>, ip6addrs: Set<string>)

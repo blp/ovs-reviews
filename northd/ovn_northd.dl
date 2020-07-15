@@ -479,7 +479,7 @@ RefChassis(lr_uuid, chassis_uuid) :-
 relation RefChassisSet0(lr_uuid: uuid, chassis_uuids: Set<uuid>)
 RefChassisSet0(lr_uuid, chassis_uuids) :-
     RefChassis(lr_uuid, chassis_uuid),
-    var chassis_uuids = Aggregate((lr_uuid), group2set(chassis_uuid)).
+    var chassis_uuids = Aggregate((lr_uuid), group_to_set(chassis_uuid)).
 relation RefChassisSet(lr_uuid: uuid, chassis_uuids: Set<uuid>)
 RefChassisSet(lr_uuid, chassis_uuids) :-
     RefChassisSet0(lr_uuid, chassis_uuids).
@@ -503,7 +503,7 @@ HAChassisGroupRefChassisSet(hacg_uuid, chassis_uuids) :-
 sb.Out_HA_Chassis_Group(hacg_uuid, hacg_name, ha_chassis, ref_chassis, eids) :-
     HAChassis(hacg_uuid, chassis_name, _, _),
     var ha_chassis_uuid = ha_chassis_uuid(chassis_name),
-    var ha_chassis = Aggregate((hacg_uuid), group2set(ha_chassis_uuid)),
+    var ha_chassis = Aggregate((hacg_uuid), group_to_set(ha_chassis_uuid)),
     HAChassisGroup(hacg_uuid, hacg_name, eids),
     HAChassisGroupRefChassisSet(hacg_uuid, ref_chassis).
 
@@ -539,7 +539,7 @@ sb.Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
     ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid),
     var ha_chassis_uuid_name = ha_chassis_uuid(ha_chassis.chassis_name),
-    var ha_chassis = Aggregate((ls_uuid, name, eids), group2set(ha_chassis_uuid_name)),
+    var ha_chassis = Aggregate((ls_uuid, name, eids), group_to_set(ha_chassis_uuid_name)),
     var _uuid = ha_chassis_group_uuid(ls_uuid).
 
 /*
@@ -643,7 +643,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
     },
     //PortDynamicAddresses(.lsport = port_uuid, .ip4addrs = dynamic),
     var port_ip4addrs = set_union(stat, dynamic),
-    var pg_ip4addrs = Aggregate((as_name), group2vec(port_ip4addrs)).
+    var pg_ip4addrs = Aggregate((as_name), group_to_vec(port_ip4addrs)).
 
 sb.Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
     nb.Port_Group(.ports = set_empty(), .name = pg_name),
@@ -669,7 +669,7 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip6addrs)) :-
     },
     //PortDynamicAddresses(.lsport = port_uuid, .ip6addrs = dynamic),
     var port_ip6addrs = set_union(stat, dynamic),
-    var pg_ip6addrs = Aggregate((as_name), group2vec(port_ip6addrs)).
+    var pg_ip6addrs = Aggregate((as_name), group_to_vec(port_ip6addrs)).
 
 sb.Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
     nb.Port_Group(.ports = set_empty(), .name = pg_name),
@@ -684,7 +684,7 @@ sb.Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = port_names) :-
     nb.Port_Group(._uuid = _uuid, .name = pg_name, .ports = pg_ports),
     var port_uuid = FlatMap(pg_ports),
     nb.Logical_Switch_Port(._uuid = port_uuid, .name = port_name),
-    var port_names = Aggregate((_uuid, pg_name), group2set(port_name)).
+    var port_names = Aggregate((_uuid, pg_name), group_to_set(port_name)).
 
 sb.Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()) :-
     nb.Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()).
@@ -740,7 +740,7 @@ sb.Out_Multicast_Group (._uuid      = hash128((datapath,name)),
     &SwitchPort(.lsp = lsp, .sw = &Switch{.ls = ls}),
     is_enabled(lsp.enabled),
     var datapath = ls._uuid,
-    var port_ids = Aggregate((datapath), group2set(lsp._uuid)),
+    var port_ids = Aggregate((datapath), group_to_set(lsp._uuid)),
     (var name, var tunnel_key) = mC_FLOOD().
 
 /* Only create unknown group if the switch has ports with "unknown" address */
@@ -1105,7 +1105,7 @@ sb.Out_DNS(._uuid        = nbdns._uuid,
            .external_ids = map_insert_imm(nbdns.external_ids, "dns_id", uuid2str(nbdns._uuid))) :-
     nb.DNS[nbdns],
     LogicalSwitchDNS(ls_uuid, nbdns._uuid),
-    var datapaths = Aggregate((nbdns), group2set(ls_uuid)).
+    var datapaths = Aggregate((nbdns), group_to_set(ls_uuid)).
 
 /*
  * RBAC_Permission: fixed
@@ -1221,7 +1221,7 @@ LRPIPv6Prefix(lrp_uuid, None) :-
     not LRPIPv6Prefix0(lrp_uuid, _).
 
 nb.Out_Logical_Router_Port(._uuid = _uuid,
-                           .ipv6_prefix = option2set(ipv6_prefix)) :-
+                           .ipv6_prefix = to_set(ipv6_prefix)) :-
     nb.Logical_Router_Port(._uuid = _uuid, .name = name),
     LRPIPv6Prefix(_uuid, ipv6_prefix).
 
@@ -1486,7 +1486,7 @@ function vec_space_sep(items: Vec<string>): string = {
 
 // space-separated set of strings
 function set_space_sep(items: Set<string>): string = {
-    vec_space_sep(set2vec(items))
+    vec_space_sep(set_to_vec(items))
 }
 
 function build_port_security_ipv6_flow(
@@ -2490,7 +2490,7 @@ function ct_lb(backends: string, selection_fields: Set<string>): string {
         "ct_lb(backends=${backends});"
     } else {
         "ct_lb(backends=${backends}; hash_fields=" ++
-        json_string_escape(string_join(set2vec(selection_fields), ",")) ++
+        json_string_escape(string_join(set_to_vec(selection_fields), ",")) ++
         ");"
     }
 }
@@ -2510,7 +2510,7 @@ Flow(.logical_datapath = sw.ls._uuid,
                               .ip = lbvipbackend.ip,
                               .protocol = default_protocol(lb.protocol),
                               .logical_port = svc_monitor.port_name),
-    var bses = Aggregate((sw, lbvip, lb), group2set(bs)),
+    var bses = Aggregate((sw, lbvip, lb), group_to_set(bs)),
     var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
     var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
     var up_backends = {
@@ -2525,7 +2525,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     var actions = if (set_is_empty(up_backends)) {
         "drop;"
     } else {
-        ct_lb(string_join(set2vec(up_backends), ","), lb.selection_fields)
+        ct_lb(string_join(set_to_vec(up_backends), ","), lb.selection_fields)
     }.
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, STATEFUL),
@@ -2597,7 +2597,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
     var __match = get_hairpin_match(lbvipbackend, "dst", Some{lbvipbackend.ip}),
-    var matches = Aggregate((lbvip, lb, sw), group2vec(__match)),
+    var matches = Aggregate((lbvip, lb, sw), group_to_vec(__match)),
     var __match = string_join(matches, " || "),
     var actions = "${rEGBIT_HAIRPIN()} = 1; ct_snat(${lbvip.vip_addr});".
 /* If the packets are replies for hairpinned traffic, UNSNAT them. */
@@ -2613,7 +2613,7 @@ Flow(.logical_datapath = sw.ls._uuid,
     var lb = lbvip.lb,
     set_contains(sw.ls.load_balancer, lb._uuid),
     var __match = get_hairpin_match(lbvipbackend, "src", None),
-    var matches = Aggregate((lbvip, lb, sw), group2vec(__match)),
+    var matches = Aggregate((lbvip, lb, sw), group_to_vec(__match)),
     var ipX = ip46_ipX(lbvip.vip_addr),
     var __match = "(" ++ string_join(matches, " || ") ++ ") && "
                   "${ipX}.dst == ${lbvip.vip_addr}",
@@ -3668,7 +3668,7 @@ Flow(.logical_datapath = sw.ls._uuid,
      .priority         = 75,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && arp.op == 1 && arp.tpa == { " ++
-                         string_join(set2vec(all_ips_v4), ", ") ++ "}",
+                         string_join(set_to_vec(all_ips_v4), ", ") ++ "}",
      .actions          = match (sw.localnet_port_name) {
                              Some{name} -> "clone { outport = ${json_string_escape(name)}; output; }; ",
                              None -> ""
@@ -3683,7 +3683,7 @@ Flow(.logical_datapath = sw.ls._uuid,
      .priority         = 75,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && nd_ns && nd.target == { " ++
-                         string_join(set2vec(all_ips_v6), ", ") ++ "}",
+                         string_join(set_to_vec(all_ips_v6), ", ") ++ "}",
      .actions          = match (sw.localnet_port_name) {
                              Some{name} -> "clone { outport = ${json_string_escape(name)}; output; }; ",
                              None -> ""
@@ -4563,7 +4563,7 @@ for (&RouterPort(.lrp = lrp,
     var ips = set_union(ip4s, ip6s) in
     if (not set_is_empty(ips)) {
         /* Drop IP traffic to this router. */
-        var __match = string_join(set2vec(ips), " || ") in
+        var __match = string_join(set_to_vec(ips), " || ") in
         Flow(.logical_datapath = lr._uuid,
              .stage            = router_stage(IN, IP_INPUT),
              .priority         = 60,
@@ -5394,7 +5394,7 @@ Flow(.logical_datapath = r.lr._uuid,
                               .ip = lbvipbackend.ip,
                               .protocol = default_protocol(lb.protocol),
                               .logical_port = svc_monitor.port_name),
-    var bses = Aggregate((r, lbvip, lb), group2set(bs)),
+    var bses = Aggregate((r, lbvip, lb), group_to_set(bs)),
     var __match
         = "ct.new && " ++
           get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true) ++
@@ -5418,7 +5418,7 @@ Flow(.logical_datapath = r.lr._uuid,
         match (get_force_snat_ip(r.lr, "lb")) {
             Some{snat_ip} -> "flags.force_snat_for_lb = 1; ",
             _ -> ""
-        } ++ ct_lb(string_join(set2vec(up_backends), ","), lb.selection_fields)
+        } ++ ct_lb(string_join(set_to_vec(up_backends), ","), lb.selection_fields)
     }.
 Flow(.logical_datapath = r.lr._uuid,
      .stage            = router_stage(IN, DNAT),
@@ -5793,7 +5793,7 @@ relation EcmpGroup(
 EcmpGroup(group_id, router, key, dsts) :-
     RouterStaticRoute(.router = router, .key = key, .dsts = dsts),
     set_size(dsts) > 1,
-    var groups = Aggregate((), group2set((router, key, dsts))),
+    var groups = Aggregate((), group_to_set((router, key, dsts))),
     var group_id_and_group = FlatMap(numbered_vec(groups)),
     (var group_id, (var router, var key, var dsts)) = group_id_and_group.
 
@@ -6453,7 +6453,7 @@ AssignedTunKey(datapath, tunkey) :-
 relation AllocatedTunKeys(keys: Set<integer>)
 AllocatedTunKeys(keys) :-
     AssignedTunKey(.tunkey = tunkey),
-    var keys = Aggregate((), group2set(tunkey)).
+    var keys = Aggregate((), group_to_set(tunkey)).
 
 // Datapath_Binding's not yet in the Realized table
 relation NotYetAllocatedTunKeys(datapaths: Vec<uuid>)
@@ -6461,7 +6461,7 @@ relation NotYetAllocatedTunKeys(datapaths: Vec<uuid>)
 NotYetAllocatedTunKeys(datapaths) :-
     OutProxy_Datapath_Binding(._uuid = datapath),
     not AssignedTunKey(datapath, _),
-    var datapaths = Aggregate((), group2vec(datapath)).
+    var datapaths = Aggregate((), group_to_vec(datapath)).
 
 // Perform the allocation
 relation TunKeyAllocation(datapath: uuid, tunkey: integer)
@@ -6544,7 +6544,7 @@ relation AllocatedPortTunKeys(datapath: uuid, keys: Set<integer>)
 
 AllocatedPortTunKeys(datapath, keys) :-
     AssignedPortTunKey(datapath, port, tunkey),
-    var keys = Aggregate((datapath), group2set(tunkey)).
+    var keys = Aggregate((datapath), group_to_set(tunkey)).
 
 // Port_Binding's not yet in the Realized table
 relation NotYetAllocatedPortTunKeys(datapath: uuid, all_logical_ids: Vec<uuid>)
@@ -6552,7 +6552,7 @@ relation NotYetAllocatedPortTunKeys(datapath: uuid, all_logical_ids: Vec<uuid>)
 NotYetAllocatedPortTunKeys(datapath, all_names) :-
     OutProxy_Port_Binding(._uuid = port_uuid, .datapath = datapath),
     not AssignedPortTunKey(datapath, port_uuid, _),
-    var all_names = Aggregate((datapath), group2vec(port_uuid)).
+    var all_names = Aggregate((datapath), group_to_vec(port_uuid)).
 
 // Perform the allocation.
 relation PortTunKeyAllocation(port: uuid, tunkey: integer)
@@ -6587,7 +6587,7 @@ relation AllocatedMulticastGroupTunKeys(datapath_uuid: uuid, keys: Set<integer>)
 AllocatedMulticastGroupTunKeys(datapath_uuid, keys) :-
     sb.Multicast_Group(.datapath = datapath_uuid, .tunnel_key = tunkey),
     //sb.UUIDMap_Datapath_Binding(datapath, Left{datapath_uuid}),
-    var keys = Aggregate((datapath_uuid), group2set(tunkey)).
+    var keys = Aggregate((datapath_uuid), group_to_set(tunkey)).
 
 // Multicast_Group's not yet in the Realized table.
 relation NotYetAllocatedMulticastGroupTunKeys(datapath_uuid: uuid,
@@ -6596,7 +6596,7 @@ relation NotYetAllocatedMulticastGroupTunKeys(datapath_uuid: uuid,
 NotYetAllocatedMulticastGroupTunKeys(datapath_uuid, all_names) :-
     OutProxy_Multicast_Group(.name = name, .datapath = datapath_uuid),
     not sb.Multicast_Group(.name = name, .datapath = datapath_uuid),
-    var all_names = Aggregate((datapath_uuid), group2vec(name)).
+    var all_names = Aggregate((datapath_uuid), group_to_vec(name)).
 
 // Perform the allocation
 relation MulticastGroupTunKeyAllocation(datapath_uuid: uuid, group: string, tunkey: integer)
@@ -6669,7 +6669,7 @@ relation AggPortRequiresQID(chassis: uuid, ports: Vec<uuid>)
 
 AggPortRequiresQID(chassis, ports) :-
     PortRequiresQID(port, chassis),
-    var ports = Aggregate((chassis), group2vec(port)).
+    var ports = Aggregate((chassis), group_to_vec(port)).
 
 relation AllocatedQIDs(chassis: uuid, allocated_ids: Map<uuid, integer>)
 
@@ -6679,14 +6679,14 @@ AllocatedQIDs(chassis, allocated_ids) :-
     Some{var chassis} = pb.chassis,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
     Some{var qid} = parse_dec_u64(qid_str),
-    var allocated_ids = Aggregate((chassis), group2map((pb._uuid, qid))).
+    var allocated_ids = Aggregate((chassis), group_to_map((pb._uuid, qid))).
 AllocatedQIDs(chassis, allocated_ids) :-
     pb in sb.Port_Binding(),
     pb.__type == "localnet",
     var chassis = pb._uuid,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
     Some{var qid} = parse_dec_u64(qid_str),
-    var allocated_ids = Aggregate((chassis), group2map((pb._uuid, qid))).
+    var allocated_ids = Aggregate((chassis), group_to_map((pb._uuid, qid))).
 
 // allocate queue IDs to ports
 relation QueueIDAllocation(port: uuid, qids: Option<integer>)
@@ -6748,7 +6748,7 @@ relation SwitchPortReservedTags(parent_name: string, tags: Set<integer>)
 
 SwitchPortReservedTags(parent_name, tags) :-
     SwitchPortReservedTag(parent_name, tag),
-    var tags = Aggregate((parent_name), group2set(tag)).
+    var tags = Aggregate((parent_name), group_to_set(tag)).
 
 SwitchPortReservedTags(parent_name, set_empty()) :-
     nb.Logical_Switch_Port(.name = parent_name),
@@ -6762,7 +6762,7 @@ relation SwitchPortAllocatedTags(lsp_uuid: uuid, tag: Option<integer>)
 SwitchPortAllocatedTags(lsp_uuid, tag) :-
     &SwitchPort(.lsp = lsp, .needs_dynamic_tag = true, .parent_name = Some{parent_name}),
     is_none(lsp.tag),
-    var lsps_need_tag = Aggregate((parent_name), group2vec(lsp._uuid)),
+    var lsps_need_tag = Aggregate((parent_name), group_to_vec(lsp._uuid)),
     SwitchPortReservedTags(parent_name, reserved),
     var dyn_tags = allocate_opt(reserved,
                                 lsps_need_tag,

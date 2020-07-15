@@ -172,7 +172,7 @@ relation SwitchIPv4ReservedAddresses(lswitch: uuid, addrs: Set<bit<32>>)
 
 SwitchIPv4ReservedAddresses(lswitch, addrs) :-
     SwitchIPv4ReservedAddress(lswitch, addr),
-    var addrs = Aggregate((lswitch), group2set(addr)).
+    var addrs = Aggregate((lswitch), group_to_set(addr)).
 
 SwitchIPv4ReservedAddresses(lswitch_uuid, set_empty()) :-
     nb.Logical_Switch(._uuid = lswitch_uuid),
@@ -187,7 +187,7 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
     port in &SwitchPort(.needs_dynamic_ipv4address = true,
                         .sw = &sw),
     var switch_id = sw.ls._uuid,
-    var ports = Aggregate((switch_id), group2vec(port)),
+    var ports = Aggregate((switch_id), group_to_vec(port)),
     SwitchIPv4ReservedAddresses(switch_id, reserved_addrs),
     /* Allocate dynamic addresses only for ports that don't have a dynamic address
      * or have one that is no longer valid. */
@@ -348,7 +348,7 @@ relation ReservedMACAddresses(addrs: Set<bit<64>>)
 
 ReservedMACAddresses(addrs) :-
     ReservedMACAddress(addr),
-    var addrs = Aggregate((), group2set(addr)).
+    var addrs = Aggregate((), group_to_set(addr)).
 
 /* Handle case when `ReservedMACAddress` is empty */
 ReservedMACAddresses(set_empty()) :-
@@ -369,7 +369,7 @@ SwitchPortAllocatedMACDynAddress(lsport, dyn_addr) :-
     /* Group all ports that need a dynamic IP address */
     port in &SwitchPort(.needs_dynamic_macaddress = true, .lsp = lsp),
     SwitchPortNewIPv4DynAddress(lsp._uuid, ipv4_addr),
-    var ports = Aggregate((), group2vec((port, ipv4_addr))),
+    var ports = Aggregate((), group_to_vec((port, ipv4_addr))),
     ReservedMACAddresses(reserved_addrs),
     MacPrefix(mac_prefix),
     var dyn_addresses = {

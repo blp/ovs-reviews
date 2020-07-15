@@ -125,7 +125,7 @@ SwitchMcastFloodRelayPorts(switch, relay_ports) :-
         .sw   = switch,
         .peer = Some{&RouterPort{.router = &Router{.mcast_cfg = &mcast_cfg}}}
     ), mcast_cfg.relay,
-    var relay_ports = Aggregate((switch), group2set(lsp._uuid)).
+    var relay_ports = Aggregate((switch), group_to_set(lsp._uuid)).
 
 SwitchMcastFloodRelayPorts(switch, set_empty()) :-
     Switch[switch],
@@ -148,7 +148,7 @@ SwitchMcastFloodPorts(switch, flood_ports) :-
         .lsp = lsp,
         .sw  = switch,
         .mcast_cfg = &McastPortCfg{.flood = true}),
-    var flood_ports = Aggregate((switch), group2set(lsp._uuid)).
+    var flood_ports = Aggregate((switch), group_to_set(lsp._uuid)).
 
 SwitchMcastFloodPorts(switch, set_empty()) :-
     Switch[switch],
@@ -166,7 +166,7 @@ SwitchMcastFloodReportPorts(switch, flood_ports) :-
         .lsp = lsp,
         .sw  = switch,
         .mcast_cfg = &McastPortCfg{.flood_reports = true}),
-    var flood_ports = Aggregate((switch), group2set(lsp._uuid)).
+    var flood_ports = Aggregate((switch), group_to_set(lsp._uuid)).
 
 SwitchMcastFloodReportPorts(switch, set_empty()) :-
     Switch[switch],
@@ -185,7 +185,7 @@ RouterMcastFloodPorts(router, flood_ports) :-
         .router = router,
         .mcast_cfg = &McastPortCfg{.flood = true}
     ),
-    var flood_ports = Aggregate((router), group2set(lrp._uuid)).
+    var flood_ports = Aggregate((router), group_to_set(lrp._uuid)).
 
 RouterMcastFloodPorts(router, set_empty()) :-
     Router[router],
@@ -220,7 +220,7 @@ relation IgmpSwitchMulticastGroup(
 
 IgmpSwitchMulticastGroup(address, switch, ports) :-
     IgmpSwitchGroupPort(address, switch, port),
-    var ports = Aggregate((address, switch), group2set(port)).
+    var ports = Aggregate((address, switch), group_to_set(port)).
 
 /* Flattened IGMP group representation for routers with relay enabled. One
  * record per address-port tuple for all IGMP groups learned by switches
@@ -257,4 +257,4 @@ relation IgmpRouterMulticastGroup(
 
 IgmpRouterMulticastGroup(address, router, ports) :-
     IgmpRouterGroupPort(address, router, port),
-    var ports = Aggregate((address, router), group2set(port)).
+    var ports = Aggregate((address, router), group_to_set(port)).
