@@ -220,7 +220,7 @@ northd_ctx_create(const char *server, const char *database, ddlog_prog ddlog,
     struct northd_ctx *ctx;
 
     ctx = xzalloc(sizeof *ctx);
-    ctx->prefix = xasprintf("%s.", database);
+    ctx->prefix = xasprintf("%s::", database);
     ctx->session = jsonrpc_session_open(server, true);
     ctx->state_seqno = UINT_MAX;
     ctx->request_id = NULL;
@@ -791,7 +791,7 @@ ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
         VLOG_INFO("xxx ddlog_table_update_output (%s) error: %d", table, error);
         return;
     }
-    char *table_name = xasprintf("%s.Out_%s", db, table);
+    char *table_name = xasprintf("%s::Out_%s", db, table);
     ddlog_delta_clear_table(delta, ddlog_get_table_id(table_name));
     free(table_name);
 

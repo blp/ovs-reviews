@@ -11,19 +11,19 @@ import ipam
 
 output relation Warning[string]
 
-index Logical_Flow_Index() on sb.Out_Logical_Flow()
+index Logical_Flow_Index() on sb::Out_Logical_Flow()
 
 /* Meter_Band table */
-for (mb in nb.Meter_Band) {
-    sb.Out_Meter_Band(._uuid = mb._uuid,
+for (mb in nb::Meter_Band) {
+    sb::Out_Meter_Band(._uuid = mb._uuid,
                       .action = mb.action,
                       .rate = mb.rate,
                       .burst_size = mb.burst_size)
 }
 
 /* Meter table */
-for (meter in nb.Meter) {
-    sb.Out_Meter(._uuid = meter._uuid,
+for (meter in nb::Meter) {
+    sb::Out_Meter(._uuid = meter._uuid,
                  .name = meter.name,
                  .unit = meter.unit,
                  .bands = meter.bands)
@@ -38,7 +38,7 @@ relation OutProxy_Datapath_Binding (
 
 /* Datapath_Binding table */
 OutProxy_Datapath_Binding(uuid, external_ids) :-
-    nb.Logical_Switch(._uuid = uuid, .name = name, .external_ids = ids,
+    nb::Logical_Switch(._uuid = uuid, .name = name, .external_ids = ids,
                       .other_config = other_config),
     var uuid_str = uuid2str(uuid),
     var external_ids = {
@@ -57,7 +57,7 @@ OutProxy_Datapath_Binding(uuid, external_ids) :-
     }.
 
 OutProxy_Datapath_Binding(uuid, external_ids) :-
-    nb.Logical_Router(._uuid = uuid, .name = name, .external_ids = ids, .enabled = enabled),
+    nb::Logical_Router(._uuid = uuid, .name = name, .external_ids = ids, .enabled = enabled),
     is_enabled(enabled),
     var uuid_str = uuid2str(uuid),
     var external_ids = {
@@ -71,7 +71,7 @@ OutProxy_Datapath_Binding(uuid, external_ids) :-
         eids
     }.
 
-sb.Out_Datapath_Binding(uuid, tunkey, external_ids) :-
+sb::Out_Datapath_Binding(uuid, tunkey, external_ids) :-
     OutProxy_Datapath_Binding(uuid, external_ids),
     TunKeyAllocation(uuid, tunkey).
 
@@ -405,7 +405,7 @@ relation RouterPortRAOptionsComplete(lrp: uuid, options: Map<string, string>)
 RouterPortRAOptionsComplete(lrp, options) :-
     RouterPortRAOptions(lrp, options).
 RouterPortRAOptionsComplete(lrp, map_empty()) :-
-    nb.Logical_Router_Port(._uuid = lrp),
+    nb::Logical_Router_Port(._uuid = lrp),
     not RouterPortRAOptions(lrp, _).
 
 
@@ -439,7 +439,7 @@ OutProxy_Port_Binding(// lrp._uuid is already in use; generate a new UUID by
 
 /* Add allocated qdisc_queue_id and tunnel key to Port_Binding.
  */
-sb.Out_Port_Binding(._uuid              = pbinding._uuid,
+sb::Out_Port_Binding(._uuid              = pbinding._uuid,
                     .logical_port       = pbinding.logical_port,
                     .__type             = pbinding.__type,
                     .gateway_chassis    = pbinding.gateway_chassis,
@@ -462,9 +462,9 @@ sb.Out_Port_Binding(._uuid              = pbinding._uuid,
 
 /* Referenced chassis.
  *
- * These tables track the sb.Chassis that a packet that traverses logical
+ * These tables track the sb::Chassis that a packet that traverses logical
  * router 'lr_uuid' can end up at (or start from).  This is used for
- * sb.Out_HA_Chassis_Group's ref_chassis column.
+ * sb::Out_HA_Chassis_Group's ref_chassis column.
  *
  * RefChassisSet0 has a row for each logical router that actually references a
  * chassis.  RefChassisSet has a row for every logical router. */
@@ -473,8 +473,8 @@ RefChassis(lr_uuid, chassis_uuid) :-
     ReachableLogicalRouter(lr_uuid, lr2_uuid),
     FirstHopLogicalRouter(lr2_uuid, ls_uuid),
     LogicalSwitchPort(lsp_uuid, ls_uuid),
-    nb.Logical_Switch_Port(._uuid = lsp_uuid, .name = lsp_name),
-    sb.Port_Binding(.logical_port = lsp_name, .chassis = chassis_uuids),
+    nb::Logical_Switch_Port(._uuid = lsp_uuid, .name = lsp_name),
+    sb::Port_Binding(.logical_port = lsp_name, .chassis = chassis_uuids),
     Some{var chassis_uuid} = chassis_uuids.
 relation RefChassisSet0(lr_uuid: uuid, chassis_uuids: Set<uuid>)
 RefChassisSet0(lr_uuid, chassis_uuids) :-
@@ -484,7 +484,7 @@ relation RefChassisSet(lr_uuid: uuid, chassis_uuids: Set<uuid>)
 RefChassisSet(lr_uuid, chassis_uuids) :-
     RefChassisSet0(lr_uuid, chassis_uuids).
 RefChassisSet(lr_uuid, set_empty()) :-
-    nb.Logical_Router(._uuid = lr_uuid),
+    nb::Logical_Router(._uuid = lr_uuid),
     not RefChassisSet0(lr_uuid, _).
 
 /* Referenced chassis for an HA chassis group.
@@ -500,44 +500,44 @@ HAChassisGroupRefChassisSet(hacg_uuid, chassis_uuids) :-
     var chassis_uuids = Aggregate((hacg_uuid), group_set_unions(chassis_uuids)).
 
 /* HA_Chassis_Group and HA_Chassis. */
-sb.Out_HA_Chassis_Group(hacg_uuid, hacg_name, ha_chassis, ref_chassis, eids) :-
+sb::Out_HA_Chassis_Group(hacg_uuid, hacg_name, ha_chassis, ref_chassis, eids) :-
     HAChassis(hacg_uuid, chassis_name, _, _),
     var ha_chassis_uuid = ha_chassis_uuid(chassis_name),
     var ha_chassis = Aggregate((hacg_uuid), group_to_set(ha_chassis_uuid)),
     HAChassisGroup(hacg_uuid, hacg_name, eids),
     HAChassisGroupRefChassisSet(hacg_uuid, ref_chassis).
 
-sb.Out_HA_Chassis(ha_chassis_uuid(chassis_name), chassis, priority, eids) :-
+sb::Out_HA_Chassis(ha_chassis_uuid(chassis_name), chassis, priority, eids) :-
     HAChassis(_, chassis_name, priority, eids),
-    chassis_rec in sb.Chassis(.name = chassis_name),
+    chassis_rec in sb::Chassis(.name = chassis_name),
     var chassis = Some{chassis_rec._uuid}.
-sb.Out_HA_Chassis(ha_chassis_uuid(chassis_name), None, priority, eids) :-
+sb::Out_HA_Chassis(ha_chassis_uuid(chassis_name), None, priority, eids) :-
     HAChassis(_, chassis_name, priority, eids),
-    not chassis_rec in sb.Chassis(.name = chassis_name).
+    not chassis_rec in sb::Chassis(.name = chassis_name).
 
 relation HAChassisToChassis(name: string, chassis: Option<uuid>)
 HAChassisToChassis(name, Some{chassis}) :-
-    sb.Chassis(._uuid = chassis, .name = name).
+    sb::Chassis(._uuid = chassis, .name = name).
 HAChassisToChassis(name, None) :-
-    nb.HA_Chassis(.chassis_name = name),
-    not sb.Chassis(.name = name).
-sb.Out_HA_Chassis(ha_chassis_uuid(ha_chassis.chassis_name), chassis, priority, eids) :-
+    nb::HA_Chassis(.chassis_name = name),
+    not sb::Chassis(.name = name).
+sb::Out_HA_Chassis(ha_chassis_uuid(ha_chassis.chassis_name), chassis, priority, eids) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
     Some{var ha_chassis_group_uuid} = sp.lsp.ha_chassis_group,
-    ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
+    ha_chassis_group in nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
-    ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid, .priority = priority, .external_ids = eids),
+    ha_chassis in nb::HA_Chassis(._uuid = ha_chassis_uuid, .priority = priority, .external_ids = eids),
     HAChassisToChassis(ha_chassis.chassis_name, chassis).
-sb.Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :-
+sb::Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
     var ls_uuid = sp.sw.ls._uuid,
     Some{var ha_chassis_group_uuid} = sp.lsp.ha_chassis_group,
-    ha_chassis_group in nb.HA_Chassis_Group(._uuid = ha_chassis_group_uuid, .name = name,
+    ha_chassis_group in nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid, .name = name,
                                             .external_ids = eids),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
-    ha_chassis in nb.HA_Chassis(._uuid = ha_chassis_uuid),
+    ha_chassis in nb::HA_Chassis(._uuid = ha_chassis_uuid),
     var ha_chassis_uuid_name = ha_chassis_uuid(ha_chassis.chassis_name),
     var ha_chassis = Aggregate((ls_uuid, name, eids), group_to_set(ha_chassis_uuid_name)),
     var _uuid = ha_chassis_group_uuid(ls_uuid).
@@ -547,30 +547,30 @@ sb.Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :
  * If NB_Global does not exist yet, just keep the current value of SB_Global,
  * if any.
  */
-for (nb_global in nb.NB_Global) {
-    sb.Out_SB_Global(._uuid          = nb_global._uuid,
+for (nb_global in nb::NB_Global) {
+    sb::Out_SB_Global(._uuid          = nb_global._uuid,
                      .nb_cfg         = nb_global.nb_cfg,
                      .options        = nb_global.options,
                      .ipsec          = nb_global.ipsec)
 }
 
-sb.Out_SB_Global(._uuid          = sb_global._uuid,
+sb::Out_SB_Global(._uuid          = sb_global._uuid,
                  .nb_cfg         = sb_global.nb_cfg,
                  .options        = sb_global.options,
                  .ipsec          = sb_global.ipsec) :-
-    sb_global in sb.SB_Global(),
-    not nb.NB_Global().
+    sb_global in sb::SB_Global(),
+    not nb::NB_Global().
 
 
 /* Track minimum hv_cfg across all the (non-remote) chassis. */
 relation HvCfg0(hv_cfg: integer)
 HvCfg0(hv_cfg) :-
-    sb.Chassis(.nb_cfg = chassis_cfg, .external_ids = eids),
+    sb::Chassis(.nb_cfg = chassis_cfg, .external_ids = eids),
     not map_get_bool_def(eids, "is-remote", false),
     var hv_cfg = Aggregate((), group_min(chassis_cfg)).
 relation HvCfg(hv_cfg: integer)
 HvCfg(hv_cfg) :- HvCfg0(hv_cfg).
-HvCfg(hv_cfg) :- Unit(), not HvCfg0(), nb.NB_Global(.nb_cfg = hv_cfg).
+HvCfg(hv_cfg) :- Unit(), not HvCfg0(), nb::NB_Global(.nb_cfg = hv_cfg).
 
 /*
  * NB_Global:
@@ -580,13 +580,13 @@ HvCfg(hv_cfg) :- Unit(), not HvCfg0(), nb.NB_Global(.nb_cfg = hv_cfg).
  *   instance.  There is a potential race condition if this field is modified at the same
  *   time northd is updating `sb_cfg` or `hv_cfg`.
  */
-nb.Out_NB_Global(._uuid         = _uuid,
+nb::Out_NB_Global(._uuid         = _uuid,
                  .sb_cfg        = sb_cfg,
                  .hv_cfg        = hv_cfg,
                  .ipsec         = ipsec,
                  .options       = options) :-
-    nbg in nb.NB_Global(._uuid = _uuid, .ipsec = ipsec),
-    sb.SB_Global(.nb_cfg = sb_cfg),
+    nbg in nb::NB_Global(._uuid = _uuid, .ipsec = ipsec),
+    sb::SB_Global(.nb_cfg = sb_cfg),
     HvCfg(hv_cfg),
     MacPrefix(mac_prefix),
     SvcMonitorMac(svc_monitor_mac),
@@ -594,17 +594,17 @@ nb.Out_NB_Global(._uuid         = _uuid,
     var options = put_svc_monitor_mac(options0, svc_monitor_mac).
 
 /* SB_Global does not exist yet -- just keep the old value of NB_Global */
-nb.Out_NB_Global(._uuid         = nbg._uuid,
+nb::Out_NB_Global(._uuid         = nbg._uuid,
                  .sb_cfg        = nbg.sb_cfg,
                  .hv_cfg        = nbg.hv_cfg,
                  .ipsec         = nbg.ipsec,
                  .options       = nbg.options) :-
-    nbg in nb.NB_Global(),
-    not sb.SB_Global().
+    nbg in nb::NB_Global(),
+    not sb::SB_Global().
 
 output relation Northd_Probe_Interval[integer]
 Northd_Probe_Interval[interval] :-
-    nb in nb.NB_Global(),
+    nb in nb::NB_Global(),
     var interval = map_get_int_def(nb.options, "northd_probe_interval", 0).
 
 /*
@@ -614,25 +614,25 @@ Northd_Probe_Interval[interval] :-
  * There can be name collisions between the two types of Address_Set records.  User-defined records
  * take precedence.
  */
-for (nb_as in nb.Address_Set) {
-    sb.Out_Address_Set(._uuid     = nb_as._uuid,
+for (nb_as in nb::Address_Set) {
+    sb::Out_Address_Set(._uuid     = nb_as._uuid,
                        .name      = nb_as.name,
                        .addresses = nb_as.addresses)
 }
 
-sb.Out_Address_Set(._uuid = hash128("svc_monitor_mac"),
+sb::Out_Address_Set(._uuid = hash128("svc_monitor_mac"),
                    .name = "svc_monitor_mac",
                    .addresses = set_singleton("${svc_monitor_mac}")) :-
     SvcMonitorMac(svc_monitor_mac).
 
-sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
-    nb.Port_Group(.ports = pg_ports, .name = pg_name),
+sb::Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
+    nb::Port_Group(.ports = pg_ports, .name = pg_name),
     var as_name = pg_name ++ "_ip4",
     // avoid name collisions with user-defined Address_Sets
-    not nb.Address_Set(.name = as_name),
+    not nb::Address_Set(.name = as_name),
     var port_uuid = FlatMap(pg_ports),
     PortStaticAddresses(.lsport = port_uuid, .ip4addrs = stat),
-    SwitchPortNewDynamicAddress(&SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = port_uuid}},
+    SwitchPortNewDynamicAddress(&SwitchPort{.lsp = nb::Logical_Switch_Port{._uuid = port_uuid}},
                                 dyn_addr),
     var dynamic = match (dyn_addr) {
         None -> set_empty(),
@@ -645,20 +645,20 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip4addrs)) :-
     var port_ip4addrs = set_union(stat, dynamic),
     var pg_ip4addrs = Aggregate((as_name), group_to_vec(port_ip4addrs)).
 
-sb.Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
-    nb.Port_Group(.ports = set_empty(), .name = pg_name),
+sb::Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
+    nb::Port_Group(.ports = set_empty(), .name = pg_name),
     var as_name = pg_name ++ "_ip4",
     // avoid name collisions with user-defined Address_Sets
-    not nb.Address_Set(.name = as_name).
+    not nb::Address_Set(.name = as_name).
 
-sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip6addrs)) :-
-    nb.Port_Group(.ports = pg_ports, .name = pg_name),
+sb::Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip6addrs)) :-
+    nb::Port_Group(.ports = pg_ports, .name = pg_name),
     var as_name = pg_name ++ "_ip6",
     // avoid name collisions with user-defined Address_Sets
-    not nb.Address_Set(.name = as_name),
+    not nb::Address_Set(.name = as_name),
     var port_uuid = FlatMap(pg_ports),
     PortStaticAddresses(.lsport = port_uuid, .ip6addrs = stat),
-    SwitchPortNewDynamicAddress(&SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = port_uuid}},
+    SwitchPortNewDynamicAddress(&SwitchPort{.lsp = nb::Logical_Switch_Port{._uuid = port_uuid}},
                                 dyn_addr),
     var dynamic = match (dyn_addr) {
         None -> set_empty(),
@@ -671,23 +671,23 @@ sb.Out_Address_Set(hash128(as_name), as_name, set_unions(pg_ip6addrs)) :-
     var port_ip6addrs = set_union(stat, dynamic),
     var pg_ip6addrs = Aggregate((as_name), group_to_vec(port_ip6addrs)).
 
-sb.Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
-    nb.Port_Group(.ports = set_empty(), .name = pg_name),
+sb::Out_Address_Set(hash128(as_name), as_name, set_empty()) :-
+    nb::Port_Group(.ports = set_empty(), .name = pg_name),
     var as_name = pg_name ++ "_ip6",
     // avoid name collisions with user-defined Address_Sets
-    not nb.Address_Set(.name = as_name).
+    not nb::Address_Set(.name = as_name).
 
 /*
  * Port_Group: copy from NB, but replace UUIDs with logical port names
  */
-sb.Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = port_names) :-
-    nb.Port_Group(._uuid = _uuid, .name = pg_name, .ports = pg_ports),
+sb::Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = port_names) :-
+    nb::Port_Group(._uuid = _uuid, .name = pg_name, .ports = pg_ports),
     var port_uuid = FlatMap(pg_ports),
-    nb.Logical_Switch_Port(._uuid = port_uuid, .name = port_name),
+    nb::Logical_Switch_Port(._uuid = port_uuid, .name = port_name),
     var port_names = Aggregate((_uuid, pg_name), group_to_set(port_name)).
 
-sb.Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()) :-
-    nb.Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()).
+sb::Out_Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()) :-
+    nb::Port_Group(._uuid = _uuid, .name = pg_name, .ports = set_empty()).
 
 /*
  * Multicast_Group:
@@ -732,7 +732,7 @@ relation OutProxy_Multicast_Group (
 )
 
 /* Only create flood group if the switch has enabled ports */
-sb.Out_Multicast_Group (._uuid      = hash128((datapath,name)),
+sb::Out_Multicast_Group (._uuid      = hash128((datapath,name)),
                         .datapath   = datapath,
                         .name       = name,
                         .tunnel_key = tunnel_key,
@@ -744,7 +744,7 @@ sb.Out_Multicast_Group (._uuid      = hash128((datapath,name)),
     (var name, var tunnel_key) = mC_FLOOD().
 
 /* Only create unknown group if the switch has ports with "unknown" address */
-sb.Out_Multicast_Group (._uuid      = hash128((ls,name)),
+sb::Out_Multicast_Group (._uuid      = hash128((ls,name)),
                         .datapath   = ls,
                         .name       = name,
                         .tunnel_key = tunnel_key,
@@ -755,7 +755,7 @@ sb.Out_Multicast_Group (._uuid      = hash128((ls,name)),
 /* Create a multicast group to flood multicast traffic to routers with
  * multicast relay enabled.
  */
-sb.Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
+sb::Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
                         .datapath = sw.ls._uuid,
                         .name = name,
                         .tunnel_key = tunnel_key,
@@ -766,7 +766,7 @@ sb.Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
 /* Create a multicast group to flood traffic (no reports) to ports with
  * multicast flood enabled.
  */
-sb.Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
+sb::Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
                         .datapath = sw.ls._uuid,
                         .name = name,
                         .tunnel_key = tunnel_key,
@@ -777,7 +777,7 @@ sb.Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
 /* Create a multicast group to flood reports to ports with
  * multicast flood_reports enabled.
  */
-sb.Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
+sb::Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
                         .datapath = sw.ls._uuid,
                         .name = name,
                         .tunnel_key = tunnel_key,
@@ -788,7 +788,7 @@ sb.Out_Multicast_Group (._uuid    = hash128((sw.ls._uuid,name)),
 /* Create a multicast group to flood traffic and reports to router ports with
  * multicast flood enabled.
  */
-sb.Out_Multicast_Group (._uuid    = hash128((rtr.lr._uuid,name)),
+sb::Out_Multicast_Group (._uuid    = hash128((rtr.lr._uuid,name)),
                         .datapath = rtr.lr._uuid,
                         .name = name,
                         .tunnel_key = tunnel_key,
@@ -813,7 +813,7 @@ OutProxy_Multicast_Group (.datapath   = router.lr._uuid,
     IgmpRouterMulticastGroup(address, &router, port_ids).
 
 /* Allocate a 'tunnel_key' for dynamic multicast groups. */
-sb.Out_Multicast_Group(._uuid    = hash128((mcgroup.datapath,mcgroup.name)),
+sb::Out_Multicast_Group(._uuid    = hash128((mcgroup.datapath,mcgroup.name)),
                        .datapath = mcgroup.datapath,
                        .name = mcgroup.name,
                        .tunnel_key = tunnel_key,
@@ -824,229 +824,229 @@ sb.Out_Multicast_Group(._uuid    = hash128((mcgroup.datapath,mcgroup.name)),
 /*
  * MAC binding: records inserted by hypervisors; northd removes records for deleted logical ports and datapaths.
  */
-sb.Out_MAC_Binding (._uuid        = mb._uuid,
+sb::Out_MAC_Binding (._uuid        = mb._uuid,
                     .logical_port = mb.logical_port,
                     .ip           = mb.ip,
                     .mac          = mb.mac,
                     .datapath     = mb.datapath) :-
-    sb.MAC_Binding[mb],
-    sb.Out_Port_Binding(.logical_port = mb.logical_port),
-    sb.Out_Datapath_Binding(._uuid = mb.datapath).
+    sb::MAC_Binding[mb],
+    sb::Out_Port_Binding(.logical_port = mb.logical_port),
+    sb::Out_Datapath_Binding(._uuid = mb.datapath).
 
 /*
  * DHCP options: fixed table
  */
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h7d9d898a_179b_4898_8382_b73bec391f23,
     .name   = "offerip",
     .code   = 0,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hea5e7d14_fd97_491c_8004_a120bdbc4306,
     .name   = "netmask",
     .code   = 1,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hdab5e39b_6702_4245_9573_6c142aa3724c,
     .name   = "router",
     .code   = 3,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h340b4bc5_c5c3_43d1_ae77_564da69c8fcc,
     .name   = "dns_server",
     .code   = 6,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hcd1ab302_cbb2_4eab_9ec5_ec1c8541bd82,
     .name   = "log_server",
     .code   = 7,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h1c7ea6a0_fe6b_48c1_a920_302583c1ff08,
     .name   = "lpr_server",
     .code   = 9,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hae35e575_226a_4ab5_a1c4_166f426dd999,
     .name   = "domain_name",
     .code   = 15,
     .__type = "str"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'had0ec3e0_8be9_4c77_bceb_f8954a34c7ba,
     .name   = "swap_server",
     .code   = 16,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h884c2e02_6e99_4d12_aef7_8454ebf8a3b7,
     .name   = "policy_filter",
     .code   = 21,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h57cc2c61_fd2a_41c6_b6b1_6ce9a8901f86,
     .name   = "router_solicitation",
     .code   = 32,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h48249097_03f0_46c1_a32a_2dd57cd4d0f8,
     .name   = "nis_server",
     .code   = 41,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h333fe07e_bdd1_4371_aa4f_a412bc60f3a2,
     .name   = "ntp_server",
     .code   = 42,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h6207109c_49d0_4348_8238_dd92afb69bf0,
     .name   = "server_id",
     .code   = 54,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h2090b783_26d3_4c1d_830c_54c1b6c5d846,
     .name   = "tftp_server",
     .code   = 66,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'ha18ff399_caea_406e_af7e_321c6f74e581,
     .name   = "classless_static_route",
     .code   = 121,
     .__type = "static_routes"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hb81ad7b4_62f0_40c7_a9a3_f96677628767,
     .name   = "ms_classless_static_route",
     .code   = 249,
     .__type = "static_routes"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h0c2e144e_4b5f_4e21_8978_0e20bac9a6ea,
     .name   = "ip_forward_enable",
     .code   = 19,
     .__type = "bool"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h6feb1926_9469_4b40_bfbf_478b9888cd3a,
     .name   = "router_discovery",
     .code   = 31,
     .__type = "bool"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hcb776249_e8b1_4502_b33b_fa294d44077d,
     .name   = "ethernet_encap",
     .code   = 36,
     .__type = "bool"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'ha2df9eaa_aea9_497f_b339_0c8ec3e39a07,
     .name   = "default_ttl",
     .code   = 23,
     .__type = "uint8"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hb44b45a9_5004_4ef5_8e6a_aa8629e1afb1,
     .name   = "tcp_ttl",
     .code   = 37,
     .__type = "uint8"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h50f01ca7_c650_46f0_8f50_39a67ec657da,
     .name   = "mtu",
     .code   = 26,
     .__type = "uint16"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h9d31c057_6085_4810_96af_eeac7d3c5308,
     .name   = "lease_time",
     .code   = 51,
     .__type = "uint32"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hea1e2e7a_9585_46ee_ad49_adfdefc0c4ef,
     .name   = "T1",
     .code   = 58,
     .__type = "uint32"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hbc83a233_554b_453a_afca_1eadf76810d2,
     .name   = "T2",
     .code   = 59,
     .__type = "uint32"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h1ab3eeca_0523_4101_9076_eea77d0232f4,
     .name   = "bootfile_name",
     .code   = 67,
     .__type = "str"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'ha5c20b69_f7f3_4fa8_b550_8697aec6cbb7,
     .name   = "wpad",
     .code   = 252,
     .__type = "str"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h1516bcb6_cc93_4233_a63f_bd29c8601831,
     .name   = "path_prefix",
     .code   = 210,
     .__type = "str"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hc98e13cd_f653_473c_85c1_850dcad685fc,
     .name   = "tftp_server_address",
     .code   = 150,
     .__type = "ipv4"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'hfbe06e70_b43d_4dd9_9b21_2f27eb5da5df,
     .name   = "arp_cache_timeout",
     .code   = 35,
     .__type = "uint32"
 ).
 
-sb.Out_DHCP_Options (
+sb::Out_DHCP_Options (
     ._uuid  = 128'h2af54a3c_545c_4104_ae1c_432caa3e085e,
     .name   = "tcp_keepalive_interval",
     .code   = 38,
@@ -1057,28 +1057,28 @@ sb.Out_DHCP_Options (
 /*
  * DHCPv6 options: fixed table
  */
-sb.Out_DHCPv6_Options (
+sb::Out_DHCPv6_Options (
     ._uuid  = 128'h100b2659_0ec0_4da7_9ec3_25997f92dc00,
     .name   = "server_id",
     .code   = 2,
     .__type = "mac"
 ).
 
-sb.Out_DHCPv6_Options (
+sb::Out_DHCPv6_Options (
     ._uuid  = 128'h53f49b50_db75_4b0d_83df_50d31009ca9c,
     .name   = "ia_addr",
     .code   = 5,
     .__type = "ipv6"
 ).
 
-sb.Out_DHCPv6_Options (
+sb::Out_DHCPv6_Options (
     ._uuid  = 128'he3619685_d4f7_42ad_936b_4f4440b7eeb4,
     .name   = "dns_server",
     .code   = 23,
     .__type = "ipv6"
 ).
 
-sb.Out_DHCPv6_Options (
+sb::Out_DHCPv6_Options (
     ._uuid  = 128'hcb8a4e7f_a312_4cb1_a846_e474d9f0c531,
     .name   = "domain_search",
     .code   = 24,
@@ -1099,11 +1099,11 @@ function map_to_lowercase(m_in: Map<string,string>): Map<string,string> {
     m_out
 }
 
-sb.Out_DNS(._uuid        = nbdns._uuid,
+sb::Out_DNS(._uuid        = nbdns._uuid,
            .records      = map_to_lowercase(nbdns.records),
            .datapaths    = datapaths,
            .external_ids = map_insert_imm(nbdns.external_ids, "dns_id", uuid2str(nbdns._uuid))) :-
-    nb.DNS[nbdns],
+    nb::DNS[nbdns],
     LogicalSwitchDNS(ls_uuid, nbdns._uuid),
     var datapaths = Aggregate((nbdns), group_to_set(ls_uuid)).
 
@@ -1111,7 +1111,7 @@ sb.Out_DNS(._uuid        = nbdns._uuid,
  * RBAC_Permission: fixed
  */
 
-sb.Out_RBAC_Permission (
+sb::Out_RBAC_Permission (
     ._uuid          = 128'h7df3749a_1754_4a78_afa4_3abf526fe510,
     .table          = "Chassis",
     .authorization  = set_singleton("name"),
@@ -1126,7 +1126,7 @@ sb.Out_RBAC_Permission (
         }
 ).
 
-sb.Out_RBAC_Permission (
+sb::Out_RBAC_Permission (
     ._uuid          = 128'h94bec860_431e_4d95_82e7_3b75d8997241,
     .table          = "Encap",
     .authorization  = set_singleton("chassis_name"),
@@ -1140,7 +1140,7 @@ sb.Out_RBAC_Permission (
         }
 ).
 
-sb.Out_RBAC_Permission (
+sb::Out_RBAC_Permission (
     ._uuid          = 128'hd8ceff1a_2b11_48bd_802f_4a991aa4e908,
     .table          = "Port_Binding",
     .authorization  = set_singleton(""),
@@ -1148,7 +1148,7 @@ sb.Out_RBAC_Permission (
     .update         = set_singleton("chassis")
 ).
 
-sb.Out_RBAC_Permission (
+sb::Out_RBAC_Permission (
     ._uuid          = 128'h6ffdc696_8bfb_4d82_b620_a00d39270b2f,
     .table          = "MAC_Binding",
     .authorization  = set_singleton(""),
@@ -1163,7 +1163,7 @@ sb.Out_RBAC_Permission (
         }
 ).
 
-sb.Out_RBAC_Permission (
+sb::Out_RBAC_Permission (
     ._uuid          = 128'h39231c7e_4bf1_41d0_ada4_1d8a319c0da3,
     .table          = "Service_Monitor",
     .authorization  = set_singleton(""),
@@ -1174,7 +1174,7 @@ sb.Out_RBAC_Permission (
 /*
  * RBAC_Role: fixed
  */
-sb.Out_RBAC_Role (
+sb::Out_RBAC_Role (
     ._uuid       = 128'ha406b472_5de8_4456_9f38_bf344c911b22,
     .name        = "ovn-controller",
     .permissions = {
@@ -1189,7 +1189,7 @@ sb.Out_RBAC_Role (
 ).
 
 /* Output modified Logical_Switch_Port table with dynamic address updated */
-nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
+nb::Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
                            .tag                    = tag,
                            .dynamic_addresses      = dynamic_addresses,
                            .up                     = Some{up}) :-
@@ -1206,9 +1206,9 @@ nb.Out_Logical_Switch_Port(._uuid                  = lsp._uuid,
 
 relation LRPIPv6Prefix0(lrp_uuid: uuid, ipv6_prefix: string)
 LRPIPv6Prefix0(lrp._uuid, ipv6_prefix) :-
-    lrp in nb.Logical_Router_Port(),
+    lrp in nb::Logical_Router_Port(),
     map_get_bool_def(lrp.options, "prefix", false),
-    sb.Port_Binding(.logical_port = lrp.name, .options = options),
+    sb::Port_Binding(.logical_port = lrp.name, .options = options),
     Some{var ipv6_ra_pd_list} = map_get(options, "ipv6_ra_pd_list"),
     var parts = string_split(ipv6_ra_pd_list, ","),
     Some{var ipv6_prefix} = vec_nth(parts, 1).
@@ -1217,12 +1217,12 @@ relation LRPIPv6Prefix(lrp_uuid: uuid, ipv6_prefix: Option<string>)
 LRPIPv6Prefix(lrp_uuid, Some{ipv6_prefix}) :-
     LRPIPv6Prefix0(lrp_uuid, ipv6_prefix).
 LRPIPv6Prefix(lrp_uuid, None) :-
-    nb.Logical_Router_Port(._uuid = lrp_uuid),
+    nb::Logical_Router_Port(._uuid = lrp_uuid),
     not LRPIPv6Prefix0(lrp_uuid, _).
 
-nb.Out_Logical_Router_Port(._uuid = _uuid,
+nb::Out_Logical_Router_Port(._uuid = _uuid,
                            .ipv6_prefix = to_set(ipv6_prefix)) :-
-    nb.Logical_Router_Port(._uuid = _uuid, .name = name),
+    nb::Logical_Router_Port(._uuid = _uuid, .name = name),
     LRPIPv6Prefix(_uuid, ipv6_prefix).
 
 typedef Direction = IN | OUT
@@ -1401,7 +1401,7 @@ relation Flow (
     external_ids:     Map<string,string>
 )
 
-sb.Out_Logical_Flow(._uuid            = hash128((f.logical_datapath, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+sb::Out_Logical_Flow(._uuid            = hash128((f.logical_datapath, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
                     .logical_datapath = f.logical_datapath,
                     .pipeline         = if (f.stage.direction == IN) "ingress" else "egress",
                     .table_id         = table_id,
@@ -1421,7 +1421,7 @@ Flow(.logical_datapath = sw.ls._uuid,
      .external_ids     = stage_hint(fg_uuid)) :-
     sw in &Switch(),
     var fg_uuid = FlatMap(sw.ls.forwarding_groups),
-    fg in nb.Forwarding_Group(._uuid = fg_uuid),
+    fg in nb::Forwarding_Group(._uuid = fg_uuid),
     not set_is_empty(fg.child_port),
     var __match = "arp.tpa == ${fg.vip} && arp.op == 1",
     var actions = "eth.dst = eth.src; "
@@ -1450,7 +1450,7 @@ Flow(.logical_datapath = sw.ls._uuid,
      .external_ids     = map_empty()) :-
     sw in &Switch(),
     var fg_uuid = FlatMap(sw.ls.forwarding_groups),
-    fg in nb.Forwarding_Group(._uuid = fg_uuid),
+    fg in nb::Forwarding_Group(._uuid = fg_uuid),
     not set_is_empty(fg.child_port),
     var __match = "eth.dst == ${fg.vmac}",
     var actions = "fwd_group(" ++
@@ -1567,7 +1567,7 @@ for (&Switch(.ls =ls)) {
  * send all IP packets through the conntrack action, which handles
  * defragmentation, in order to match L4 headers. */
 
-for (&SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "router"},
+for (&SwitchPort(.lsp = lsp@nb::Logical_Switch_Port{.__type = "router"},
                  .json_name = lsp_name,
                  .sw = &Switch{.ls = ls, .has_stateful_acl = true})) {
     /* Can't use ct() for router ports. Consider the
@@ -1599,7 +1599,7 @@ for (&SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "router"},
     }
 }
 
-for (&SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "localnet"},
+for (&SwitchPort(.lsp = lsp@nb::Logical_Switch_Port{.__type = "localnet"},
                  .json_name = lsp_name,
                  .sw = &Switch{.ls = ls, .has_stateful_acl = true})) {
     Flow(.logical_datapath = ls._uuid,
@@ -1708,14 +1708,14 @@ for (&Switch(.ls = ls)) {
 relation HasEventElbMeter(has_meter: bool)
 
 HasEventElbMeter(true) :-
-    nb.Meter(.name = "event-elb").
+    nb::Meter(.name = "event-elb").
 
 HasEventElbMeter(false) :-
     Unit(),
-    not nb.Meter(.name = "event-elb").
+    not nb::Meter(.name = "event-elb").
 
 /* Empty LoadBalancer Controller event */
-function build_empty_lb_event_flow(key: string, lb: nb.Load_Balancer,
+function build_empty_lb_event_flow(key: string, lb: nb::Load_Balancer,
                                    meter: bool):
          Option<(string, string)> = {
     var __proto = if (lb.protocol == Some{"tcp"}) {
@@ -1754,8 +1754,8 @@ function build_empty_lb_event_flow(key: string, lb: nb.Load_Balancer,
  * events or 'false' to disable them. */
 relation ControllerEventEn(enable: bool)
 ControllerEventEn(map_get_bool_def(options, "controller_event", false)) :-
-    nb.NB_Global(.options = options).
-ControllerEventEn(false) :- Unit(), not nb.NB_Global().
+    nb::NB_Global(.options = options).
+ControllerEventEn(false) :- Unit(), not nb::NB_Global().
 
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, PRE_LB),
@@ -1833,7 +1833,7 @@ for (&Switch(.ls = ls)) {
          .external_ids     = map_empty())
 }
 
-function build_acl_log(acl: nb.ACL): string =
+function build_acl_log(acl: nb::ACL): string =
 {
     if (not acl.log) {
         ""
@@ -1880,7 +1880,7 @@ function oVN_ACL_PRI_OFFSET(): integer = 1000
 /* Intermediate relation that stores reject ACLs.
  * The following rules generate logical flows for these ACLs.
  */
-relation Reject(lsuuid: uuid, pipeline: string, stage: Stage, acl: nb.ACL, extra_match: string, extra_actions: string)
+relation Reject(lsuuid: uuid, pipeline: string, stage: Stage, acl: nb::ACL, extra_match: string, extra_actions: string)
 
 /* build_reject_acl_rules() */
 for (Reject(lsuuid, pipeline, stage, acl, extra_match_, extra_actions_)) {
@@ -2245,7 +2245,7 @@ for (&SwitchACL(.sw = &Switch{.ls = ls, .has_stateful_acl = has_stateful}, .acl 
  * logical ports of the datapath if the CMS has configured DHCPv4 options.
  * */
 for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
-                             .dhcpv4_options = dhcpv4_options@&nb.DHCP_Options{.options = options})
+                             .dhcpv4_options = dhcpv4_options@&nb::DHCP_Options{.options = options})
      if lsp.__type != "external") {
     (Some{var server_id}, Some{var server_mac}, Some{var lease_time}) =
         (map_get(options, "server_id"), map_get(options, "server_mac"), map_get(options, "lease_time")) in
@@ -2261,7 +2261,7 @@ for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
 }
 
 for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
-                             .dhcpv6_options = dhcpv6_options@&nb.DHCP_Options{.options=options} )
+                             .dhcpv6_options = dhcpv6_options@&nb::DHCP_Options{.options=options} )
      if lsp.__type != "external") {
     Some{var server_mac} = map_get(options, "server_id") in
     Some{var ea} = eth_addr_from_string(server_mac) in
@@ -2282,7 +2282,7 @@ for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = &sw},
 relation QoSAction(qos: uuid, key_action: string, value_action: integer)
 
 QoSAction(qos, k, v) :-
-    nb.QoS(._uuid = qos, .action = actions),
+    nb::QoS(._uuid = qos, .action = actions),
     var action = FlatMap(actions),
     (var k, var v) = action.
 
@@ -2661,7 +2661,7 @@ Flow(.logical_datapath = sw.ls._uuid,
                   ingress table PORT_SEC_ND: ingress port security - ND (priority 90 and 80) */
 for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name, .ps_eth_addresses = ps_eth_addresses)
      if is_enabled(lsp.enabled) and lsp.__type != "external") {
-     for (pbinding in sb.Out_Port_Binding(.logical_port = lsp.name)) {
+     for (pbinding in sb::Out_Port_Binding(.logical_port = lsp.name)) {
         var __match = if (vec_is_empty(ps_eth_addresses)) {
                 "inport == ${json_name}"
             } else {
@@ -2873,7 +2873,7 @@ for (&SwitchPort(.lsp = lsp, .sw = &sw, .json_name = json_name)
          .external_ids     = stage_hint(lsp._uuid))
 }
 
-function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
+function lsp_is_up(lsp: nb::Logical_Switch_Port): bool = {
     lsp.up == Some{true}
 }
 
@@ -2894,12 +2894,12 @@ function lsp_is_up(lsp: nb.Logical_Switch_Port): bool = {
                           "(arp.op == 2 && arp.spa == ${virtual_ip}))",
       .actions          = "bind_vport(${sp.json_name}, inport); next;",
       .external_ids     = stage_hint(lsp._uuid)) :-
-    sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
+    sp in &SwitchPort(.lsp = lsp@nb::Logical_Switch_Port{.__type = "virtual"}),
     Some{var virtual_ip} = map_get(lsp.options, "virtual-ip"),
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
     Some{var ip} = ip_parse(virtual_ip),
     var vparent = FlatMap(string_split(virtual_parents, ",")),
-    vp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = vparent}),
+    vp in &SwitchPort(.lsp = nb::Logical_Switch_Port{.name = vparent}),
     vp.sw == sp.sw.
 
 /*
@@ -2995,7 +2995,7 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
 
 /* Ingress table ARP_ND_RSP: ARP/ND responder, by default goto next.
  * (priority 0)*/
-for (ls in nb.Logical_Switch) {
+for (ls in nb::Logical_Switch) {
     Flow(.logical_datapath = ls._uuid,
          .stage            = switch_stage(IN, ARP_ND_RSP),
          .priority         = 0,
@@ -3024,13 +3024,13 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
     LBVIPBackend[lbvipbackend],
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
     sp in &SwitchPort(
-        .lsp = nb.Logical_Switch_Port{.name = svc_monitor.port_name}),
+        .lsp = nb::Logical_Switch_Port{.name = svc_monitor.port_name}),
     var svc_mon_src_ip = svc_monitor.src_ip,
     SvcMonitorMac(svc_monitor_mac).
 
 function build_dhcpv4_action(
     lsp_json_key: string,
-    dhcpv4_options: nb.DHCP_Options,
+    dhcpv4_options: nb::DHCP_Options,
     offer_ip: in_addr) : Option<(string, string, string)> =
 {
     match (ip_parse_masked(dhcpv4_options.cidr)) {
@@ -3088,7 +3088,7 @@ function build_dhcpv4_action(
 
 function build_dhcpv6_action(
     lsp_json_key: string,
-    dhcpv6_options: nb.DHCP_Options,
+    dhcpv6_options: nb::DHCP_Options,
     offer_ip: in6_addr): Option<(string, string)> =
 {
     match (ipv6_parse_masked(dhcpv6_options.cidr)) {
@@ -3199,8 +3199,8 @@ for (lsp in &SwitchPort
             /* DHCPv4 options enabled for this port */
             Some{var dhcpv4_options_uuid} = lsp.lsp.dhcpv4_options in
             {
-                for (dhcpv4_options in nb.DHCP_Options(._uuid = dhcpv4_options_uuid)) {
-                    for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea = ea, .addr = addr)) {
+                for (dhcpv4_options in nb::DHCP_Options(._uuid = dhcpv4_options_uuid)) {
+                    for (SwitchPortIPv4Address(.port = &SwitchPort{.lsp = nb::Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea = ea, .addr = addr)) {
                         Some{(var options_action, var response_action, var ipv4_addr_match)} =
                             build_dhcpv4_action(json_key, dhcpv4_options, addr.addr) in
                         {
@@ -3256,8 +3256,8 @@ for (lsp in &SwitchPort
             /* DHCPv6 options enabled for this port */
             Some{var dhcpv6_options_uuid} = lsp.lsp.dhcpv6_options in
             {
-                for (dhcpv6_options in nb.DHCP_Options(._uuid = dhcpv6_options_uuid)) {
-                    for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = nb.Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea = ea, .addr = addr)) {
+                for (dhcpv6_options in nb::DHCP_Options(._uuid = dhcpv6_options_uuid)) {
+                    for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = nb::Logical_Switch_Port{._uuid = lsp.lsp._uuid}}, .ea = ea, .addr = addr)) {
                         Some{(var options_action, var response_action)} =
                             build_dhcpv6_action(json_key, dhcpv6_options, addr.addr) in
                         {
@@ -3334,7 +3334,7 @@ for (LogicalSwitchHasDNSRecords(ls, true))
 
  * Ingress table EXTERNAL_PORT - External port handling, by default goto next.
  * (priority 0). */
-for (ls in nb.Logical_Switch) {
+for (ls in nb::Logical_Switch) {
     Flow(.logical_datapath = ls._uuid,
          .stage            = switch_stage(IN, DHCP_OPTIONS),
          .priority         = 0,
@@ -3578,7 +3578,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 
 /* Ingress table L2_LKUP: Destination lookup, broadcast and multicast handling
  * (priority 100). */
-for (ls in nb.Logical_Switch) {
+for (ls in nb::Logical_Switch) {
     var mc_flood = json_string_escape(mC_FLOOD().0) in
     Flow(.logical_datapath = ls._uuid,
          .stage            = switch_stage(IN, L2_LKUP),
@@ -3825,7 +3825,7 @@ Flow(.logical_datapath = sw.ls._uuid,
         } else {
             "outport == ${json_name} && eth.dst == {${vec_space_sep(ps_eth_addresses)}}"
         },
-    pbinding in sb.Out_Port_Binding(.logical_port = lsp.name),
+    pbinding in sb::Out_Port_Binding(.logical_port = lsp.name),
     var queue_action = match ((lsp.__type,
                                map_get(pbinding.options, "qdisc_queue_id"))) {
         ("localnet", Some{queue_id}) -> "set_queue(${queue_id});",
@@ -4213,11 +4213,11 @@ AddChassisResidentCheck(lrp, add_check) :-
     AddChassisResidentCheck_(lrp, add_check).
 
 AddChassisResidentCheck(lrp, false) :-
-    nb.Logical_Router_Port(._uuid = lrp),
+    nb::Logical_Router_Port(._uuid = lrp),
     not AddChassisResidentCheck_(lrp, _).
 
 
-function get_force_snat_ip(lr: nb.Logical_Router, key_type: string): Option<(string, v46_ip)> =
+function get_force_snat_ip(lr: nb::Logical_Router, key_type: string): Option<(string, v46_ip)> =
 {
     match (map_get(lr.options, key_type ++ "_force_snat_ip")) {
         None -> None,
@@ -4326,7 +4326,7 @@ for (&RouterPort(.lrp = lrp,
                  .networks = networks,
                  .is_redirect = is_redirect))
 {
-    for (RouterLBVIP(.router = &Router{.lr = nb.Logical_Router{._uuid= lr._uuid}}, .vip = vip)) {
+    for (RouterLBVIP(.router = &Router{.lr = nb::Logical_Router{._uuid= lr._uuid}}, .vip = vip)) {
         Some{(var ip_address, _)} = ip_address_and_port_from_lb_key(vip) in
         var __match =
             "inport == ${json_name} && " ++
@@ -4781,7 +4781,7 @@ for (&Router(.lr = lr)) {
          .external_ids     = map_empty())
 }
 
-function lrouter_nat_is_stateless(nat: nb.NAT): bool = {
+function lrouter_nat_is_stateless(nat: nb::NAT): bool = {
     Some{"true"} == map_get(nat.options, "stateless")
 }
 
@@ -5209,7 +5209,7 @@ for (&Router(.lr = lr,
     }
 }
 
-function nats_contain_vip(nats: Vec<Ref<nb.NAT>>, vip: v46_ip): bool {
+function nats_contain_vip(nats: Vec<Ref<nb::NAT>>, vip: v46_ip): bool {
     for (nat in nats) {
         if (ip46_parse(nat.external_ip) == Some{vip}) {
             return true
@@ -5545,7 +5545,7 @@ function copy_ra_to_sb(port: RouterPort, address_mode: string): Map<string, stri
 /* Logical router ingress table ND_RA_OPTIONS and ND_RA_RESPONSE: IPv6 Router
  * Adv (RA) options and response. */
 // FIXME: do these rules apply to derived ports?
-for (&RouterPort[port@RouterPort{.lrp = lrp@nb.Logical_Router_Port{.peer = None},
+for (&RouterPort[port@RouterPort{.lrp = lrp@nb::Logical_Router_Port{.peer = None},
                                  .router = &router,
                                  .json_name = json_name,
                                  .networks = networks,
@@ -5936,7 +5936,7 @@ Flow(.logical_datapath = r.lr._uuid,
      .external_ids     = stage_hint(policy._uuid)) :-
     r in &Router(),
     var policy_uuid = FlatMap(r.lr.policies),
-    policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
+    policy in nb::Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "reroute",
     out_port in &RouterPort(.router = r),
     Some{var nexthop_s} = policy.nexthop,
@@ -5962,7 +5962,7 @@ Flow(.logical_datapath = r.lr._uuid,
      .external_ids     = stage_hint(policy._uuid)) :-
     r in &Router(),
     var policy_uuid = FlatMap(r.lr.policies),
-    policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
+    policy in nb::Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "drop".
 Flow(.logical_datapath = r.lr._uuid,
      .stage            = router_stage(IN, POLICY),
@@ -5972,7 +5972,7 @@ Flow(.logical_datapath = r.lr._uuid,
      .external_ids     = stage_hint(policy._uuid)) :-
     r in &Router(),
     var policy_uuid = FlatMap(r.lr.policies),
-    policy in nb.Logical_Router_Policy(._uuid = policy_uuid),
+    policy in nb::Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "allow".
 
 /* XXX destination unreachable */
@@ -6002,7 +6002,7 @@ for (rp in &RouterPort(.peer = PeerRouter{peer_port, _},
                        .router = &router,
                        .networks = networks))
 {
-    for (&RouterPort(.lrp = nb.Logical_Router_Port{._uuid = peer_port},
+    for (&RouterPort(.lrp = nb::Logical_Router_Port{._uuid = peer_port},
                      .json_name = peer_json_name,
                      .router = &peer_router))
     {
@@ -6067,7 +6067,7 @@ for (SwitchPortIPv4Address(
         .addr = addr)
      if lsp.__type != "router" and lsp.__type != "virtual" and is_enabled(lsp.enabled))
 {
-    for (&SwitchPort(.sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}},
+    for (&SwitchPort(.sw = &Switch{.ls = nb::Logical_Switch{._uuid = sw.ls._uuid}},
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
     {
         Some{_} = find_lrp_member_ip(peer.networks, IPv4{addr.addr}) in
@@ -6086,7 +6086,7 @@ for (SwitchPortIPv6Address(
         .addr = addr)
      if lsp.__type != "router" and lsp.__type != "virtual" and is_enabled(lsp.enabled))
 {
-    for (&SwitchPort(.sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}},
+    for (&SwitchPort(.sw = &Switch{.ls = nb::Logical_Switch{._uuid = sw.ls._uuid}},
                      .peer = Some{&peer@RouterPort{.router = &peer_router}}))
     {
         Some{_} = find_lrp_member_ip(peer.networks, IPv6{addr.addr}) in
@@ -6125,11 +6125,11 @@ Flow(.logical_datapath = peer.router.lr._uuid,
      .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
      .actions          = "eth.dst = 00:00:00:00:00:00; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
-    sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
+    sp in &SwitchPort(.lsp = lsp@nb::Logical_Switch_Port{.__type = "virtual"}),
     Some{var virtual_ip_s} = map_get(lsp.options, "virtual-ip"),
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
     Some{var virtual_ip} = ip_parse(virtual_ip_s),
-    pb in sb.Port_Binding(.logical_port = sp.lsp.name),
+    pb in sb::Port_Binding(.logical_port = sp.lsp.name),
     is_empty_set_or_string(pb.virtual_parent) or is_none(pb.chassis),
     sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
     Some{_} = find_lrp_member_ip(peer.networks, IPv4{virtual_ip}).
@@ -6139,14 +6139,14 @@ Flow(.logical_datapath = peer.router.lr._uuid,
      .__match          = "outport == ${peer.json_name} && reg0 == ${virtual_ip}",
      .actions          = "eth.dst = ${address.ea}; next;",
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
-    sp in &SwitchPort(.lsp = lsp@nb.Logical_Switch_Port{.__type = "virtual"}),
+    sp in &SwitchPort(.lsp = lsp@nb::Logical_Switch_Port{.__type = "virtual"}),
     Some{var virtual_ip_s} = map_get(lsp.options, "virtual-ip"),
     Some{var virtual_parents} = map_get(lsp.options, "virtual-parents"),
     Some{var virtual_ip} = ip_parse(virtual_ip_s),
-    pb in sb.Port_Binding(.logical_port = sp.lsp.name),
+    pb in sb::Port_Binding(.logical_port = sp.lsp.name),
     not (is_empty_set_or_string(pb.virtual_parent) or is_none(pb.chassis)),
     Some{var virtual_parent} = pb.virtual_parent,
-    vp in &SwitchPort(.lsp = nb.Logical_Switch_Port{.name = virtual_parent}),
+    vp in &SwitchPort(.lsp = nb::Logical_Switch_Port{.name = virtual_parent}),
     var address = FlatMap(vp.static_addresses),
     sp2 in &SwitchPort(.sw = sp.sw, .peer = Some{peer}),
     Some{_} = find_lrp_member_ip(peer.networks, IPv4{virtual_ip}).
@@ -6163,7 +6163,7 @@ for (&SwitchPort(.lsp = lsp1,
      if is_enabled(lsp1.enabled))
 {
     for (&SwitchPort(.lsp = lsp2, .peer = Some{&peer2},
-                     .sw = &Switch{.ls = nb.Logical_Switch{._uuid = sw.ls._uuid}})
+                     .sw = &Switch{.ls = nb::Logical_Switch{._uuid = sw.ls._uuid}})
          /* Skip the router port under consideration. */
          if peer2.lrp._uuid != peer1.lrp._uuid)
     {
@@ -6422,10 +6422,10 @@ function get_dp_tunkey(map: Map<string,string>, key: string): Option<integer> {
 // Tunnel keys requested by datapaths.
 relation RequestedTunKey(datapath: uuid, tunkey: integer)
 RequestedTunKey(uuid, tunkey) :-
-    ls in nb.Logical_Switch(._uuid = uuid),
+    ls in nb::Logical_Switch(._uuid = uuid),
     Some{var tunkey} = get_dp_tunkey(ls.other_config, "requested-tnl-key").
 RequestedTunKey(uuid, tunkey) :-
-    lr in nb.Logical_Router(._uuid = uuid),
+    lr in nb::Logical_Router(._uuid = uuid),
     Some{var tunkey} = get_dp_tunkey(lr.options, "requested-tnl-key").
 Warning[message] :-
     RequestedTunKey(datapath, tunkey),
@@ -6444,7 +6444,7 @@ AssignedTunKey(datapath, tunkey) :-
     RequestedTunKey(datapath, tunkey),
     var datapath = Aggregate((tunkey), group_first(datapath)).
 AssignedTunKey(datapath, tunkey) :-
-    sb.Datapath_Binding(._uuid = datapath, .tunnel_key = tunkey),
+    sb::Datapath_Binding(._uuid = datapath, .tunnel_key = tunkey),
     not RequestedTunKey(_, tunkey),
     not RequestedTunKey(datapath, _),
     var datapath = Aggregate((tunkey), group_first(datapath)).
@@ -6532,7 +6532,7 @@ AssignedPortTunKey(datapath, port, tunkey) :-
     RequestedPortTunKey(datapath, port, tunkey),
     var port = Aggregate((datapath, tunkey), group_first(port)).
 AssignedPortTunKey(datapath, port, tunkey) :-
-    sb.Port_Binding(._uuid = port_uuid,
+    sb::Port_Binding(._uuid = port_uuid,
                     .datapath = datapath,
                     .tunnel_key = tunkey),
     not RequestedPortTunKey(datapath, _, tunkey),
@@ -6585,8 +6585,8 @@ PortTunKeyAllocation(port, tunkey) :-
 relation AllocatedMulticastGroupTunKeys(datapath_uuid: uuid, keys: Set<integer>)
 
 AllocatedMulticastGroupTunKeys(datapath_uuid, keys) :-
-    sb.Multicast_Group(.datapath = datapath_uuid, .tunnel_key = tunkey),
-    //sb.UUIDMap_Datapath_Binding(datapath, Left{datapath_uuid}),
+    sb::Multicast_Group(.datapath = datapath_uuid, .tunnel_key = tunkey),
+    //sb::UUIDMap_Datapath_Binding(datapath, Left{datapath_uuid}),
     var keys = Aggregate((datapath_uuid), group_to_set(tunkey)).
 
 // Multicast_Group's not yet in the Realized table.
@@ -6595,7 +6595,7 @@ relation NotYetAllocatedMulticastGroupTunKeys(datapath_uuid: uuid,
 
 NotYetAllocatedMulticastGroupTunKeys(datapath_uuid, all_names) :-
     OutProxy_Multicast_Group(.name = name, .datapath = datapath_uuid),
-    not sb.Multicast_Group(.name = name, .datapath = datapath_uuid),
+    not sb::Multicast_Group(.name = name, .datapath = datapath_uuid),
     var all_names = Aggregate((datapath_uuid), group_to_vec(name)).
 
 // Perform the allocation
@@ -6603,8 +6603,8 @@ relation MulticastGroupTunKeyAllocation(datapath_uuid: uuid, group: string, tunk
 
 // transfer existing allocations from the realized table
 MulticastGroupTunKeyAllocation(datapath_uuid, group, tunkey) :-
-    //sb.UUIDMap_Datapath_Binding(_, datapath_uuid),
-    sb.Multicast_Group(.name = group,
+    //sb::UUIDMap_Datapath_Binding(_, datapath_uuid),
+    sb::Multicast_Group(.name = group,
                        .datapath = datapath_uuid,
                        .tunnel_key = tunkey).
 
@@ -6639,7 +6639,7 @@ MulticastGroupTunKeyAllocation(datapath_uuid, group, tunkey) :-
  *
  * Queue ID may also need to be deallocated if port loses QoS attributes
  *
- * This logic applies mainly to sb.Port_Binding records bound to a chassis
+ * This logic applies mainly to sb::Port_Binding records bound to a chassis
  * (i.e. with the chassis column nonempty) but "localnet" ports can also
  * have a queue ID.  For those we use the port's own UUID as the chassis UUID.
  */
@@ -6657,13 +6657,13 @@ PortRequiresQID(pb._uuid, chassis) :-
     pb in OutProxy_Port_Binding(),
     pb.__type != "localnet",
     port_has_qos_params(pb.options),
-    sb.Port_Binding(._uuid = pb._uuid, .chassis = chassis_set),
+    sb::Port_Binding(._uuid = pb._uuid, .chassis = chassis_set),
     Some{var chassis} = chassis_set.
 PortRequiresQID(pb._uuid, pb._uuid) :-
     pb in OutProxy_Port_Binding(),
     pb.__type == "localnet",
     port_has_qos_params(pb.options),
-    sb.Port_Binding(._uuid = pb._uuid).
+    sb::Port_Binding(._uuid = pb._uuid).
 
 relation AggPortRequiresQID(chassis: uuid, ports: Vec<uuid>)
 
@@ -6674,14 +6674,14 @@ AggPortRequiresQID(chassis, ports) :-
 relation AllocatedQIDs(chassis: uuid, allocated_ids: Map<uuid, integer>)
 
 AllocatedQIDs(chassis, allocated_ids) :-
-    pb in sb.Port_Binding(),
+    pb in sb::Port_Binding(),
     pb.__type != "localnet",
     Some{var chassis} = pb.chassis,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
     Some{var qid} = parse_dec_u64(qid_str),
     var allocated_ids = Aggregate((chassis), group_to_map((pb._uuid, qid))).
 AllocatedQIDs(chassis, allocated_ids) :-
-    pb in sb.Port_Binding(),
+    pb in sb::Port_Binding(),
     pb.__type == "localnet",
     var chassis = pb._uuid,
     Some{var qid_str} = map_get(pb.options, "qdisc_queue_id"),
@@ -6714,11 +6714,11 @@ QueueIDAllocation(port, Some{qid}) :-
  */
 relation PreserveIPv6RAPDList(lrp_uuid: uuid, ipv6_ra_pd_list: Option<string>)
 PreserveIPv6RAPDList(lrp_uuid, ipv6_ra_pd_list) :-
-    sb.Port_Binding(._uuid = lrp_uuid, .options = options),
+    sb::Port_Binding(._uuid = lrp_uuid, .options = options),
     var ipv6_ra_pd_list = map_get(options, "ipv6_ra_pd_list").
 PreserveIPv6RAPDList(lrp_uuid, None) :-
-    nb.Logical_Router_Port(._uuid = lrp_uuid),
-    not sb.Port_Binding(._uuid = lrp_uuid).
+    nb::Logical_Router_Port(._uuid = lrp_uuid),
+    not sb::Port_Binding(._uuid = lrp_uuid).
 
 /*
  * Tag allocation for nested containers.
@@ -6751,7 +6751,7 @@ SwitchPortReservedTags(parent_name, tags) :-
     var tags = Aggregate((parent_name), group_to_set(tag)).
 
 SwitchPortReservedTags(parent_name, set_empty()) :-
-    nb.Logical_Switch_Port(.name = parent_name),
+    nb::Logical_Switch_Port(.name = parent_name),
     not SwitchPortReservedTag(.parent_name = parent_name).
 
 /* Allocate tags for ports that require dynamically allocated tags and do not
@@ -6798,7 +6798,7 @@ SwitchPortNewDynamicTag(lsp._uuid, tag) :-
     SwitchPortAllocatedTags(lsp._uuid, tag).
 
 /* IP_Multicast table (only applicable for Switches). */
-sb.Out_IP_Multicast(._uuid = cfg.datapath,
+sb::Out_IP_Multicast(._uuid = cfg.datapath,
                     .datapath = cfg.datapath,
                     .enabled = Some{cfg.enabled},
                     .querier = Some{cfg.querier},
@@ -6813,10 +6813,10 @@ sb.Out_IP_Multicast(._uuid = cfg.datapath,
 
 
 relation PortExists(name: string)
-PortExists(name) :- nb.Logical_Switch_Port(.name = name).
-PortExists(name) :- nb.Logical_Router_Port(.name = name).
+PortExists(name) :- nb::Logical_Switch_Port(.name = name).
+PortExists(name) :- nb::Logical_Router_Port(.name = name).
 
-sb.Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip, lbvipbackend.port, protocol)),
+sb::Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip, lbvipbackend.port, protocol)),
                        .ip = "${lbvipbackend.ip}",
                        .protocol = Some{protocol},
                        .port = lbvipbackend.port as integer,

@@ -3,40 +3,40 @@ import OVN_Southbound as sb
 import ovsdb
 import ovn
 
-/* ACLRef: reference to nb.ACL */
-relation &ACLRef[nb.ACL]
-&ACLRef[acl] :- nb.ACL[acl].
+/* ACLRef: reference to nb::ACL */
+relation &ACLRef[nb::ACL]
+&ACLRef[acl] :- nb::ACL[acl].
 
-/* DHCP_Options: reference to nb.DHCP_Options */
-relation &DHCP_OptionsRef[nb.DHCP_Options]
-&DHCP_OptionsRef[options] :- nb.DHCP_Options[options].
+/* DHCP_Options: reference to nb::DHCP_Options */
+relation &DHCP_OptionsRef[nb::DHCP_Options]
+&DHCP_OptionsRef[options] :- nb::DHCP_Options[options].
 
-/* QoS: reference to nb.QoS */
-relation &QoSRef[nb.QoS]
-&QoSRef[qos] :- nb.QoS[qos].
+/* QoS: reference to nb::QoS */
+relation &QoSRef[nb::QoS]
+&QoSRef[qos] :- nb::QoS[qos].
 
-/* LoadBalancerRef: reference to nb.Load_Balancer */
-relation &LoadBalancerRef[nb.Load_Balancer]
-&LoadBalancerRef[lb] :- nb.Load_Balancer[lb].
+/* LoadBalancerRef: reference to nb::Load_Balancer */
+relation &LoadBalancerRef[nb::Load_Balancer]
+&LoadBalancerRef[lb] :- nb::Load_Balancer[lb].
 
-/* LoadBalancerHealthCheckRef: reference to nb.Load_Balancer_Health_Check */
-relation &LoadBalancerHealthCheckRef[nb.Load_Balancer_Health_Check]
-&LoadBalancerHealthCheckRef[lbhc] :- nb.Load_Balancer_Health_Check[lbhc].
+/* LoadBalancerHealthCheckRef: reference to nb::Load_Balancer_Health_Check */
+relation &LoadBalancerHealthCheckRef[nb::Load_Balancer_Health_Check]
+&LoadBalancerHealthCheckRef[lbhc] :- nb::Load_Balancer_Health_Check[lbhc].
 
-/* NATRef: reference to nb.NAT*/
-relation &NATRef[nb.NAT]
-&NATRef[nat] :- nb.NAT[nat].
+/* NATRef: reference to nb::NAT*/
+relation &NATRef[nb::NAT]
+&NATRef[nat] :- nb::NAT[nat].
 
-/* ServiceMonitor: reference to sb.Service_Monitor */
-relation &ServiceMonitorRef[sb.Service_Monitor]
-&ServiceMonitorRef[sm] :- sb.Service_Monitor[sm].
+/* ServiceMonitor: reference to sb::Service_Monitor */
+relation &ServiceMonitorRef[sb::Service_Monitor]
+&ServiceMonitorRef[sm] :- sb::Service_Monitor[sm].
 
 /* Switch-to-router logical port connections */
 relation SwitchRouterPeer(lsp: uuid, lsp_name: string, lrp: uuid)
 SwitchRouterPeer(lsp, lsp_name, lrp) :-
-    nb.Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = "router", .options = options),
+    nb::Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = "router", .options = options),
     Some{var router_port} = map_get(options, "router-port"),
-    nb.Logical_Router_Port(.name = router_port, ._uuid = lrp).
+    nb::Logical_Router_Port(.name = router_port, ._uuid = lrp).
 
 function map_get_bool_def(m: Map<string, string>,
                           k: string, def: bool): bool = {

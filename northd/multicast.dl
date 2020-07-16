@@ -70,7 +70,7 @@ relation &McastSwitchCfg(
         .idle_timeout   = idle_timeout,
         .query_interval = query_interval,
         .query_max_resp = query_max_resp) :-
-    nb.Logical_Switch(._uuid        = ls_uuid,
+    nb::Logical_Switch(._uuid        = ls_uuid,
                       .other_config = other_config),
     var idle_timeout =
         map_get_int_def_limit(other_config, "mcast_idle_timeout",
@@ -93,7 +93,7 @@ relation &McastRouterCfg(
 )
 
 &McastRouterCfg(lr_uuid, mcast_relay) :-
-    nb.Logical_Router(._uuid = lr_uuid, .options = options),
+    nb::Logical_Router(._uuid = lr_uuid, .options = options),
     var mcast_relay = map_get_bool_def(options, "mcast_relay", false).
 
 /* IP Multicast port configuration. */
@@ -105,13 +105,13 @@ relation &McastPortCfg(
 )
 
 &McastPortCfg(lsp_uuid, false, flood, flood_reports) :-
-    nb.Logical_Switch_Port(._uuid = lsp_uuid, .options = options),
+    nb::Logical_Switch_Port(._uuid = lsp_uuid, .options = options),
     var flood = map_get_bool_def(options, "mcast_flood", false),
     var flood_reports = map_get_bool_def(options, "mcast_flood_reports",
                                          false).
 
 &McastPortCfg(lrp_uuid, true, flood, flood) :-
-    nb.Logical_Router_Port(._uuid = lrp_uuid, .options = options),
+    nb::Logical_Router_Port(._uuid = lrp_uuid, .options = options),
     var flood = map_get_bool_def(options, "mcast_flood", false).
 
 /* Mapping between Switch and the set of router port uuids on which to flood
@@ -201,12 +201,12 @@ relation IgmpSwitchGroupPort(
 )
 
 IgmpSwitchGroupPort(address, switch, lsp_uuid) :-
-    sb.IGMP_Group(.address = address, .datapath = igmp_dp_set,
+    sb::IGMP_Group(.address = address, .datapath = igmp_dp_set,
                   .ports = pb_ports),
     var pb_port_uuid = FlatMap(pb_ports),
-    sb.Port_Binding(._uuid = pb_port_uuid, .logical_port = lsp_name),
+    sb::Port_Binding(._uuid = pb_port_uuid, .logical_port = lsp_name),
     &SwitchPort(
-        .lsp = nb.Logical_Switch_Port{._uuid = lsp_uuid, .name = lsp_name},
+        .lsp = nb::Logical_Switch_Port{._uuid = lsp_uuid, .name = lsp_name},
         .sw = switch).
 
 /* Aggregated IGMP group: merges all IgmpSwitchGroupPort for a given
@@ -243,7 +243,7 @@ IgmpRouterGroupPort(address, rtr_port.router, rtr_port.lrp._uuid) :-
         None -> true
     },
     var flood_port = FlatMap(sw_flood_ports),
-    &SwitchPort(.lsp = nb.Logical_Switch_Port{._uuid = flood_port},
+    &SwitchPort(.lsp = nb::Logical_Switch_Port{._uuid = flood_port},
                 .peer = Some{&rtr_port}).
 
 /* Aggregated IGMP group for routers: merges all IgmpRouterGroupPort for
