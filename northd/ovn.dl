@@ -13,6 +13,9 @@ extern type eth_addr
 
 extern function eth_addr_zero(): eth_addr
 extern function eth_addr2string(addr: eth_addr): string
+function to_string(addr: eth_addr): string {
+    eth_addr2string(addr)
+}
 extern function scan_eth_addr(s: string): Option<eth_addr>
 extern function scan_eth_addr_prefix(s: string): Option<bit<64>>
 extern function eth_addr_from_string(s: string): Option<eth_addr>
@@ -30,7 +33,7 @@ function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
 
 extern type in_addr
 
-function in_addr2string(ip: in_addr): string = {
+function to_string(ip: in_addr): string = {
     var x = iptohl(ip);
     "${x >> 24}.${(x >> 16) & 'hff}.${(x >> 8) & 'hff}.${x & 'hff}"
 }
@@ -139,7 +142,7 @@ extern function ipv6_is_cidr(ip6: in6_addr): bool
 extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
 
 extern function inet6_ntop(addr: in6_addr): string
-function in6_addr2string(addr: in6_addr): string = {
+function to_string(addr: in6_addr): string = {
     inet6_ntop(addr)
 }
 
@@ -182,7 +185,7 @@ function ip46_parse(s: string) : Option<v46_ip> = {
     };
     None
 }
-function v46_ip2string(ip46: v46_ip) : string = {
+function to_string(ip46: v46_ip) : string = {
     match (ip46) {
         IPv4{ipv4} -> "${ipv4}",
         IPv6{ipv6} -> "${ipv6}"
@@ -311,7 +314,7 @@ typedef lport_addresses = LPortAddress {
     ipv6_addrs: Vec<ipv6_netaddr>
 }
 
-function lport_addresses2string(addr: lport_addresses): string = {
+function to_string(addr: lport_addresses): string = {
     var addrs = vec_singleton("${addr.ea}");
     for (ip4 in addr.ipv4_addrs) {
         vec_push(addrs, "${ip4.addr}")

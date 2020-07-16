@@ -595,7 +595,7 @@ function get_svc_monitor_mac(options: Map<string,string>, uuid: uuid)
 function put_svc_monitor_mac(options: Map<string,string>,
                              svc_monitor_mac: eth_addr) : Map<string,string> =
 {
-    map_insert_imm(options, "svc_monitor_mac", eth_addr2string(svc_monitor_mac))
+    map_insert_imm(options, "svc_monitor_mac", to_string(svc_monitor_mac))
 }
 relation SvcMonitorMac(mac: eth_addr)
 SvcMonitorMac(get_svc_monitor_mac(options, uuid)) :-

@@ -441,7 +441,7 @@ function route_policy_from_string(s: Option<string>): route_policy = {
         _ -> DstIp
     }
 }
-function route_policy2string(policy: route_policy): string = {
+function to_string(policy: route_policy): string = {
     match (policy) {
         SrcIp -> "src-ip",
         DstIp -> "dst-ip"

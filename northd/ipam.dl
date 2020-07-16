@@ -316,7 +316,7 @@ function put_mac_prefix(options: Map<string,string>, mac_prefix: bit<64>)
     : Map<string,string> =
 {
     map_insert_imm(options, "mac_prefix",
-                   string_substr(eth_addr2string(eth_addr_from_uint64(mac_prefix)), 0, 8))
+                   string_substr(to_string(eth_addr_from_uint64(mac_prefix)), 0, 8))
 }
 relation MacPrefix(mac_prefix: bit<64>)
 MacPrefix(get_mac_prefix(options, uuid)) :-
