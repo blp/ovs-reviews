@@ -90,16 +90,16 @@ northd_cli_1 = northd/ovn_northd_ddlog/target/release/ovn_%_cli
 EXTRA_northd_ovn_northd_DEPENDENCIES = $(northd_cli_$(NORTHD_CLI))
 
 cargo_build = $(cargo_build_$(NORTHD_LIB)$(NORTHD_CLI))
-cargo_build_01 = --bin ovn_northd_cli
+cargo_build_01 = --features command-line --bin ovn_northd_cli
 cargo_build_10 = --lib
-cargo_build_11 =
+cargo_build_11 = --features command-line
 
 $(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
 	$(AM_V_GEN)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
 	LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
 	cd northd/ovn_northd_ddlog && \
 	RUSTC='$(RUSTC)' RUSTFLAGS="$(RUSTFLAGS)" \
-	    cargo build --release $(CARGO_VERBOSE) $(cargo_build)
+	    cargo build --release $(CARGO_VERBOSE) $(cargo_build) --no-default-features --features ovsdb
 endif
 
 CLEAN_LOCAL += clean-ddlog
