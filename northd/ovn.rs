@@ -1,5 +1,4 @@
-#[macro_use] extern crate nom;
-
+use nom::*;
 use differential_datalog::arcval;
 use differential_datalog::record;
 use std::ffi;
