@@ -55,8 +55,8 @@ AC_DEFUN([OVS_CHECK_DDLOG], [
   if test "$DDLOGLIBDIR" != none; then
     if test ! -d "$DDLOGLIBDIR"; then
       AC_MSG_ERROR([ddlog library dir "$DDLOGLIBDIR" doesn't exist])
-    elif test ! -f "$DDLOGLIBDIR"/std.dl; then
-      AC_MSG_ERROR([ddlog library dir "$DDLOGLIBDIR" lacks std.dl])
+    elif test ! -f "$DDLOGLIBDIR"/ddlog_std.dl; then
+      AC_MSG_ERROR([ddlog library dir "$DDLOGLIBDIR" lacks ddlog_std.dl])
     fi
 
     AC_ARG_VAR([DDLOG])
