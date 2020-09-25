@@ -97,8 +97,8 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
                     exclude_ips
                 },
                 Right{ranges} -> {
-                    for (range in ranges) {
-                        (var ip_start, var ip_end) = range;
+                    for (rng in ranges) {
+                        (var ip_start, var ip_end) = rng;
                         var start = iptohl(ip_start);
                         var end = match (ip_end) {
                             None -> start,

@@ -176,8 +176,8 @@ HAChassis(ha_chassis_group_uuid(lrp._uuid),
 HAChassis(ha_chassis_group_uuid(ha_chassis_group._uuid),
           chassis_name, priority, external_ids) :-
     DistributedGatewayPort(.lrp = lrp),
-    Some{var ha_chassis_group_uuid} = lrp.ha_chassis_group,
-    ha_chassis_group in nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
+    Some{var hac_group_uuid} = lrp.ha_chassis_group,
+    ha_chassis_group in nb::HA_Chassis_Group(._uuid = hac_group_uuid),
     var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
     nb::HA_Chassis(._uuid = ha_chassis_uuid,
                   .chassis_name = chassis_name,
@@ -201,10 +201,10 @@ HAChassisGroup(ha_chassis_group_uuid(lrp._uuid), lrp.name, map_empty()) :-
     DistributedGatewayPort(.lrp = lrp),
     is_none(lrp.ha_chassis_group),
     not set_is_empty(lrp.gateway_chassis).
-HAChassisGroup(ha_chassis_group_uuid(ha_chassis_group_uuid),
+HAChassisGroup(ha_chassis_group_uuid(hac_group_uuid),
                name, external_ids) :-
     DistributedGatewayPort(.lrp = lrp),
-    Some{var ha_chassis_group_uuid} = lrp.ha_chassis_group,
+    Some{var hac_group_uuid} = lrp.ha_chassis_group,
     nb::HA_Chassis_Group(._uuid = hacg_uuid,
                         .name = name,
                         .external_ids = external_ids).
@@ -219,10 +219,10 @@ LogicalRouterHAChassisGroup(lr_uuid, ha_chassis_group_uuid(lrp._uuid)) :-
     is_none(lrp.ha_chassis_group),
     set_size(lrp.gateway_chassis) > 0.
 LogicalRouterHAChassisGroup(lr_uuid,
-                            ha_chassis_group_uuid(ha_chassis_group_uuid)) :-
+                            ha_chassis_group_uuid(hac_group_uuid)) :-
     DistributedGatewayPort(lrp, lr_uuid),
-    Some{var ha_chassis_group_uuid} = lrp.ha_chassis_group,
-    nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid).
+    Some{var hac_group_uuid} = lrp.ha_chassis_group,
+    nb::HA_Chassis_Group(._uuid = hac_group_uuid).
 
 
 /* For each router port, tracks whether it's a redirect port of its router */

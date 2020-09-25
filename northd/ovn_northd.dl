@@ -526,8 +526,8 @@ sb::Out_HA_Chassis(ha_chassis_uuid(ha_chassis.chassis_name), chassis, priority, 
     sp.lsp.__type == "external",
     Some{var ha_chassis_group_uuid} = sp.lsp.ha_chassis_group,
     ha_chassis_group in nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
-    var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
-    ha_chassis in nb::HA_Chassis(._uuid = ha_chassis_uuid, .priority = priority, .external_ids = eids),
+    var hac_uuid = FlatMap(ha_chassis_group.ha_chassis),
+    ha_chassis in nb::HA_Chassis(._uuid = hac_uuid, .priority = priority, .external_ids = eids),
     HAChassisToChassis(ha_chassis.chassis_name, chassis).
 sb::Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) :-
     sp in &SwitchPort(),
@@ -536,8 +536,8 @@ sb::Out_HA_Chassis_Group(_uuid, name, ha_chassis, set_empty() /* XXX? */, eids) 
     Some{var ha_chassis_group_uuid} = sp.lsp.ha_chassis_group,
     ha_chassis_group in nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid, .name = name,
                                             .external_ids = eids),
-    var ha_chassis_uuid = FlatMap(ha_chassis_group.ha_chassis),
-    ha_chassis in nb::HA_Chassis(._uuid = ha_chassis_uuid),
+    var hac_uuid = FlatMap(ha_chassis_group.ha_chassis),
+    ha_chassis in nb::HA_Chassis(._uuid = hac_uuid),
     var ha_chassis_uuid_name = ha_chassis_uuid(ha_chassis.chassis_name),
     var ha_chassis = Aggregate((ls_uuid, name, eids), group_to_set(ha_chassis_uuid_name)),
     var _uuid = ha_chassis_group_uuid(ls_uuid).
@@ -2129,7 +2129,7 @@ for (&Switch(.ls = ls,
 for (&SwitchACL(.sw = &Switch{.ls = ls, .has_stateful_acl = has_stateful}, .acl = &acl)) {
     /* consider_acl */
     var ingress = acl.direction == "from-lport" in
-    var stage = if ingress switch_stage(IN, ACL) else switch_stage(OUT, ACL) in
+    var stage = if ingress { switch_stage(IN, ACL) } else { switch_stage(OUT, ACL) } in
     var pipeline = if ingress "ingress" else "egress" in
     var stage_hint = stage_hint(acl._uuid) in
     if (acl.action == "allow" or acl.action == "allow-related") {
@@ -2317,7 +2317,7 @@ for (&Switch(.ls = ls)) {
 for (SwitchQoS(.sw = &sw, .qos = &qos)) {
     var ingress = if (qos.direction == "from-lport") true else false in
     var pipeline = if ingress "ingress" else "egress" in {
-        var stage = if ingress switch_stage(IN, QOS_MARK) else switch_stage(OUT, QOS_MARK) in
+        var stage = if ingress { switch_stage(IN, QOS_MARK) } else { switch_stage(OUT, QOS_MARK) } in
         /* FIXME: Can value_action be negative? */
         for (QoSAction(qos._uuid, key_action, value_action)) {
             if (key_action == "dscp") {
@@ -2345,7 +2345,7 @@ for (SwitchQoS(.sw = &sw, .qos = &qos)) {
             (burst, rate)
         } in
         if (rate != 0) {
-            var stage = if (ingress) switch_stage(IN, QOS_METER) else switch_stage(OUT, QOS_METER) in
+            var stage = if (ingress) { switch_stage(IN, QOS_METER) } else { switch_stage(OUT, QOS_METER) } in
             var meter_action = if (burst != 0) {
                     "set_meter(${rate}, ${burst}); next;"
                 } else {

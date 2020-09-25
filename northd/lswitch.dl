@@ -40,7 +40,7 @@ PortStaticAddresses(.lsport     = port_uuid,
                     .ip4addrs   = set_unions(ip4_addrs),
                     .ip6addrs   = set_unions(ip6_addrs)) :-
     nb::Logical_Switch_Port(._uuid = port_uuid, .addresses = addresses),
-    var address = FlatMap(if set_is_empty(addresses) set_singleton("") else addresses),
+    var address = FlatMap(if (set_is_empty(addresses)) { set_singleton("") } else { addresses }),
     (var ip4addrs, var ip6addrs) = if (not is_dynamic_lsp_address(address)) {
         split_addresses(address)
     } else { (set_empty(), set_empty()) },
@@ -360,12 +360,12 @@ SwitchPortUp(lsp, up) :-
     not sb::Port_Binding(.logical_port = lsp_name),
     var up = __type == "router".
 
-relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, ha_chassis_group_uuid: uuid)
+relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, hac_group_uuid: uuid)
 SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid(ls_uuid)) :-
     lsp in nb::Logical_Switch_Port(._uuid = lsp_uuid),
     lsp.__type == "external",
-    Some{var ha_chassis_group_uuid} = lsp.ha_chassis_group,
-    ha_chassis_group in nb::HA_Chassis_Group(._uuid = ha_chassis_group_uuid),
+    Some{var hac_group_uuid} = lsp.ha_chassis_group,
+    ha_chassis_group in nb::HA_Chassis_Group(._uuid = hac_group_uuid),
     /* If the group is empty, then HA_Chassis_Group record will not be created in SB,
      * and so we should not create a reference to the group in Port_Binding table,
      * to avoid integrity violation. */
