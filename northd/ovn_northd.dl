@@ -5121,7 +5121,7 @@ for (&Router(.lr = lr,
             var __match = "${ipX}.dst == ${nat.external_ip} && outport == ${json_string_escape(gwport.name)} && is_chassis_resident(${port})" in
             var regs = {
                 var regs = vec_empty();
-                for (j in range(0, mFF_N_LOG_REGS()-1, 01)) {
+                for (j in range_vec(0, mFF_N_LOG_REGS(), 01)) {
                     vec_push(regs, "reg${j} = 0; ")
                 };
                 regs
@@ -5807,7 +5807,7 @@ Flow(.logical_datapath = router.lr._uuid,
     (var __match, var priority) = build_route_match(key),
     var all_member_ids = {
         var member_ids = vec_with_capacity(set_size(dsts));
-        for (i in range(1, set_size(dsts), 1)) {
+        for (i in range_vec(1, set_size(dsts)+1, 1)) {
             vec_push(member_ids, "${i}")
         };
         string_join(member_ids, ", ")

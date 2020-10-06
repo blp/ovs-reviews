@@ -107,7 +107,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
                         start = max(start_ipv4, start);
                         end = min(start_ipv4 + total_ipv4s - 1, end);
                         if (end >= start) {
-                            for (addr in range(start, end, 1)) {
+                            for (addr in range_vec(start, end+1, 1)) {
                                 set_insert(exclude_ips, addr)
                             }
                         } else {
