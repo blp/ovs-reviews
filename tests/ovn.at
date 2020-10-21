@@ -1852,10 +1852,6 @@ test_arp() {
     fi
 }
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # Send packets between all pairs of source and destination ports:
 #
 # 1. Unicast packets are delivered to exactly one logical switch port
@@ -2146,10 +2142,6 @@ test_packet() {
     for outport; do
         echo $packet >> $outport.expected
     done
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 # Send packets between all pairs of source and destination ports:
@@ -3272,9 +3264,6 @@ done
 # ARP request should not be responded to by logical switch router
 # type arp responder on HV1 and HV2 and should reach directly to
 # vif1 and vif2
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 sha=f00000000003
 spa=`ip_to_hex 192 168 1 2`
 tpa=`ip_to_hex 192 168 1 1`
@@ -3676,9 +3665,6 @@ as hv1 ovs-ofctl dump-flows br-int
 #
 # 2. Broadcast IP packets are delivered to all logical switch ports
 #    except the input port.
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 for is in 1 2 3; do
   for js in 1 2 3; do
     for ks in 1 2 3; do
@@ -4039,10 +4025,6 @@ test_arp() {
     fi
 }
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # lp11 send GARP request to announce ownership of 192.168.1.100.
 
 sha=f00000000011
@@ -4243,10 +4225,6 @@ test_icmpv6() {
     for outport; do
         echo $packet >> $outport.expected
     done
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 # no port security
@@ -4674,9 +4652,6 @@ ovs-vsctl -- add-port br-int vif2 -- \
 sleep 1
 
 # Send ip packets between the two ports.
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 # Packet to send.
 src_mac="f00000010203"
@@ -4791,9 +4766,6 @@ ovs-vsctl -- add-port br-int vif2 -- \
 sleep 1
 
 # Send ip packets between the two ports.
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 # Packet to send.
 src_mac="f00000010203"
@@ -4940,10 +4912,6 @@ OVN_POPULATE_ARP
 # Allow some time for ovn-northd and ovn-controller to catch up.
 # XXX This should be more systematic.
 sleep 1
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 # Send ip packets between foo1 and alice1
 src_mac="f00000010203"
@@ -5163,10 +5131,6 @@ OVN_POPULATE_ARP
 # Allow some time for ovn-northd and ovn-controller to catch up.
 # XXX This should be more systematic.
 sleep 1
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 # Send ip packets between foo1 and alice1
 src_mac="f00000010203"
@@ -5428,10 +5392,6 @@ options:rxq_pcap=dummy-rx.pcap
     rm -f ${pcap_file}*.pcap
     check ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
 options:rxq_pcap=${pcap_file}-rx.pcap
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 AT_CAPTURE_FILE([ofctl_monitor0.log])
@@ -6251,10 +6211,6 @@ ovn-nbctl lsp-add alice alice1 \
 # XXX This should be more systematic.
 sleep 2
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # Send ip packets between foo1 and alice1
 src_mac="f00000010203"
 dst_mac="000001010203"
@@ -6392,9 +6348,6 @@ ovs-vsctl -- add-port br-int vif2 -- \
 sleep 1
 
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 for i in 1 2; do
     : > vif$i.expected
 done
@@ -7531,10 +7484,6 @@ ovs-vsctl -- add-port br-int hv1-vif3 -- \
 # XXX This should be more systematic.
 sleep 1
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # Send ip packets between foo1 and foo2
 src_mac="0a0000a80103"
 dst_mac="0a0000a80104"
@@ -7766,10 +7715,6 @@ echo "------Flows dump-----"
 as hv1
 ovs-ofctl dump-flows
 echo "---------------------"
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 src_mac="f00000000003"
 dst_mac="f00000000001"
@@ -8856,10 +8801,6 @@ OVN_POPULATE_ARP
 # XXX This should be more systematic.
 sleep 1
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # Test that ovn-controllers create ct-zone entry for container ports.
 foo1_zoneid=$(as hv1 ovs-vsctl get bridge br-int external_ids:ct-zone-foo1)
 AT_CHECK([test ! -z $foo1_zoneid])
@@ -9167,9 +9108,6 @@ OVN_POPULATE_ARP
 # XXX This should be more systematic.
 sleep 1
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 trim_zeros() {
     sed 's/\(00\)\{1,\}$//'
 }
@@ -9281,10 +9219,6 @@ as hv1 ovs-vsctl show
 echo "*************************"
 ovn-sbctl list DNS
 echo "*************************"
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 reset_pcap_file() {
     local iface=$1
@@ -9773,9 +9707,6 @@ AT_CHECK([ovn-nbctl --timeout=3 --wait=sb sync], [0], [ignore])
 # Allow some time for ovn-northd and ovn-controller to catch up.
 ovn-nbctl --wait=hv sync
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 reset_pcap_file() {
     local iface=$1
@@ -10027,10 +9958,6 @@ OVS_WAIT_UNTIL(
 # XXX This should be more systematic.
 sleep 2
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 reset_pcap_file() {
     local iface=$1
     local pcap_file=$2
@@ -10275,9 +10202,6 @@ AT_CHECK([as hv2 ovs-ofctl dump-flows br-int | grep arp | grep load:0x2- | grep 
 ])
 
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 
 : > hv2-vif1.expected
@@ -10771,10 +10695,6 @@ for chassis in hv1 hv2 hv3; do
     echo "--------------------------"
 done
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 foo1_ip=$(ip_to_hex 192 168 1 2)
 gw_ip=$(ip_to_hex 172 16 1 6)
 dst_ip=$(ip_to_hex 8 8 8 8)
@@ -11224,10 +11144,6 @@ OVN_POPULATE_ARP
 # Allow some time for ovn-northd and ovn-controller to catch up.
 # XXX This should be more systematic.
 sleep 1
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 # Send ip packets between foo1 and alice1
 src_mac="f00000010203"
@@ -12855,10 +12771,6 @@ OVN_POPULATE_ARP
 # allow some time for ovn-northd and ovn-controller to catch up.
 sleep 1
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 for i in 1 2 3; do
     : > vif${i}1.expected
 done
@@ -13062,9 +12974,6 @@ as hv1 ovs-ofctl dump-flows br-int
 
 # Send IP packets between all pairs of source and destination ports,
 # packets matches ACL (pg2 to pg1) should be dropped
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 for is in 1 2 3; do
   for js in 1 2 3; do
     for ks in 1 2 3; do
@@ -13302,9 +13211,6 @@ as hv1 ovs-ofctl dump-flows br-int
 
 # Send IP packets between all pairs of source and destination ports,
 # packets matches ACL1 but not ACL2 should be dropped
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 for is in 1 2 3; do
   for js in 1 2 3; do
     for ks in 1 2 3; do
@@ -13535,10 +13441,6 @@ ${dst_ip}0035111100080000
     for outport; do
         echo $packet >> $outport.expected
     done
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 reset_pcap_file() {
@@ -13948,10 +13850,6 @@ test_ip6_packet() {
     as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
 }
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 for i in 1 2; do
     net_add n$i
     ovn-nbctl ls-add sw$i
@@ -14091,10 +13989,6 @@ test_ip6_packet() {
     echo $reply >> vif$inport.expected
 
     as hv$hv ovs-appctl netdev-dummy/receive vif$inport $packet
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 for i in 1 2; do
@@ -14580,10 +14474,6 @@ options:rxq_pcap=dummy-rx.pcap
     rm -f ${pcap_file}*.pcap
     ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
 options:rxq_pcap=${pcap_file}-rx.pcap
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 AT_CAPTURE_FILE([ofctl_monitor0_hv1.log])
@@ -15265,10 +15155,6 @@ reset_pcap_file() {
      rm -f ${pcap_file}*.pcap
      ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
  options:rxq_pcap=${pcap_file}-rx.pcap
-}
-
-ip_to_hex() {
-     printf "%02x%02x%02x%02x" "$@"
 }
 
 test_ip_packet_larger() {
@@ -16008,10 +15894,6 @@ lrp_to_lrp_mac () {
     esac
 }
 
-ip_to_hex() {
-       printf "%02x%02x%02x%02x" "$@"
-}
-
 net_add n1
 for i in 1 2; do
     sim_add hv$i
@@ -16242,10 +16124,6 @@ ovn-sbctl dump-flows lr0 | grep lr_in_arp_resolve | grep "reg0 == 10.0.0.10" \
 AT_CHECK([cat lflows.txt], [0], [dnl
   table=13(lr_in_arp_resolve  ), priority=100  , match=(outport == "lr0-sw0" && reg0 == 10.0.0.10), action=(eth.dst = 00:00:00:00:00:00; next;)
 ])
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 hv1_ch_uuid=`ovn-sbctl --bare --columns _uuid find chassis name="hv1"`
 hv2_ch_uuid=`ovn-sbctl --bare --columns _uuid find chassis name="hv2"`
@@ -16642,10 +16520,6 @@ options:rxq_pcap=dummy-rx.pcap
     rm -f ${pcap_file}*.pcap
     ovs-vsctl -- set Interface $iface options:tx_pcap=${pcap_file}-tx.pcap \
 options:rxq_pcap=${pcap_file}-rx.pcap
-}
-
-ip_to_hex() {
-     printf "%02x%02x%02x%02x" "$@"
 }
 
 #
@@ -18227,10 +18101,6 @@ m4_define([DVR_N_S_PING],
        esac
    }
 
-   ip_to_hex() {
-          printf "%02x%02x%02x%02x" "$@"
-   }
-
    net_add n1
    for i in 1 2; do
        sim_add hv$i
@@ -18367,11 +18237,6 @@ m4_define([DVR_N_S_PING],
    vif_to_lrp () {
        echo router-to-`vif_to_ls ${1}`
    }
-
-   ip_to_hex() {
-          printf "%02x%02x%02x%02x" "${@}"
-   }
-
 
    test_ip() {
            # This packet has bad checksums but logical L3 routing doesn't check.
@@ -18550,10 +18415,6 @@ ovn-nbctl --wait=hv sync
 
 as hv1 ovs-appctl -t ovn-controller vlog/set dbg
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # From sw0-p1 send GARP for 10.0.0.30.
 # ovn-controller should learn the
 #   mac_binding entry
@@ -18711,10 +18572,6 @@ ovn-nbctl lsp-set-addresses ln1 unknown
 ovn-nbctl lsp-set-type ln1 localnet
 ovn-nbctl lsp-set-options ln1 network_name=phys
 
-ip_to_hex() {
-       printf "%02x%02x%02x%02x" "$@"
-}
-
 net_add n1
 
 sim_add hv1
@@ -18822,10 +18679,6 @@ vif_to_hv () {
         vif?[[north]]?) echo hv4 ;; dnl (
         *) AT_FAIL_IF([:]) ;;
     esac
-}
-
-ip_to_hex() {
-       printf "%02x%02x%02x%02x" "$@"
 }
 
 net_add n1
@@ -18965,11 +18818,6 @@ vif_to_hv () {
 vif_to_lrp () {
     echo router-to-`vif_to_ls $1`
 }
-
-ip_to_hex() {
-       printf "%02x%02x%02x%02x" "$@"
-}
-
 
 test_ip() {
         # This packet has bad checksums but logical L3 routing doesn't check.
@@ -19393,10 +19241,6 @@ AT_CLEANUP
 
 AT_SETUP([ovn -- ARP/ND request broadcast limiting])
 ovn_start
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 send_arp_request() {
     local hv=$1 inport=$2 eth_src=$3 spa=$4 tpa=$5
@@ -20265,10 +20109,6 @@ options:rxq_pcap=dummy-rx.pcap
 options:rxq_pcap=${pcap_file}-rx.pcap
 }
 
-ip_to_hex() {
-     printf "%02x%02x%02x%02x" "$@"
-}
-
 build_udp() {
     local sport=$1 dport=$2 chksum=$3
     local len=000a
@@ -20616,10 +20456,6 @@ table=0, priority=100, pkt_mark=0xffffffff actions=drop
 ])
 
 AT_CHECK([as hv1 ovs-ofctl --protocols=OpenFlow13 add-flows br-phys flows.txt])
-
-ip_to_hex() {
-     printf "%02x%02x%02x%02x" "$@"
-}
 sleep 5
 
 send_ipv4_pkt() {
@@ -21479,10 +21315,6 @@ ovn-nbctl --wait=hv sync
 AT_CHECK([ovn-sbctl lflow-list | grep lr_in_arp_resolve | grep 10.0.0.1], [1], [])
 AT_CHECK([ovn-sbctl lflow-list | grep lr_in_arp_resolve | grep 10.0.0.2], [1], [])
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 # Send ip packets from p1 to p2
 src_mac="f00000000102"
 dst_mac="000000000101"
@@ -21720,10 +21552,6 @@ ovn-nbctl --wait=hv sync
 sw_key=$(ovn-sbctl --bare --columns tunnel_key list datapath_binding r1)
 
 AT_CHECK([ovn-sbctl lflow-list | grep lr_in_arp_resolve | grep 10.0.1.1], [1], [])
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
 
 # Send ip packets from p1 to lrp-r1-s1
 src_mac="f00000000102"
@@ -21981,10 +21809,6 @@ options:rxq_pcap=dummy-rx.pcap
 options:rxq_pcap=${pcap_file}-rx.pcap
 }
 
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
-}
-
 send_arp_request() {
     local eth_src=$1 spa=$2 tpa=$3
     local eth_dst=ffffffffffff
@@ -22136,10 +21960,6 @@ ${dst_ip}0035111100080000
     for outport; do
         echo $packet >> $outport.expected
     done
-}
-
-ip_to_hex() {
-    printf "%02x%02x%02x%02x" "$@"
 }
 
 reset_pcap_file() {
