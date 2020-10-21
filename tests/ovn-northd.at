@@ -344,7 +344,7 @@ ovn_init_db ovn-nb; ovn-nbctl init
 
 # test unixctl option
 mkdir "$ovs_base"/northd
-as northd start_daemon ovn-northd --unixctl="$ovs_base"/northd/ovn-northd.ctl --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
+as northd start_daemon NORTHD_TYPE --unixctl="$ovs_base"/northd/NORTHD_TYPE[].ctl --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 ovn-nbctl ls-add sw
 ovn-nbctl --wait=sb lsp-add sw p1
 # northd created with unixctl option successfully created port_binding entry
@@ -353,7 +353,7 @@ AT_CHECK([ovn-sbctl --bare --columns datapath find port_binding logical_port="p1
 AT_CHECK([ovn-nbctl --wait=sb lsp-del p1])
 
 # ovs-appctl exit with unixctl option
-OVS_APP_EXIT_AND_WAIT_BY_TARGET(["$ovs_base"/northd/ovn-northd.ctl], ["$ovs_base"/northd/ovn-northd.pid])
+OVS_APP_EXIT_AND_WAIT_BY_TARGET(["$ovs_base"/northd/NORTHD_TYPE[].ctl], ["$ovs_base"/northd/NORTHD_TYPE[].pid])
 
 # Check no port_binding entry for new port as ovn-northd is not running
 ovn-nbctl lsp-add sw p2
@@ -362,7 +362,7 @@ AT_CHECK([ovn-sbctl --bare --columns datapath find port_binding logical_port="p2
 ])
 
 # test default unixctl path
-as northd start_daemon ovn-northd --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
+as northd start_daemon NORTHD_TYPE --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 ovn-nbctl --wait=sb lsp-add sw p3
 # northd created with default unixctl path successfully created port_binding entry
 AT_CHECK([ovn-sbctl --bare --columns datapath find port_binding logical_port="p3" | wc -l], [0], [1
@@ -373,7 +373,7 @@ OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 AT_CLEANUP
 ])
@@ -771,78 +771,53 @@ name=hagrp1`
 
 # The type of the lsp - sw0-pext1 is still not set to external.
 # So ha_chassis_group should be ignored.
-ovn-nbctl set logical_switch_port sw0-pext1 ha_chassis_group=$hagrp1_uuid
-
-OVS_WAIT_UNTIL([test 0 = `ovn-sbctl --bare --columns name find \
-ha_chassis_group name="hagrp1" | wc -l`])
-
-AT_CHECK([test 0 = `ovn-sbctl list ha_chassis | grep chassis | wc -l`])
+check ovn-nbctl set logical_switch_port sw0-pext1 ha_chassis_group=$hagrp1_uuid
+wait_row_count ha_chassis_group 0 ha_chassis_group
+check_row_count ha_chassis 0
 
 # Set the type of sw0-pext1 to external
-ovn-nbctl lsp-set-type sw0-pext1 external
+check ovn-nbctl lsp-set-type sw0-pext1 external
 
-OVS_WAIT_UNTIL([test 1 = `ovn-sbctl --bare --columns name find \
-ha_chassis_group name="hagrp1" | wc -l`])
+wait_row_count ha_chassis_group 1 name=hagrp1
+check_row_count ha_chassis 3
 
-AT_CHECK([test 3 = `ovn-sbctl list ha_chassis | grep chassis | \
-grep -v chassis-name | wc -l`])
-
-sb_hagrp1_uuid=`ovn-sbctl --bare --columns _uuid find ha_chassis_group \
-name=hagrp1`
-
-AT_CHECK([test "$sb_hagrp1_uuid" = `ovn-sbctl --bare --columns \
-ha_chassis_group find port_binding logical_port=sw0-pext1`])
+sb_hagrp1_uuid=$(fetch_column ha_chassis_group _uuid name=hagrp1)
+AT_CHECK([test "$sb_hagrp1_uuid" = "$(fetch_column port_binding ha_chassis_group logical_port=sw0-pext1)"])
 
 # Set the type of sw0-pext2 to external and associate ha_chassis_group
-ovn-nbctl lsp-set-type sw0-pext2 external
-ovn-nbctl set logical_switch_port sw0-pext2 ha_chassis_group=$hagrp1_uuid
+check ovn-nbctl lsp-set-type sw0-pext2 external
+check ovn-nbctl set logical_switch_port sw0-pext2 ha_chassis_group=$hagrp1_uuid
+wait_row_count ha_chassis_group 1 name=hagrp1
+check_row_count ha_chassis 3
+AT_CHECK([test "$sb_hagrp1_uuid" = "$(fetch_column port_binding ha_chassis_group logical_port=sw0-pext1)"])
 
-OVS_WAIT_UNTIL([test 1 = `ovn-sbctl --bare --columns name find \
-ha_chassis_group name="hagrp1" | wc -l`])
-
-AT_CHECK([test 3 = `ovn-sbctl list ha_chassis | grep chassis |
-grep -v chassis-name | wc -l`])
-AT_CHECK([test "$sb_hagrp1_uuid" = `ovn-sbctl --bare --columns \
-ha_chassis_group find port_binding logical_port=sw0-pext1`])
-
-OVS_WAIT_UNTIL([test "$sb_hagrp1_uuid" = `ovn-sbctl --bare --columns \
-ha_chassis_group find port_binding logical_port=sw0-pext2`])
+OVS_WAIT_UNTIL([test "$sb_hagrp1_uuid" = "$(fetch_column port_binding ha_chassis_group logical_port=sw0-pext2)"])
 
 # sw0-p1 is a normal port. So ha_chassis_group should not be set
 # in port_binding.
-ovn-nbctl --wait=sb set logical_switch_port sw0-p1 \
-ha_chassis_group=$hagrp1_uuid
+check ovn-nbctl --wait=sb set logical_switch_port sw0-p1 ha_chassis_group=$hagrp1_uuid
 
-OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
-logical_port=sw0-p1) = x], [0], [])
-
+wait_row_count port_binding 1 logical_port=sw0-p1 'chassis=[[]]'
 # Clear ha_chassis_group for sw0-pext1
 check ovn-nbctl --wait=sb clear logical_switch_port sw0-pext1 ha_chassis_group
 
-OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
-logical_port=sw0-pext1) = x], [0], [])
-
-OVS_WAIT_UNTIL([test 1 = `ovn-sbctl --bare --columns name find \
-ha_chassis_group name="hagrp1" | wc -l`])
-
-AT_CHECK([test 3 = `ovn-sbctl list ha_chassis | grep chassis | \
-grep -v chassis-name | wc -l`])
+wait_row_count port_binding 1 logical_port=sw0-pext1 'chassis=[[]]'
+wait_row_count ha_chassis_group 1 name=hagrp1
+check_row_count ha_chassis 3
 
 # Clear ha_chassis_group for sw0-pext2
-ovn-nbctl --wait=sb clear logical_switch_port sw0-pext2 ha_chassis_group
+check ovn-nbctl --wait=sb clear logical_switch_port sw0-pext2 ha_chassis_group
 
-OVS_WAIT_UNTIL([test x$(ovn-sbctl --bare --columns chassis find port_binding \
-logical_port=sw0-pext2) = x], [0], [])
-
-OVS_WAIT_UNTIL([test 0 = `ovn-sbctl list ha_chassis_group |  wc -l`])
-AT_CHECK([test 0 = `ovn-sbctl list ha_chassis | wc -l`])
+wait_row_count port_binding 1 logical_port=sw0-pext2 'chassis=[[]]'
+wait_row_count ha_chassis_group 0
+check_row_count ha_chassis 0
 
 as ovn-sb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 
 AT_CLEANUP
 ])
@@ -851,61 +826,63 @@ OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- ovn-northd pause and resume])
 ovn_start
 
-AT_CHECK([test xfalse = x`as northd ovn-appctl -t ovn-northd is-paused`])
-AT_CHECK([as northd ovn-appctl -t ovn-northd status], [0], [Status: active
+get_northd_status() {
+    as northd ovn-appctl -t NORTHD_TYPE is-paused
+    as northd ovn-appctl -t NORTHD_TYPE status
+    as northd-backup ovn-appctl -t NORTHD_TYPE is-paused
+    as northd-backup ovn-appctl -t NORTHD_TYPE status
+}
+
+# Pause the backup, to force the main northd to become active (otherwise
+# there's no guarantee, ovn_start is racy).
+check as northd-backup ovs-appctl -t NORTHD_TYPE pause
+OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
+Status: active
+true
+Status: paused
 ])
-AT_CHECK([test xfalse = x`as northd-backup ovn-appctl -t ovn-northd \
-is-paused`])
-AT_CHECK([as northd-backup ovn-appctl -t ovn-northd status], [0],
-[Status: standby
+
+# Resume the backup.
+check as northd-backup ovs-appctl -t NORTHD_TYPE resume
+OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
+Status: active
+false
+Status: standby
 ])
 
-ovn-nbctl ls-add sw0
-
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 0 = $?])
-
-ovn-nbctl ls-del sw0
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 1 = $?])
+# Check that ovn-northd is active, by verifying that it creates and
+# destroys southbound datapaths as one would expect.
+check_row_count Datapath_Binding 0
+check ovn-nbctl --wait=sb ls-add sw0
+check_row_count Datapath_Binding 1
+check ovn-nbctl --wait=sb ls-del sw0
+check_row_count Datapath_Binding 0
 
 # Now pause the ovn-northd
-as northd ovs-appctl -t ovn-northd pause
-as northd-backup ovs-appctl -t ovn-northd pause
-AT_CHECK([test xtrue = x`as northd ovn-appctl -t ovn-northd is-paused`])
-AT_CHECK([as northd ovn-appctl -t ovn-northd status], [0], [Status: paused
-])
-AT_CHECK([test xtrue = x`as northd-backup ovn-appctl -t ovn-northd is-paused`])
-AT_CHECK([as northd-backup ovn-appctl -t ovn-northd status], [0],
-[Status: paused
+check as northd ovs-appctl -t NORTHD_TYPE pause
+check as northd-backup ovs-appctl -t NORTHD_TYPE pause
+AT_CHECK([get_northd_status], [0], [true
+Status: paused
+true
+Status: paused
 ])
 
-ovn-nbctl ls-add sw0
+# Now ovn-northd won't respond by adding a datapath, because it's paused.
+check ovn-nbctl ls-add sw0
+sleep 5
+check_row_count Datapath_Binding 0
 
-# There should be no logical flows for sw0 datapath.
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 1 = $?])
-
-# Now resume ovn-northd
-as northd ovs-appctl -t ovn-northd resume
-AT_CHECK([test xfalse = x`as northd ovn-appctl -t ovn-northd is-paused`])
-OVS_WAIT_UNTIL([as northd ovn-appctl -t ovn-northd status], [0],
-[Status: active
+# Now resume ovn-northd!
+check as northd ovs-appctl -t NORTHD_TYPE resume
+check as northd-backup ovs-appctl -t NORTHD_TYPE resume
+OVS_WAIT_FOR_OUTPUT([get_northd_status], [0], [false
+Status: active
+false
+Status: standby
 ])
 
-as northd-backup ovs-appctl -t ovn-northd resume
-AT_CHECK([test xfalse = x`as northd-backup ovn-appctl -t ovn-northd \
-is-paused`])
-AT_CHECK([as northd-backup ovn-appctl -t ovn-northd status], [0],
-[Status: standby
-])
-
-OVS_WAIT_UNTIL([
-    ovn-sbctl lflow-list sw0
-    test 0 = $?])
+check ovn-nbctl --wait=sb sync
+check_row_count Datapath_Binding 1
 
 AT_CLEANUP
 ])
@@ -1316,8 +1293,8 @@ AT_CLEANUP
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check Load balancer health check and Service Monitor sync])
 AT_SKIP_IF([test $HAVE_PYTHON = no])
-ovn_start
 
+ovn_start NORTHD_TYPE
 ovn-nbctl lb-add lb1 10.0.0.10:80 10.0.0.3:80,20.0.0.3:80
 
 ovn-nbctl --wait=sb set load_balancer . ip_port_mappings:10.0.0.3=sw0-p1

@@ -7469,11 +7469,7 @@ as ovn-nb
 OVS_APP_EXIT_AND_WAIT([ovsdb-server])
 
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
-
-as northd-backup
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
-
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
 AT_CLEANUP
 ])
 
@@ -8080,8 +8076,8 @@ logical_port="c6"], [0], [1
 
 dnl Restart northd to see that the same allocation remains.
 as northd
-OVS_APP_EXIT_AND_WAIT([ovn-northd])
-start_daemon ovn-northd \
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
+start_daemon NORTHD_TYPE \
     --ovnnb-db=unix:"$ovs_base"/ovn-nb/ovn-nb.sock \
     --ovnsb-db=unix:"$ovs_base"/ovn-sb/ovn-sb.sock
 
@@ -19411,7 +19407,7 @@ service_monitor | sed '/^$/d' | wc -l`])
 # Let's also be sure the warning message about SCTP load balancers is
 # is in the ovn-northd log
 
-AT_CHECK([test 1 = `grep -c "SCTP load balancers do not currently support health checks" northd/ovn-northd.log`])
+AT_CHECK([test 1 = `grep -c "SCTP load balancers do not currently support health checks" northd/NORTHD_TYPE.log`])
 
 AT_CLEANUP
 ])
