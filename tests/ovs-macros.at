@@ -23,9 +23,11 @@ dnl that can ordinarily be run only within AT_SETUP...AT_CLEANUP.
 m4_define([OVS_START_SHELL_HELPERS],
   [m4_ifdef([AT_ingroup], [m4_fatal([$0: AT_SETUP and OVS_DEFINE_SHELL_HELPERS may not nest])])
    m4_define([AT_ingroup])
+   m4_define([AT_capture_files])
    m4_divert_push([PREPARE_TESTS])])
 m4_define([OVS_END_SHELL_HELPERS], [
    m4_divert_pop([PREPARE_TESTS])
+   m4_undefine([AT_capture_files])
    m4_undefine([AT_ingroup])])
 
 m4_divert_push([PREPARE_TESTS])
