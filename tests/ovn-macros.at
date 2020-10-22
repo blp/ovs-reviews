@@ -115,7 +115,7 @@ m4_divert_push([PREPARE_TESTS])
 #
 # Usually invoked from ovn_start.
 ovn_init_db () {
-    echo "creating $1 database"
+    echo "${AZ:+$AZ: }creating $1 database"
     local as_d=$1
     if test -n "$2"; then
         as_d=$2/$as_d
@@ -124,7 +124,7 @@ ovn_init_db () {
     mkdir "$d" || return 1
     : > "$d"/.$1.db.~lock~
     as $as_d ovsdb-tool create "$d"/$1.db "$abs_top_srcdir"/$1.ovsschema
-    as $as_d start_daemon ovsdb-server --remote=punix:"$d"/$1.sock "$d"/$1.db
+    as $as_d start_daemon ovsdb-server -vjsonrpc --remote=punix:"$d"/$1.sock "$d"/$1.db
     local var=`echo $1_db | tr a-z- A-Z_`
     AS_VAR_SET([$var], [unix:"$d"/$1.sock]); export $var
 }
@@ -445,6 +445,9 @@ m4_define([OVN_CHECK_PACKETS_REMOVE_BROADCAST],
 
 m4_define([OVN_FOR_EACH_NORTHD], [dnl
 m4_pushdef([NORTHD_TYPE], [ovn-northd])dnl
+$1
+m4_popdef([NORTHD_TYPE])dnl
+m4_pushdef([NORTHD_TYPE], [ovn-northd-ddlog])dnl
 $1
 m4_popdef([NORTHD_TYPE])dnl
 ])
