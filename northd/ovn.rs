@@ -247,7 +247,7 @@ pub fn extract_lrp_networks(mac: &String, networks: &ddlog_std::Set<String>) -> 
     }
 }
 
-pub fn ipv6_parse_masked(s: &String) -> ddlog_std::Either<String, (in6_addr, in6_addr)>
+pub fn ipv6_parse_masked(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in6_addr, in6_addr>>
 {
     unsafe {
         let mut ip: in6_addr = Default::default();
@@ -258,12 +258,12 @@ pub fn ipv6_parse_masked(s: &String) -> ddlog_std::Either<String, (in6_addr, in6
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: (ip, mask)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, mask)}
         }
     }
 }
 
-pub fn ipv6_parse_cidr(s: &String) -> ddlog_std::Either<String, (in6_addr, u32)>
+pub fn ipv6_parse_cidr(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in6_addr, u32>>
 {
     unsafe {
         let mut ip: in6_addr = Default::default();
@@ -274,7 +274,7 @@ pub fn ipv6_parse_cidr(s: &String) -> ddlog_std::Either<String, (in6_addr, u32)>
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: (ip, plen as u32)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, plen as u32)}
         }
     }
 }
@@ -332,7 +332,7 @@ pub fn hltoip(addr: &u32) -> in_addr {
     ddlog_std::htonl(addr)
 }
 
-pub fn ip_parse_masked(s: &String) -> ddlog_std::Either<String, (in_addr, in_addr)>
+pub fn ip_parse_masked(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in_addr, in_addr>>
 {
     unsafe {
         let mut ip: ovs_be32 = 0;
@@ -343,12 +343,12 @@ pub fn ip_parse_masked(s: &String) -> ddlog_std::Either<String, (in_addr, in_add
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: (ip, mask)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, mask)}
         }
     }
 }
 
-pub fn ip_parse_cidr(s: &String) -> ddlog_std::Either<String, (in_addr, u32)>
+pub fn ip_parse_cidr(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in_addr, u32>>
 {
     unsafe {
         let mut ip: ovs_be32 = 0;
@@ -359,7 +359,7 @@ pub fn ip_parse_cidr(s: &String) -> ddlog_std::Either<String, (in_addr, u32)>
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: (ip, plen as u32)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, plen as u32)}
         }
     }
 }
@@ -391,12 +391,12 @@ pub fn is_dynamic_lsp_address(address: &String) -> bool {
     }
 }
 
-pub fn split_addresses(addresses: &String) -> (ddlog_std::Set<String>, ddlog_std::Set<String>) {
+pub fn split_addresses(addresses: &String) -> ddlog_std::tuple2<ddlog_std::Set<String>, ddlog_std::Set<String>> {
     let mut ip4_addrs = ovs_svec::new();
     let mut ip6_addrs = ovs_svec::new();
     unsafe {
         ovn_c::split_addresses(string2cstr(addresses).as_ptr(), &mut ip4_addrs as *mut ovs_svec, &mut ip6_addrs as *mut ovs_svec);
-        (ip4_addrs.into_strings(), ip6_addrs.into_strings())
+        ddlog_std::tuple2(ip4_addrs.into_strings(), ip6_addrs.into_strings())
     }
 }
 
@@ -452,7 +452,7 @@ pub fn scan_static_dynamic_ip(s: &String) -> ddlog_std::Option<in_addr> {
 }
 
 pub fn ip_address_and_port_from_lb_key(k: &String) ->
-    ddlog_std::Option<(v46_ip, u16)>
+    ddlog_std::Option<ddlog_std::tuple2<v46_ip, u16>>
 {
     unsafe {
         let mut ip_address: *mut raw::c_char = ptr::null_mut();
@@ -464,7 +464,7 @@ pub fn ip_address_and_port_from_lb_key(k: &String) ->
         if (ip_address != ptr::null_mut()) {
             match (ip46_parse(&cstr2string(ip_address))) {
                 ddlog_std::Option::Some{x: ip46} => {
-                    let res = (ip46, port as u16);
+                    let res = ddlog_std::tuple2(ip46, port as u16);
                     free(ip_address as *mut raw::c_void);
                     return ddlog_std::Option::Some{x: res}
                 },
@@ -801,7 +801,7 @@ named!(parse_ipv4_address_list<nom::types::CompleteStr, Vec<(String, Option<Stri
               ranges: many0!(parse_ipv4_range) >>
               (ranges)));
 
-pub fn parse_ip_list(ips: &String) -> ddlog_std::Either<String, ddlog_std::Vec<(in_addr, ddlog_std::Option<in_addr>)>>
+pub fn parse_ip_list(ips: &String) -> ddlog_std::Either<String, ddlog_std::Vec<ddlog_std::tuple2<in_addr, ddlog_std::Option<in_addr>>>>
 {
     match parse_ipv4_address_list(nom::types::CompleteStr(ips.as_str())) {
         Err(e) => {
@@ -821,7 +821,7 @@ pub fn parse_ip_list(ips: &String) -> ddlog_std::Either<String, ddlog_std::Vec<(
                         x => x
                     }
                 };
-                res.push((start, end));
+                res.push(ddlog_std::tuple2(start, end));
             };
             ddlog_std::Either::Right{r: ddlog_std::Vec{x: res}}
         },
