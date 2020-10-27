@@ -1,5 +1,4 @@
 use ::nom::*;
-use ::differential_datalog::arcval;
 use ::differential_datalog::record;
 use ::std::ffi;
 use ::std::ptr;
