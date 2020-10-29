@@ -3974,8 +3974,8 @@ ovn_lflow_init(struct ovn_lflow *lflow, struct ovn_datapath *od,
     lflow->where = where;
 }
 
-/* If this option is 'true' northd will combine logical flows that differs by
- * logical datapath only by creating a datapah group. */
+/* If this option is 'true' northd will combine logical flows that differ by
+ * logical datapath only by creating a datapath group. */
 static bool use_logical_dp_groups = false;
 
 /* Adds a row with the specified contents to the Logical_Flow table. */
