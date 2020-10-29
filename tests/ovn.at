@@ -4477,23 +4477,30 @@ tip=`ip_to_hex 224 0 0 4`
 test_ip 33 f00000000033 f00000000013 $sip $tip 13
 
 #dump information including flow counters
-ovn-nbctl show
-ovn-sbctl dump-flows -- list multicast_group
+ovn-nbctl show > nbdump
+AT_CAPTURE_FILE([nbdump])
 
-echo "------ hv1 dump ------"
-as hv1 ovs-vsctl show
-as hv1 ovs-ofctl -O OpenFlow13 show br-int
-as hv1 ovs-ofctl -O OpenFlow13 dump-flows br-int
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
 
-echo "------ hv2 dump ------"
-as hv2 ovs-vsctl show
-as hv2 ovs-ofctl -O OpenFlow13 show br-int
-as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int
+ovn-sbctl list multicast_group > mcgroups
+AT_CAPTURE_FILE([groups])
 
-echo "------ hv3 dump ------"
-as hv3 ovs-vsctl show
-as hv3 ovs-ofctl -O OpenFlow13 show br-int
-as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int
+(echo "------ hv1 dump ------"
+ as hv1 ovs-vsctl show
+ as hv1 ovs-ofctl -O OpenFlow13 show br-int
+ as hv1 ovs-ofctl -O OpenFlow13 dump-flows br-int
+
+ echo "------ hv2 dump ------"
+ as hv2 ovs-vsctl show
+ as hv2 ovs-ofctl -O OpenFlow13 show br-int
+ as hv2 ovs-ofctl -O OpenFlow13 dump-flows br-int
+
+ echo "------ hv3 dump ------"
+ as hv3 ovs-vsctl show
+ as hv3 ovs-ofctl -O OpenFlow13 show br-int
+ as hv3 ovs-ofctl -O OpenFlow13 dump-flows br-int) > hvdump
+AT_CAPTURE_FILE([hvdump])
 
 # Now check the packets actually received against the ones expected.
 for i in 1 2 3; do
@@ -16788,6 +16795,10 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- IGMP snoop/querier/relay])
+
+dnl This test has problems with ovn-northd-ddlog.
+AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
+
 ovn_start
 
 # Logical network:
@@ -17454,6 +17465,10 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- MLD snoop/querier/relay])
+
+dnl This test has problems with ovn-northd-ddlog.
+AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
+
 ovn_start
 
 # Logical network:
@@ -20146,6 +20161,10 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- interconnection])
+
+dnl This test has problems with ovn-northd-ddlog.
+AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
+
 ovn_init_ic_db
 n_az=5
 n_ts=5
