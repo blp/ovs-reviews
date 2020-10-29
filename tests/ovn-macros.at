@@ -445,4 +445,7 @@ m4_define([OVN_FOR_EACH_NORTHD], [dnl
 m4_pushdef([NORTHD_TYPE], [ovn-northd])dnl
 $1
 m4_popdef([NORTHD_TYPE])dnl
+m4_pushdef([NORTHD_TYPE], [ovn-northd-ddlog])dnl
+$1
+m4_popdef([NORTHD_TYPE])dnl
 ])

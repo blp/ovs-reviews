@@ -705,6 +705,103 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- ovn-northd restart])
+ovn_start --no-backup-northd
+
+# Check that ovn-northd is active, by verifying that it creates and
+# destroys southbound datapaths as one would expect.
+check_row_count Datapath_Binding 0
+check ovn-nbctl --wait=sb ls-add sw0
+check_row_count Datapath_Binding 1
+
+# Kill northd.
+as northd
+OVS_APP_EXIT_AND_WAIT([NORTHD_TYPE])
+
+# With ovn-northd gone, changes to nbdb won't be reflected into sbdb.
+# Make sure.
+check ovn-nbctl ls-add sw1
+sleep 5
+check_row_count Datapath_Binding 1
+
+# Now resume ovn-northd.  Changes should catch up.
+ovn_start_northd primary
+wait_row_count Datapath_Binding 2
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- northbound database reconnection])
+ovn_start --no-backup-northd
+
+# Check that ovn-northd is active, by verifying that it creates and
+# destroys southbound datapaths as one would expect.
+check_row_count Datapath_Binding 0
+check ovn-nbctl --wait=sb ls-add sw0
+check_row_count Datapath_Binding 1
+lf=$(count_rows Logical_Flow)
+
+# Make nbdb ovsdb-server drop connection from ovn-northd.
+conn=$(as ovn-nb ovs-appctl -t ovsdb-server ovsdb-server/list-remotes)
+check as ovn-nb ovs-appctl -t ovsdb-server ovsdb-server/remove-remote "$conn"
+conn2=punix:`pwd`/special.sock
+check as ovn-nb ovs-appctl -t ovsdb-server ovsdb-server/add-remote "$conn2"
+
+# ovn-northd won't respond to changes (because the nbdb connection dropped).
+check ovn-nbctl --db="${conn2#p}" ls-add sw1
+sleep 5
+check_row_count Datapath_Binding 1
+check_row_count Logical_Flow $lf
+
+# Now re-enable the nbdb connection and observe ovn-northd catch up.
+#
+# It's important to check both Datapath_Binding and Logical_Flow because
+# ovn-northd-ddlog implements them in different ways that might go wrong
+# differently on reconnection.
+check as ovn-nb ovs-appctl -t ovsdb-server ovsdb-server/add-remote "$conn"
+wait_row_count Datapath_Binding 2
+wait_row_count Logical_Flow $(expr 2 \* $lf)
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- southbound database reconnection])
+ovn_start --no-backup-northd
+
+# Check that ovn-northd is active, by verifying that it creates and
+# destroys southbound datapaths as one would expect.
+check_row_count Datapath_Binding 0
+check ovn-nbctl --wait=sb ls-add sw0
+check_row_count Datapath_Binding 1
+lf=$(count_rows Logical_Flow)
+
+# Make sbdb ovsdb-server drop connection from ovn-northd.
+conn=$(as ovn-sb ovs-appctl -t ovsdb-server ovsdb-server/list-remotes)
+check as ovn-sb ovs-appctl -t ovsdb-server ovsdb-server/remove-remote "$conn"
+conn2=punix:`pwd`/special.sock
+check as ovn-sb ovs-appctl -t ovsdb-server ovsdb-server/add-remote "$conn2"
+
+# ovn-northd can't respond to changes (because the sbdb connection dropped).
+check ovn-nbctl ls-add sw1
+sleep 5
+OVN_SB_DB=${conn2#p} check_row_count Datapath_Binding 1
+OVN_SB_DB=${conn2#p} check_row_count Logical_Flow $lf
+
+# Now re-enable the sbdb connection and observe ovn-northd catch up.
+#
+# It's important to check both Datapath_Binding and Logical_Flow because
+# ovn-northd-ddlog implements them in different ways that might go wrong
+# differently on reconnection.
+check as ovn-sb ovs-appctl -t ovsdb-server ovsdb-server/add-remote "$conn"
+wait_row_count Datapath_Binding 2
+wait_row_count Logical_Flow $(expr 2 \* $lf)
+
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- check Redirect Chassis propagation from NB to SB])
 ovn_start
 
