@@ -1,5 +1,11 @@
 Post-v20.09.0
 ---------------------
+   - ovn-northd-ddlog: New implementation of northd, based on DDlog.  This
+     implementation is incremental, meaning that it only recalculates what is
+     needed for the southbound database when northbound changes occur.  It is
+     expected to scale better than the C implementation, for large deployments.
+     (This may take testing and tuning to be effective.)  This version of OVN
+     requires DDLog 0.30.
    - The "datapath" argument to ovn-trace is now optional, since the
      datapath can be inferred from the inport (which is required).
    - The obsolete "redirect-chassis" way to configure gateways has been
