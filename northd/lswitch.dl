@@ -101,18 +101,16 @@ LogicalSwitchHasStatefulACL(ls, false) :-
     nb::Logical_Switch(._uuid = ls),
     not LogicalSwitchStatefulACL(ls, _).
 
-relation LogicalSwitchLocalnetPort0(ls_uuid: uuid, lsp_name: string)
-LogicalSwitchLocalnetPort0(ls_uuid, lsp_name) :-
+relation LogicalSwitchLocalnetPort0(ls_uuid: uuid, lsp: nb::Logical_Switch_Port)
+LogicalSwitchLocalnetPort0(ls_uuid, lsp) :-
     ls in nb::Logical_Switch(._uuid = ls_uuid),
     var lsp_uuid = FlatMap(ls.ports),
-    lsp in nb::Logical_Switch_Port(._uuid = lsp_uuid),
-    lsp.__type == "localnet",
-    var lsp_name = lsp.name.
+    lsp in nb::Logical_Switch_Port(._uuid = lsp_uuid, .__type = "localnet").
 
-relation LogicalSwitchLocalnetPorts(ls_uuid: uuid, localnet_port_names: Vec<string>)
-LogicalSwitchLocalnetPorts(ls_uuid, localnet_port_names) :-
+relation LogicalSwitchLocalnetPorts(ls_uuid: uuid, localnet_ports: Vec<nb::Logical_Switch_Port>)
+LogicalSwitchLocalnetPorts(ls_uuid, localnet_ports) :-
     LogicalSwitchLocalnetPort0(ls_uuid, lsp_name),
-    var localnet_port_names = lsp_name.group_by(ls_uuid).to_vec().
+    var localnet_ports = lsp_name.group_by(ls_uuid).to_vec().
 LogicalSwitchLocalnetPorts(ls_uuid, vec_empty()) :-
     ls in nb::Logical_Switch(),
     var ls_uuid = ls._uuid,
@@ -163,7 +161,7 @@ relation &Switch(
     has_stateful_acl:  bool,
     has_lb_vip:        bool,
     has_dns_records:   bool,
-    localnet_port_names: Vec<string>,
+    localnet_ports:    Vec<nb::Logical_Switch_Port>,
     subnet:            Option<(in_addr/*subnet*/, in_addr/*mask*/, bit<32>/*start_ipv4*/, bit<32>/*total_ipv4s*/)>,
     ipv6_prefix:       Option<in6_addr>,
     mcast_cfg:         Ref<McastSwitchCfg>,
@@ -187,7 +185,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
         .has_stateful_acl  = has_stateful_acl,
         .has_lb_vip        = has_lb_vip,
         .has_dns_records   = has_dns_records,
-        .localnet_port_names = localnet_port_names,
+        .localnet_ports    = localnet_ports,
         .subnet            = subnet,
         .ipv6_prefix       = ipv6_prefix,
         .mcast_cfg         = mcast_cfg,
@@ -196,7 +194,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
     LogicalSwitchHasStatefulACL(ls._uuid, has_stateful_acl),
     LogicalSwitchHasLBVIP(ls._uuid, has_lb_vip),
     LogicalSwitchHasDNSRecords(ls._uuid, has_dns_records),
-    LogicalSwitchLocalnetPorts(ls._uuid, localnet_port_names),
+    LogicalSwitchLocalnetPorts(ls._uuid, localnet_ports),
     LogicalSwitchHasNonRouterPort(ls._uuid, has_non_router_port),
     mcast_cfg in &McastSwitchCfg(.datapath = ls._uuid),
     var subnet =

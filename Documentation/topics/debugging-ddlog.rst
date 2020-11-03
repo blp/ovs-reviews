@@ -26,7 +26,7 @@ Debugging the DDlog version of ovn-northd
 =========================================
 
 This document gives some tips for debugging correctness issues in the
-DDlog implementation of ``ovn-northd``.  To keep things conrete, we
+DDlog implementation of ``ovn-northd``.  To keep things concrete, we
 assume here that a failure occurred in one of the test cases in
 ``ovn-e2e.at``, but the same methodology applies in any other
 environment.  If none of these methods helps, ask for assistance or

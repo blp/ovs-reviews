@@ -5356,8 +5356,53 @@ build_acl_hints(struct ovn_datapath *od, struct hmap *lflows)
     }
 }
 
+static bool
+is_a_shared_meter(const struct smap *nb_options, const char *meter_name)
+{
+    bool is_shared_meter = false;
+    const char *meters = smap_get(nb_options, "acl_shared_log_meters");
+    if (meters && meters[0]) {
+        char *cur, *next, *start;
+        next = start = xstrdup(meters);
+        while ((cur = strsep(&next, ",")) && *cur) {
+            if (!strcmp(meter_name, cur)) {
+                is_shared_meter = true;
+                break;
+            }
+        }
+        free(start);
+    }
+    return is_shared_meter;
+}
+
+static char*
+alloc_acl_log_unique_meter_name(const struct nbrec_acl *acl)
+{
+    return xasprintf("%s__" UUID_FMT,
+                     acl->meter, UUID_ARGS(&acl->header_.uuid));
+}
+
 static void
-build_acl_log(struct ds *actions, const struct nbrec_acl *acl)
+build_acl_log_meter(struct ds *actions, const struct nbrec_acl *acl,
+                    const struct smap *nb_options)
+{
+    if (!acl->meter) {
+        return;
+    }
+
+    /* If ACL log meter uses a shared meter, use unique Meter name. */
+    if (is_a_shared_meter(nb_options, acl->meter)) {
+        char *meter_name = alloc_acl_log_unique_meter_name(acl);
+        ds_put_format(actions, "meter=\"%s\", ", meter_name);
+        free(meter_name);
+    } else {
+        ds_put_format(actions, "meter=\"%s\", ", acl->meter);
+    }
+}
+
+static void
+build_acl_log(struct ds *actions, const struct nbrec_acl *acl,
+              const struct smap *nb_options)
 {
     if (!acl->log) {
         return;
@@ -5385,9 +5430,7 @@ build_acl_log(struct ds *actions, const struct nbrec_acl *acl)
         ds_put_cstr(actions, "verdict=allow, ");
     }
 
-    if (acl->meter) {
-        ds_put_format(actions, "meter=\"%s\", ", acl->meter);
-    }
+    build_acl_log_meter(actions, acl, nb_options);
 
     ds_chomp(actions, ' ');
     ds_chomp(actions, ',');
@@ -5398,7 +5441,8 @@ static void
 build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                        enum ovn_stage stage, struct nbrec_acl *acl,
                        struct ds *extra_match, struct ds *extra_actions,
-                       const struct ovsdb_idl_row *stage_hint)
+                       const struct ovsdb_idl_row *stage_hint,
+                       const struct smap *nb_options)
 {
     struct ds match = DS_EMPTY_INITIALIZER;
     struct ds actions = DS_EMPTY_INITIALIZER;
@@ -5410,7 +5454,7 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
                   ingress ? ovn_stage_get_table(S_SWITCH_OUT_QOS_MARK)
                           : ovn_stage_get_table(S_SWITCH_IN_L2_LKUP));
 
-    build_acl_log(&actions, acl);
+    build_acl_log(&actions, acl, nb_options);
     if (extra_match->length > 0) {
         ds_put_format(&match, "(%s) && ", extra_match->string);
     }
@@ -5435,7 +5479,8 @@ build_reject_acl_rules(struct ovn_datapath *od, struct hmap *lflows,
 
 static void
 consider_acl(struct hmap *lflows, struct ovn_datapath *od,
-             struct nbrec_acl *acl, bool has_stateful)
+             struct nbrec_acl *acl, bool has_stateful,
+             const struct smap *nb_options)
 {
     bool ingress = !strcmp(acl->direction, "from-lport") ? true :false;
     enum ovn_stage stage = ingress ? S_SWITCH_IN_ACL : S_SWITCH_OUT_ACL;
@@ -5449,7 +5494,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
          * associated conntrack entry and would return "+invalid". */
         if (!has_stateful) {
             struct ds actions = DS_EMPTY_INITIALIZER;
-            build_acl_log(&actions, acl);
+            build_acl_log(&actions, acl, nb_options);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
                                     acl->priority + OVN_ACL_PRI_OFFSET,
@@ -5475,7 +5520,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_put_format(&match, REGBIT_ACL_HINT_ALLOW_NEW " == 1 && (%s)",
                           acl->match);
             ds_put_cstr(&actions, REGBIT_CONNTRACK_COMMIT" = 1; ");
-            build_acl_log(&actions, acl);
+            build_acl_log(&actions, acl, nb_options);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
                                     acl->priority + OVN_ACL_PRI_OFFSET,
@@ -5494,7 +5539,7 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_put_format(&match, REGBIT_ACL_HINT_ALLOW " == 1 && (%s)",
                           acl->match);
 
-            build_acl_log(&actions, acl);
+            build_acl_log(&actions, acl, nb_options);
             ds_put_cstr(&actions, "next;");
             ovn_lflow_add_with_hint(lflows, od, stage,
                                     acl->priority + OVN_ACL_PRI_OFFSET,
@@ -5519,10 +5564,10 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_put_cstr(&match, REGBIT_ACL_HINT_DROP " == 1");
             if (!strcmp(acl->action, "reject")) {
                 build_reject_acl_rules(od, lflows, stage, acl, &match,
-                                       &actions, &acl->header_);
+                                       &actions, &acl->header_, nb_options);
             } else {
                 ds_put_format(&match, " && (%s)", acl->match);
-                build_acl_log(&actions, acl);
+                build_acl_log(&actions, acl, nb_options);
                 ds_put_cstr(&actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
                                         acl->priority + OVN_ACL_PRI_OFFSET,
@@ -5546,10 +5591,10 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
             ds_put_cstr(&actions, "ct_commit { ct_label.blocked = 1; }; ");
             if (!strcmp(acl->action, "reject")) {
                 build_reject_acl_rules(od, lflows, stage, acl, &match,
-                                       &actions, &acl->header_);
+                                       &actions, &acl->header_, nb_options);
             } else {
                 ds_put_format(&match, " && (%s)", acl->match);
-                build_acl_log(&actions, acl);
+                build_acl_log(&actions, acl, nb_options);
                 ds_put_cstr(&actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
                                         acl->priority + OVN_ACL_PRI_OFFSET,
@@ -5562,9 +5607,9 @@ consider_acl(struct hmap *lflows, struct ovn_datapath *od,
              * logical flow action in all cases. */
             if (!strcmp(acl->action, "reject")) {
                 build_reject_acl_rules(od, lflows, stage, acl, &match,
-                                       &actions, &acl->header_);
+                                       &actions, &acl->header_, nb_options);
             } else {
-                build_acl_log(&actions, acl);
+                build_acl_log(&actions, acl, nb_options);
                 ds_put_cstr(&actions, "/* drop */");
                 ovn_lflow_add_with_hint(lflows, od, stage,
                                         acl->priority + OVN_ACL_PRI_OFFSET,
@@ -5644,7 +5689,7 @@ build_port_group_lswitches(struct northd_context *ctx, struct hmap *pgs,
 
 static void
 build_acls(struct ovn_datapath *od, struct hmap *lflows,
-           struct hmap *port_groups)
+           struct hmap *port_groups, const struct smap *nb_options)
 {
     bool has_stateful = (has_stateful_acl(od) || has_lb_vip(od));
 
@@ -5747,13 +5792,14 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows,
     /* Ingress or Egress ACL Table (Various priorities). */
     for (size_t i = 0; i < od->nbs->n_acls; i++) {
         struct nbrec_acl *acl = od->nbs->acls[i];
-        consider_acl(lflows, od, acl, has_stateful);
+        consider_acl(lflows, od, acl, has_stateful, nb_options);
     }
     struct ovn_port_group *pg;
     HMAP_FOR_EACH (pg, key_node, port_groups) {
         if (ovn_port_group_ls_find(pg, &od->nbs->header_.uuid)) {
             for (size_t i = 0; i < pg->nb_pg->n_acls; i++) {
-                consider_acl(lflows, od, pg->nb_pg->acls[i], has_stateful);
+                consider_acl(lflows, od, pg->nb_pg->acls[i], has_stateful,
+                             nb_options);
             }
         }
     }
@@ -6776,7 +6822,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
                     struct hmap *port_groups, struct hmap *lflows,
                     struct hmap *mcgroups, struct hmap *igmp_groups,
                     struct shash *meter_groups,
-                    struct hmap *lbs)
+                    struct hmap *lbs, const struct smap *nb_options)
 {
     /* This flow table structure is documented in ovn-northd(8), so please
      * update ovn-northd.8.xml if you change anything. */
@@ -6796,7 +6842,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         build_pre_lb(od, lflows, meter_groups, lbs);
         build_pre_stateful(od, lflows);
         build_acl_hints(od, lflows);
-        build_acls(od, lflows, port_groups);
+        build_acls(od, lflows, port_groups, nb_options);
         build_qos(od, lflows);
         build_lb(od, lflows);
         build_stateful(od, lflows, lbs);
@@ -11379,8 +11425,12 @@ build_lflows(struct northd_context *ctx, struct hmap *datapaths,
 {
     struct hmap lflows = HMAP_INITIALIZER(&lflows);
 
+    const struct nbrec_nb_global *nb_global =
+        nbrec_nb_global_first(ctx->ovnnb_idl);
+    ovs_assert(nb_global);
+
     build_lswitch_flows(datapaths, ports, port_groups, &lflows, mcgroups,
-                        igmp_groups, meter_groups, lbs);
+                        igmp_groups, meter_groups, lbs, &nb_global->options);
     build_lrouter_flows(datapaths, ports, &lflows, meter_groups, lbs);
 
     /* Push changes to the Logical_Flow table to database. */
@@ -11706,14 +11756,84 @@ done:
     return need_update;
 }
 
+static void
+sync_meters_iterate_nb_meter(struct northd_context *ctx,
+                             const char *meter_name,
+                             const struct nbrec_meter *nb_meter,
+                             struct shash *sb_meters)
+{
+    bool new_sb_meter = false;
+
+    const struct sbrec_meter *sb_meter = shash_find_and_delete(sb_meters,
+                                                               meter_name);
+    if (!sb_meter) {
+        sb_meter = sbrec_meter_insert(ctx->ovnsb_txn);
+        sbrec_meter_set_name(sb_meter, meter_name);
+        new_sb_meter = true;
+    }
+
+    if (new_sb_meter || bands_need_update(nb_meter, sb_meter)) {
+        struct sbrec_meter_band **sb_bands;
+        sb_bands = xcalloc(nb_meter->n_bands, sizeof *sb_bands);
+        for (size_t i = 0; i < nb_meter->n_bands; i++) {
+            const struct nbrec_meter_band *nb_band = nb_meter->bands[i];
+
+            sb_bands[i] = sbrec_meter_band_insert(ctx->ovnsb_txn);
+
+            sbrec_meter_band_set_action(sb_bands[i], nb_band->action);
+            sbrec_meter_band_set_rate(sb_bands[i], nb_band->rate);
+            sbrec_meter_band_set_burst_size(sb_bands[i],
+                                            nb_band->burst_size);
+        }
+        sbrec_meter_set_bands(sb_meter, sb_bands, nb_meter->n_bands);
+        free(sb_bands);
+    }
+
+    sbrec_meter_set_unit(sb_meter, nb_meter->unit);
+}
+
+static void
+sync_acl_shared_meters(struct northd_context *ctx,
+                       struct hmap *datapaths,
+                       const struct smap *nb_options,
+                       const struct nbrec_meter *nb_meter,
+                       struct shash *sb_meters)
+{
+    if (!is_a_shared_meter(nb_options, nb_meter->name)) {
+        return;
+    }
+
+    struct ovn_datapath *od;
+    HMAP_FOR_EACH (od, key_node, datapaths) {
+        if (!od->nbs) {
+            continue;
+        }
+        for (size_t i = 0; i < od->nbs->n_acls; i++) {
+            struct nbrec_acl *acl = od->nbs->acls[i];
+            if (!acl->meter || strcmp(nb_meter->name, acl->meter)) {
+                continue;
+            }
+
+            char *meter_name = alloc_acl_log_unique_meter_name(acl);
+            sync_meters_iterate_nb_meter(ctx, meter_name, nb_meter, sb_meters);
+            free(meter_name);
+        }
+    }
+}
+
 /* Each entry in the Meter and Meter_Band tables in OVN_Northbound have
  * a corresponding entries in the Meter and Meter_Band tables in
- * OVN_Southbound.
+ * OVN_Southbound. Additionally, ACL logs that use shared meters have
+ * a private copy of its meter in the SB table.
  */
 static void
-sync_meters(struct northd_context *ctx)
+sync_meters(struct northd_context *ctx, struct hmap *datapaths)
 {
     struct shash sb_meters = SHASH_INITIALIZER(&sb_meters);
+
+    const struct nbrec_nb_global *nb_global =
+        nbrec_nb_global_first(ctx->ovnnb_idl);
+    ovs_assert(nb_global);
 
     const struct sbrec_meter *sb_meter;
     SBREC_METER_FOR_EACH (sb_meter, ctx->ovnsb_idl) {
@@ -11722,33 +11842,10 @@ sync_meters(struct northd_context *ctx)
 
     const struct nbrec_meter *nb_meter;
     NBREC_METER_FOR_EACH (nb_meter, ctx->ovnnb_idl) {
-        bool new_sb_meter = false;
-
-        sb_meter = shash_find_and_delete(&sb_meters, nb_meter->name);
-        if (!sb_meter) {
-            sb_meter = sbrec_meter_insert(ctx->ovnsb_txn);
-            sbrec_meter_set_name(sb_meter, nb_meter->name);
-            new_sb_meter = true;
-        }
-
-        if (new_sb_meter || bands_need_update(nb_meter, sb_meter)) {
-            struct sbrec_meter_band **sb_bands;
-            sb_bands = xcalloc(nb_meter->n_bands, sizeof *sb_bands);
-            for (size_t i = 0; i < nb_meter->n_bands; i++) {
-                const struct nbrec_meter_band *nb_band = nb_meter->bands[i];
-
-                sb_bands[i] = sbrec_meter_band_insert(ctx->ovnsb_txn);
-
-                sbrec_meter_band_set_action(sb_bands[i], nb_band->action);
-                sbrec_meter_band_set_rate(sb_bands[i], nb_band->rate);
-                sbrec_meter_band_set_burst_size(sb_bands[i],
-                                                nb_band->burst_size);
-            }
-            sbrec_meter_set_bands(sb_meter, sb_bands, nb_meter->n_bands);
-            free(sb_bands);
-        }
-
-        sbrec_meter_set_unit(sb_meter, nb_meter->unit);
+        sync_meters_iterate_nb_meter(ctx, nb_meter->name, nb_meter,
+                                     &sb_meters);
+        sync_acl_shared_meters(ctx, datapaths, &nb_global->options, nb_meter,
+                               &sb_meters);
     }
 
     struct shash_node *node, *next;
@@ -12241,7 +12338,7 @@ ovnnb_db_run(struct northd_context *ctx,
 
     sync_address_sets(ctx);
     sync_port_groups(ctx, &port_groups);
-    sync_meters(ctx);
+    sync_meters(ctx, datapaths);
     sync_dns_entries(ctx, datapaths);
     destroy_ovn_lbs(&lbs);
     hmap_destroy(&lbs);

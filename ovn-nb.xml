@@ -206,6 +206,20 @@
         </p>
       </column>
 
+      <column name="options" key="acl_shared_log_meters">
+        <p>
+          A string value that contains a list of meter names delimited by ",".
+          The <ref column="meter" table="ACL"/> column is used by ACL to rate
+          limit log events. As multiple ACL rows may opt to use the same meter
+          name, a potentially adverse effect is that a "noisy" ACL log could
+          consume all the allowable events for the shared
+          <ref column="name" table="meter"/>. This global option can be used to
+          eliminate that behavior, by listing the meters that are meant to
+          provide its "complete" rate to each one of the <ref table="ACL"/>
+          logs that use it.
+        </p>
+      </column>
+
       <group title="Options for configuring interconnection route advertisement">
         <p>
           These options control how routes are advertised between OVN

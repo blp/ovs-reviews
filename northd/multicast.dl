@@ -208,6 +208,10 @@ IgmpSwitchGroupPort(address, switch, lsp_uuid) :-
         .lsp = nb::Logical_Switch_Port{._uuid = lsp_uuid, .name = lsp_name},
         .sw = switch).
 
+IgmpSwitchGroupPort(address, switch, localnet_port._uuid) :-
+    IgmpSwitchGroupPort(address, switch, _),
+    var localnet_port = FlatMap(switch.localnet_ports).
+
 /* Aggregated IGMP group: merges all IgmpSwitchGroupPort for a given
  * address-switch tuple from all chassis.
  */

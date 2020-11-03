@@ -27,6 +27,19 @@ output relation Warning[string]
 
 index Logical_Flow_Index() on sb::Out_Logical_Flow()
 
+/* Single-row relation that contains the set of shared meters. */
+relation AclSharedLogMeters[Set<string>]
+AclSharedLogMeters[meters] :- AclSharedLogMeters0[meters].
+AclSharedLogMeters[set_empty()] :-
+    Unit(),
+    not AclSharedLogMeters0[_].
+
+relation AclSharedLogMeters0[Set<string>]
+AclSharedLogMeters0[meters] :-
+    nb in nb::NB_Global(),
+    Some{var s} = nb.options.get("acl_shared_log_meters"),
+    var meters = s.split(",").to_set().
+
 /* Meter_Band table */
 for (mb in nb::Meter_Band) {
     sb::Out_Meter_Band(._uuid = mb._uuid,
@@ -42,6 +55,14 @@ for (meter in nb::Meter) {
                  .unit = meter.unit,
                  .bands = meter.bands)
 }
+sb::Out_Meter(._uuid = hash128(meter_uuid ++ acl_uuid),
+              .name = "${name}__${uuid2str(acl_uuid)}",
+              .unit = unit,
+              .bands = bands) :-
+    AclSharedLogMeters[names],
+    var name = FlatMap(names),
+    nb::Meter(._uuid = meter_uuid, .name = name, .unit = unit, .bands = bands),
+    nb::ACL(._uuid = acl_uuid, .meter = Some{name}).
 
 /* Proxy table for Out_Datapath_Binding: contains all Datapath_Binding fields,
  * except tunnel id, which is allocated separately (see TunKeyAllocation). */
@@ -222,7 +243,7 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
              and is_some(l3dgw_port)) or
             Some{rport.lrp} == l3dgw_port or
             (is_some(map_get(rport.router.lr.options, "chassis")) and
-             not sw.localnet_port_names.is_empty())) {
+             not sw.localnet_ports.is_empty())) {
             false -> set_empty(),
             true -> set_singleton(get_garp_nat_addresses(deref(rport)))
         },
@@ -2008,7 +2029,7 @@ for (&Switch(.ls = ls)) {
          .external_ids     = map_empty())
 }
 
-function build_acl_log(acl: nb::ACL): string =
+function build_acl_log(acl: nb::ACL, shared_meters: Set<string>): string =
 {
     if (not acl.log) {
         ""
@@ -2040,7 +2061,14 @@ function build_acl_log(acl: nb::ACL): string =
         };
         match (acl.meter) {
             None -> (),
-            Some{meter} -> vec_push(strs, "meter=${json_string_escape(meter)}")
+            Some{meter} -> {
+                var s = if (shared_meters.contains(meter)) {
+                    "${meter}__${uuid2str(acl._uuid)}"
+                } else {
+                    meter
+                };
+                vec_push(strs, "meter=${json_string_escape(s)}")
+            }
         };
         "log(${string_join(strs, \", \")}); "
     }
@@ -2058,31 +2086,33 @@ function oVN_ACL_PRI_OFFSET(): integer = 1000
 relation Reject(lsuuid: uuid, pipeline: string, stage: Stage, acl: nb::ACL, extra_match: string, extra_actions: string)
 
 /* build_reject_acl_rules() */
-for (Reject(lsuuid, pipeline, stage, acl, extra_match_, extra_actions_)) {
-    var extra_match = match (extra_match_) {
-        "" -> "",
-        s -> "(${s}) && "
-    } in
-    var extra_actions = match (extra_actions_) {
-        "" -> "",
-        s -> "${s} "
-    } in
-    var next = match (pipeline == "ingress") {
-        true  -> "next(pipeline=egress,table=${stage_id(switch_stage(OUT, QOS_MARK)).0})",
-        false -> "next(pipeline=ingress,table=${stage_id(switch_stage(IN, L2_LKUP)).0})"
-    } in
-    var acl_log = build_acl_log(acl) in {
-        var __match = extra_match ++ acl.__match in
-        var actions = acl_log ++ extra_actions ++ "reg0 = 0; "
-                      "reject { "
-                      "/* eth.dst <-> eth.src; ip.dst <-> ip.src; is implicit. */ "
-                      "outport <-> inport; ${next}; };" in
-        Flow(.logical_datapath = lsuuid,
-             .stage            = stage,
-             .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-             .__match          = __match,
-             .actions          = actions,
-             .external_ids     = stage_hint(acl._uuid))
+for (AclSharedLogMeters[shared_meters]) {
+    for (Reject(lsuuid, pipeline, stage, acl, extra_match_, extra_actions_)) {
+        var extra_match = match (extra_match_) {
+            "" -> "",
+            s -> "(${s}) && "
+        } in
+        var extra_actions = match (extra_actions_) {
+            "" -> "",
+            s -> "${s} "
+        } in
+        var next = match (pipeline == "ingress") {
+            true  -> "next(pipeline=egress,table=${stage_id(switch_stage(OUT, QOS_MARK)).0})",
+            false -> "next(pipeline=ingress,table=${stage_id(switch_stage(IN, L2_LKUP)).0})"
+        } in
+        var acl_log = build_acl_log(acl, shared_meters) in {
+            var __match = extra_match ++ acl.__match in
+            var actions = acl_log ++ extra_actions ++ "reg0 = 0; "
+                          "reject { "
+                          "/* eth.dst <-> eth.src; ip.dst <-> ip.src; is implicit. */ "
+                          "outport <-> inport; ${next}; };" in
+            Flow(.logical_datapath = lsuuid,
+                 .stage            = stage,
+                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                 .__match          = __match,
+                 .actions          = actions,
+                 .external_ids     = stage_hint(acl._uuid))
+        }
     }
 }
 
@@ -2338,113 +2368,116 @@ for (&Switch(.ls = ls)) {
 }
 
 /* Ingress or Egress ACL Table (Various priorities). */
-for (&SwitchACL(.sw = &Switch{.ls = ls, .has_stateful_acl = has_stateful}, .acl = &acl)) {
-    /* consider_acl */
-    var ingress = acl.direction == "from-lport" in
-    var stage = if (ingress) { switch_stage(IN, ACL) } else { switch_stage(OUT, ACL) } in
-    var pipeline = if ingress "ingress" else "egress" in
-    var stage_hint = stage_hint(acl._uuid) in
-    if (acl.action == "allow" or acl.action == "allow-related") {
-        /* If there are any stateful flows, we must even commit "allow"
-         * actions.  This is because, while the initiater's
-         * direction may not have any stateful rules, the server's
-         * may and then its return traffic would not have an
-         * associated conntrack entry and would return "+invalid". */
-        if (not has_stateful) {
-            Flow(.logical_datapath = ls._uuid,
-                 .stage            = stage,
-                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                 .__match          = acl.__match,
-                 .actions          = "${build_acl_log(acl)}next;",
-                 .external_ids     = stage_hint)
-        } else {
-            /* Commit the connection tracking entry if it's a new
-             * connection that matches this ACL.  After this commit,
-             * the reply traffic is allowed by a flow we create at
-             * priority 65535, defined earlier.
-             *
-             * It's also possible that a known connection was marked for
-             * deletion after a policy was deleted, but the policy was
-             * re-added while that connection is still known.  We catch
-             * that case here and un-set ct_label.blocked (which will be done
-             * by ct_commit in the "stateful" stage) to indicate that the
-             * connection should be allowed to resume.
-             */
-            Flow(.logical_datapath = ls._uuid,
-                 .stage            = stage,
-                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                 .__match          = "${rEGBIT_ACL_HINT_ALLOW_NEW()} == 1 && (${acl.__match})",
-                 .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; ${build_acl_log(acl)}next;",
-                 .external_ids     = stage_hint);
-
-            /* Match on traffic in the request direction for an established
-             * connection tracking entry that has not been marked for
-             * deletion.  There is no need to commit here, so we can just
-             * proceed to the next table. We use this to ensure that this
-             * connection is still allowed by the currently defined
-             * policy. Match untracked packets too. */
-            Flow(.logical_datapath = ls._uuid,
-                 .stage            = stage,
-                 .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                 .__match          = "${rEGBIT_ACL_HINT_ALLOW()} == 1 && (${acl.__match})",
-                 .actions          = "${build_acl_log(acl)}next;",
-                 .external_ids     = stage_hint)
-        }
-    } else if (acl.action == "drop" or acl.action == "reject") {
-        /* The implementation of "drop" differs if stateful ACLs are in
-         * use for this datapath.  In that case, the actions differ
-         * depending on whether the connection was previously committed
-         * to the connection tracker with ct_commit. */
-        if (has_stateful) {
-            /* If the packet is not tracked or not part of an established
-             * connection, then we can simply reject/drop it. */
-            var __match = "${rEGBIT_ACL_HINT_DROP()} == 1" in
-            if (acl.action == "reject") {
-                Reject(ls._uuid, pipeline, stage, acl, __match, "")
-            } else {
-                Flow(.logical_datapath = ls._uuid,
-                     .stage            = stage,
-                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                     .__match          = __match ++ " && (${acl.__match})",
-                     .actions          = "${build_acl_log(acl)}/* drop */",
-                     .external_ids     = stage_hint)
-            };
-            /* For an existing connection without ct_label set, we've
-             * encountered a policy change. ACLs previously allowed
-             * this connection and we committed the connection tracking
-             * entry.  Current policy says that we should drop this
-             * connection.  First, we set bit 0 of ct_label to indicate
-             * that this connection is set for deletion.  By not
-             * specifying "next;", we implicitly drop the packet after
-             * updating conntrack state.  We would normally defer
-             * ct_commit() to the "stateful" stage, but since we're
-             * rejecting/dropping the packet, we go ahead and do it here.
-             */
-            var __match = "${rEGBIT_ACL_HINT_BLOCK()} == 1" in
-            var actions = "ct_commit { ct_label.blocked = 1; }; " in
-            if (acl.action == "reject") {
-                Reject(ls._uuid, pipeline, stage, acl, __match, actions)
-            } else {
-                Flow(.logical_datapath = ls._uuid,
-                     .stage            = stage,
-                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
-                     .__match          = __match ++ " && (${acl.__match})",
-                     .actions          = "${actions}${build_acl_log(acl)}/* drop */",
-                     .external_ids     = stage_hint)
-            }
-        } else {
-            /* There are no stateful ACLs in use on this datapath,
-             * so a "reject/drop" ACL is simply the "reject/drop"
-             * logical flow action in all cases. */
-            if (acl.action == "reject") {
-                Reject(ls._uuid, pipeline, stage, acl, "", "")
-            } else {
+for (AclSharedLogMeters[shared_meters]) {
+    for (&SwitchACL(.sw = &Switch{.ls = ls, .has_stateful_acl = has_stateful}, .acl = &acl)) {
+        /* consider_acl */
+        var ingress = acl.direction == "from-lport" in
+        var stage = if (ingress) { switch_stage(IN, ACL) } else { switch_stage(OUT, ACL) } in
+        var pipeline = if ingress "ingress" else "egress" in
+        var stage_hint = stage_hint(acl._uuid) in
+        var log_acl = build_acl_log(acl, shared_meters) in
+        if (acl.action == "allow" or acl.action == "allow-related") {
+            /* If there are any stateful flows, we must even commit "allow"
+             * actions.  This is because, while the initiater's
+             * direction may not have any stateful rules, the server's
+             * may and then its return traffic would not have an
+             * associated conntrack entry and would return "+invalid". */
+            if (not has_stateful) {
                 Flow(.logical_datapath = ls._uuid,
                      .stage            = stage,
                      .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
                      .__match          = acl.__match,
-                     .actions          = "${build_acl_log(acl)}/* drop */",
+                     .actions          = "${log_acl}next;",
                      .external_ids     = stage_hint)
+            } else {
+                /* Commit the connection tracking entry if it's a new
+                 * connection that matches this ACL.  After this commit,
+                 * the reply traffic is allowed by a flow we create at
+                 * priority 65535, defined earlier.
+                 *
+                 * It's also possible that a known connection was marked for
+                 * deletion after a policy was deleted, but the policy was
+                 * re-added while that connection is still known.  We catch
+                 * that case here and un-set ct_label.blocked (which will be done
+                 * by ct_commit in the "stateful" stage) to indicate that the
+                 * connection should be allowed to resume.
+                 */
+                Flow(.logical_datapath = ls._uuid,
+                     .stage            = stage,
+                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                     .__match          = "${rEGBIT_ACL_HINT_ALLOW_NEW()} == 1 && (${acl.__match})",
+                     .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; ${log_acl}next;",
+                     .external_ids     = stage_hint);
+
+                /* Match on traffic in the request direction for an established
+                 * connection tracking entry that has not been marked for
+                 * deletion.  There is no need to commit here, so we can just
+                 * proceed to the next table. We use this to ensure that this
+                 * connection is still allowed by the currently defined
+                 * policy. Match untracked packets too. */
+                Flow(.logical_datapath = ls._uuid,
+                     .stage            = stage,
+                     .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                     .__match          = "${rEGBIT_ACL_HINT_ALLOW()} == 1 && (${acl.__match})",
+                     .actions          = "${log_acl}next;",
+                     .external_ids     = stage_hint)
+            }
+        } else if (acl.action == "drop" or acl.action == "reject") {
+            /* The implementation of "drop" differs if stateful ACLs are in
+             * use for this datapath.  In that case, the actions differ
+             * depending on whether the connection was previously committed
+             * to the connection tracker with ct_commit. */
+            if (has_stateful) {
+                /* If the packet is not tracked or not part of an established
+                 * connection, then we can simply reject/drop it. */
+                var __match = "${rEGBIT_ACL_HINT_DROP()} == 1" in
+                if (acl.action == "reject") {
+                    Reject(ls._uuid, pipeline, stage, acl, __match, "")
+                } else {
+                    Flow(.logical_datapath = ls._uuid,
+                         .stage            = stage,
+                         .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                         .__match          = __match ++ " && (${acl.__match})",
+                         .actions          = "${log_acl}/* drop */",
+                         .external_ids     = stage_hint)
+                };
+                /* For an existing connection without ct_label set, we've
+                 * encountered a policy change. ACLs previously allowed
+                 * this connection and we committed the connection tracking
+                 * entry.  Current policy says that we should drop this
+                 * connection.  First, we set bit 0 of ct_label to indicate
+                 * that this connection is set for deletion.  By not
+                 * specifying "next;", we implicitly drop the packet after
+                 * updating conntrack state.  We would normally defer
+                 * ct_commit() to the "stateful" stage, but since we're
+                 * rejecting/dropping the packet, we go ahead and do it here.
+                 */
+                var __match = "${rEGBIT_ACL_HINT_BLOCK()} == 1" in
+                var actions = "ct_commit { ct_label.blocked = 1; }; " in
+                if (acl.action == "reject") {
+                    Reject(ls._uuid, pipeline, stage, acl, __match, actions)
+                } else {
+                    Flow(.logical_datapath = ls._uuid,
+                         .stage            = stage,
+                         .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                         .__match          = __match ++ " && (${acl.__match})",
+                         .actions          = "${actions}${log_acl}/* drop */",
+                         .external_ids     = stage_hint)
+                }
+            } else {
+                /* There are no stateful ACLs in use on this datapath,
+                 * so a "reject/drop" ACL is simply the "reject/drop"
+                 * logical flow action in all cases. */
+                if (acl.action == "reject") {
+                    Reject(ls._uuid, pipeline, stage, acl, "", "")
+                } else {
+                    Flow(.logical_datapath = ls._uuid,
+                         .stage            = stage,
+                         .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
+                         .__match          = acl.__match,
+                         .actions          = "${log_acl}/* drop */",
+                         .external_ids     = stage_hint)
+                }
             }
         }
     }
@@ -3432,8 +3465,12 @@ function json_string_escape_vec(names: Vec<string>): string
  */
 function match_dhcp_input(lsp: Ref<SwitchPort>): (string, string) =
 {
-    if (lsp.lsp.__type == "external" and not lsp.sw.localnet_port_names.is_empty()) {
-        ("inport == " ++ json_string_escape_vec(lsp.sw.localnet_port_names) ++ " && ",
+    if (lsp.lsp.__type == "external" and not lsp.sw.localnet_ports.is_empty()) {
+        var localnet_port_names = vec_with_capacity(lsp.sw.localnet_ports.len());
+        for (localnet_port in lsp.sw.localnet_ports) {
+            localnet_port_names.push(localnet_port.name)
+        };
+        ("inport == " ++ json_string_escape_vec(localnet_port_names) ++ " && ",
          " && is_chassis_resident(${lsp.json_name})")
     } else {
         ("inport == ${lsp.json_name} && ", "")
@@ -3449,7 +3486,7 @@ for (lsp in &SwitchPort
          /* If it's an external port and there is no localnet port
           * and if it doesn't belong to an HA chassis group ignore it. */
          and (lsp.lsp.__type != "external"
-              or (not lsp.sw.localnet_port_names.is_empty()
+              or (not lsp.sw.localnet_ports.is_empty()
                   and is_some(lsp.lsp.ha_chassis_group))))
 {
     for (lps in LogicalSwitchPort(.lport = lsp.lsp._uuid, .lswitch = lsuuid)) {
@@ -3805,7 +3842,7 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
 Flow(.logical_datapath = sp.sw.ls._uuid,
      .stage            = switch_stage(IN, EXTERNAL_PORT),
      .priority         = 100,
-     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+     .__match          = ("inport == ${json_string_escape(localnet_port.name)} && "
                           "eth.src == ${lp_addr.ea} && "
                           "!is_chassis_resident(${sp.json_name}) && "
                           "arp.tpa == ${rp_addr.addr} && arp.op == 1"),
@@ -3813,7 +3850,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var localnet_port_name = FlatMap(sp.sw.localnet_port_names),
+    var localnet_port = FlatMap(sp.sw.localnet_ports),
     var lp_addr = FlatMap(sp.static_addresses),
     rp in &SwitchPort(.sw = sp.sw),
     rp.lsp.__type == "router",
@@ -3821,7 +3858,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 Flow(.logical_datapath = sp.sw.ls._uuid,
      .stage            = switch_stage(IN, EXTERNAL_PORT),
      .priority         = 100,
-     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+     .__match          = ("inport == ${json_string_escape(localnet_port.name)} && "
                           "eth.src == ${lp_addr.ea} && "
                           "!is_chassis_resident(${sp.json_name}) && "
                           "nd_ns && ip6.dst == {${rp_addr.addr}, ${ipv6_netaddr_solicited_node(rp_addr)}} && "
@@ -3830,7 +3867,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var localnet_port_name = FlatMap(sp.sw.localnet_port_names),
+    var localnet_port = FlatMap(sp.sw.localnet_ports),
     var lp_addr = FlatMap(sp.static_addresses),
     rp in &SwitchPort(.sw = sp.sw),
     rp.lsp.__type == "router",
@@ -3838,7 +3875,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 Flow(.logical_datapath = sp.sw.ls._uuid,
      .stage            = switch_stage(IN, EXTERNAL_PORT),
      .priority         = 100,
-     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+     .__match          = ("inport == ${json_string_escape(localnet_port.name)} && "
                           "eth.src == ${lp_addr.ea} && "
                           "eth.dst == ${ea} && "
                           "!is_chassis_resident(${sp.json_name})"),
@@ -3846,7 +3883,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var localnet_port_name = FlatMap(sp.sw.localnet_port_names),
+    var localnet_port = FlatMap(sp.sw.localnet_ports),
     var lp_addr = FlatMap(sp.static_addresses),
     rp in &SwitchPort(.sw = sp.sw),
     rp.lsp.__type == "router",
@@ -4057,7 +4094,7 @@ for (&SwitchPort(.lsp = lsp,
 {
     Some{var mac} = scan_eth_addr(lrp.mac) in {
         var add_chassis_resident_check =
-            not sw.localnet_port_names.is_empty() and
+            not sw.localnet_ports.is_empty() and
             (/* The peer of this port represents a distributed
               * gateway port. The destination lookup flow for the
               * router's distributed gateway port MAC address should
@@ -4574,7 +4611,7 @@ AddChassisResidentCheck_(lrp._uuid, res) :-
     &SwitchPort(.peer = Some{&RouterPort{.lrp = lrp, .router = &router, .is_redirect = is_redirect}},
                 .sw = sw),
     is_some(router.l3dgw_port),
-    not sw.localnet_port_names.is_empty(),
+    not sw.localnet_ports.is_empty(),
     var res = if (is_redirect) {
         /* Traffic with eth.src = l3dgw_port->lrp_networks.ea
          * should only be sent from the "redirect-chassis", so that

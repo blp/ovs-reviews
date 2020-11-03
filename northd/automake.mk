@@ -22,8 +22,7 @@ bin_PROGRAMS += northd/ovn-northd-ddlog
 northd_ovn_northd_ddlog_SOURCES = \
 	northd/ovn-northd-ddlog.c \
 	northd/ovn-northd-ddlog-sb.inc \
-	northd/ovn-northd-ddlog-nb.inc \
-	northd/ovn_northd_ddlog/ddlog.h
+	northd/ovn-northd-ddlog-nb.inc
 northd_ovn_northd_ddlog_LDADD = \
 	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
 	lib/libovn.la \
@@ -46,6 +45,7 @@ BUILT_SOURCES += \
 	northd/ovn-northd-ddlog-sb.inc \
 	northd/ovn-northd-ddlog-nb.inc
 
+northd/ovn-northd-ddlog.$(OBJEXT): northd/ovn_northd_ddlog/ddlog.h
 northd/ovn_northd_ddlog/ddlog.h: northd/ddlog.stamp
 
 CARGO_VERBOSE = $(cargo_verbose_$(V))
