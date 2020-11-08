@@ -99,7 +99,7 @@ $(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.
 	LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
 	cd northd/ovn_northd_ddlog && \
 	RUSTC='$(RUSTC)' RUSTFLAGS="$(RUSTFLAGS)" \
-	    cargo build --release $(CARGO_VERBOSE) $(cargo_build) --no-default-features --features ovsdb
+	    cargo build --release $(CARGO_VERBOSE) $(cargo_build) --no-default-features --features ovsdb,c_api
 endif
 
 CLEAN_LOCAL += clean-ddlog
