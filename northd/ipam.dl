@@ -27,7 +27,6 @@ import ovsdb
 import allocate
 import helpers
 import ovn
-import ovn_northd
 import lswitch
 import lrouter
 

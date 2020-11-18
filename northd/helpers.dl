@@ -17,6 +17,9 @@ import OVN_Southbound as sb
 import ovsdb
 import ovn
 
+
+output relation Warning[string]
+
 /* ACLRef: reference to nb::ACL */
 relation &ACLRef[nb::ACL]
 &ACLRef[acl] :- nb::ACL[acl].

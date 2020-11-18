@@ -19,7 +19,6 @@ import ovsdb
 import ovn
 import helpers
 import lswitch
-import ovn_northd
 
 function is_enabled(lr: nb::Logical_Router): bool { is_enabled(lr.enabled) }
 function is_enabled(lrp: nb::Logical_Router_Port): bool { is_enabled(lrp.enabled) }
