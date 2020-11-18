@@ -5,7 +5,6 @@ import ovsdb
 import ovn
 import helpers
 import lswitch
-import ovn_northd
 
 /* default logical flow prioriry for distributed routes */
 function dROUTE_PRIO(): bit<32> = 400
