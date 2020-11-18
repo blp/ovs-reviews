@@ -77,7 +77,7 @@ static table_id NB_CFG_TIMESTAMP_ID;
 /* Initialize frequently used table ids. */
 static void init_table_ids(void)
 {
-    WARNING_TABLE_ID = ddlog_get_table_id("Warning");
+    WARNING_TABLE_ID = ddlog_get_table_id("helpers::Warning");
     NB_CFG_TIMESTAMP_ID = ddlog_get_table_id("NbCfgTimestamp");
 }
 

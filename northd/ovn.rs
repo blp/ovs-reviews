@@ -21,8 +21,6 @@ use ::std::process;
 use ::std::os::raw;
 use ::libc;
 
-use crate::ddlog_std;
-
 pub fn warn(msg: &String) {
     warn_(msg.as_str())
 }

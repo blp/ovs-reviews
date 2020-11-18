@@ -23,8 +23,6 @@ import multicast
 import helpers
 import ipam
 
-output relation Warning[string]
-
 index Logical_Flow_Index() on sb::Out_Logical_Flow()
 
 /* Meter_Band table */
