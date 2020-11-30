@@ -118,7 +118,6 @@ extern function ipv6_bitand(a: in6_addr, b: in6_addr): in6_addr
 extern function ipv6_bitnot(a: in6_addr): in6_addr
 extern function ipv6_create_mask(mask: bit<32>): in6_addr
 extern function ipv6_is_zero(a: in6_addr): bool
-extern function ipv6_is_v4mapped(a: in6_addr): bool
 extern function ipv6_is_routable_multicast(a: in6_addr): bool
 extern function ipv6_is_all_hosts(a: in6_addr): bool
 
@@ -136,7 +135,6 @@ function ipv6_same_network(ips: (in6_addr, in6_addr), mask: in6_addr): bool {
     ipv6_network(ips.0, mask) == ipv6_network(ips.1, mask)
 }
 
-extern function ipv6_host_is_zero(addr: in6_addr, mask: in6_addr): bool
 extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
 extern function ipv6_is_cidr(ip6: in6_addr): bool
 extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
@@ -331,7 +329,6 @@ function to_string(addr: lport_addresses): string = {
  * Logging
  */
 extern function warn(msg: string): ()
-extern function err(msg: string): ()
 extern function abort(msg: string): ()
 
 /*
