@@ -856,7 +856,7 @@ pub fn parse_ip_list(ips: &String) -> ddlog_std::Either<String, ddlog_std::Vec<d
                 };
                 res.push(ddlog_std::tuple2(start, end));
             };
-            ddlog_std::Either::Right{r: ddlog_std::Vec{x: res}}
+            ddlog_std::Either::Right{r: ddlog_std::Vec::from(res)}
         },
         Ok((suffix, _)) => {
             ddlog_std::Either::Left{l: format!("IP address list contains trailing characters: \"{}\"", suffix)}
