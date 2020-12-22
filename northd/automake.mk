@@ -91,9 +91,10 @@ cargo_build_01 = --features command-line --bin ovn_northd_cli
 cargo_build_10 = --lib
 cargo_build_11 = --features command-line
 
+libtool_deps = $(srcdir)/build-aux/libtool-deps
 $(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
-	$(AM_V_GEN)LIBOVN_DEPS=`. lib/libovn.la && echo "$$dependency_libs"` && \
-	LIBOPENVSWITCH_DEPS=`. $(OVS_LIBDIR)/libopenvswitch.la && echo "$$dependency_libs"` && \
+	$(AM_V_GEN)LIBOVN_DEPS=`$(libtool_deps) lib/libovn.la` && \
+	LIBOPENVSWITCH_DEPS=`$(libtool_deps) $(OVS_LIBDIR)/libopenvswitch.la` && \
 	cd northd/ovn_northd_ddlog && \
 	RUSTC='$(RUSTC)' RUSTFLAGS="$(RUSTFLAGS)" \
 	    cargo build --release $(CARGO_VERBOSE) $(cargo_build) --no-default-features --features ovsdb
