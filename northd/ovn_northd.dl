@@ -1569,13 +1569,14 @@ relation Flow (
 )
 
 sb::Out_Logical_Flow(._uuid            = hash128((f.logical_datapath, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
-                    .logical_datapath = f.logical_datapath,
+                    .logical_datapath = Some{f.logical_datapath},
                     .pipeline         = if (f.stage.direction == IN) "ingress" else "egress",
                     .table_id         = table_id,
                     .priority         = f.priority,
                     .__match          = f.__match,
                     .actions          = f.actions,
-                    .external_ids     = f.external_ids.insert_imm("stage-name", table_name)) :-
+                    .external_ids     = f.external_ids.insert_imm("stage-name", table_name),
+                    .logical_dp_group = None) :-
     Flow[f],
     (var table_id, var table_name) = stage_id(f.stage).
 
