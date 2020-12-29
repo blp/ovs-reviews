@@ -1130,7 +1130,7 @@ main(int argc, char *argv[])
 
 
     ddlog_prog ddlog;
-    ddlog = ddlog_run(1, false, NULL, 0, ddlog_print_error, &delta);
+    ddlog = ddlog_run(1, false, ddlog_print_error, &delta);
     if (!ddlog) {
         ovs_fatal(0, "DDlog instance could not be created");
     }
