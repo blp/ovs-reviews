@@ -44,7 +44,7 @@ const AF_INET6: usize = 10;
 /* Implementation for externs declared in ovn.dl */
 
 #[repr(C)]
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug)]
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug, IntoRecord, Mutator)]
 pub struct eth_addr {
     x: [u8; ETH_ADDR_SIZE]
 }
@@ -98,12 +98,8 @@ impl FromRecord for eth_addr {
     }
 }
 
-::differential_datalog::decl_struct_into_record!(eth_addr, <>, x);
-::differential_datalog::decl_record_mutator_struct!(eth_addr, <>, x: [u8; ETH_ADDR_SIZE]);
-
-
 #[repr(C)]
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug)]
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug, IntoRecord, Mutator)]
 pub struct in6_addr {
     x: [u8; IN6_ADDR_SIZE]
 }
@@ -119,9 +115,6 @@ impl FromRecord for in6_addr {
     }
 }
 
-::differential_datalog::decl_struct_into_record!(in6_addr, <>, x);
-::differential_datalog::decl_record_mutator_struct!(in6_addr, <>, x: [u8; IN6_ADDR_SIZE]);
- 
 pub fn in6_generate_lla(ea: &eth_addr) -> in6_addr {
     let mut addr: in6_addr = Default::default();
     unsafe {ovs::in6_generate_lla(ea.clone(), &mut addr as *mut in6_addr)};
