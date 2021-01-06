@@ -73,8 +73,8 @@ static const char *unixctl_path;
 static table_id WARNING_TABLE_ID;
 
 /* Initialize frequently used table ids. */
-static void init_table_ids(void) {
-    WARNING_TABLE_ID = ddlog_get_table_id("helpers::Warning");
+static void init_table_ids(ddlog_prog ddlog) {
+    WARNING_TABLE_ID = ddlog_get_table_id(ddlog, "helpers::Warning");
 }
 
 /*
@@ -730,7 +730,7 @@ northd_update_probe_interval(struct northd_ctx *nb, struct northd_ctx *sb)
 {
     /* Default probe interval for NB and SB DB connections. */
     int probe_interval = 5000;
-    table_id tid = ddlog_get_table_id("Northd_Probe_Interval");
+    table_id tid = ddlog_get_table_id(nb->ddlog, "Northd_Probe_Interval");
     ddlog_delta *probe_delta = ddlog_delta_get_table(delta, tid);
     ddlog_delta_enumerate(probe_delta, northd_update_probe_interval_cb, (uintptr_t) &probe_interval);
 
@@ -792,7 +792,7 @@ ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog,
         return;
     }
     char *table_name = xasprintf("%s::Out_%s", db, table);
-    ddlog_delta_clear_table(delta, ddlog_get_table_id(table_name));
+    ddlog_delta_clear_table(delta, ddlog_get_table_id(ddlog, table_name));
     free(table_name);
 
     if (!updates[0]) {
@@ -1051,7 +1051,7 @@ get_database_ops(struct northd_ctx *ctx)
              * We require output-only tables to have an accompanying index
              * named <table>_Index. */
             char *index = xasprintf("%s_Index", table);
-            index_id idxid = ddlog_get_index_id(index);
+            index_id idxid = ddlog_get_index_id(ctx->ddlog, index);
             if (idxid == -1) {
                 VLOG_WARN_RL(&rl, "%s: unknown index", index);
                 free(index);
@@ -1185,7 +1185,7 @@ ddlog_clear(struct northd_ctx *ctx)
     int n_failures = 0;
     for (int i = 0; ctx->input_relations[i]; i++) {
         char *table = xasprintf("%s%s", ctx->prefix, ctx->input_relations[i]);
-        if (ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(table))) {
+        if (ddlog_clear_relation(ctx->ddlog, ddlog_get_table_id(ctx->ddlog, table))) {
             n_failures++;
         }
         free(table);
@@ -1317,8 +1317,6 @@ main(int argc, char *argv[])
     int retval;
     bool exiting;
 
-    init_table_ids();
-
     fatal_ignore_sigpipe();
     ovs_cmdl_proctitle_init(argc, argv);
     set_program_name(argv[0]);
@@ -1353,6 +1351,7 @@ main(int argc, char *argv[])
     if (!ddlog) {
         ovs_fatal(0, "DDlog instance could not be created");
     }
+    init_table_ids(ddlog);
 
     int replay_fd = -1;
     if (record_file) {
