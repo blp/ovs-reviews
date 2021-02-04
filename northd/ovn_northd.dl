@@ -1158,6 +1158,20 @@ sb::Out_DHCP_Options (
 ).
 
 sb::Out_DHCP_Options (
+    ._uuid  = 128'h32224b72_1561_4279_b430_982423b62a69,
+    .name   = "netbios_name_server",
+    .code   = 44,
+    .__type = "ipv4"
+).
+
+sb::Out_DHCP_Options (
+    ._uuid  = 128'h691db4ae_624e_43e2_9f4a_5ed9de58f0e5,
+    .name   = "netbios_node_type",
+    .code   = 46,
+    .__type = "uint8"
+).
+
+sb::Out_DHCP_Options (
     ._uuid  = 128'h2d738583_96f4_4a78_99a1_f8f7fe328f3f,
     .name   = "bootfile_name_alt",
     .code   = 254,
