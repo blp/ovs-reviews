@@ -3716,20 +3716,20 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                     }
                 } in {
                     /* Punt IGMP traffic to controller. */
-                    Flow(.logical_datapath = ls._uuid,
-                         .stage            = switch_stage(IN, L2_LKUP),
-                         .priority         = 100,
-                         .__match          = "ip4 && ip.proto == 2",
-                         .actions          = "${igmp_act}",
-                         .external_ids     = map_empty());
+                    UniqueFlow[Flow{.logical_datapath = ls._uuid,
+                                    .stage            = switch_stage(IN, L2_LKUP),
+                                    .priority         = 100,
+                                    .__match          = "ip4 && ip.proto == 2",
+                                    .actions          = "${igmp_act}",
+                                    .external_ids     = map_empty()}];
 
                     /* Punt MLD traffic to controller. */
-                    Flow(.logical_datapath = ls._uuid,
-                         .stage            = switch_stage(IN, L2_LKUP),
-                         .priority         = 100,
-                         .__match          = "mldv1 || mldv2",
-                         .actions          = "${igmp_act}",
-                         .external_ids     = map_empty());
+                    UniqueFlow[Flow{.logical_datapath = ls._uuid,
+                                    .stage            = switch_stage(IN, L2_LKUP),
+                                    .priority         = 100,
+                                    .__match          = "mldv1 || mldv2",
+                                    .actions          = "${igmp_act}",
+                                    .external_ids     = map_empty()}];
 
                     /* Flood all IP multicast traffic destined to 224.0.0.X to
                      * all ports - RFC 4541, section 2.1.2, item 2.
@@ -4177,12 +4177,12 @@ for (&SwitchPort(.lsp = lsp,
 /* Ingress table L2_LKUP: Destination lookup for unknown MACs (priority 0). */
 for (LogicalSwitchUnknownPorts(.ls = ls_uuid)) {
     var mc_unknown = json_string_escape(mC_UNKNOWN().0) in
-    Flow(.logical_datapath = ls_uuid,
-         .stage            = switch_stage(IN, L2_LKUP),
-         .priority         = 0,
-         .__match          = "1",
-         .actions          = "outport = ${mc_unknown}; output;",
-         .external_ids     = map_empty())
+    UniqueFlow[Flow{.logical_datapath = ls_uuid,
+                    .stage            = switch_stage(IN, L2_LKUP),
+                    .priority         = 0,
+                    .__match          = "1",
+                    .actions          = "outport = ${mc_unknown}; output;",
+                    .external_ids     = map_empty()}]
 }
 
 /* Egress tables PORT_SEC_IP: Egress port security - IP (priority 0)
