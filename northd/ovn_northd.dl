@@ -1358,6 +1358,7 @@ typedef PipelineStage = PORT_SEC_L2
                      | IP_ROUTING
                      | IP_ROUTING_ECMP
                      | POLICY
+                     | POLICY_ECMP
                      | ARP_RESOLVE
                      | CHK_PKT_LEN
                      | LARGER_PKTS
@@ -1438,11 +1439,12 @@ function stage_id(stage: Stage): (integer, string) =
        (LRouter, IN,  IP_ROUTING)    -> (10,  "lr_in_ip_routing"),
        (LRouter, IN,  IP_ROUTING_ECMP) -> (11,  "lr_in_ip_routing_ecmp"),
        (LRouter, IN,  POLICY)        -> (12,  "lr_in_policy"),
-       (LRouter, IN,  ARP_RESOLVE)   -> (13,  "lr_in_arp_resolve"),
-       (LRouter, IN,  CHK_PKT_LEN)   -> (14, "lr_in_chk_pkt_len"),
-       (LRouter, IN,  LARGER_PKTS)   -> (15, "lr_in_larger_pkts"),
-       (LRouter, IN,  GW_REDIRECT)   -> (16, "lr_in_gw_redirect"),
-       (LRouter, IN,  ARP_REQUEST)   -> (17, "lr_in_arp_request"),
+       (LRouter, IN,  POLICY_ECMP)   -> (13,  "lr_in_policy_ecmp"),
+       (LRouter, IN,  ARP_RESOLVE)   -> (14,  "lr_in_arp_resolve"),
+       (LRouter, IN,  CHK_PKT_LEN)   -> (15, "lr_in_chk_pkt_len"),
+       (LRouter, IN,  LARGER_PKTS)   -> (16, "lr_in_larger_pkts"),
+       (LRouter, IN,  GW_REDIRECT)   -> (17, "lr_in_gw_redirect"),
+       (LRouter, IN,  ARP_REQUEST)   -> (18, "lr_in_arp_request"),
 
        /* Logical router egress stages. */
        (LRouter, OUT, UNDNAT)        -> (0,  "lr_out_undnat"),
@@ -6517,6 +6519,13 @@ for (&Router(.lr = lr)) {
          .stage            = router_stage(IN, POLICY),
          .priority         = 0,
          .__match          = "1",
+         .actions          = "${rEG_ECMP_GROUP_ID()} = 0; next;",
+         .external_ids     = map_empty());
+
+    Flow(.logical_datapath = lr._uuid,
+         .stage            = router_stage(IN, POLICY_ECMP),
+         .priority         = 150,
+         .__match          = "${rEG_ECMP_GROUP_ID()} == 0",
          .actions          = "next;",
          .external_ids     = map_empty())
 }
@@ -6545,9 +6554,13 @@ Flow(.logical_datapath = r.lr._uuid,
     var policy_uuid = FlatMap(r.lr.policies),
     policy in nb::Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "reroute",
-    out_port in &RouterPort(.router = r),
-    Some{var nexthop_s} = policy.nexthop,
+    Some{var nexthop_s} = match (policy.nexthops.size()) {
+        0 -> policy.nexthop,
+        1 -> policy.nexthops.nth(0),
+        _ -> None       /* >1 nexthops handled separately as ECMP. */
+    },
     Some{var nexthop} = ip46_parse(nexthop_s),
+    out_port in &RouterPort(.router = r),
     Some{var src_ip} = find_lrp_member_ip(out_port.networks, nexthop),
     /*
     None:
@@ -6562,7 +6575,78 @@ Flow(.logical_datapath = r.lr._uuid,
                    "eth.src = ${out_port.networks.ea}; "
                    "outport = ${out_port.json_name}; "
                    "flags.loopback = 1; "
+                   "${rEG_ECMP_GROUP_ID()} = 0; "
                    "next;").
+
+/* Returns true if the addresses in 'addrs' are all IPv4 or all IPv6,
+   false if they are a mix. */
+function all_same_addr_family(addrs: Set<string>): bool {
+    var addr_families = set_empty();
+    for (a in addrs) {
+        addr_families.insert(a.contains("."))
+    };
+    addr_families.size() <= 1
+}
+
+relation EcmpReroutePolicy(
+    r: Ref<Router>,
+    policy: nb::Logical_Router_Policy,
+    ecmp_group_id: usize
+)
+EcmpReroutePolicy(r, policy, ecmp_group_id) :-
+    r in &Router(),
+    var policy_uuid = FlatMap(r.lr.policies),
+    policy in nb::Logical_Router_Policy(._uuid = policy_uuid),
+    policy.action == "reroute",
+    policy.nexthops.size() > 1,
+    var policies = policy.group_by(r).to_vec(),
+    var ecmp_group_ids = range_vec(1, policies.len() + 1, 1),
+    var numbered_policies = policies.zip(ecmp_group_ids),
+    var pair = FlatMap(numbered_policies),
+    (var policy, var ecmp_group_id) = pair,
+    all_same_addr_family(policy.nexthops).
+Flow(.logical_datapath = r.lr._uuid,
+     .stage            = router_stage(IN, POLICY_ECMP),
+     .priority         = 100,
+     .__match          = __match,
+     .actions          = actions,
+     .external_ids     = stage_hint(policy._uuid)) :-
+    EcmpReroutePolicy(r, policy, ecmp_group_id),
+    var member_ids = range_vec(1, policy.nexthops.size() + 1, 1),
+    var numbered_nexthops = policy.nexthops.to_vec().zip(member_ids),
+    var pair = FlatMap(numbered_nexthops),
+    (var nexthop_s, var member_id) = pair,
+    Some{var nexthop} = ip46_parse(nexthop_s),
+    out_port in &RouterPort(.router = r),
+    Some{var src_ip} = find_lrp_member_ip(out_port.networks, nexthop), // or warn
+    var xx = ip46_xxreg(src_ip),
+    var actions = (pkt_mark_policy(policy.options) ++
+                   "${xx}${rEG_NEXT_HOP()} = ${nexthop}; "
+                   "${xx}${rEG_SRC()} = ${src_ip}; "
+                   "eth.src = ${out_port.networks.ea}; "
+                   "outport = ${out_port.json_name}; "
+                   "flags.loopback = 1; "
+                   "next;"),
+    var __match = ("${rEG_ECMP_GROUP_ID()} == ${ecmp_group_id} && "
+                   "${rEG_ECMP_MEMBER_ID()} == ${member_id}").
+Flow(.logical_datapath = r.lr._uuid,
+     .stage            = router_stage(IN, POLICY),
+     .priority         = policy.priority,
+     .__match          = policy.__match,
+     .actions          = actions,
+     .external_ids     = stage_hint(policy._uuid)) :-
+    EcmpReroutePolicy(r, policy, ecmp_group_id),
+    var member_ids = {
+        var n = policy.nexthops.size();
+        var member_ids = vec_with_capacity(n);
+        for (i in range_vec(1, n + 1, 1)) {
+            member_ids.push("${i}")
+        };
+        member_ids.join(", ")
+    },
+    var actions = ("${rEG_ECMP_GROUP_ID()} = ${ecmp_group_id}; "
+                   "${rEG_ECMP_MEMBER_ID()} = select(${member_ids});").
+    
 Flow(.logical_datapath = r.lr._uuid,
      .stage            = router_stage(IN, POLICY),
      .priority         = policy.priority,
@@ -6577,12 +6661,13 @@ Flow(.logical_datapath = r.lr._uuid,
      .stage            = router_stage(IN, POLICY),
      .priority         = policy.priority,
      .__match          = policy.__match,
-     .actions          = pkt_mark_policy(policy.options) ++ "next;",
+     .actions          = pkt_mark_policy(policy.options) ++ "${rEG_ECMP_GROUP_ID()} = 0; next;",
      .external_ids     = stage_hint(policy._uuid)) :-
     r in &Router(),
     var policy_uuid = FlatMap(r.lr.policies),
     policy in nb::Logical_Router_Policy(._uuid = policy_uuid),
     policy.action == "allow".
+
 
 /* XXX destination unreachable */
 
