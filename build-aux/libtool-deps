@@ -19,15 +19,15 @@ parse_dependencies() {
     dependency_libs=none
     . "$1" || exit 1
     if test "$dependency_libs" = none; then
-	echo "$1: not a libtool .la file (use --help for help)" >&2
-	exit 1
+        echo "$1: not a libtool .la file (use --help for help)" >&2
+        exit 1
     fi
 
     for dep in $dependency_libs; do
-	case $dep in
-	    *.la) parse_dependencies "$dep" ;;
-	    *) deps="$deps $dep" ;;
-	esac
+        case $dep in
+            *.la) parse_dependencies "$dep" ;;
+            *) deps="$deps $dep" ;;
+        esac
     done
 }
 
