@@ -1548,18 +1548,27 @@ function fLAGBIT_NOT_VXLAN() : string = "flags[1] == 0"
 function mFF_N_LOG_REGS()          : bit<32> = 10
 
 /*
- * Logical_Flow
-   relation Out_Logical_Flow (
-        logical_datapath: string,
-        pipeline: string,
-        table_id: integer,
-        priority: integer,
-        __match: string,
-        actions: string,
-        external_ids: Map<string,string>)
+ * Generating sb::Logical_Flow and sb::Logical_DP_Group.
+ *
+ * Some logical flows occur in multiple logical datapaths.  These can
+ * be represented two ways: either as multiple Logical_Flow records
+ * (each with logical_datapath set appropriately) or as a single
+ * Logical_Flow record that points to a Logical_DP_Group record that
+ * lists all the datapaths it's in.  (It would be possible to mix or
+ * duplicate these methods, but we don't do that.)  We have to support
+ * both:
+ *
+ *    - There's a setting "use_logical_dp_groups" that globally
+ *      enables or disables this feature.
+ *
+ *    - Some flows can't use this feature even if it's globally
+ *      enabled, due to ovn-controller bugs (see commit bfed224006750
+ *      "northd: Add support for Logical Datapath Groups.").  Flows
+ *      that can't be shared must get added into AnnotatedFlow with
+ *      'shared' set to 'false', instead of Flow.
  */
 
-relation Flow (
+relation Flow(
     logical_datapath: uuid,
     stage:            Stage,
     priority:         integer,
@@ -1568,17 +1577,78 @@ relation Flow (
     external_ids:     Map<string,string>
 )
 
-sb::Out_Logical_Flow(._uuid            = hash128((f.logical_datapath, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
-                    .logical_datapath = Some{f.logical_datapath},
-                    .pipeline         = if (f.stage.direction == IN) "ingress" else "egress",
-                    .table_id         = table_id,
-                    .priority         = f.priority,
-                    .__match          = f.__match,
-                    .actions          = f.actions,
-                    .external_ids     = f.external_ids.insert_imm("stage-name", table_name),
-                    .logical_dp_group = None) :-
-    Flow[f],
-    (var table_id, var table_name) = stage_id(f.stage).
+/* If this option is 'true' northd will combine logical flows that differ by
+ * logical datapath only by creating a datapath group. */
+relation UseLogicalDatapathGroups[bool]
+UseLogicalDatapathGroups[use_logical_dp_groups] :-
+    nb in nb::NB_Global(),
+    var use_logical_dp_groups = map_get_bool_def(nb.options, "use_logical_dp_groups", false).
+UseLogicalDatapathGroups[false] :-
+    Unit(),
+    not nb in nb::NB_Global().
+
+relation AnnotatedFlow(f: Flow, shared: bool)
+AnnotatedFlow(f, b) :- UseLogicalDatapathGroups[b], Flow[f].
+
+relation UniqueFlow[Flow]
+AnnotatedFlow(f, false) :- UniqueFlow[f].
+
+relation AggregatedFlow (
+    logical_datapaths: Set<uuid>,
+    stage:             Stage,
+    priority:          integer,
+    __match:           string,
+    actions:           string,
+    external_ids:      Map<string,string>
+)
+AggregatedFlow(.logical_datapaths = g.to_set(),
+               .stage = stage,
+               .priority = priority,
+               .__match = __match,
+               .actions = actions,
+               .external_ids = external_ids) :-
+    AnnotatedFlow(Flow{logical_datapath, stage, priority, __match, actions, external_ids}, true),
+    var g = logical_datapath.group_by((stage, priority, __match, actions, external_ids)).
+AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
+               .stage = stage,
+               .priority = priority,
+               .__match = __match,
+               .actions = actions,
+               .external_ids = external_ids) :-
+    AnnotatedFlow(Flow{logical_datapath, stage, priority, __match, actions, external_ids}, false).
+
+for (f in AggregatedFlow()) {
+    (var table_id, var table_name) = stage_id(f.stage) in
+    var pipeline = if (f.stage.direction == IN) "ingress" else "egress" in
+    var external_ids = f.external_ids.insert_imm("stage-name", table_name) in
+    if (f.logical_datapaths.size() == 1) {
+        Some{var dp} = f.logical_datapaths.nth(0) in
+        sb::Out_Logical_Flow(
+            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+            .logical_datapath = Some{dp},
+            .logical_dp_group = None,
+            .pipeline         = pipeline,
+            .table_id         = table_id,
+            .priority         = f.priority,
+            .__match          = f.__match,
+            .actions          = f.actions,
+            .external_ids     = external_ids)
+    } else {
+        var group_uuid = hash128(f.logical_datapaths) in {
+            sb::Out_Logical_Flow(
+                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+                .logical_datapath = None,
+                .logical_dp_group = Some{group_uuid},
+                .pipeline         = pipeline,
+                .table_id         = table_id,
+                .priority         = f.priority,
+                .__match          = f.__match,
+                .actions          = f.actions,
+                .external_ids     = external_ids);
+            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths)
+        }
+    }
+}
 
 /* Logical flows for forwarding groups. */
 Flow(.logical_datapath = sw.ls._uuid,
@@ -3665,23 +3735,23 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                      * all ports - RFC 4541, section 2.1.2, item 2.
                      */
                     var flood = json_string_escape(mC_FLOOD().0) in
-                    Flow(.logical_datapath = ls._uuid,
-                         .stage            = switch_stage(IN, L2_LKUP),
-                         .priority         = 85,
-                         .__match          = "ip4.mcast && ip4.dst == 224.0.0.0/24",
-                         .actions          = "outport = ${flood}; output;",
-                         .external_ids     = map_empty());
+                    UniqueFlow[Flow{.logical_datapath = ls._uuid,
+                                    .stage            = switch_stage(IN, L2_LKUP),
+                                    .priority         = 85,
+                                    .__match          = "ip4.mcast && ip4.dst == 224.0.0.0/24",
+                                    .actions          = "outport = ${flood}; output;",
+                                    .external_ids     = map_empty()}];
 
                     /* Flood all IPv6 multicast traffic destined to reserved
                      * multicast IPs (RFC 4291, 2.7.1).
                      */
                     var flood = json_string_escape(mC_FLOOD().0) in
-                    Flow(.logical_datapath = ls._uuid,
-                         .stage            = switch_stage(IN, L2_LKUP),
-                         .priority         = 85,
-                         .__match          = "ip6.mcast_flood",
-                         .actions          = "outport = ${flood}; output;",
-                         .external_ids     = map_empty());
+                    UniqueFlow[Flow{.logical_datapath = ls._uuid,
+                                    .stage            = switch_stage(IN, L2_LKUP),
+                                    .priority         = 85,
+                                    .__match          = "ip6.mcast_flood",
+                                    .actions          = "outport = ${flood}; output;",
+                                    .external_ids     = map_empty()}];
 
                     /* Forward uregistered IP multicast to routers with relay
                      * enabled and to any ports configured to flood IP
@@ -3715,13 +3785,13 @@ for (sw in &Switch(.ls = ls, .mcast_cfg = &mcast_cfg)
                                 ""
                             }
                         } in
-                        Flow(.logical_datapath = ls._uuid,
-                             .stage            = switch_stage(IN, L2_LKUP),
-                             .priority         = 80,
-                             .__match          = "ip4.mcast || ip6.mcast",
-                             .actions          =
-                                "${relay_act}${static_act}${drop_act}",
-                             .external_ids     = map_empty())
+                        UniqueFlow[Flow{.logical_datapath = ls._uuid,
+                                        .stage            = switch_stage(IN, L2_LKUP),
+                                        .priority         = 80,
+                                        .__match          = "ip4.mcast || ip6.mcast",
+                                        .actions          =
+                                           "${relay_act}${static_act}${drop_act}",
+                                        .external_ids     = map_empty()}]
                     }
                 }
             }
@@ -3769,14 +3839,14 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
                     ""
                 }
             } in
-            Flow(.logical_datapath = sw.ls._uuid,
-                 .stage            = switch_stage(IN, L2_LKUP),
-                 .priority         = 90,
-                 .__match          = "eth.mcast && ${ipX} && ${ipX}.dst == ${address}",
-                 .actions          =
-                    "${relay_act} ${static_act} outport = \"${address}\"; "
-                    "output;",
-                 .external_ids     = map_empty())
+            UniqueFlow[Flow{.logical_datapath = sw.ls._uuid,
+                            .stage            = switch_stage(IN, L2_LKUP),
+                            .priority         = 90,
+                            .__match          = "eth.mcast && ${ipX} && ${ipX}.dst == ${address}",
+                            .actions          =
+                               "${relay_act} ${static_act} outport = \"${address}\"; "
+                               "output;",
+                            .external_ids     = map_empty()}]
         }
     }
 }
@@ -3843,12 +3913,12 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
  * (priority 100). */
 for (ls in nb::Logical_Switch) {
     var mc_flood = json_string_escape(mC_FLOOD().0) in
-    Flow(.logical_datapath = ls._uuid,
-         .stage            = switch_stage(IN, L2_LKUP),
-         .priority         = 70,
-         .__match          = "eth.mcast",
-         .actions          = "outport = ${mc_flood}; output;",
-         .external_ids     = map_empty())
+    UniqueFlow[Flow{.logical_datapath = ls._uuid,
+                    .stage            = switch_stage(IN, L2_LKUP),
+                    .priority         = 70,
+                    .__match          = "eth.mcast",
+                    .actions          = "outport = ${mc_flood}; output;",
+                    .external_ids     = map_empty()}]
 }
 
 /* Ingress table L2_LKUP: Destination lookup, unicast handling (priority 50).
@@ -3897,12 +3967,12 @@ function lrouter_port_ip_reachable(rp: Ref<RouterPort>, addr: v46_ip): bool {
     };
     false
 }
-Flow(.logical_datapath = sw.ls._uuid,
-     .stage            = switch_stage(IN, L2_LKUP),
-     .priority         = 75,
-     .__match          = __match,
-     .actions          = actions,
-     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+UniqueFlow[Flow{.logical_datapath = sw.ls._uuid,
+                .stage            = switch_stage(IN, L2_LKUP),
+                .priority         = 75,
+                .__match          = __match,
+                .actions          = actions,
+                .external_ids     = stage_hint(sp.lsp._uuid)}] :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
     rp.is_enabled(),
     var eth_src_set = {
@@ -3985,37 +4055,39 @@ function get_arp_forward_ips(rp: Ref<RouterPort>): (Set<string>, Set<string>) = 
  * delivers to patch ports) but we're bypassing multicast_groups.
  * (This is why we match against fLAGBIT_NOT_VXLAN() here.)
  */
-Flow(.logical_datapath = sw.ls._uuid,
-     .stage            = switch_stage(IN, L2_LKUP),
-     .priority         = 80,
-     .__match          = fLAGBIT_NOT_VXLAN() ++
-                         " && arp.op == 1 && arp.tpa == { " ++
-                         all_ips_v4.to_vec().join(", ") ++ "}",
-     .actions          = if (sw.has_non_router_port) {
-                             "clone {outport = ${sp.json_name}; output; }; "
-                             "outport = ${mc_flood_l2}; output;"
-                         } else {
-                             "outport = ${sp.json_name}; output;"
-                         },
-     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+AnnotatedFlow(.f = Flow{.logical_datapath = sw.ls._uuid,
+                        .stage            = switch_stage(IN, L2_LKUP),
+                        .priority         = 80,
+                        .__match          = fLAGBIT_NOT_VXLAN() ++
+                                            " && arp.op == 1 && arp.tpa == { " ++
+                                            all_ips_v4.to_vec().join(", ") ++ "}",
+                        .actions          = if (sw.has_non_router_port) {
+                                                "clone {outport = ${sp.json_name}; output; }; "
+                                                "outport = ${mc_flood_l2}; output;"
+                                            } else {
+                                                "outport = ${sp.json_name}; output;"
+                                            },
+                        .external_ids     = stage_hint(sp.lsp._uuid)},
+              .shared = not sw.has_non_router_port) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
     rp.is_enabled(),
     (var all_ips_v4, _) = get_arp_forward_ips(rp),
     not all_ips_v4.is_empty(),
     var mc_flood_l2 = json_string_escape(mC_FLOOD_L2().0).
-Flow(.logical_datapath = sw.ls._uuid,
-     .stage            = switch_stage(IN, L2_LKUP),
-     .priority         = 80,
-     .__match          = fLAGBIT_NOT_VXLAN() ++
-                         " && nd_ns && nd.target == { " ++
-                         all_ips_v6.to_vec().join(", ") ++ "}",
-     .actions          = if (sw.has_non_router_port) {
-                             "clone {outport = ${sp.json_name}; output; }; "
-                             "outport = ${mc_flood_l2}; output;"
-                         } else {
-                             "outport = ${sp.json_name}; output;"
-                         },
-     .external_ids     = stage_hint(sp.lsp._uuid)) :-
+AnnotatedFlow(.f = Flow{.logical_datapath = sw.ls._uuid,
+                        .stage            = switch_stage(IN, L2_LKUP),
+                        .priority         = 80,
+                        .__match          = fLAGBIT_NOT_VXLAN() ++
+                                            " && nd_ns && nd.target == { " ++
+                                            all_ips_v6.to_vec().join(", ") ++ "}",
+                        .actions          = if (sw.has_non_router_port) {
+                                                "clone {outport = ${sp.json_name}; output; }; "
+                                                "outport = ${mc_flood_l2}; output;"
+                                            } else {
+                                                "outport = ${sp.json_name}; output;"
+                                            },
+                        .external_ids     = stage_hint(sp.lsp._uuid)},
+              .shared = not sw.has_non_router_port) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
     rp.is_enabled(),
     (_, var all_ips_v6) = get_arp_forward_ips(rp),
@@ -6387,14 +6459,14 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
         } in
         Some{var ip} = ip46_parse(address) in
         var ipX = ip46_ipX(ip) in
-        Flow(.logical_datapath = rtr.lr._uuid,
-             .stage            = router_stage(IN, IP_ROUTING),
-             .priority         = 500,
-             .__match          = "${ipX} && ${ipX}.dst == ${address}",
-             .actions          =
-                "${static_act} outport = ${json_string_escape(address)}; "
-                "ip.ttl--; next;",
-             .external_ids     = map_empty())
+        UniqueFlow[Flow{.logical_datapath = rtr.lr._uuid,
+                        .stage            = router_stage(IN, IP_ROUTING),
+                        .priority         = 500,
+                        .__match          = "${ipX} && ${ipX}.dst == ${address}",
+                        .actions          =
+                           "${static_act} outport = ${json_string_escape(address)}; "
+                           "ip.ttl--; next;",
+                        .external_ids     = map_empty()}]
     }
 }
 
@@ -6413,12 +6485,13 @@ for (RouterMcastFloodPorts(&rtr, flood_ports) if rtr.mcast_cfg.relay) {
     } else {
         "drop;"
     } in
-    Flow(.logical_datapath = rtr.lr._uuid,
-         .stage            = router_stage(IN, IP_ROUTING),
-         .priority         = 450,
-         .__match          = "ip4.mcast || ip6.mcast",
-         .actions          = actions,
-         .external_ids     = map_empty())
+    AnnotatedFlow(.f = Flow{.logical_datapath = rtr.lr._uuid,
+                            .stage            = router_stage(IN, IP_ROUTING),
+                            .priority         = 450,
+                            .__match          = "ip4.mcast || ip6.mcast",
+                            .actions          = actions,
+                            .external_ids     = map_empty()},
+                  .shared = not flood_static)
 }
 
 /* Logical router ingress table POLICY: Policy.

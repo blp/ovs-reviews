@@ -8,6 +8,7 @@
 -o HA_Chassis_Group
 -o IP_Multicast
 -o Load_Balancer
+-o Logical_DP_Group
 -o MAC_Binding
 -o Meter
 -o Meter_Band
@@ -23,6 +24,7 @@
 --ro Port_Binding.chassis
 --ro Port_Binding.encap
 --ro Port_Binding.virtual_parent
+--ro Port_Binding.up
 --ro SB_Global.connections
 --ro SB_Global.external_ids
 --ro SB_Global.ssl
