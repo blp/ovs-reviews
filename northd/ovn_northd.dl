@@ -2015,6 +2015,7 @@ Flow(.logical_datapath = sw.ls._uuid,
      .external_ids     = stage_hint(lb._uuid)) :-
     ControllerEventEn(true),
     SwitchLBVIP(.sw_uuid = sw_uuid, .lb = &lb, .vip = vip, .backends = backends),
+    not map_get_bool_def(lb.options, "reject", false),
     sw in &Switch(.ls = nb::Logical_Switch{._uuid = sw_uuid}),
     backends == "",
     HasEventElbMeter(has_elb_meter),
@@ -2871,11 +2872,14 @@ Flow(.logical_datapath = sw.ls._uuid,
         };
         up_backends
     },
-    var actions = if (up_backends.is_empty()) {
-        "drop;"
-    } else {
+    var actions = if (not up_backends.is_empty()) {
         ct_lb(up_backends.to_vec().join(","),
               lb.selection_fields, lb.protocol)
+    } else if (map_get_bool_def(lb.options, "reject", false)) {
+        var stage = stage_id(switch_stage(OUT, QOS_MARK)).0;
+        "reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=${stage});};"
+    } else {
+        "drop;"
     }.
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, STATEFUL),
@@ -5773,7 +5777,7 @@ for (RouterLBVIP(
         .backends = backends)
      if is_some(l3dgw_port) or is_gateway)
 {
-    if (backends == "") {
+    if (backends == "" and not map_get_bool_def(lb.options, "reject", false)) {
         for (ControllerEventEn(true)) {
             for (HasEventElbMeter(has_elb_meter)) {
                 Some {(var __match, var __action)} =
@@ -5830,8 +5834,8 @@ for (RouterLBVIP(
                 (110, "")
             } in
         var __match = match1 ++ match2 ++
-            match (l3dgw_port) {
-                Some{gwport} -> " && is_chassis_resident(${redirect_port_name})",
+            match ((l3dgw_port, backends != "" or map_get_bool_def(lb.options, "reject", false))) {
+                (Some{gwport}, true) -> " && is_chassis_resident(${redirect_port_name})",
                 _ -> ""
             } in
         var has_force_snat_ip = has_force_snat_ip(lr, "lb") in
@@ -5954,14 +5958,17 @@ Flow(.logical_datapath = r.lr._uuid,
         };
         up_backends
     },
-    var actions = if (up_backends.is_empty()) {
-        "drop;"
-    } else {
+    var actions = if (not up_backends.is_empty()) {
         match (has_force_snat_ip(r.lr, "lb")) {
             true -> "flags.force_snat_for_lb = 1; ",
             false -> ""
         } ++ ct_lb(up_backends.to_vec().join(","), lb.selection_fields,
                    lb.protocol)
+    } else if (map_get_bool_def(lb.options, "reject", false)) {
+        var stage = stage_id(router_stage(OUT, SNAT)).0;
+        "reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=${stage});};"
+    } else {
+        "drop;"
     }.
 Flow(.logical_datapath = r.lr._uuid,
      .stage            = router_stage(IN, DNAT),
