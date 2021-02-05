@@ -20,6 +20,7 @@ import lrouter
 import multicast
 import helpers
 import ipam
+import ovn_northd
 
 function is_enabled(lsp: nb::Logical_Switch_Port): bool { is_enabled(lsp.enabled) }
 function is_enabled(lsp: Ref<nb::Logical_Switch_Port>): bool { lsp.deref().is_enabled() }
@@ -36,12 +37,31 @@ SwitchRouterPeerRef(lsp, None) :-
     nb::Logical_Switch_Port(._uuid = lsp),
     not SwitchRouterPeer(lsp, _, _).
 
-/* map logical ports to logical switches */
-relation LogicalSwitchPort(lport: uuid, lswitch: uuid)
+/* LogicalSwitchPortCandidate.
+ *
+ * Each row pairs a logical switch port with its logical switch, but without
+ * checking that the logical switch port is on only one logical switch.
+ *
+ * (Use LogicalSwitchPort instead, which guarantees uniqueness.) */
+relation LogicalSwitchPortCandidate(lsp_uuid: uuid, ls_uuid: uuid)
+LogicalSwitchPortCandidate(lsp_uuid, ls_uuid) :-
+    nb::Logical_Switch(._uuid = ls_uuid, .ports = ports),
+    var lsp_uuid = FlatMap(ports).
+Warning[message] :-
+    LogicalSwitchPortCandidate(lsp_uuid, ls_uuid),
+    var lss = ls_uuid.group_by(lsp_uuid).to_set(),
+    set_size(lss) > 1,
+    lsp in nb::Logical_Switch_Port(._uuid = lsp_uuid),
+    var message = "Bad configuration: logical switch port ${lsp.name} belongs "
+    "to more than one logical switch".
 
-LogicalSwitchPort(lport, lswitch) :-
-    nb::Logical_Switch(._uuid = lswitch, .ports = ports),
-    var lport = FlatMap(ports).
+/* Each row means 'lport' is in 'lswitch' (and only that lswitch). */
+relation LogicalSwitchPort(lport: uuid, lswitch: uuid)
+LogicalSwitchPort(lsp_uuid, ls_uuid) :-
+    LogicalSwitchPortCandidate(lsp_uuid, ls_uuid),
+    var lss = ls_uuid.group_by(lsp_uuid).to_set(),
+    set_size(lss) == 1,
+    Some{var ls_uuid} = set_nth(lss, 0).
 
 /* Logical switches that have enabled ports with "unknown" address */
 relation LogicalSwitchUnknownPorts(ls: uuid, port_ids: Set<uuid>)
