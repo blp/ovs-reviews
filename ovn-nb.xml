@@ -3755,6 +3755,10 @@
     </p>
 
     <group title="Configuration">
+      <p>
+        <code>ovn-northd</code> reads configuration from these columns.
+      </p>
+
       <column name="logical_port">
         OVN logical port when BFD engine is running.
       </column>
@@ -3794,6 +3798,10 @@
     </group>
 
     <group title="Status Reporting">
+      <p>
+        <code>ovn-northd</code> writes BFD status into these columns.
+      </p>
+
       <column name="status">
         <p>
           BFD port logical states. Possible values are:

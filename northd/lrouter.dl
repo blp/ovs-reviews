@@ -506,6 +506,14 @@ RouterPortSbOptions(lrp._uuid, map_empty()) :-
     lrp in nb::Logical_Router_Port(),
     not sb::Port_Binding(._uuid = lrp._uuid).
 
+relation RouterPortHasBfd(lrp_uuid: uuid, has_bfd: bool)
+RouterPortHasBfd(lrp_uuid, true) :-
+    nb::Logical_Router_Port(._uuid = lrp_uuid, .name = logical_port),
+    nb::BFD(.logical_port = logical_port).
+RouterPortHasBfd(lrp_uuid, false) :-
+    nb::Logical_Router_Port(._uuid = lrp_uuid, .name = logical_port),
+    not nb::BFD(.logical_port = logical_port).
+
 /* FIXME: what should happen when extract_lrp_networks fails? */
 /* RouterPort relation collects all attributes of a logical router port */
 relation &RouterPort(
@@ -516,7 +524,8 @@ relation &RouterPort(
     is_redirect:      bool,
     peer:             RouterPeer,
     mcast_cfg:        Ref<McastPortCfg>,
-    sb_options:       Map<string,string>)
+    sb_options:       Map<string,string>,
+    has_bfd:          bool)
 
 &RouterPort(.lrp                = lrp,
             .json_name          = json_string_escape(lrp.name),
@@ -525,7 +534,8 @@ relation &RouterPort(
             .is_redirect        = is_redirect,
             .peer               = peer,
             .mcast_cfg          = mcast_cfg,
-            .sb_options         = sb_options) :-
+            .sb_options         = sb_options,
+            .has_bfd            = has_bfd) :-
     nb::Logical_Router_Port[lrp],
     Some{var networks} = extract_lrp_networks(lrp.mac, lrp.networks),
     LogicalRouterPort(lrp._uuid, lrouter_uuid),
@@ -533,7 +543,8 @@ relation &RouterPort(
     RouterPortIsRedirect(lrp._uuid, is_redirect),
     RouterPortPeer(lrp._uuid, peer),
     mcast_cfg in &McastPortCfg(.port = lrp._uuid, .router_port = true),
-    RouterPortSbOptions(lrp._uuid, sb_options).
+    RouterPortSbOptions(lrp._uuid, sb_options),
+    RouterPortHasBfd(lrp._uuid, has_bfd).
 
 relation RouterPortNetworksIPv4Addr(port: Ref<RouterPort>, addr: ipv4_netaddr)
 
@@ -568,6 +579,20 @@ typedef route_key = RouteKey {
     plen: bit<32>
 }
 
+/* StaticRouteDown contains the UUID of all the static routes that are down.
+ * A static route is down if it has a BFD whose dst_ip matches it nexthop and
+ * that BFD is down or admin_down. */
+relation StaticRouteDown(lrsr_uuid: uuid)
+StaticRouteDown(lrsr_uuid) :-
+    nb::Logical_Router_Static_Route(._uuid = lrsr_uuid, .bfd = Some{bfd_uuid}, .nexthop = nexthop),
+    bfd in nb::BFD(._uuid = bfd_uuid, .dst_ip = nexthop),
+    match (bfd.status) {
+        None -> true,
+        Some{"admin_down"} -> true,
+        Some{"down"} -> true,
+        _ -> false
+    }.
+
 relation &StaticRoute(lrsr: nb::Logical_Router_Static_Route,
                       key: route_key,
                       nexthop: v46_ip,
@@ -580,6 +605,7 @@ relation &StaticRoute(lrsr: nb::Logical_Router_Static_Route,
              .output_port = lrsr.output_port,
              .ecmp_symmetric_reply = esr) :-
     lrsr in nb::Logical_Router_Static_Route(),
+    not StaticRouteDown(lrsr._uuid),
     var policy = route_policy_from_string(lrsr.policy),
     Some{(var nexthop, var nexthop_plen)} = ip46_parse_cidr(lrsr.nexthop),
     match (nexthop) {
