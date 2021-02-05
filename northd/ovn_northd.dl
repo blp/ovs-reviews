@@ -1266,7 +1266,7 @@ sb::Out_RBAC_Permission (
     .table          = "Port_Binding",
     .authorization  = set_singleton(""),
     .insert_delete  = false,
-    .update         = set_singleton("chassis")
+    .update         = ["chassis", "up"].to_set()
 ).
 
 sb::Out_RBAC_Permission (
