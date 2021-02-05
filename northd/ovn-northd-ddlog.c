@@ -26,6 +26,7 @@
 #include "hash.h"
 #include "jsonrpc.h"
 #include "lib/ovn-util.h"
+#include "memory.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/json.h"
 #include "openvswitch/poll-loop.h"
@@ -35,6 +36,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "ovsdb-types.h"
+#include "simap.h"
 #include "stream-ssl.h"
 #include "stream.h"
 #include "unixctl.h"
@@ -1166,6 +1168,15 @@ main(int argc, char *argv[])
     /* Main loop. */
     exiting = false;
     while (!exiting) {
+        memory_run();
+        if (memory_should_report()) {
+            struct simap usage = SIMAP_INITIALIZER(&usage);
+
+            /* Nothing special to report yet. */
+            memory_report(&usage);
+            simap_destroy(&usage);
+        }
+
         bool has_lock = ovsdb_cs_has_lock(sb_ctx->cs);
         if (!sb_ctx->paused) {
             if (has_lock && !status.locked) {
@@ -1196,6 +1207,7 @@ main(int argc, char *argv[])
         northd_wait(nb_ctx);
         northd_wait(sb_ctx);
         unixctl_server_wait(unixctl);
+        memory_wait();
         if (exiting) {
             poll_immediate_wake();
         }
