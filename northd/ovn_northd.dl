@@ -6223,6 +6223,8 @@ function build_route_match(key: route_key) : (string, bit<32>) =
 {
     var ipX = ip46_ipX(key.ip_prefix);
 
+    /* The priority here is calculated to implement longest-prefix-match
+     * routing. */
     (var dir, var priority) = match (key.policy) {
         SrcIp -> ("src", key.plen * 2),
         DstIp -> ("dst", (key.plen * 2) + 1)
@@ -6254,7 +6256,6 @@ for (Route(.port        = port,
         None     -> "${ipX}.dst"
     } in
     var actions =
-        "ip.ttl--; "
         "${rEG_ECMP_GROUP_ID()} = 0; "
         "${xx}${rEG_NEXT_HOP()} = ${nexthop}; "
         "${xx}${rEG_SRC()} = ${src_ip}; "
@@ -6262,14 +6263,23 @@ for (Route(.port        = port,
         "outport = ${port.json_name}; "
         "flags.loopback = 1; "
         "next;" in
-    /* The priority here is calculated to implement longest-prefix-match
-     * routing. */
-    Flow(.logical_datapath = port.router.lr._uuid,
-         .stage            = router_stage(IN, IP_ROUTING),
-         .priority         = 32'd0 ++ priority,
-         .__match          = __match,
-         .actions          = actions,
-         .external_ids     = stage_hint(port.lrp._uuid))
+    {
+        Flow(.logical_datapath = port.router.lr._uuid,
+             .stage            = router_stage(IN, IP_ROUTING),
+             .priority         = priority as integer,
+             .__match          = __match,
+             .actions          = "ip.ttl--; ${actions}",
+             .external_ids     = stage_hint(port.lrp._uuid));
+
+        if (port.has_bfd) {
+            Flow(.logical_datapath = port.router.lr._uuid,
+                 .stage            = router_stage(IN, IP_ROUTING),
+                 .priority         = priority as integer + 1,
+                 .__match          = "${__match} && udp.dst == 3784",
+                 .actions          = actions,
+                 .external_ids     = stage_hint(port.lrp._uuid))
+        }
+    }
 }
 
 /* Logical router ingress table IP_ROUTING & IP_ROUTING_ECMP: IP Routing.
@@ -7659,3 +7669,167 @@ Warning["SCTP load balancers do not currently support "
     LoadBalancerHealthCheckRef[lbhc],
     lbvipbackend.lbvip.lb.health_check.contains(lbhc._uuid),
     lbhc.vip == lbvipbackend.lbvip.vip_key.
+
+/*
+ * BFD table.
+ */
+
+/*
+ * BFD source port allocation.
+ *
+ * We need to assign a unique source port to each (logical_port, dst_ip) pair.
+ * RFC 5881 section 4 says:
+ *
+ *   The source port MUST be in the range 49152 through 65535.
+ *   The same UDP source port number MUST be used for all BFD
+ *   Control packets associated with a particular session.
+ *   The source port number SHOULD be unique among all BFD
+ *   sessions on the system
+ */
+function bFD_UDP_SRC_PORT_MIN(): integer { 49152 }
+function bFD_UDP_SRC_PORT_MAX(): integer { 65535 }
+
+// Get already assigned BFD source ports.
+// If there's a conflict, make an arbitrary choice.
+relation AssignedSrcPort(
+    logical_port: string,
+    dst_ip: string,
+    src_port: integer)
+AssignedSrcPort(logical_port, dst_ip, src_port) :-
+    sb::BFD(.logical_port = logical_port, .dst_ip = dst_ip, .src_port = src_port),
+    var pair = (logical_port, dst_ip).group_by(src_port).first(),
+    (var logical_port, var dst_ip) = pair.
+
+// All source ports already in use.
+relation AllocatedSrcPorts0(src_ports: Set<integer>)
+AllocatedSrcPorts0(src_ports) :-
+    AssignedSrcPort(.src_port = src_port),
+    var src_ports = src_port.group_by(()).to_set().
+
+relation AllocatedSrcPorts(src_ports: Set<integer>)
+AllocatedSrcPorts(src_ports) :- AllocatedSrcPorts0(src_ports).
+AllocatedSrcPorts(set_empty()) :- Unit(), not AllocatedSrcPorts0(_).
+
+// (logical_port, dst_ip) pairs not yet in the Realized table
+relation NotYetAllocatedSrcPorts(pairs: Vec<(string, string)>)
+NotYetAllocatedSrcPorts(pairs) :-
+    nb::BFD(.logical_port = logical_port, .dst_ip = dst_ip),
+    not AssignedSrcPort(logical_port, dst_ip, _),
+    var pairs = (logical_port, dst_ip).group_by(()).to_vec().
+
+// Perform the allocation
+relation SrcPortAllocation(
+    logical_port: string,
+    dst_ip: string,
+    src_port: integer)
+SrcPortAllocation(logical_port, dst_ip, src_port) :- AssignedSrcPort(logical_port, dst_ip, src_port).
+SrcPortAllocation(logical_port, dst_ip, src_port) :-
+    NotYetAllocatedSrcPorts(unallocated),
+    AllocatedSrcPorts(allocated),
+    var allocation = FlatMap(allocate(allocated, unallocated,
+                                      bFD_UDP_SRC_PORT_MIN(), bFD_UDP_SRC_PORT_MAX())),
+    ((var logical_port, var dst_ip), var src_port) = allocation.
+
+relation SouthboundBFDStatus(
+    logical_port: string,
+    dst_ip: string,
+    status: Option<string>
+)
+SouthboundBFDStatus(bfd.logical_port, bfd.dst_ip, Some{bfd.status}) :- bfd in sb::BFD().
+SouthboundBFDStatus(logical_port, dst_ip, None) :-
+    nb::BFD(.logical_port = logical_port, .dst_ip = dst_ip),
+    not sb::BFD(.logical_port = logical_port, .dst_ip = dst_ip).
+
+function bFD_DEF_MINTX(): integer { 1000 } // 1 second
+function bFD_DEF_MINRX(): integer { 1000 } // 1 second
+function bFD_DEF_DETECT_MULT(): integer { 5 }
+sb::Out_BFD(._uuid = hash,
+            .src_port = src_port,
+            .disc = max(1, hash as u32) as integer,
+            .logical_port = nb.logical_port,
+            .dst_ip = nb.dst_ip,
+            .min_tx = nb.min_tx.unwrap_or(bFD_DEF_MINTX()),
+            .min_rx = nb.min_rx.unwrap_or(bFD_DEF_MINRX()),
+            .detect_mult = nb.detect_mult.unwrap_or(bFD_DEF_DETECT_MULT()),
+            .status = status,
+            .external_ids = map_empty(),
+            .options = map_empty()) :-
+    nb in nb::BFD(),
+    SrcPortAllocation(nb.logical_port, nb.dst_ip, src_port),
+    var nb_status = nb.status.unwrap_or("admin_down"),
+    SouthboundBFDStatus(nb.logical_port, nb.dst_ip, sb_status),
+    var status = match (sb_status) {
+        None -> nb_status,
+        Some{s} -> if (nb_status == s) {
+                       s
+                   } else if (nb_status == "admin_down" or s == "admin_down") {
+                       nb_status
+                   } else {
+                       s
+                   }
+    },
+    var hash = hash128((nb.logical_port, nb.dst_ip)).
+
+relation BFDReferenced(bfd_uuid: uuid)
+BFDReferenced(bfd_uuid) :-
+    &StaticRoute(.lrsr = nb::Logical_Router_Static_Route{.bfd = Some{bfd_uuid}, .nexthop = nexthop}),
+    nb::BFD(._uuid = bfd_uuid, .dst_ip = nexthop).
+
+nb::Out_BFD(bfd_uuid, Some{"admin_down"}) :-
+    nb::BFD(._uuid = bfd_uuid),
+    not BFDReferenced(bfd_uuid).
+nb::Out_BFD(bfd_uuid, Some{status}) :-
+    nb in nb::BFD(._uuid = bfd_uuid),
+    BFDReferenced(bfd_uuid),
+    var nb_status = nb.status.unwrap_or("admin_down"),
+    SouthboundBFDStatus(nb.logical_port, nb.dst_ip, sb_status),
+    var status = match (sb_status) {
+        None -> nb_status,
+        Some{s} -> if (nb_status == "admin_down") {
+                       "down"
+                   } else if (s != nb_status and s != "admin_down" and nb_status != "admin_down") {
+                       s
+                   } else {
+                       nb_status
+                   }
+    }.
+
+/*
+ * Logical router BFD flows
+ */
+
+function lrouter_bfd_flows(lr_uuid: uuid, lrp_uuid: uuid, ipX: string, networks: string)
+    : (Flow, Flow)
+{
+    (Flow{.logical_datapath = lr_uuid,
+          .stage            = router_stage(IN, IP_INPUT),
+          .priority         = 110,
+          .__match          = "${ipX}.src == ${networks} && udp.dst == 3784",
+          .actions          = "next; ",
+          .external_ids     = stage_hint(lrp_uuid)},
+     Flow{.logical_datapath = lr_uuid,
+          .stage            = router_stage(IN, IP_INPUT),
+          .priority         = 110,
+          .__match          = "${ipX}.dst == ${networks} && udp.dst == 3784",
+          .actions          = "handle_bfd_msg(); ",
+          .external_ids     = stage_hint(lrp_uuid)})
+}
+for (&RouterPort(.router = &router, .networks = networks, .lrp = lrp, .has_bfd = true)) {
+    if (not networks.ipv4_addrs.is_empty()) {
+        (var a, var b) = lrouter_bfd_flows(router.lr._uuid, lrp._uuid, "ip4",
+                                           format_v4_networks(networks, false)) in {
+            Flow[a];
+            Flow[b]
+        }
+    };
+
+    if (not networks.ipv6_addrs.is_empty()) {
+        (var a, var b) = lrouter_bfd_flows(router.lr._uuid, lrp._uuid, "ip6",
+                                           format_v6_networks(networks)) in {
+            Flow[a];
+            Flow[b]
+        }
+    }
+}    
+                                          
+ 

@@ -1,3 +1,5 @@
+-o BFD
+--rw BFD.status
 -o Logical_Router_Port
 --rw Logical_Router_Port.ipv6_prefix
 -o Logical_Switch_Port
