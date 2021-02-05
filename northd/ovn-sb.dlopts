@@ -1,4 +1,5 @@
 -o Address_Set
+-o BFD
 -o DHCP_Options
 -o DHCPv6_Options
 -o DNS
