@@ -5051,7 +5051,7 @@ for (RouterPortNetworksIPv4Addr(
             .lrp = lrp},
          .addr = addr))
 {
-    /* UDP/TCP port unreachable. */
+    /* UDP/TCP/SCTP port unreachable. */
     var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag && udp" in
     Flow(.logical_datapath = lr._uuid,
          .stage            = router_stage(IN, IP_INPUT),
@@ -5072,6 +5072,17 @@ for (RouterPortNetworksIPv4Addr(
          .priority         = 80,
          .__match          = __match,
          .actions          = "tcp_reset {"
+                             "eth.dst <-> eth.src; "
+                             "ip4.dst <-> ip4.src; "
+                             "next; };",
+         .external_ids     = stage_hint(lrp._uuid));
+
+    var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag && sctp" in
+    Flow(.logical_datapath = lr._uuid,
+         .stage            = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "sctp_reset {"
                              "eth.dst <-> eth.src; "
                              "ip4.dst <-> ip4.src; "
                              "next; };",
@@ -5159,7 +5170,7 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.lrp = lrp,
                         .external_ids = stage_hint(lrp._uuid))
 }
 
-/* UDP/TCP port unreachable */
+/* UDP/TCP/SCTP port unreachable */
 for (RouterPortNetworksIPv6Addr(
         .port = &RouterPort{.router = &Router{.lr = lr,
                                               .l3dgw_port = None,
@@ -5174,6 +5185,17 @@ for (RouterPortNetworksIPv6Addr(
          .priority         = 80,
          .__match          = __match,
          .actions          = "tcp_reset {"
+                             "eth.dst <-> eth.src; "
+                             "ip6.dst <-> ip6.src; "
+                             "next; };",
+         .external_ids     = stage_hint(lrp._uuid));
+
+    var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag && sctp" in
+    Flow(.logical_datapath = lr._uuid,
+         .stage            = router_stage(IN, IP_INPUT),
+         .priority         = 80,
+         .__match          = __match,
+         .actions          = "sctp_abort {"
                              "eth.dst <-> eth.src; "
                              "ip6.dst <-> ip6.src; "
                              "next; };",
