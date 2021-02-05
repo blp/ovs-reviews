@@ -406,15 +406,12 @@ relation SwitchPortUp(lsp: uuid, up: bool)
 
 SwitchPortUp(lsp, up) :-
     nb::Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = __type),
-    sb::Port_Binding(.logical_port = lsp_name, .chassis = chassis),
-    var up =
-        if (__type == "router") {
-            true
-        } else if (is_none(chassis)) {
-            false
-        } else {
-            true
-        }.
+    sb::Port_Binding(.logical_port = lsp_name, .up = pb_up),
+    var up = match ((__type, pb_up)) {
+        ("router", _) -> true,
+        (_, Some{true}) -> true,
+        _ -> false
+    }.
 
 SwitchPortUp(lsp, up) :-
     nb::Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = __type),
