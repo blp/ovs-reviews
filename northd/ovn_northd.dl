@@ -1242,7 +1242,7 @@ sb::Out_RBAC_Permission (
     .authorization  = set_singleton("name"),
     .insert_delete  = true,
     .update         = ["nb_cfg", "external_ids", "encaps",
-                       "vtep_logical_switches", "other_config", "name"].to_set()
+                       "vtep_logical_switches", "other_config"].to_set()
 ).
 
 sb::Out_RBAC_Permission (
@@ -1250,7 +1250,7 @@ sb::Out_RBAC_Permission (
     .table          = "Chassis_Private",
     .authorization  = set_singleton("name"),
     .insert_delete  = true,
-    .update         = ["nb_cfg", "nb_cfg_timestamp", "chassis", "name"].to_set()
+    .update         = ["nb_cfg", "nb_cfg_timestamp", "chassis", "external_ids"].to_set()
 ).
 
 sb::Out_RBAC_Permission (
@@ -1258,7 +1258,7 @@ sb::Out_RBAC_Permission (
     .table          = "Encap",
     .authorization  = set_singleton("chassis_name"),
     .insert_delete  = true,
-    .update         = ["type", "options", "ip", "chassis_name"].to_set()
+    .update         = ["type", "options", "ip"].to_set()
 ).
 
 sb::Out_RBAC_Permission (
