@@ -1980,7 +1980,7 @@ HasEventElbMeter(false) :-
     not nb::Meter(.name = "event-elb").
 
 /* Empty LoadBalancer Controller event */
-function build_empty_lb_event_flow(key: string, lb: nb::Load_Balancer,
+function build_empty_lb_event_flow(key: string, lb: Ref<nb::Load_Balancer>,
                                    meter: bool): Option<(string, string)> {
     (var ip, var port) = match (ip_address_and_port_from_lb_key(key)) {
         Some{(ip, port)} -> (ip, port),
@@ -2016,12 +2016,22 @@ function build_empty_lb_event_flow(key: string, lb: nb::Load_Balancer,
     Some{(__match.join(" && "), action)}
 }
 
-/* ControllerEventEn has exactly one row, either 'true' to enable controller
- * events or 'false' to disable them. */
-relation ControllerEventEn(enable: bool)
-ControllerEventEn(map_get_bool_def(options, "controller_event", false)) :-
-    nb::NB_Global(.options = options).
-ControllerEventEn(false) :- Unit(), not nb::NB_Global().
+/* Contains the load balancers for which an event should be sent each time it
+ * runs out of backends.
+ *
+ * The preferred way to do this by setting an individual Load_Balancer's
+ * options:event=true.
+ *
+ * The deprecated way is to set nb::NB_Global options:controller_event=true,
+ * which enables events for every load balancer.
+ */
+relation LoadBalancerEmptyEvents(lb: Ref<nb::Load_Balancer>)
+LoadBalancerEmptyEvents(lb) :-
+    nb::NB_Global(.options = options),
+    var global_events = map_get_bool_def(options, "controller_event", false),
+    lb in &LoadBalancerRef[nb::Load_Balancer{.options = options}],
+    var local_events = map_get_bool_def(options, "event", false),
+    global_events or local_events.
 
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, PRE_LB),
@@ -2029,8 +2039,8 @@ Flow(.logical_datapath = sw.ls._uuid,
      .__match          = __match,
      .actions          = __action,
      .external_ids     = stage_hint(lb._uuid)) :-
-    ControllerEventEn(true),
-    SwitchLBVIP(.sw_uuid = sw_uuid, .lb = &lb, .vip = vip, .backends = backends),
+    SwitchLBVIP(.sw_uuid = sw_uuid, .lb = lb, .vip = vip, .backends = backends),
+    LoadBalancerEmptyEvents(lb),
     not map_get_bool_def(lb.options, "reject", false),
     sw in &Switch(.ls = nb::Logical_Switch{._uuid = sw_uuid}),
     backends == "",
@@ -5810,13 +5820,13 @@ for (RouterLBVIP(
                           .redirect_port_name = redirect_port_name,
                           .is_gateway = is_gateway,
                           .nats = nats},
-        .lb = &lb,
+        .lb = lb,
         .vip = vip,
         .backends = backends)
      if is_some(l3dgw_port) or is_gateway)
 {
     if (backends == "" and not map_get_bool_def(lb.options, "reject", false)) {
-        for (ControllerEventEn(true)) {
+        for (LoadBalancerEmptyEvents(lb)) {
             for (HasEventElbMeter(has_elb_meter)) {
                 Some {(var __match, var __action)} =
                     build_empty_lb_event_flow(vip, lb, has_elb_meter) in
