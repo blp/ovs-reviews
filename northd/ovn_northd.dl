@@ -444,6 +444,19 @@ OutProxy_Port_Binding(// lrp._uuid is already in use; generate a new UUID by
     },
     var options = redirect_type.insert_imm("distributed-port", lrp.name).
 
+/*
+ * We want to preserve 'up' (set by ovn-controller) for Port_Binding rows.
+ * We need to set set 'up' in new rows to Some{false}; if we don't set
+ * it at all, ovn-controller will never update it.
+ */
+relation PortBindingUp0(pb_uuid: uuid, up: bool)
+PortBindingUp0(pb_uuid, up) :- sb::Port_Binding(._uuid = pb_uuid, .up = Some{up}).
+
+relation PortBindingUp(pb_uuid: uuid, up: bool)
+PortBindingUp(pb_uuid, up) :- PortBindingUp0(pb_uuid, up).
+PortBindingUp(pb_uuid, false) :-
+    OutProxy_Port_Binding(._uuid = pb_uuid),
+    not PortBindingUp0(pb_uuid, _).
 
 /* Add allocated qdisc_queue_id and tunnel key to Port_Binding.
  */
@@ -459,10 +472,12 @@ sb::Out_Port_Binding(._uuid              = pbinding._uuid,
                     .tag                = pbinding.tag,
                     .mac                = pbinding.mac,
                     .nat_addresses      = pbinding.nat_addresses,
-                    .external_ids       = pbinding.external_ids) :-
+                    .external_ids       = pbinding.external_ids,
+                    .up                 = Some{up}) :-
     pbinding in OutProxy_Port_Binding(),
     PortTunKeyAllocation(pbinding._uuid, tunkey),
     QueueIDAllocation(pbinding._uuid, qid),
+    PortBindingUp(pbinding._uuid, up),
     var options0 = match (qid) {
         None -> pbinding.options,
         Some{id} -> pbinding.options.insert_imm("qdisc_queue_id", "${id}")
