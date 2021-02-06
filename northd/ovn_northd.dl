@@ -7444,7 +7444,8 @@ sb::Out_Load_Balancer(._uuid = lb._uuid,
                       .vips = lb.vips,
                       .protocol = lb.protocol,
                       .datapaths = datapaths,
-                      .external_ids = ["lb_id" -> uuid2str(lb_uuid)]) :-
+                      .external_ids = ["lb_id" -> uuid2str(lb_uuid)],
+                      .options = map_empty()) :-
     nb in nb::Logical_Switch(._uuid = ls_uuid, .load_balancer = lb_uuids),
     var lb_uuid = FlatMap(lb_uuids),
     var datapaths = ls_uuid.group_by(lb_uuid).to_set(),
