@@ -422,21 +422,23 @@ relation &SwitchACL(sw: Ref<Switch>,
     acl in &ACLRef[nb::ACL{._uuid = acl_uuid}],
     ACLHasFairMeter(acl, has_fair_meter).
 
-relation SwitchPortUp(lsp: uuid, up: bool)
-
-SwitchPortUp(lsp, up) :-
+function oVN_FEATURE_PORT_UP_NOTIF(): string { "port-up-notif" }
+relation SwitchPortUp0(lsp: uuid)
+SwitchPortUp0(lsp) :-
+    nb::Logical_Switch_Port(._uuid = lsp, .__type = "router").
+SwitchPortUp0(lsp) :-
     nb::Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = __type),
-    sb::Port_Binding(.logical_port = lsp_name, .up = pb_up),
-    var up = match ((__type, pb_up)) {
-        ("router", _) -> true,
-        (_, Some{true}) -> true,
-        _ -> false
+    sb::Port_Binding(.logical_port = lsp_name, .up = up, .chassis = Some{chassis_uuid}),
+    sb::Chassis(._uuid = chassis_uuid, .other_config = other_config),
+    if (map_get_bool_def(other_config, oVN_FEATURE_PORT_UP_NOTIF(), false)) {
+        up == Some{true}
+    } else {
+        true
     }.
 
-SwitchPortUp(lsp, up) :-
-    nb::Logical_Switch_Port(._uuid = lsp, .name = lsp_name, .__type = __type),
-    not sb::Port_Binding(.logical_port = lsp_name),
-    var up = __type == "router".
+relation SwitchPortUp(lsp: uuid, up: bool)
+SwitchPortUp(lsp, true) :- SwitchPortUp0(lsp).
+SwitchPortUp(lsp, false) :- nb::Logical_Switch_Port(._uuid = lsp), not SwitchPortUp0(lsp).
 
 relation SwitchPortHAChassisGroup0(lsp_uuid: uuid, hac_group_uuid: uuid)
 SwitchPortHAChassisGroup0(lsp_uuid, ha_chassis_group_uuid(ls_uuid)) :-
