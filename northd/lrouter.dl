@@ -328,6 +328,27 @@ LogicalRouterNATs(lr, vec_empty()) :-
     nb::Logical_Router(._uuid = lr),
     not LogicalRouterNAT(lr, _).
 
+function get_force_snat_ip(lr: nb::Logical_Router, key_type: string): Set<v46_ip> =
+{
+    var ips = set_empty();
+    match (lr.options.get(key_type ++ "_force_snat_ip")) {
+        None -> (),
+        Some{s} -> {
+            for (token in s.split(" ")) {
+                match (ip46_parse(token)) {
+                    Some{ip} -> ips.insert(ip),
+                    _ -> () // XXX warn
+                }
+            };
+        }
+    };
+    ips
+}
+
+function has_force_snat_ip(lr: nb::Logical_Router, key_type: string): bool {
+    not get_force_snat_ip(lr, key_type).is_empty()
+}
+
 /* For each router, collect the set of IPv4 and IPv6 addresses used for SNAT,
  * which includes:
  *

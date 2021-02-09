@@ -4707,27 +4707,6 @@ AddChassisResidentCheck(lrp, false) :-
     not AddChassisResidentCheck_(lrp, _).
 
 
-function get_force_snat_ip(lr: nb::Logical_Router, key_type: string): Set<v46_ip> =
-{
-    var ips = set_empty();
-    match (lr.options.get(key_type ++ "_force_snat_ip")) {
-        None -> (),
-        Some{s} -> {
-            for (token in s.split(" ")) {
-                match (ip46_parse(token)) {
-                    Some{ip} -> ips.insert(ip),
-                    _ -> () // XXX warn
-                }
-            };
-        }
-    };
-    ips
-}
-
-function has_force_snat_ip(lr: nb::Logical_Router, key_type: string): bool {
-    not get_force_snat_ip(lr, key_type).is_empty()
-}
-
 /* Logical router ingress table IP_INPUT: IP Input for IPv4. */
 for (&RouterPort(.router = &router, .networks = networks, .lrp = lrp)
      if (not networks.ipv4_addrs.is_empty()))
