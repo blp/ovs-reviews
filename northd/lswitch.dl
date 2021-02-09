@@ -20,7 +20,6 @@ import lrouter
 import multicast
 import helpers
 import ipam
-import ovn_northd
 
 function is_enabled(lsp: nb::Logical_Switch_Port): bool { is_enabled(lsp.enabled) }
 function is_enabled(lsp: Ref<nb::Logical_Switch_Port>): bool { lsp.deref().is_enabled() }
