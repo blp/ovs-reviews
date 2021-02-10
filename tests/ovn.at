@@ -14595,6 +14595,9 @@ OVN_POPULATE_ARP
 wait_for_ports_up
 ovn-nbctl --wait=hv sync
 
+ovn-sbctl dump-flows > sbflows
+AT_CAPTURE_FILE([sbflows])
+
 test_ip_packet 1 1 000000000001 00000000ff01 $(ip_to_hex 192 168 1 1) $(ip_to_hex 192 168 1 254) 11 0000 f87c f485 0303
 test_ip6_packet 1 1 000000000001 00000000ff01 20010db8000100000000000000000011 20010db8000100000000000000000001 11 0015 dbb8303900155bac6b646f65206676676e6d66720a 0104 1d31
 OVN_CHECK_PACKETS([hv1/vif1-tx.pcap], [vif1.expected])

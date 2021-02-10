@@ -269,21 +269,47 @@ LogicalSwitchHasLBVIP(sw_uuid, false) :-
     nb::Logical_Switch(._uuid = sw_uuid),
     not SwitchLBVIP(.sw_uuid = sw_uuid).
 
-relation &LBVIP(
+/* Load balancer virtual IPs.
+ *
+ * Three levels:
+ *   - LBVIP0 is load balancer virtual IPs with health checks.
+ *   - LBVIP1 also includes virtual IPs without health checks.
+ *   - LBVIP parses the IP address and port (and drops VIPs where those are invalid).
+ */
+relation LBVIP0(
     lb: Ref<nb::Load_Balancer>,
     vip_key: string,
-    vip_addr: v46_ip,
-    vip_port: bit<16>,
-    backend_ips: string)
-
-&LBVIP(.lb = lb,
-       .vip_key = vip_key,
-       .vip_addr = vip_addr,
-       .vip_port = vip_port,
-       .backend_ips = backend_ips) :-
+    backend_ips: string,
+    health_check: Ref<nb::Load_Balancer_Health_Check>)
+LBVIP0(lb, vip_key, backend_ips, health_check) :-
     LoadBalancerRef[lb],
     var vip = FlatMap(lb.vips),
     (var vip_key, var backend_ips) = vip,
+    LoadBalancerHealthCheckRef[health_check@&nb::Load_Balancer_Health_Check{.vip = vip_key}],
+    lb.health_check.contains(health_check._uuid).
+
+relation LBVIP1(
+    lb: Ref<nb::Load_Balancer>,
+    vip_key: string,
+    backend_ips: string,
+    health_check: Option<Ref<nb::Load_Balancer_Health_Check>>)
+LBVIP1(lb, vip_key, backend_ips, Some{health_check}) :-
+    LBVIP0(lb, vip_key, backend_ips, health_check).
+LBVIP1(lb, vip_key, backend_ips, None) :-
+    LoadBalancerRef[lb],
+    var vip = FlatMap(lb.vips),
+    (var vip_key, var backend_ips) = vip,
+    not LBVIP0(lb, vip_key, backend_ips, _).
+
+relation &LBVIP(
+    lb: Ref<nb::Load_Balancer>,
+    vip_key: string,
+    backend_ips: string,
+    health_check: Option<Ref<nb::Load_Balancer_Health_Check>>,
+    vip_addr: v46_ip,
+    vip_port: bit<16>)
+&LBVIP(lb, vip_key, backend_ips, health_check, vip_addr, vip_port) :-
+    LBVIP1(lb, vip_key, backend_ips, health_check),
     Some{(var vip_addr, var vip_port)} = ip_address_and_port_from_lb_key(vip_key).
 
 typedef svc_monitor = SvcMonitor{
@@ -291,6 +317,12 @@ typedef svc_monitor = SvcMonitor{
     src_ip: string
 }
 
+/* Backends for load balancer virtual IPs.
+ *
+ * Use caution with this table, because load balancer virtual IPs
+ * sometimes have no backends and there is some significance to that.
+ * In cases that are really per-LBVIP, instead of per-LBVIPBackend,
+ * process the LBVIPs directly. */
 relation &LBVIPBackend(
     lbvip: Ref<LBVIP>,
     ip: v46_ip,

@@ -1429,7 +1429,7 @@ function stage_id(stage: Stage): (integer, string) =
         (LSwitch, IN,  LB)            -> (10,  "ls_in_lb"),
         (LSwitch, IN,  STATEFUL)      -> (11, "ls_in_stateful"),
         (LSwitch, IN,  PRE_HAIRPIN)   -> (12, "ls_in_pre_hairpin"),
-        (LSwitch, IN,  NAT_HAIRPIN)   -> (13, "ls_in_hairpin"),
+        (LSwitch, IN,  NAT_HAIRPIN)   -> (13, "ls_in_nat_hairpin"),
         (LSwitch, IN,  HAIRPIN)       -> (14, "ls_in_hairpin"),
         (LSwitch, IN,  ARP_ND_RSP)    -> (15, "ls_in_arp_rsp"),
         (LSwitch, IN,  DHCP_OPTIONS)  -> (16, "ls_in_dhcp_options"),
@@ -2962,7 +2962,7 @@ for (&Switch(.ls = nb::Logical_Switch{._uuid = ls_uuid}, .has_lb_vip = true)) {
          .stage = switch_stage(IN, PRE_HAIRPIN),
          .priority = 90,
          .__match = "ip",
-         .actions = "${rEGBIT_HAIRPIN()} = chk_lb_hairpin_reply(); ",
+         .actions = "${rEGBIT_HAIRPIN()} = chk_lb_hairpin_reply(); next;",
          .external_ids = stage_hint(ls_uuid));
 
     /* If packet needs to be hairpinned, snat the src ip with the VIP. */
@@ -5084,7 +5084,7 @@ for (RouterPortNetworksIPv4Addr(
          .stage            = router_stage(IN, IP_INPUT),
          .priority         = 80,
          .__match          = __match,
-         .actions          = "sctp_reset {"
+         .actions          = "sctp_abort {"
                              "eth.dst <-> eth.src; "
                              "ip4.dst <-> ip4.src; "
                              "next; };",
@@ -7672,15 +7672,13 @@ sb::Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip
                        .logical_port = svc_monitor.port_name,
                        .src_mac = to_string(svc_monitor_mac),
                        .src_ip = svc_monitor.src_ip,
-                       .options = lbhc.options,
+                       .options = health_check.options,
                        .external_ids = map_empty()) :-
     SvcMonitorMac(svc_monitor_mac),
     LBVIPBackend[lbvipbackend],
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    LoadBalancerHealthCheckRef[lbhc],
+    Some{var health_check} = lbvipbackend.lbvip.health_check,
     PortExists(svc_monitor.port_name),
-    lbvipbackend.lbvip.lb.health_check.contains(lbhc._uuid),
-    lbhc.vip == lbvipbackend.lbvip.vip_key,
     var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
     protocol != "sctp".
 
@@ -7690,9 +7688,7 @@ Warning["SCTP load balancers do not currently support "
     LBVIPBackend[lbvipbackend],
     default_protocol(lbvipbackend.lbvip.lb.protocol) == "sctp",
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    LoadBalancerHealthCheckRef[lbhc],
-    lbvipbackend.lbvip.lb.health_check.contains(lbhc._uuid),
-    lbhc.vip == lbvipbackend.lbvip.vip_key.
+    Some{var health_check} = lbvipbackend.lbvip.health_check.
 
 /*
  * BFD table.

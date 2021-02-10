@@ -3282,7 +3282,7 @@ void build_lb_vip_actions(struct ovn_lb_vip *lb_vip,
     } else if (lb_vip->empty_backend_rej && !lb_vip->n_backends) {
         reject = true;
     } else {
-        ds_put_format(action, "ct_lb(backends=%s);", lb_vip_nb->backend_ips);
+        ds_put_format(action, "ct_lb(backends=%s/**/);", lb_vip_nb->backend_ips);
     }
 
     if (reject) {
