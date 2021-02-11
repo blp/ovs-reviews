@@ -2040,10 +2040,10 @@ function build_empty_lb_event_flow(key: string, lb: Ref<nb::Load_Balancer>,
  */
 relation LoadBalancerEmptyEvents(lb: Ref<nb::Load_Balancer>)
 LoadBalancerEmptyEvents(lb) :-
-    nb::NB_Global(.options = options),
-    var global_events = map_get_bool_def(options, "controller_event", false),
-    lb in &LoadBalancerRef[nb::Load_Balancer{.options = options}],
-    var local_events = map_get_bool_def(options, "event", false),
+    nb::NB_Global(.options = global_options),
+    var global_events = map_get_bool_def(global_options, "controller_event", false),
+    lb in &LoadBalancerRef[nb::Load_Balancer{.options = local_options}],
+    var local_events = map_get_bool_def(local_options, "event", false),
     global_events or local_events.
 
 Flow(.logical_datapath = sw.ls._uuid,
@@ -2883,43 +2883,33 @@ function ct_lb(backends: string,
 
     "ct_lb(" ++ args.join("; ") ++ ");"
 }
-Flow(.logical_datapath = sw.ls._uuid,
-     .stage            = switch_stage(IN, STATEFUL),
-     .priority         = priority,
-     .__match          = __match,
-     .actions          = actions,
-     .external_ids     = stage_hint(lb._uuid)) :-
-    sw in &Switch(),
-    LBVIPBackend[lbvipbackend],
-    Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    var lbvip = lbvipbackend.lbvip,
-    var lb = lbvip.lb,
-    sw.ls.load_balancer.contains(lb._uuid),
-    bs in &LBVIPBackendStatus(.port = lbvipbackend.port,
-                              .ip = lbvipbackend.ip,
-                              .protocol = default_protocol(lb.protocol),
-                              .logical_port = svc_monitor.port_name),
-    var bses = bs.group_by((sw, lbvip, lb)).to_set(),
-    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
-    var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
-    var up_backends = {
-        var up_backends = set_empty();
-        for (bs in bses) {
-            if (bs.up) {
-                up_backends.insert("${bs.ip}:${bs.port}")
-            }
-        };
-        up_backends
-    },
-    var actions = if (not up_backends.is_empty()) {
-        ct_lb(up_backends.to_vec().join(","),
-              lb.selection_fields, lb.protocol)
-    } else if (map_get_bool_def(lb.options, "reject", false)) {
-        var stage = stage_id(switch_stage(OUT, QOS_MARK)).0;
-        "reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=${stage});};"
+function build_lb_vip_actions(lbvip: Ref<LBVIPWithStatus>,
+                              table: integer,
+                              force_snat: bool): string {
+    var up_backends = set_empty();
+    for (pair in lbvip.backends) {
+        (var backend, var up) = pair;
+        if (up) {
+            up_backends.insert("${backend.ip}:${backend.port}")
+        }
+    };
+
+    if (up_backends.is_empty()) {
+        if (map_get_bool_def(lbvip.lb.options, "reject", false)) {
+            return "reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=${table});};"
+        } else if (lbvip.health_check.is_some()) {
+            return "drop;"
+        } // else fall through
+    };
+
+    var actions = ct_lb(up_backends.to_vec().join(","), lbvip.lb.selection_fields,
+                        lbvip.lb.protocol);
+    if (force_snat) {
+        "flags.force_snat_for_lb = 1; " ++ actions
     } else {
-        "drop;"
-    }.
+        actions
+    }
+}
 Flow(.logical_datapath = sw.ls._uuid,
      .stage            = switch_stage(IN, STATEFUL),
      .priority         = priority,
@@ -2927,14 +2917,11 @@ Flow(.logical_datapath = sw.ls._uuid,
      .actions          = actions,
      .external_ids     = stage_hint(lb._uuid)) :-
     sw in &Switch(),
-    LBVIPBackend[lbvipbackend],
-    None = lbvipbackend.svc_monitor,
-    var lbvip = lbvipbackend.lbvip,
-    var lb = lbvip.lb,
+    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
     sw.ls.load_balancer.contains(lb._uuid),
-    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false),
     var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
-    var actions = ct_lb(lbvip.backend_ips, lb.selection_fields, lb.protocol).
+    var actions = build_lb_vip_actions(lbvip, stage_id(switch_stage(OUT, QOS_MARK)).0, false),
+    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false).
 
 /* Ingress Pre-Hairpin/Nat-Hairpin/Hairpin tabled (Priority 0).
  * Packets that don't need hairpinning should continue processing.
@@ -3364,8 +3351,9 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
                          "outport = inport; "
                          "flags.loopback = 1; "
                          "output;",
-     .external_ids     = stage_hint(lbvipbackend.lbvip.lb._uuid)) :-
-    LBVIPBackend[lbvipbackend],
+     .external_ids     = stage_hint(lbvip.lb._uuid)) :-
+    LBVIP[lbvip],
+    var lbvipbackend = FlatMap(lbvip.backends),
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
     sp in &SwitchPort(
         .lsp = nb::Logical_Switch_Port{.name = svc_monitor.port_name}),
@@ -5971,57 +5959,7 @@ Flow(.logical_datapath = r.lr._uuid,
      .external_ids     = stage_hint(lb._uuid)) :-
     r in &Router(),
     is_some(r.l3dgw_port) or r.is_gateway,
-    LBVIPBackend[lbvipbackend],
-    Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    var lbvip = lbvipbackend.lbvip,
-    var lb = lbvip.lb,
-    r.lr.load_balancer.contains(lb._uuid),
-    bs in &LBVIPBackendStatus(.port = lbvipbackend.port,
-                              .ip = lbvipbackend.ip,
-                              .protocol = default_protocol(lb.protocol),
-                              .logical_port = svc_monitor.port_name),
-    var bses = bs.group_by((r, lbvip, lb)).to_set(),
-    var __match
-        = "ct.new && " ++
-          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true) ++
-          match (r.l3dgw_port) {
-              Some{gwport} -> " && is_chassis_resident(${r.redirect_port_name})",
-              _ -> ""
-          },
-    var priority = if (lbvip.vip_port != 0) 120 else 110,
-    var up_backends = {
-        var up_backends = set_empty();
-        for (bs in bses) {
-            if (bs.up) {
-                up_backends.insert("${bs.ip}:${bs.port}")
-            }
-        };
-        up_backends
-    },
-    var actions = if (not up_backends.is_empty()) {
-        match (has_force_snat_ip(r.lr, "lb")) {
-            true -> "flags.force_snat_for_lb = 1; ",
-            false -> ""
-        } ++ ct_lb(up_backends.to_vec().join(","), lb.selection_fields,
-                   lb.protocol)
-    } else if (map_get_bool_def(lb.options, "reject", false)) {
-        var stage = stage_id(router_stage(OUT, SNAT)).0;
-        "reg0 = 0; reject { outport <-> inport; next(pipeline=egress,table=${stage});};"
-    } else {
-        "drop;"
-    }.
-Flow(.logical_datapath = r.lr._uuid,
-     .stage            = router_stage(IN, DNAT),
-     .priority         = priority,
-     .__match          = __match,
-     .actions          = actions,
-     .external_ids     = stage_hint(lb._uuid)) :-
-    r in &Router(),
-    is_some(r.l3dgw_port) or r.is_gateway,
-    LBVIPBackend[lbvipbackend],
-    None = lbvipbackend.svc_monitor,
-    var lbvip = lbvipbackend.lbvip,
-    var lb = lbvip.lb,
+    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
     r.lr.load_balancer.contains(lb._uuid),
     var __match
         = "ct.new && " ++
@@ -6031,7 +5969,8 @@ Flow(.logical_datapath = r.lr._uuid,
               _ -> ""
           },
     var priority = if (lbvip.vip_port != 0) 120 else 110,
-    var actions = ct_lb(lbvip.backend_ips, lb.selection_fields, lb.protocol).
+    var force_snat = has_force_snat_ip(r.lr, "lb"),
+    var actions = build_lb_vip_actions(lbvip, stage_id(router_stage(OUT, SNAT)).0, force_snat).
 
 
 /* Defaults based on MaxRtrInterval and MinRtrInterval from RFC 4861 section
@@ -7675,20 +7614,22 @@ sb::Out_Service_Monitor(._uuid = hash128((svc_monitor.port_name, lbvipbackend.ip
                        .options = health_check.options,
                        .external_ids = map_empty()) :-
     SvcMonitorMac(svc_monitor_mac),
-    LBVIPBackend[lbvipbackend],
+    LBVIP[lbvip@&LBVIP{.lb = lb}],
+    Some{var health_check} = lbvip.health_check,
+    var lbvipbackend = FlatMap(lbvip.backends),
     Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    Some{var health_check} = lbvipbackend.lbvip.health_check,
     PortExists(svc_monitor.port_name),
-    var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
+    var protocol = default_protocol(lb.protocol),
     protocol != "sctp".
 
 Warning["SCTP load balancers do not currently support "
         "health checks. Not creating health checks for "
-        "load balancer ${uuid2str(lbvipbackend.lbvip.lb._uuid)}"] :-
-    LBVIPBackend[lbvipbackend],
-    default_protocol(lbvipbackend.lbvip.lb.protocol) == "sctp",
-    Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    Some{var health_check} = lbvipbackend.lbvip.health_check.
+        "load balancer ${uuid2str(lb._uuid)}"] :-
+    LBVIP[lbvip@&LBVIP{.lb = lb}],
+    default_protocol(lb.protocol) == "sctp",
+    Some{var health_check} = lbvip.health_check,
+    var lbvipbackend = FlatMap(lbvip.backends),
+    Some{var svc_monitor} = lbvipbackend.svc_monitor.
 
 /*
  * BFD table.

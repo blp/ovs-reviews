@@ -20,6 +20,7 @@ import lrouter
 import multicast
 import helpers
 import ipam
+import vec
 
 function is_enabled(lsp: nb::Logical_Switch_Port): bool { is_enabled(lsp.enabled) }
 function is_enabled(lsp: Ref<nb::Logical_Switch_Port>): bool { lsp.deref().is_enabled() }
@@ -307,10 +308,13 @@ relation &LBVIP(
     backend_ips: string,
     health_check: Option<Ref<nb::Load_Balancer_Health_Check>>,
     vip_addr: v46_ip,
-    vip_port: bit<16>)
-&LBVIP(lb, vip_key, backend_ips, health_check, vip_addr, vip_port) :-
+    vip_port: bit<16>,
+    backends: Vec<lb_vip_backend>)
+&LBVIP(lb, vip_key, backend_ips, health_check, vip_addr, vip_port, backends) :-
     LBVIP1(lb, vip_key, backend_ips, health_check),
-    Some{(var vip_addr, var vip_port)} = ip_address_and_port_from_lb_key(vip_key).
+    Some{(var vip_addr, var vip_port)} = ip_address_and_port_from_lb_key(vip_key),
+    var backends = backend_ips.split(",").filter_map(
+        |ip| parse_vip_backend(ip, lb.ip_port_mappings)).
 
 typedef svc_monitor = SvcMonitor{
     port_name: string,          // Might name a switch or router port.
@@ -323,11 +327,18 @@ typedef svc_monitor = SvcMonitor{
  * sometimes have no backends and there is some significance to that.
  * In cases that are really per-LBVIP, instead of per-LBVIPBackend,
  * process the LBVIPs directly. */
-relation &LBVIPBackend(
-    lbvip: Ref<LBVIP>,
+typedef lb_vip_backend = LBVIPBackend{
     ip: v46_ip,
     port: bit<16>,
-    svc_monitor: Option<svc_monitor>)
+    svc_monitor: Option<svc_monitor>}
+
+function parse_vip_backend(backend_ip: string,
+                           mappings: Map<string,string>): Option<lb_vip_backend> {
+    match (ip_address_and_port_from_lb_key(backend_ip)) {
+        Some{(ip, port)} -> Some{LBVIPBackend{ip, port, parse_ip_port_mapping(mappings, ip)}},
+        _ -> None
+    }
+}
 
 function parse_ip_port_mapping(mappings: Map<string,string>, ip: v46_ip)
     : Option<svc_monitor> {
@@ -348,15 +359,6 @@ function parse_ip_port_mapping(mappings: Map<string,string>, ip: v46_ip)
     return None
 }
 
-&LBVIPBackend(.lbvip = lbvip,
-              .ip = ip,
-              .port = port,
-              .svc_monitor = svc_monitor) :-
-    LBVIP[lbvip],
-    var backend = FlatMap(string_split(lbvip.backend_ips, ",")),
-    Some{(var ip, var port)} = ip_address_and_port_from_lb_key(backend),
-    (var svc_monitor) = parse_ip_port_mapping(lbvip.lb.ip_port_mappings, ip).
-
 function is_online(status: Option<string>): bool = {
     match (status) {
         Some{s} -> s == "online",
@@ -369,30 +371,50 @@ function default_protocol(protocol: Option<string>): string = {
         None -> "tcp"
     }
 }
-relation &LBVIPBackendStatus(
-    port: bit<16>,
-    ip: v46_ip,
-    protocol: string,
-    logical_port: string,
+
+relation &LBVIPWithStatus(
+    lb: Ref<nb::Load_Balancer>,
+    vip_key: string,
+    backend_ips: string,
+    health_check: Option<Ref<nb::Load_Balancer_Health_Check>>,
+    vip_addr: v46_ip,
+    vip_port: bit<16>,
+    backends: Map<lb_vip_backend, bool>)
+&LBVIPWithStatus(lb, vip_key, backend_ips, health_check, vip_addr, vip_port, map_empty()) :-
+    &LBVIP(lb, vip_key, backend_ips, health_check, vip_addr, vip_port, vec_empty()).
+&LBVIPWithStatus(lb, vip_key, backend_ips, health_check, vip_addr, vip_port, backends_with_status) :-
+    &LBVIP(lb, vip_key, backend_ips, health_check, vip_addr, vip_port, backends),
+    var backend = FlatMap(backends),
+    LBVIPBackendStatus(lbvip, backend, up),
+    var backends_with_status = ((backend, up)).group_by((lb, vip_key, backend_ips, health_check,
+                                                         vip_addr, vip_port)).to_map().
+
+/* Maps from a load-balancer virtual IP backend to whether it's up or not.
+ *
+ * Only some backends have health checking enabled. The ones that don't
+ * are always considered to be up. */
+relation LBVIPBackendStatus0(
+    lbvip: Ref<LBVIP>,
+    backend: lb_vip_backend,
     up: bool)
-&LBVIPBackendStatus(port, ip, protocol, logical_port, up) :-
-    sm in sb::Service_Monitor(),
-    var port = sm.port as bit<16>,
-    Some{var ip} = ip46_parse(sm.ip),
-    var protocol = default_protocol(sm.protocol),
-    var logical_port = sm.logical_port,
-    var up = is_online(sm.status).
-&LBVIPBackendStatus(port, ip, protocol, logical_port, true) :-
-    LBVIPBackend[lbvipbackend],
-    var port = lbvipbackend.port as bit<16>,
-    var ip = lbvipbackend.ip,
-    var protocol = default_protocol(lbvipbackend.lbvip.lb.protocol),
-    Some{var svc_monitor} = lbvipbackend.svc_monitor,
-    var logical_port = svc_monitor.port_name,
-    not sb::Service_Monitor(.port = port as bit<64>,
-                           .ip = "${ip}",
-                           .protocol = Some{protocol},
-                           .logical_port = logical_port).
+LBVIPBackendStatus0(lbvip, backend, is_online(sm.status)) :-
+    LBVIP[lbvip@&LBVIP{.lb = lb}],
+    var backend = FlatMap(lbvip.backends),
+    Some{var svc_monitor} = backend.svc_monitor,
+    sm in sb::Service_Monitor(.port = backend.port as integer),
+    ip46_parse(sm.ip) == Some{backend.ip},
+    svc_monitor.port_name == sm.logical_port,
+    default_protocol(lb.protocol) == default_protocol(sm.protocol).
+
+relation LBVIPBackendStatus(
+    lbvip: Ref<LBVIP>,
+    backend: lb_vip_backend,
+    up: bool)
+LBVIPBackendStatus(lbvip, backend, up) :- LBVIPBackendStatus0(lbvip, backend, up).
+LBVIPBackendStatus(lbvip, backend, true) :-
+    LBVIP[lbvip@&LBVIP{.lb = lb}],
+    var backend = FlatMap(lbvip.backends),
+    not LBVIPBackendStatus0(lbvip, backend, _).
 
 /* SwitchPortDHCPv4Options: many-to-one relation between logical switches and DHCPv4 options */
 relation SwitchPortDHCPv4Options(
