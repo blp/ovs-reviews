@@ -24154,8 +24154,8 @@ OVS_WAIT_UNTIL([test `ovs-vsctl get Interface lsp2 external_ids:ovn-installed` =
 AS_BOX([ovn-controller should not reset Port_Binding.up without northd])
 # Pause northd and clear the "up" field to simulate older ovn-northd
 # versions writing to the Southbound DB.
-as northd ovn-appctl -t ovn-northd pause
-as northd-backup ovn-appctl -t ovn-northd pause
+as northd ovn-appctl -t NORTHD_TYPE pause
+as northd-backup ovn-appctl -t NORTHD_TYPE pause
 
 as hv1 ovn-appctl -t ovn-controller debug/pause
 check ovn-sbctl clear Port_Binding lsp1 up
@@ -24170,8 +24170,8 @@ check_column "" Port_Binding up logical_port=lsp1
 
 # Once northd should explicitly set the Port_Binding.up field to 'false' and
 # ovn-controller sets it to 'true' as soon as the update is processed.
-as northd ovn-appctl -t ovn-northd resume
-as northd-backup ovn-appctl -t ovn-northd resume
+as northd ovn-appctl -t NORTHD_TYPE resume
+as northd-backup ovn-appctl -t NORTHD_TYPE resume
 wait_column "true" Port_Binding up logical_port=lsp1
 wait_column "true" nb:Logical_Switch_Port up name=lsp1
 
