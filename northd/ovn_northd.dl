@@ -2890,7 +2890,7 @@ function build_lb_vip_actions(lbvip: Ref<LBVIPWithStatus>,
     for (pair in lbvip.backends) {
         (var backend, var up) = pair;
         if (up) {
-            up_backends.insert("${backend.ip}:${backend.port}")
+            up_backends.insert("${backend.ip.to_bracketed_string()}:${backend.port}")
         }
     };
 
@@ -4004,7 +4004,7 @@ UniqueFlow[Flow{.logical_datapath = sw.ls._uuid,
                 .__match          = __match,
                 .actions          = actions,
                 .external_ids     = stage_hint(sp.lsp._uuid)}] :-
-    sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
+    sp in &SwitchPort(.sw = sw@&Switch{.has_non_router_port = true}, .peer = Some{rp}),
     rp.is_enabled(),
     var eth_src_set = {
         var eth_src_set = set_singleton("${rp.networks.ea}");
@@ -7714,46 +7714,58 @@ sb::Out_BFD(._uuid = hash,
             .detect_mult = nb.detect_mult.unwrap_or(bFD_DEF_DETECT_MULT()),
             .status = status,
             .external_ids = map_empty(),
-            .options = map_empty()) :-
+            .options = ["nb_status" -> nb.status.unwrap_or(""),
+                        "sb_status" -> sb_status.unwrap_or(""),
+                        "referenced" -> referenced.to_string()]) :-
     nb in nb::BFD(),
     SrcPortAllocation(nb.logical_port, nb.dst_ip, src_port),
-    var nb_status = nb.status.unwrap_or("admin_down"),
     SouthboundBFDStatus(nb.logical_port, nb.dst_ip, sb_status),
-    var status = match (sb_status) {
-        None -> nb_status,
-        Some{s} -> if (nb_status == s) {
-                       s
-                   } else if (nb_status == "admin_down" or s == "admin_down") {
-                       nb_status
-                   } else {
-                       s
-                   }
-    },
+    BFDReferenced(nb._uuid, referenced),
+    var status = bfd_new_status(referenced, nb.status, sb_status).1,
     var hash = hash128((nb.logical_port, nb.dst_ip)).
 
-relation BFDReferenced(bfd_uuid: uuid)
-BFDReferenced(bfd_uuid) :-
-    &StaticRoute(.lrsr = nb::Logical_Router_Static_Route{.bfd = Some{bfd_uuid}, .nexthop = nexthop}),
+relation BFDReferenced0(bfd_uuid: uuid)
+BFDReferenced0(bfd_uuid) :-
+    nb::Logical_Router_Static_Route(.bfd = Some{bfd_uuid}, .nexthop = nexthop),
     nb::BFD(._uuid = bfd_uuid, .dst_ip = nexthop).
 
-nb::Out_BFD(bfd_uuid, Some{"admin_down"}) :-
+relation BFDReferenced(bfd_uuid: uuid, referenced: bool)
+BFDReferenced(bfd_uuid, true) :- BFDReferenced0(bfd_uuid).
+BFDReferenced(bfd_uuid, false) :-
     nb::BFD(._uuid = bfd_uuid),
-    not BFDReferenced(bfd_uuid).
+    not BFDReferenced0(bfd_uuid).
+
+// Given the following:
+//    - 'referenced': whether a BFD object is referenced by a route
+//    - 'nb_status0': 'status' in the existing nb::BFD record
+//    - 'sb_status0': 'status' in the existing sb::BFD record (None, if none exists yet)
+// computes and returns (nb_status, sb_status), which are the values to use next in these records
+function bfd_new_status(referenced: bool,
+                        nb_status0: Option<string>,
+                        sb_status0: Option<string>): (string, string) {
+    var nb_status = nb_status0.unwrap_or("admin_down");
+    match (sb_status0) {
+        Some{sb_status} -> if (nb_status != "admin_down" and sb_status != "admin_down") {
+                               nb_status = sb_status
+                           },
+        _ -> ()
+    };
+    var sb_status = nb_status;
+    if (referenced) {
+        if (nb_status == "admin_down") {
+            nb_status = "down"
+        }
+    } else {
+        nb_status = "admin_down"
+    };
+    warn("nb_status=${nb_status} sb_status=${sb_status} referenced=${referenced}");
+    (nb_status, sb_status)
+}
 nb::Out_BFD(bfd_uuid, Some{status}) :-
     nb in nb::BFD(._uuid = bfd_uuid),
-    BFDReferenced(bfd_uuid),
-    var nb_status = nb.status.unwrap_or("admin_down"),
+    BFDReferenced(bfd_uuid, referenced),
     SouthboundBFDStatus(nb.logical_port, nb.dst_ip, sb_status),
-    var status = match (sb_status) {
-        None -> nb_status,
-        Some{s} -> if (nb_status == "admin_down") {
-                       "down"
-                   } else if (s != nb_status and s != "admin_down" and nb_status != "admin_down") {
-                       s
-                   } else {
-                       nb_status
-                   }
-    }.
+    var status = bfd_new_status(referenced, nb.status, sb_status).0.
 
 /*
  * Logical router BFD flows
