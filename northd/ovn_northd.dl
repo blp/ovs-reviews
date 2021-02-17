@@ -22,6 +22,7 @@ import lrouter
 import multicast
 import helpers
 import ipam
+import vec
 
 index Logical_Flow_Index() on sb::Out_Logical_Flow()
 
@@ -231,7 +232,7 @@ OutProxy_Port_Binding(._uuid              = lsp._uuid,
              and is_some(l3dgw_port)) or
             Some{rport.lrp} == l3dgw_port or
             (is_some(rport.router.lr.options.get("chassis")) and
-             not sw.localnet_port_names.is_empty())) {
+             not sw.localnet_ports.is_empty())) {
             false -> set_empty(),
             true -> set_singleton(get_garp_nat_addresses(deref(rport)))
         },
@@ -3520,8 +3521,8 @@ function json_string_escape_vec(names: Vec<string>): string
  */
 function match_dhcp_input(lsp: Ref<SwitchPort>): (string, string) =
 {
-    if (lsp.lsp.__type == "external" and not lsp.sw.localnet_port_names.is_empty()) {
-        ("inport == " ++ json_string_escape_vec(lsp.sw.localnet_port_names) ++ " && ",
+    if (lsp.lsp.__type == "external" and not lsp.sw.localnet_ports.is_empty()) {
+        ("inport == " ++ json_string_escape_vec(lsp.sw.localnet_ports.map(|x| x.1)) ++ " && ",
          " && is_chassis_resident(${lsp.json_name})")
     } else {
         ("inport == ${lsp.json_name} && ", "")
@@ -3537,7 +3538,7 @@ for (lsp in &SwitchPort
          /* If it's an external port and there is no localnet port
           * and if it doesn't belong to an HA chassis group ignore it. */
          and (lsp.lsp.__type != "external"
-              or (not lsp.sw.localnet_port_names.is_empty()
+              or (not lsp.sw.localnet_ports.is_empty()
                   and is_some(lsp.lsp.ha_chassis_group))))
 {
     for (lps in LogicalSwitchPort(.lport = lsp.lsp._uuid, .lswitch = lsuuid)) {
@@ -3893,7 +3894,7 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = &sw)) {
 Flow(.logical_datapath = sp.sw.ls._uuid,
      .stage            = switch_stage(IN, EXTERNAL_PORT),
      .priority         = 100,
-     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+     .__match          = ("inport == ${json_string_escape(localnet_port.1)} && "
                           "eth.src == ${lp_addr.ea} && "
                           "!is_chassis_resident(${sp.json_name}) && "
                           "arp.tpa == ${rp_addr.addr} && arp.op == 1"),
@@ -3901,7 +3902,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var localnet_port_name = FlatMap(sp.sw.localnet_port_names),
+    var localnet_port = FlatMap(sp.sw.localnet_ports),
     var lp_addr = FlatMap(sp.static_addresses),
     rp in &SwitchPort(.sw = sp.sw),
     rp.lsp.__type == "router",
@@ -3909,7 +3910,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 Flow(.logical_datapath = sp.sw.ls._uuid,
      .stage            = switch_stage(IN, EXTERNAL_PORT),
      .priority         = 100,
-     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+     .__match          = ("inport == ${json_string_escape(localnet_port.1)} && "
                           "eth.src == ${lp_addr.ea} && "
                           "!is_chassis_resident(${sp.json_name}) && "
                           "nd_ns && ip6.dst == {${rp_addr.addr}, ${ipv6_netaddr_solicited_node(rp_addr)}} && "
@@ -3918,7 +3919,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var localnet_port_name = FlatMap(sp.sw.localnet_port_names),
+    var localnet_port = FlatMap(sp.sw.localnet_ports),
     var lp_addr = FlatMap(sp.static_addresses),
     rp in &SwitchPort(.sw = sp.sw),
     rp.lsp.__type == "router",
@@ -3926,7 +3927,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
 Flow(.logical_datapath = sp.sw.ls._uuid,
      .stage            = switch_stage(IN, EXTERNAL_PORT),
      .priority         = 100,
-     .__match          = ("inport == ${json_string_escape(localnet_port_name)} && "
+     .__match          = ("inport == ${json_string_escape(localnet_port.1)} && "
                           "eth.src == ${lp_addr.ea} && "
                           "eth.dst == ${ea} && "
                           "!is_chassis_resident(${sp.json_name})"),
@@ -3934,7 +3935,7 @@ Flow(.logical_datapath = sp.sw.ls._uuid,
      .external_ids     = stage_hint(sp.lsp._uuid)) :-
     sp in &SwitchPort(),
     sp.lsp.__type == "external",
-    var localnet_port_name = FlatMap(sp.sw.localnet_port_names),
+    var localnet_port = FlatMap(sp.sw.localnet_ports),
     var lp_addr = FlatMap(sp.static_addresses),
     rp in &SwitchPort(.sw = sp.sw),
     rp.lsp.__type == "router",
@@ -4147,7 +4148,7 @@ for (&SwitchPort(.lsp = lsp,
 {
     Some{var mac} = scan_eth_addr(lrp.mac) in {
         var add_chassis_resident_check =
-            not sw.localnet_port_names.is_empty() and
+            not sw.localnet_ports.is_empty() and
             (/* The peer of this port represents a distributed
               * gateway port. The destination lookup flow for the
               * router's distributed gateway port MAC address should
@@ -4664,7 +4665,7 @@ AddChassisResidentCheck_(lrp._uuid, res) :-
     &SwitchPort(.peer = Some{&RouterPort{.lrp = lrp, .router = &router, .is_redirect = is_redirect}},
                 .sw = sw),
     is_some(router.l3dgw_port),
-    not sw.localnet_port_names.is_empty(),
+    not sw.localnet_ports.is_empty(),
     var res = if (is_redirect) {
         /* Traffic with eth.src = l3dgw_port->lrp_networks.ea
          * should only be sent from the "redirect-chassis", so that
@@ -6448,7 +6449,7 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
                     "outport = ${mc_static}; "
                     "ip.ttl--; "
                     "next; "
-                "};"
+                "}; "
             } else {
                 ""
             }
@@ -6458,9 +6459,9 @@ for (IgmpRouterMulticastGroup(address, &rtr, ports)) {
         UniqueFlow[Flow{.logical_datapath = rtr.lr._uuid,
                         .stage            = router_stage(IN, IP_ROUTING),
                         .priority         = 500,
-                        .__match          = "${ipX} && ${ipX}.dst == ${address}",
+                        .__match          = "${ipX} && ${ipX}.dst == ${address} ",
                         .actions          =
-                           "${static_act} outport = ${json_string_escape(address)}; "
+                           "${static_act}outport = ${json_string_escape(address)}; "
                            "ip.ttl--; next;",
                         .external_ids     = map_empty()}]
     }

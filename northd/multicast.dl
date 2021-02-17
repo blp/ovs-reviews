@@ -200,13 +200,15 @@ relation IgmpSwitchGroupPort(
 )
 
 IgmpSwitchGroupPort(address, switch, lsp_uuid) :-
-    sb::IGMP_Group(.address = address, .datapath = igmp_dp_set,
-                  .ports = pb_ports),
+    sb::IGMP_Group(.address = address, .ports = pb_ports),
     var pb_port_uuid = FlatMap(pb_ports),
     sb::Port_Binding(._uuid = pb_port_uuid, .logical_port = lsp_name),
     &SwitchPort(
         .lsp = nb::Logical_Switch_Port{._uuid = lsp_uuid, .name = lsp_name},
         .sw = switch).
+IgmpSwitchGroupPort(address, switch, localnet_port.0) :-
+    IgmpSwitchGroupPort(address, switch, _),
+    var localnet_port = FlatMap(switch.localnet_ports).
 
 /* Aggregated IGMP group: merges all IgmpSwitchGroupPort for a given
  * address-switch tuple from all chassis.

@@ -17192,9 +17192,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- IGMP snoop/querier/relay])
-
-dnl This test has problems with ovn-northd-ddlog.
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
+AT_KEYWORDS([snoop query querier relay])
 
 ovn_start
 
@@ -17703,6 +17701,12 @@ send_igmp_v3_report hv1-vif4 hv1 \
 wait_row_count IGMP_Group 3 address=239.0.1.68
 check ovn-nbctl --wait=hv sync
 
+ovn-sbctl dump-flows > sbflows4
+AT_CAPTURE_FILE([sbflows4])
+
+ovn-sbctl -f csv --columns=datapath,name,ports,tunnel_key list Multicast_Group > mcgroups4
+AT_CAPTURE_FILE([mcgroups4])
+
 AS_BOX([IGMP traffic test 7])
 # Send traffic from sw3 and make sure it is relayed by rtr
 # to ports that joined.
@@ -17870,9 +17874,7 @@ AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- MLD snoop/querier/relay])
-
-dnl This test has problems with ovn-northd-ddlog.
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
+AT_KEYWORDS([snoop query querier relay])
 
 ovn_start
 
