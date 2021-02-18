@@ -28,7 +28,8 @@ ddlog_sources = \
 	northd/multicast.dl \
 	northd/ovn.dl \
 	northd/ovn.rs \
-	northd/helpers.dl \
+	northd/helpers.dl
+ddlog_nodist_source = \
 	northd/OVN_Northbound.dl \
 	northd/OVN_Southbound.dl
 
@@ -78,7 +79,7 @@ RUSTFLAGS = \
 	$$LIBOVN_DEPS \
 	-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)
 
-northd/ddlog.stamp: $(ddlog_sources)
+northd/ddlog.stamp: $(ddlog_sources) $(ddlog_nodist_sources)
 	$(AM_V_GEN)$(DDLOG) -i $< -o $(builddir)/northd $(DDLOGFLAGS)
 	$(AM_V_at)touch $@
 
