@@ -1299,6 +1299,14 @@ sb::Out_RBAC_Permission (
     .update         = set_singleton("status")
 ).
 
+sb::Out_RBAC_Permission (
+    ._uuid          = 128'h5256f48e_172c_4d85_8f04_e199fa817633,
+    .table          = "IGMP_Group",
+    .authorization  = set_singleton(""),
+    .insert_delete  = true,
+    .update         = ["address", "chassis", "datapath", "ports"].to_set()
+).
+
 /*
  * RBAC_Role: fixed
  */
