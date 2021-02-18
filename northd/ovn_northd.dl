@@ -2427,8 +2427,14 @@ var has_stateful = sw.has_stateful_acl or sw.has_lb_vip in
 input relation AclHintStages[Stage]
 AclHintStages[switch_stage(IN, ACL_HINT)].
 AclHintStages[switch_stage(OUT, ACL_HINT)].
-for (&Switch(.ls = ls)) {
+for (sw in &Switch(.ls = ls)) {
     for (AclHintStages[stage]) {
+        /* In any case, advance to the next stage. */
+        Flow(ls._uuid, stage, 0, "1", "next;", map_empty())
+    };
+
+    for (AclHintStages[stage])
+    if (sw.has_stateful_acl or sw.has_lb_vip) {
         /* New, not already established connections, may hit either allow
          * or drop ACLs. For allow ACLs, the connection must also be committed
          * to conntrack so we set REGBIT_ACL_HINT_ALLOW_NEW.
@@ -2486,10 +2492,7 @@ for (&Switch(.ls = ls)) {
          */
         Flow(ls._uuid, stage, 1, "ct.est && ct_label.blocked == 0",
              "${rEGBIT_ACL_HINT_BLOCK()} = 1; "
-             "next;", map_empty());
-
-        /* In any case, advance to the next stage. */
-        Flow(ls._uuid, stage, 0, "1", "next;", map_empty())
+             "next;", map_empty())
     }
 }
 
