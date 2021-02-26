@@ -462,7 +462,7 @@ SwitchPortNewMACDynAddress(lsp._uuid, addr) :-
 
 /*
  * Dynamic IPv6 address allocation.
- * `needs_dynamic_ipv6address` -> in6_generate_eui64(mac, ipv6_prefix)
+ * `needs_dynamic_ipv6address` -> mac.to_ipv6_eui64(ipv6_prefix)
  */
 relation SwitchPortNewDynamicAddress(port: Ref<SwitchPort>, address: Option<lport_addresses>)
 
@@ -479,7 +479,7 @@ SwitchPortNewDynamicAddress(port, lport_address) :-
     SwitchPortNewIPv4DynAddress(lsp._uuid, opt_ip4_addr),
     var ip6_addr = match ((static_dynamic_ipv6, needs_dynamic_ipv6address, sw.ipv6_prefix)) {
         (Some{ipv6}, _, _) -> " ${ipv6}",
-        (_, true, Some{prefix}) -> " ${in6_generate_eui64(mac_addr, prefix)}",
+        (_, true, Some{prefix}) -> " ${mac_addr.to_ipv6_eui64(prefix)}",
         _ -> ""
     },
     var ip4_addr = match (opt_ip4_addr) {

@@ -242,8 +242,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
                         None
                     },
                     Right{(subnet, mask)} -> {
-                        if (ip_count_cidr_bits(mask) == Some{32}
-                            or not ip_is_cidr(mask)) {
+                        if (mask.cidr_bits() == Some{32} or not mask.is_cidr()) {
                             warn("bad 'subnet' ${subnet_str}");
                             None
                         } else {

@@ -77,7 +77,7 @@ function get_int_def(m: Map<string, string>, k: string, def: integer): integer =
     m.get(k).and_then(parse_dec_u64).unwrap_or(def)
 }
 
-function clamp(x: integer, range: (integer, integer)): integer {
+function clamp(x: 'A, range: ('A, 'A)): 'A {
     (var min, var max) = range;
     if (x < min) {
         min

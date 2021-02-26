@@ -134,13 +134,13 @@ impl in6_addr_c {
     }
 }
 
-pub fn in6_generate_lla(ea: &eth_addr) -> in6_addr {
+pub fn to_ipv6_lla(ea: &eth_addr) -> in6_addr {
     let mut addr: in6_addr_c = Default::default();
     unsafe {ovs::in6_generate_lla(ea.clone(), &mut addr as *mut in6_addr_c)};
     addr.to_ddlog()
 }
 
-pub fn in6_generate_eui64(ea: &eth_addr, prefix: &in6_addr) -> in6_addr {
+pub fn to_ipv6_eui64(ea: &eth_addr, prefix: &in6_addr) -> in6_addr {
     let prefix = in6_addr_c::from_ddlog(prefix);
     let mut addr: in6_addr_c = Default::default();
     unsafe {ovs::in6_generate_eui64(ea.clone(),
@@ -149,22 +149,7 @@ pub fn in6_generate_eui64(ea: &eth_addr, prefix: &in6_addr) -> in6_addr {
     addr.to_ddlog()
 }
 
-pub fn in6_is_lla(addr: &in6_addr) -> bool {
-    let addr = in6_addr_c::from_ddlog(addr);
-    unsafe {ovs::in6_is_lla(&addr as *const in6_addr_c)}
-}
-
-pub fn in6_addr_solicited_node(ip6: &in6_addr) -> in6_addr
-{
-    let ip6 = in6_addr_c::from_ddlog(ip6);
-    let mut res: in6_addr_c = Default::default();
-    unsafe {
-        ovs::in6_addr_solicited_node(&mut res as *mut in6_addr_c, &ip6 as *const in6_addr_c);
-    }
-    res.to_ddlog()
-}
-
-pub fn ipv6_string_mapped(addr: &in6_addr) -> String {
+pub fn string_mapped(addr: &in6_addr) -> String {
     let addr = in6_addr_c::from_ddlog(addr);
     let mut addr_str = [0 as i8; INET6_ADDRSTRLEN];
     unsafe {
@@ -281,13 +266,13 @@ pub fn ipv6_parse(s: &String) -> ddlog_std::Option<in6_addr>
     }
 }
 
-pub fn ipv6_is_routable_multicast(a: &in6_addr) -> bool
+pub fn is_routable_multicast(a: &in6_addr) -> bool
 {
     let a = in6_addr_c::from_ddlog(a);
     unsafe{ovn_c::ipv6_addr_is_routable_multicast(&a as *const in6_addr_c)}
 }
 
-pub fn ipv6_multicast_to_ethernet(ip6: &in6_addr) -> eth_addr
+pub fn multicast_to_ethernet(ip6: &in6_addr) -> eth_addr
 {
     let ip6 = in6_addr_c::from_ddlog(ip6);
     let mut eth: eth_addr = Default::default();
@@ -722,8 +707,6 @@ mod ovs {
         pub fn eth_addr_mark_random(ea: *mut eth_addr);
         pub fn in6_generate_eui64(ea: eth_addr, prefix: *const in6_addr_c, lla: *mut in6_addr_c);
         pub fn in6_generate_lla(ea: eth_addr, lla: *mut in6_addr_c);
-        pub fn in6_is_lla(addr: *const in6_addr_c) -> bool;
-        pub fn in6_addr_solicited_node(addr: *mut in6_addr_c, ip6: *const in6_addr_c);
 
         // include/openvswitch/json.h
         pub fn json_string_escape(str: *const raw::c_char, out: *mut ovs_ds);
