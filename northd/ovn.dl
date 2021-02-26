@@ -45,39 +45,40 @@ function pseudorandom_mac(seed: uuid, variant: bit<16>) : bit<64> = {
  * IPv4 addresses
  */
 
-extern type in_addr
+typedef in_addr = InAddr {
+    a: bit<32>                  // In host byte order.
+}
 
 function to_string(ip: in_addr): string = {
-    var x = iptohl(ip);
-    "${x >> 24}.${(x >> 16) & 'hff}.${(x >> 8) & 'hff}.${x & 'hff}"
+    "${ip.a >> 24}.${(ip.a >> 16) & 'hff}.${(ip.a >> 8) & 'hff}.${ip.a & 'hff}"
 }
 
 function ip_is_cidr(netmask: in_addr): bool {
-    var x = ~iptohl(netmask);
+    var x = ~netmask.a;
     (x & (x + 1)) == 0
 }
 function ip_is_local_multicast(ip: in_addr): bool {
-    (iptohl(ip) & 32'hffffff00) == 32'he0000000
+    (ip.a & 32'hffffff00) == 32'he0000000
 }
 
 function ip_create_mask(plen: bit<32>): in_addr {
-    hltoip((64'h00000000ffffffff << (32 - plen))[31:0])
+    InAddr{(64'h00000000ffffffff << (32 - plen))[31:0]}
 }
 
 function ip_bitxor(a: in_addr, b: in_addr): in_addr {
-    hltoip(iptohl(a) ^ iptohl(b))
+    InAddr{a.a ^ b.a}
 }
 
 function ip_bitand(a: in_addr, b: in_addr): in_addr {
-    hltoip(iptohl(a) & iptohl(b))
+    InAddr{a.a & b.a}
 }
 
 function ip_network(addr: in_addr, mask: in_addr): in_addr {
-    hltoip(iptohl(addr) & iptohl(mask))
+    InAddr{addr.a & mask.a}
 }
 
 function ip_host(addr: in_addr, mask: in_addr): in_addr {
-    hltoip(iptohl(addr) & ~iptohl(mask))
+    InAddr{addr.a & ~mask.a}
 }
 
 function ip_host_is_zero(addr: in_addr, mask: in_addr): bool {
@@ -85,11 +86,11 @@ function ip_host_is_zero(addr: in_addr, mask: in_addr): bool {
 }
 
 function ip_is_zero(a: in_addr): bool {
-    iptohl(a) == 0
+    a.a == 0
 }
 
 function ip_bcast(addr: in_addr, mask: in_addr): in_addr {
-   hltoip(iptohl(addr) | ~iptohl(mask))
+    InAddr{addr.a | ~mask.a}
 }
 
 extern function ip_parse(s: string): Option<in_addr>
@@ -100,11 +101,9 @@ extern function ip_count_cidr_bits(ip: in_addr): Option<bit<8>>
 /* True if both 'ips' are in the same network as defined by netmask 'mask',
  * false otherwise. */
 function ip_same_network(ips: (in_addr, in_addr), mask: in_addr): bool {
-    ((iptohl(ips.0) ^ iptohl(ips.1)) & iptohl(mask)) == 0
+    ((ips.0.a ^ ips.1.a) & mask.a) == 0
 }
 
-extern function iptohl(addr: in_addr): bit<32>
-extern function hltoip(addr: bit<32>): in_addr
 extern function scan_static_dynamic_ip(s: string): Option<in_addr>
 
 /*

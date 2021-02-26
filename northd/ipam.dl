@@ -112,10 +112,10 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
                 Right{ranges} -> {
                     for (rng in ranges) {
                         (var ip_start, var ip_end) = rng;
-                        var start = iptohl(ip_start);
+                        var start = ip_start.a;
                         var end = match (ip_end) {
                             None -> start,
-                            Some{ip} -> iptohl(ip)
+                            Some{ip} -> ip.a
                         };
                         start = max(start_ipv4, start);
                         end = min(start_ipv4 + total_ipv4s - 1, end);
@@ -147,7 +147,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
     var addrs = {
         var addrs = set_empty();
         for (addr in lport_addrs.ipv4_addrs) {
-            var addr_host_endian = iptohl(addr.addr);
+            var addr_host_endian = addr.addr.a;
             if (addr_host_endian >= start_ipv4 and addr_host_endian < start_ipv4 + total_ipv4s) {
                 addrs.insert(addr_host_endian)
             } else ()
@@ -166,7 +166,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
     var addrs = {
         var addrs = set_empty();
         for (addr in rport.networks.ipv4_addrs) {
-            var addr_host_endian = iptohl(addr.addr);
+            var addr_host_endian = addr.addr.a;
             if (addr_host_endian >= start_ipv4 and addr_host_endian < start_ipv4 + total_ipv4s) {
                 addrs.insert(addr_host_endian)
             } else ()
@@ -177,7 +177,7 @@ SwitchIPv4ReservedAddress(.lswitch = ls._uuid,
 
 /* Add reserved address group (5) */
 SwitchIPv4ReservedAddress(.lswitch = sw.ls._uuid,
-                          .addr    = iptohl(ip_addr)) :-
+                          .addr    = ip_addr.a) :-
     &SwitchPort(.sw = &sw, .lsp = lsp, .static_dynamic_ipv4 = Some{ip_addr}).
 
 /* Aggregate all reserved addresses for each switch. */
@@ -236,7 +236,7 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
                             need_addr.push(deref(port).lsp._uuid)
                         },
                         Some{addr} -> {
-                            var haddr = iptohl(addr.addr);
+                            var haddr = addr.addr.a;
                             if (haddr < start_ipv4 or haddr >= start_ipv4 + total_ipv4s) {
                                 need_addr.push(deref(port).lsp._uuid)
                             } else if (used_addrs.contains(haddr)) {
@@ -257,7 +257,7 @@ SwitchPortAllocatedIPv4DynAddress(lsport, dyn_addr) :-
     },
     var port_address = FlatMap(dyn_addresses),
     (var lsport, var dyn_addr_bits) = port_address,
-    var dyn_addr = dyn_addr_bits.map(hltoip).
+    var dyn_addr = dyn_addr_bits.map(|x| InAddr{x}).
 
 /* Compute new dynamic IPv4 address assignment:
  * - port does not need dynamic IP - use static_dynamic_ip if any
@@ -278,7 +278,7 @@ SwitchPortNewIPv4DynAddress(lsp._uuid, ip_addr) :-
                 match (sw.subnet) {
                     None -> { None },
                     Some{(_, _, start_ipv4, total_ipv4s)} -> {
-                        var haddr = iptohl(addr);
+                        var haddr = addr.a;
                         if (haddr < start_ipv4 or haddr >= start_ipv4 + total_ipv4s) {
                             /* new static ip is not valid */
                             None
@@ -380,7 +380,7 @@ SwitchPortDuplicateMACAddress(dup_addrs) :-
                 None       -> Some { mac_prefix | 1 },
                 Some{addr} -> {
                     /* The tentative MAC's suffix will be in the interval (1, 0xfffffe). */
-                    var mac_suffix: bit<24> = iptohl(addr)[23:0] % ((mAC_ADDR_SPACE() - 1)[23:0]) + 1;
+                    var mac_suffix: bit<24> = addr.a[23:0] % ((mAC_ADDR_SPACE() - 1)[23:0]) + 1;
                     Some{ mac_prefix | (40'd0 ++ mac_suffix) }
                 }
             };

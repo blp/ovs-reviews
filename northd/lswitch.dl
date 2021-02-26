@@ -247,7 +247,7 @@ function ipv6_parse_prefix(s: string): Option<in6_addr> {
                             warn("bad 'subnet' ${subnet_str}");
                             None
                         } else {
-                            Some{(subnet, mask, (iptohl(subnet) & iptohl(mask)) + 1, ~iptohl(mask))}
+                            Some{(subnet, mask, (subnet.a & mask.a) + 1, ~mask.a)}
                         }
                     }
                 }

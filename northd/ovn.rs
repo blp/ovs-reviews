@@ -335,14 +335,15 @@ pub fn ipv6_multicast_to_ethernet(ip6: &in6_addr) -> eth_addr
     eth
 }
 
-pub type in_addr = u32;
 pub type ovs_be32 = u32;
 
-pub fn iptohl(addr: &in_addr) -> u32 {
-    ddlog_std::ntohl(addr)
-}
-pub fn hltoip(addr: &u32) -> in_addr {
-    ddlog_std::htonl(addr)
+impl in_addr {
+    pub fn from_be32(nl: ovs_be32) -> in_addr {
+        in_addr{a: ddlog_std::ntohl(&nl)}
+    }
+    pub fn to_be32(&self) -> ovs_be32 {
+        ddlog_std::htonl(&self.a)
+    }
 }
 
 pub fn ip_parse_masked(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in_addr, in_addr>>
@@ -356,7 +357,8 @@ pub fn ip_parse_masked(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, mask)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(in_addr::from_be32(ip),
+                                                          in_addr::from_be32(mask))}
         }
     }
 }
@@ -372,7 +374,7 @@ pub fn ip_parse_cidr(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, plen as u32)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(in_addr::from_be32(ip), plen as u32)}
         }
     }
 }
@@ -382,7 +384,7 @@ pub fn ip_parse(s: &String) -> ddlog_std::Option<in_addr>
     unsafe {
         let mut ip: ovs_be32 = 0;
         if (ovs::ip_parse(string2cstr(s).as_ptr(), &mut ip as *mut ovs_be32)) {
-            ddlog_std::Option::Some{x:ip}
+            ddlog_std::Option::Some{x: in_addr::from_be32(ip)}
         } else {
             ddlog_std::Option::None
         }
@@ -392,7 +394,7 @@ pub fn ip_parse(s: &String) -> ddlog_std::Option<in_addr>
 pub fn ip_count_cidr_bits(address: &in_addr) -> ddlog_std::Option<u8> {
     unsafe {
         match (ip_is_cidr(address)) {
-            true => ddlog_std::Option::Some{x: ovs::ip_count_cidr_bits(*address) as u8},
+            true => ddlog_std::Option::Some{x: ovs::ip_count_cidr_bits(address.to_be32()) as u8},
             false => ddlog_std::Option::None
         }
     }
@@ -457,7 +459,11 @@ pub fn scan_static_dynamic_ip(s: &String) -> ddlog_std::Option<in_addr> {
                          &mut ip3 as *mut u8,
                          &mut n) && s.len() == (n as usize)
         {
-            ddlog_std::Option::Some{x: ddlog_std::htonl(&(((ip0 as u32) << 24)  | ((ip1 as u32) << 16) | ((ip2 as u32) << 8) | (ip3 as u32)))}
+            let a0 = (ip0 as u32) << 24;
+            let a1 = (ip1 as u32) << 16;
+            let a2 = (ip2 as u32) << 8;
+            let a3 = ip3 as u32;
+            ddlog_std::Option::Some{x: in_addr{a: a0 | a1 | a2 | a3}}
         } else {
             ddlog_std::Option::None
         }
@@ -618,7 +624,7 @@ impl Default for ipv4_netaddr_c {
 impl ipv4_netaddr_c {
     pub unsafe fn to_ddlog(&self) -> ipv4_netaddr {
         ipv4_netaddr{
-            addr:       self.addr,
+            addr:       in_addr::from_be32(self.addr),
             plen:       self.plen,
         }
     }
