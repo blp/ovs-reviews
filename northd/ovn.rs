@@ -173,16 +173,6 @@ pub fn ipv6_string_mapped(addr: &in6_addr) -> String {
     }
 }
 
-pub fn ipv6_count_cidr_bits(ip6: &in6_addr) -> ddlog_std::Option<u8> {
-    let ip6_c = in6_addr_c::from_ddlog(ip6);
-    unsafe {
-        match (ipv6_is_cidr(&ip6)) {
-            true => ddlog_std::Option::Some{x: ovs::ipv6_count_cidr_bits(&ip6_c as *const in6_addr_c) as u8},
-            false => ddlog_std::Option::None
-        }
-    }
-}
-
 pub fn json_string_escape(s: &String) -> String {
     let mut ds = ovs_ds::new();
     unsafe {
@@ -363,15 +353,6 @@ pub fn ip_parse(s: &String) -> ddlog_std::Option<in_addr>
     }
 }
 
-pub fn ip_count_cidr_bits(address: &in_addr) -> ddlog_std::Option<u8> {
-    unsafe {
-        match (ip_is_cidr(address)) {
-            true => ddlog_std::Option::Some{x: ovs::ip_count_cidr_bits(address.to_be32()) as u8},
-            false => ddlog_std::Option::None
-        }
-    }
-}
-
 pub fn is_dynamic_lsp_address(address: &String) -> bool {
     unsafe {
         ovn_c::is_dynamic_lsp_address(string2cstr(address).as_ptr())
@@ -465,11 +446,6 @@ pub fn ip_address_and_port_from_lb_key(k: &String) ->
         ddlog_std::Option::None
     }
 }
-
-pub fn count_1bits(x: &u64) -> u8 {
-    x.count_ones() as u8
-}
-
 
 pub fn str_to_int(s: &String, base: &u16) -> ddlog_std::Option<u64> {
     let mut i: raw::c_int = 0;
@@ -734,14 +710,12 @@ mod ovs {
         pub fn ipv6_parse_cidr(s: *const raw::c_char, ip: *mut in6_addr_c, plen: *mut raw::c_uint) -> *mut raw::c_char;
         pub fn ipv6_parse(s: *const raw::c_char, ip: *mut in6_addr_c) -> bool;
         pub fn ipv6_mask_is_any(mask: *const in6_addr_c) -> bool;
-        pub fn ipv6_count_cidr_bits(mask: *const in6_addr_c) -> raw::c_int;
         pub fn ipv6_is_cidr(mask: *const in6_addr_c) -> bool;
         pub fn ipv6_is_zero(a: *const in6_addr_c) -> bool;
         pub fn ipv6_multicast_to_ethernet(eth: *mut eth_addr, ip6: *const in6_addr_c);
         pub fn ip_parse_masked(s: *const raw::c_char, ip: *mut ovs_be32, mask: *mut ovs_be32) -> *mut raw::c_char;
         pub fn ip_parse_cidr(s: *const raw::c_char, ip: *mut ovs_be32, plen: *mut raw::c_uint) -> *mut raw::c_char;
         pub fn ip_parse(s: *const raw::c_char, ip: *mut ovs_be32) -> bool;
-        pub fn ip_count_cidr_bits(mask: ovs_be32) -> raw::c_int;
         pub fn eth_addr_from_string(s: *const raw::c_char, ea: *mut eth_addr) -> bool;
         pub fn eth_addr_to_uint64(ea: eth_addr) -> libc::uint64_t;
         pub fn eth_addr_from_uint64(x: libc::uint64_t, ea: *mut eth_addr);

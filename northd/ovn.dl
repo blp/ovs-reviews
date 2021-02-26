@@ -13,7 +13,7 @@
  */
 
 import ovsdb
-
+import bitwise
 
 /* Logical port is enabled if it does not have an enabled flag or the flag is true */
 function is_enabled(s: Option<bool>): bool = {
@@ -93,10 +93,17 @@ function ip_bcast(addr: in_addr, mask: in_addr): in_addr {
     InAddr{addr.a | ~mask.a}
 }
 
+function ip_count_cidr_bits(ip: in_addr): Option<bit<8>> {
+    if (ip_is_cidr(ip)) {
+        Some{32 - ip.a.trailing_zeros() as u8}
+    } else {
+        None
+    }
+}
+
 extern function ip_parse(s: string): Option<in_addr>
 extern function ip_parse_masked(s: string): Either<string/*err*/, (in_addr/*host_ip*/, in_addr/*mask*/)>
 extern function ip_parse_cidr(s: string): Either<string/*err*/, (in_addr/*ip*/, bit<32>/*plen*/)>
-extern function ip_count_cidr_bits(ip: in_addr): Option<bit<8>>
 
 /* True if both 'ips' are in the same network as defined by netmask 'mask',
  * false otherwise. */
@@ -174,11 +181,18 @@ function ipv6_same_network(ips: (in6_addr, in6_addr), mask: in6_addr): bool {
 }
 
 extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
-extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
 
 function ipv6_is_cidr(netmask: in6_addr): bool {
     var x = ~netmask.aaaa;
     (x & (x + 1)) == 0
+}
+
+function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>> {
+    if (ipv6_is_cidr(ip6)) {
+        Some{128 - ip6.aaaa.trailing_zeros() as u8}
+    } else {
+        None
+    }
 }
 
 extern function inet6_ntop(addr: in6_addr): string
@@ -402,9 +416,6 @@ extern function ovn_internal_version(): string
  * C functions imported from OVS
  */
 extern function json_string_escape(s: string): string
-
-/* Returns the number of 1-bits in `x`, between 0 and 64 inclusive */
-extern function count_1bits(x: bit<64>): bit<8>
 
 /* For a 'key' of the form "IP:port" or just "IP", returns
  * (v46_ip, port) tuple. */
