@@ -4734,7 +4734,8 @@ test_ip 33 f00000000033 f00000000013 $sip $tip 13
 
 #dump information including flow counters
 ovn-nbctl show
-ovn-sbctl dump-flows -- list multicast_group
+ovn-sbctl dump-flows -- list multicast_group > sbflows
+AT_CAPTURE_FILE([sbflows])
 
 echo "------ hv1 dump ------"
 as hv1 ovs-vsctl show

@@ -115,7 +115,9 @@ extern function parse_ip_list(ips: string): Either<string, Vec<(in_addr, Option<
 /*
  * IPv6 addresses
  */
-extern type in6_addr
+typedef in6_addr = In6Addr {
+    aaaa: bit<128>              // In host byte order.
+}
 
 extern function in6_generate_lla(ea: eth_addr): in6_addr
 extern function in6_generate_eui64(ea: eth_addr, prefix: in6_addr): in6_addr
@@ -126,13 +128,28 @@ extern function ipv6_string_mapped(addr: in6_addr): string
 extern function ipv6_parse_masked(s: string): Either<string/*err*/, (in6_addr/*ip*/, in6_addr/*mask*/)>
 extern function ipv6_parse(s: string): Option<in6_addr>
 extern function ipv6_parse_cidr(s: string): Either<string/*err*/, (in6_addr/*ip*/, bit<32>/*plen*/)>
-extern function ipv6_bitxor(a: in6_addr, b: in6_addr): in6_addr
-extern function ipv6_bitand(a: in6_addr, b: in6_addr): in6_addr
-extern function ipv6_bitnot(a: in6_addr): in6_addr
-extern function ipv6_create_mask(mask: bit<32>): in6_addr
-extern function ipv6_is_zero(a: in6_addr): bool
 extern function ipv6_is_routable_multicast(a: in6_addr): bool
-extern function ipv6_is_all_hosts(a: in6_addr): bool
+
+function ipv6_create_mask(plen: bit<32>): in6_addr {
+    if (plen == 0) {
+        In6Addr{0}
+    } else {
+        var shift = max(0, 128 - plen);
+        In6Addr{128'hffffffffffffffffffffffffffffffff << shift}
+    }
+}
+
+function ipv6_bitxor(a: in6_addr, b: in6_addr): in6_addr {
+    In6Addr{a.aaaa ^ b.aaaa}
+}
+
+function ipv6_bitand(a: in6_addr, b: in6_addr): in6_addr {
+    In6Addr{a.aaaa & b.aaaa}
+}
+
+function ipv6_bitnot(a: in6_addr): in6_addr {
+    In6Addr{~a.aaaa}
+}
 
 function ipv6_network(addr: in6_addr, mask: in6_addr): in6_addr {
     ipv6_bitand(addr, mask)
@@ -142,6 +159,14 @@ function ipv6_host(addr: in6_addr, mask: in6_addr): in6_addr {
     ipv6_bitand(addr, ipv6_bitnot(mask))
 }
 
+function ipv6_is_zero(a: in6_addr): bool {
+    a.aaaa == 0
+}
+
+function ipv6_is_all_hosts(a: in6_addr): bool {
+    a.aaaa == 128'hff020000000000000000000000000001
+}
+
 /* True if both 'ips' are in the same network as defined by netmask 'mask',
  * false otherwise. */
 function ipv6_same_network(ips: (in6_addr, in6_addr), mask: in6_addr): bool {
@@ -149,8 +174,12 @@ function ipv6_same_network(ips: (in6_addr, in6_addr), mask: in6_addr): bool {
 }
 
 extern function ipv6_multicast_to_ethernet(ip6: in6_addr): eth_addr
-extern function ipv6_is_cidr(ip6: in6_addr): bool
 extern function ipv6_count_cidr_bits(ip6: in6_addr): Option<bit<8>>
+
+function ipv6_is_cidr(netmask: in6_addr): bool {
+    var x = ~netmask.aaaa;
+    (x & (x + 1)) == 0
+}
 
 extern function inet6_ntop(addr: in6_addr): string
 function to_string(addr: in6_addr): string = {

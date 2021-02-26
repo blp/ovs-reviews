@@ -113,85 +113,71 @@ impl FromRecord for eth_addr {
 }
 
 #[repr(C)]
-#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug, IntoRecord, Mutator)]
-pub struct in6_addr {
-    x: [u8; IN6_ADDR_SIZE]
+struct in6_addr_c {
+    bytes: [u8; 16]
 }
 
-pub const in6addr_any: in6_addr = in6_addr{x: [0; IN6_ADDR_SIZE]};
-pub const in6addr_all_hosts: in6_addr = in6_addr{x: [
-    0xff,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
-    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01 ]};
+impl Default for in6_addr_c {
+    fn default() -> Self {
+        in6_addr_c {
+            bytes: [0; 16]
+        }
+    }
+}
 
-impl FromRecord for in6_addr {
-    fn from_record(val: &record::Record) -> Result<Self, String> {
-        Ok(in6_addr{x: <[u8; IN6_ADDR_SIZE]>::from_record(val)?})
+impl in6_addr_c {
+    pub fn from_ddlog(c: &in6_addr) -> Self {
+        in6_addr_c{bytes: c.aaaa.to_be_bytes()}
+    }
+    pub fn to_ddlog(&self) -> in6_addr {
+        in6_addr{aaaa: u128::from_be_bytes(self.bytes)}
     }
 }
 
 pub fn in6_generate_lla(ea: &eth_addr) -> in6_addr {
-    let mut addr: in6_addr = Default::default();
-    unsafe {ovs::in6_generate_lla(ea.clone(), &mut addr as *mut in6_addr)};
-    addr
+    let mut addr: in6_addr_c = Default::default();
+    unsafe {ovs::in6_generate_lla(ea.clone(), &mut addr as *mut in6_addr_c)};
+    addr.to_ddlog()
 }
 
 pub fn in6_generate_eui64(ea: &eth_addr, prefix: &in6_addr) -> in6_addr {
-    let mut addr: in6_addr = Default::default();
+    let prefix = in6_addr_c::from_ddlog(prefix);
+    let mut addr: in6_addr_c = Default::default();
     unsafe {ovs::in6_generate_eui64(ea.clone(),
-                                    prefix as *const in6_addr,
-                                    &mut addr as *mut in6_addr)};
-    addr
+                                    &prefix as *const in6_addr_c,
+                                    &mut addr as *mut in6_addr_c)};
+    addr.to_ddlog()
 }
 
 pub fn in6_is_lla(addr: &in6_addr) -> bool {
-    unsafe {ovs::in6_is_lla(addr as *const in6_addr)}
+    let addr = in6_addr_c::from_ddlog(addr);
+    unsafe {ovs::in6_is_lla(&addr as *const in6_addr_c)}
 }
 
 pub fn in6_addr_solicited_node(ip6: &in6_addr) -> in6_addr
 {
-    let mut res: in6_addr = Default::default();
+    let ip6 = in6_addr_c::from_ddlog(ip6);
+    let mut res: in6_addr_c = Default::default();
     unsafe {
-        ovs::in6_addr_solicited_node(&mut res as *mut in6_addr, ip6 as *const in6_addr);
+        ovs::in6_addr_solicited_node(&mut res as *mut in6_addr_c, &ip6 as *const in6_addr_c);
     }
-    res
-}
-
-pub fn ipv6_bitand(a: &in6_addr, b: &in6_addr) -> in6_addr {
-    unsafe {
-        ovs::ipv6_addr_bitand(a as *const in6_addr, b as *const in6_addr)
-    }
-}
-
-pub fn ipv6_bitxor(a: &in6_addr, b: &in6_addr) -> in6_addr {
-    unsafe {
-        ovs::ipv6_addr_bitxor(a as *const in6_addr, b as *const in6_addr)
-    }
-}
-
-pub fn ipv6_bitnot(a: &in6_addr) -> in6_addr {
-    let mut result: in6_addr = Default::default();
-    for i in 0..16 {
-        result.x[i] = !a.x[i]
-    }
-    result
+    res.to_ddlog()
 }
 
 pub fn ipv6_string_mapped(addr: &in6_addr) -> String {
+    let addr = in6_addr_c::from_ddlog(addr);
     let mut addr_str = [0 as i8; INET6_ADDRSTRLEN];
     unsafe {
-        ovs::ipv6_string_mapped(&mut addr_str[0] as *mut raw::c_char, addr as *const in6_addr);
+        ovs::ipv6_string_mapped(&mut addr_str[0] as *mut raw::c_char, &addr as *const in6_addr_c);
         cstr2string(&addr_str as *const raw::c_char)
     }
 }
 
-pub fn ipv6_is_zero(addr: &in6_addr) -> bool {
-    *addr == in6addr_any
-}
-
 pub fn ipv6_count_cidr_bits(ip6: &in6_addr) -> ddlog_std::Option<u8> {
+    let ip6_c = in6_addr_c::from_ddlog(ip6);
     unsafe {
-        match (ipv6_is_cidr(ip6)) {
-            true => ddlog_std::Option::Some{x: ovs::ipv6_count_cidr_bits(ip6 as *const in6_addr) as u8},
+        match (ipv6_is_cidr(&ip6)) {
+            true => ddlog_std::Option::Some{x: ovs::ipv6_count_cidr_bits(&ip6_c as *const in6_addr_c) as u8},
             false => ddlog_std::Option::None
         }
     }
@@ -263,15 +249,15 @@ pub fn ovn_internal_version() -> String {
 pub fn ipv6_parse_masked(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in6_addr, in6_addr>>
 {
     unsafe {
-        let mut ip: in6_addr = Default::default();
-        let mut mask: in6_addr = Default::default();
-        let err = ovs::ipv6_parse_masked(string2cstr(s).as_ptr(), &mut ip as *mut in6_addr, &mut mask as *mut in6_addr);
+        let mut ip: in6_addr_c = Default::default();
+        let mut mask: in6_addr_c = Default::default();
+        let err = ovs::ipv6_parse_masked(string2cstr(s).as_ptr(), &mut ip as *mut in6_addr_c, &mut mask as *mut in6_addr_c);
         if (err != ptr::null_mut()) {
             let errstr = cstr2string(err);
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, mask)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip.to_ddlog(), mask.to_ddlog())}
         }
     }
 }
@@ -279,15 +265,15 @@ pub fn ipv6_parse_masked(s: &String) -> ddlog_std::Either<String, ddlog_std::tup
 pub fn ipv6_parse_cidr(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple2<in6_addr, u32>>
 {
     unsafe {
-        let mut ip: in6_addr = Default::default();
+        let mut ip: in6_addr_c = Default::default();
         let mut plen: raw::c_uint = 0;
-        let err = ovs::ipv6_parse_cidr(string2cstr(s).as_ptr(), &mut ip as *mut in6_addr, &mut plen as *mut raw::c_uint);
+        let err = ovs::ipv6_parse_cidr(string2cstr(s).as_ptr(), &mut ip as *mut in6_addr_c, &mut plen as *mut raw::c_uint);
         if (err != ptr::null_mut()) {
             let errstr = cstr2string(err);
             free(err as *mut raw::c_void);
             ddlog_std::Either::Left{l: errstr}
         } else {
-            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip, plen as u32)}
+            ddlog_std::Either::Right{r: ddlog_std::tuple2(ip.to_ddlog(), plen as u32)}
         }
     }
 }
@@ -295,42 +281,28 @@ pub fn ipv6_parse_cidr(s: &String) -> ddlog_std::Either<String, ddlog_std::tuple
 pub fn ipv6_parse(s: &String) -> ddlog_std::Option<in6_addr>
 {
     unsafe {
-        let mut ip: in6_addr = Default::default();
-        let res = ovs::ipv6_parse(string2cstr(s).as_ptr(), &mut ip as *mut in6_addr);
+        let mut ip: in6_addr_c = Default::default();
+        let res = ovs::ipv6_parse(string2cstr(s).as_ptr(), &mut ip as *mut in6_addr_c);
         if (res) {
-            ddlog_std::Option::Some{x: ip}
+            ddlog_std::Option::Some{x: ip.to_ddlog()}
         } else {
             ddlog_std::Option::None
         }
     }
 }
 
-pub fn ipv6_create_mask(mask: &u32) -> in6_addr
-{
-    unsafe {ovs::ipv6_create_mask(*mask as raw::c_uint)}
-}
-
-
 pub fn ipv6_is_routable_multicast(a: &in6_addr) -> bool
 {
-    unsafe{ovn_c::ipv6_addr_is_routable_multicast(a as *const in6_addr)}
-}
-
-pub fn ipv6_is_all_hosts(a: &in6_addr) -> bool
-{
-    return *a == in6addr_all_hosts;
-}
-
-pub fn ipv6_is_cidr(a: &in6_addr) -> bool
-{
-    unsafe{ovs::ipv6_is_cidr(a as *const in6_addr)}
+    let a = in6_addr_c::from_ddlog(a);
+    unsafe{ovn_c::ipv6_addr_is_routable_multicast(&a as *const in6_addr_c)}
 }
 
 pub fn ipv6_multicast_to_ethernet(ip6: &in6_addr) -> eth_addr
 {
+    let ip6 = in6_addr_c::from_ddlog(ip6);
     let mut eth: eth_addr = Default::default();
     unsafe{
-        ovs::ipv6_multicast_to_ethernet(&mut eth as *mut eth_addr, ip6 as *const in6_addr);
+        ovs::ipv6_multicast_to_ethernet(&mut eth as *mut eth_addr, &ip6 as *const in6_addr_c);
     }
     eth
 }
@@ -524,9 +496,10 @@ pub fn str_to_uint(s: &String, base: &u16) -> ddlog_std::Option<u64> {
 }
 
 pub fn inet6_ntop(addr: &in6_addr) -> String {
+    let addr_c = in6_addr_c::from_ddlog(addr);
     let mut buf = [0 as i8; INET6_ADDRSTRLEN];
     unsafe {
-        let res = inet_ntop(AF_INET6 as raw::c_int, addr as *const in6_addr as *const raw::c_void,
+        let res = inet_ntop(AF_INET6 as raw::c_int, &addr_c as *const in6_addr_c as *const raw::c_void,
                             &mut buf[0] as *mut raw::c_char, INET6_ADDRSTRLEN as libc::socklen_t);
         if res == ptr::null() {
             warn(&format!("inet_ntop({:?}) failed", *addr));
@@ -622,7 +595,7 @@ impl Default for ipv4_netaddr_c {
 }
 
 impl ipv4_netaddr_c {
-    pub unsafe fn to_ddlog(&self) -> ipv4_netaddr {
+    pub fn to_ddlog(&self) -> ipv4_netaddr {
         ipv4_netaddr{
             addr:       in_addr::from_be32(self.addr),
             plen:       self.plen,
@@ -632,10 +605,10 @@ impl ipv4_netaddr_c {
 
 #[repr(C)]
 struct ipv6_netaddr_c {
-    addr:       in6_addr,     /* fc00::1 */
-    mask:       in6_addr,     /* ffff:ffff:ffff:ffff:: */
-    sn_addr:    in6_addr,     /* ff02:1:ff00::1 */
-    network:    in6_addr,     /* fc00:: */
+    addr:       in6_addr_c,     /* fc00::1 */
+    mask:       in6_addr_c,     /* ffff:ffff:ffff:ffff:: */
+    sn_addr:    in6_addr_c,     /* ff02:1:ff00::1 */
+    network:    in6_addr_c,     /* fc00:: */
     plen:       raw::c_uint,      /* CIDR Prefix: 64 */
 
     addr_s:     [raw::c_char; INET6_ADDRSTRLEN + 1],    /* "fc00::1" */
@@ -661,7 +634,7 @@ impl Default for ipv6_netaddr_c {
 impl ipv6_netaddr_c {
     pub unsafe fn to_ddlog(&self) -> ipv6_netaddr {
         ipv6_netaddr{
-            addr:       self.addr.clone(),
+            addr:       in6_addr_c::to_ddlog(&self.addr),
             plen:       self.plen
         }
     }
@@ -724,7 +697,7 @@ mod ovn_c {
     use ::libc;
     use super::lport_addresses_c;
     use super::ovs_svec;
-    use super::in6_addr;
+    use super::in6_addr_c;
 
     #[link(name = "ovn")]
     extern "C" {
@@ -738,7 +711,7 @@ mod ovn_c {
         pub fn split_addresses(addresses: *const raw::c_char, ip4_addrs: *mut ovs_svec, ipv6_addrs: *mut ovs_svec);
         pub fn ip_address_and_port_from_lb_key(key: *const raw::c_char, ip_address: *mut *mut raw::c_char,
                                                port: *mut libc::uint16_t, addr_family: *mut raw::c_int);
-        pub fn ipv6_addr_is_routable_multicast(ip: *const in6_addr) -> bool;
+        pub fn ipv6_addr_is_routable_multicast(ip: *const in6_addr_c) -> bool;
         pub fn ovn_get_internal_version() -> *mut raw::c_char;
     }
 }
@@ -746,7 +719,7 @@ mod ovn_c {
 mod ovs {
     use ::std::os::raw;
     use ::libc;
-    use super::in6_addr;
+    use super::in6_addr_c;
     use super::ovs_be32;
     use super::ovs_ds;
     use super::eth_addr;
@@ -756,18 +729,15 @@ mod ovs {
     #[link(name = "openvswitch")]
     extern "C" {
         // lib/packets.h
-        pub fn ipv6_string_mapped(addr_str: *mut raw::c_char, addr: *const in6_addr) -> *const raw::c_char;
-        pub fn ipv6_parse_masked(s: *const raw::c_char, ip: *mut in6_addr, mask: *mut in6_addr) -> *mut raw::c_char;
-        pub fn ipv6_parse_cidr(s: *const raw::c_char, ip: *mut in6_addr, plen: *mut raw::c_uint) -> *mut raw::c_char;
-        pub fn ipv6_parse(s: *const raw::c_char, ip: *mut in6_addr) -> bool;
-        pub fn ipv6_mask_is_any(mask: *const in6_addr) -> bool;
-        pub fn ipv6_count_cidr_bits(mask: *const in6_addr) -> raw::c_int;
-        pub fn ipv6_is_cidr(mask: *const in6_addr) -> bool;
-        pub fn ipv6_addr_bitxor(a: *const in6_addr, b: *const in6_addr) -> in6_addr;
-        pub fn ipv6_addr_bitand(a: *const in6_addr, b: *const in6_addr) -> in6_addr;
-        pub fn ipv6_create_mask(mask: raw::c_uint) -> in6_addr;
-        pub fn ipv6_is_zero(a: *const in6_addr) -> bool;
-        pub fn ipv6_multicast_to_ethernet(eth: *mut eth_addr, ip6: *const in6_addr);
+        pub fn ipv6_string_mapped(addr_str: *mut raw::c_char, addr: *const in6_addr_c) -> *const raw::c_char;
+        pub fn ipv6_parse_masked(s: *const raw::c_char, ip: *mut in6_addr_c, mask: *mut in6_addr_c) -> *mut raw::c_char;
+        pub fn ipv6_parse_cidr(s: *const raw::c_char, ip: *mut in6_addr_c, plen: *mut raw::c_uint) -> *mut raw::c_char;
+        pub fn ipv6_parse(s: *const raw::c_char, ip: *mut in6_addr_c) -> bool;
+        pub fn ipv6_mask_is_any(mask: *const in6_addr_c) -> bool;
+        pub fn ipv6_count_cidr_bits(mask: *const in6_addr_c) -> raw::c_int;
+        pub fn ipv6_is_cidr(mask: *const in6_addr_c) -> bool;
+        pub fn ipv6_is_zero(a: *const in6_addr_c) -> bool;
+        pub fn ipv6_multicast_to_ethernet(eth: *mut eth_addr, ip6: *const in6_addr_c);
         pub fn ip_parse_masked(s: *const raw::c_char, ip: *mut ovs_be32, mask: *mut ovs_be32) -> *mut raw::c_char;
         pub fn ip_parse_cidr(s: *const raw::c_char, ip: *mut ovs_be32, plen: *mut raw::c_uint) -> *mut raw::c_char;
         pub fn ip_parse(s: *const raw::c_char, ip: *mut ovs_be32) -> bool;
@@ -776,10 +746,10 @@ mod ovs {
         pub fn eth_addr_to_uint64(ea: eth_addr) -> libc::uint64_t;
         pub fn eth_addr_from_uint64(x: libc::uint64_t, ea: *mut eth_addr);
         pub fn eth_addr_mark_random(ea: *mut eth_addr);
-        pub fn in6_generate_eui64(ea: eth_addr, prefix: *const in6_addr, lla: *mut in6_addr);
-        pub fn in6_generate_lla(ea: eth_addr, lla: *mut in6_addr);
-        pub fn in6_is_lla(addr: *const in6_addr) -> bool;
-        pub fn in6_addr_solicited_node(addr: *mut in6_addr, ip6: *const in6_addr);
+        pub fn in6_generate_eui64(ea: eth_addr, prefix: *const in6_addr_c, lla: *mut in6_addr_c);
+        pub fn in6_generate_lla(ea: eth_addr, lla: *mut in6_addr_c);
+        pub fn in6_is_lla(addr: *const in6_addr_c) -> bool;
+        pub fn in6_addr_solicited_node(addr: *mut in6_addr_c, ip6: *const in6_addr_c);
 
         // include/openvswitch/json.h
         pub fn json_string_escape(str: *const raw::c_char, out: *mut ovs_ds);
