@@ -59,56 +59,43 @@ const AF_INET6: usize = 10;
 
 #[repr(C)]
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Serialize, Deserialize, Debug, IntoRecord, Mutator)]
-pub struct eth_addr {
+pub struct eth_addr_c {
     x: [u8; ETH_ADDR_SIZE]
 }
 
-pub fn eth_addr_zero() -> eth_addr {
-    eth_addr { x: [0; ETH_ADDR_SIZE] }
+impl eth_addr_c {
+    pub fn from_ddlog(d: &eth_addr) -> Self {
+        eth_addr_c {
+            x: [(d.ha >> 40) as u8,
+                (d.ha >> 32) as u8,
+                (d.ha >> 24) as u8,
+                (d.ha >> 16) as u8,
+                (d.ha >> 8) as u8,
+                d.ha as u8]
+        }
+    }
+    pub fn to_ddlog(&self) -> eth_addr {
+        let ea0 = u16::from_be_bytes([self.x[0], self.x[1]]) as u64;
+        let ea1 = u16::from_be_bytes([self.x[2], self.x[3]]) as u64;
+        let ea2 = u16::from_be_bytes([self.x[4], self.x[5]]) as u64;
+        eth_addr { ha: (ea0 << 32) | (ea1 << 16) | ea2 }
+    }
 }
 
 pub fn eth_addr2string(addr: &eth_addr) -> String {
+    let c = eth_addr_c::from_ddlog(addr);
     format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-            addr.x[0], addr.x[1], addr.x[2], addr.x[3], addr.x[4], addr.x[5])
+            c.x[0], c.x[1], c.x[2], c.x[3], c.x[4], c.x[5])
 }
 
 pub fn eth_addr_from_string(s: &String) -> ddlog_std::Option<eth_addr> {
-    let mut ea: eth_addr = Default::default();
+    let mut ea: eth_addr_c = Default::default();
     unsafe {
-        if ovs::eth_addr_from_string(string2cstr(s).as_ptr(), &mut ea as *mut eth_addr) {
-            ddlog_std::Option::Some{x: ea}
+        if ovs::eth_addr_from_string(string2cstr(s).as_ptr(), &mut ea as *mut eth_addr_c) {
+            ddlog_std::Option::Some{x: ea.to_ddlog()}
         } else {
             ddlog_std::Option::None
         }
-    }
-}
-
-pub fn eth_addr_from_uint64(x: &u64) -> eth_addr {
-    let mut ea: eth_addr = Default::default();
-    unsafe {
-        ovs::eth_addr_from_uint64(*x as libc::uint64_t, &mut ea as *mut eth_addr);
-        ea
-    }
-}
-
-pub fn eth_addr_mark_random(ea: &eth_addr) -> eth_addr {
-    unsafe {
-        let mut ea_new = ea.clone();
-        ovs::eth_addr_mark_random(&mut ea_new as *mut eth_addr);
-        ea_new
-    }
-}
-
-pub fn eth_addr_to_uint64(ea: &eth_addr) -> u64 {
-    unsafe {
-        ovs::eth_addr_to_uint64(ea.clone()) as u64
-    }
-}
-
-
-impl FromRecord for eth_addr {
-    fn from_record(val: &record::Record) -> Result<Self, String> {
-        Ok(eth_addr{x: <[u8; ETH_ADDR_SIZE]>::from_record(val)?})
     }
 }
 
@@ -126,27 +113,12 @@ impl Default for in6_addr_c {
 }
 
 impl in6_addr_c {
-    pub fn from_ddlog(c: &in6_addr) -> Self {
-        in6_addr_c{bytes: c.aaaa.to_be_bytes()}
+    pub fn from_ddlog(d: &in6_addr) -> Self {
+        in6_addr_c{bytes: d.aaaa.to_be_bytes()}
     }
     pub fn to_ddlog(&self) -> in6_addr {
         in6_addr{aaaa: u128::from_be_bytes(self.bytes)}
     }
-}
-
-pub fn to_ipv6_lla(ea: &eth_addr) -> in6_addr {
-    let mut addr: in6_addr_c = Default::default();
-    unsafe {ovs::in6_generate_lla(ea.clone(), &mut addr as *mut in6_addr_c)};
-    addr.to_ddlog()
-}
-
-pub fn to_ipv6_eui64(ea: &eth_addr, prefix: &in6_addr) -> in6_addr {
-    let prefix = in6_addr_c::from_ddlog(prefix);
-    let mut addr: in6_addr_c = Default::default();
-    unsafe {ovs::in6_generate_eui64(ea.clone(),
-                                    &prefix as *const in6_addr_c,
-                                    &mut addr as *mut in6_addr_c)};
-    addr.to_ddlog()
 }
 
 pub fn string_mapped(addr: &in6_addr) -> String {
@@ -266,22 +238,6 @@ pub fn ipv6_parse(s: &String) -> ddlog_std::Option<in6_addr>
     }
 }
 
-pub fn is_routable_multicast(a: &in6_addr) -> bool
-{
-    let a = in6_addr_c::from_ddlog(a);
-    unsafe{ovn_c::ipv6_addr_is_routable_multicast(&a as *const in6_addr_c)}
-}
-
-pub fn multicast_to_ethernet(ip6: &in6_addr) -> eth_addr
-{
-    let ip6 = in6_addr_c::from_ddlog(ip6);
-    let mut eth: eth_addr = Default::default();
-    unsafe{
-        ovs::ipv6_multicast_to_ethernet(&mut eth as *mut eth_addr, &ip6 as *const in6_addr_c);
-    }
-    eth
-}
-
 pub type ovs_be32 = u32;
 
 impl in_addr {
@@ -354,21 +310,21 @@ pub fn split_addresses(addresses: &String) -> ddlog_std::tuple2<ddlog_std::Set<S
 }
 
 pub fn scan_eth_addr(s: &String) -> ddlog_std::Option<eth_addr> {
-    let mut ea = eth_addr_zero();
+    let mut ea: eth_addr_c = Default::default();
     unsafe {
         if ovs::ovs_scan(string2cstr(s).as_ptr(), b"%hhx:%hhx:%hhx:%hhx:%hhx:%hhx\0".as_ptr() as *const raw::c_char,
                          &mut ea.x[0] as *mut u8, &mut ea.x[1] as *mut u8,
                          &mut ea.x[2] as *mut u8, &mut ea.x[3] as *mut u8,
                          &mut ea.x[4] as *mut u8, &mut ea.x[5] as *mut u8)
         {
-            ddlog_std::Option::Some{x: ea}
+            ddlog_std::Option::Some{x: ea.to_ddlog()}
         } else {
             ddlog_std::Option::None
         }
     }
 }
 
-pub fn scan_eth_addr_prefix(s: &String) -> ddlog_std::Option<u64> {
+pub fn scan_eth_addr_prefix(s: &String) -> ddlog_std::Option<eth_addr> {
     let mut b2: u8 = 0;
     let mut b1: u8 = 0;
     let mut b0: u8 = 0;
@@ -376,7 +332,7 @@ pub fn scan_eth_addr_prefix(s: &String) -> ddlog_std::Option<u64> {
         if ovs::ovs_scan(string2cstr(s).as_ptr(), b"%hhx:%hhx:%hhx\0".as_ptr() as *const raw::c_char,
                          &mut b2 as *mut u8, &mut b1 as *mut u8, &mut b0 as *mut u8)
         {
-            ddlog_std::Option::Some{x: ((b2 as u64) << 40) | ((b1 as u64) << 32) | ((b0 as u64) << 24) }
+            ddlog_std::Option::Some{x: eth_addr{ha: ((b2 as u64) << 40) | ((b1 as u64) << 32) | ((b0 as u64) << 24)} }
         } else {
             ddlog_std::Option::None
         }
@@ -606,7 +562,7 @@ impl ipv6_netaddr_c {
 #[repr(C)]
 struct lport_addresses_c {
     ea_s:           [raw::c_char; ETH_ADDR_STRLEN + 1],
-    ea:             eth_addr,
+    ea:             eth_addr_c,
     n_ipv4_addrs:   libc::size_t,
     ipv4_addrs:     *mut ipv4_netaddr_c,
     n_ipv6_addrs:   libc::size_t,
@@ -637,7 +593,7 @@ impl lport_addresses_c {
             ipv6_addrs.push((&*self.ipv6_addrs.offset(i as isize)).to_ddlog())
         }
         let res = lport_addresses {
-            ea:         self.ea.clone(),
+            ea:         self.ea.to_ddlog(),
             ipv4_addrs: ipv4_addrs,
             ipv6_addrs: ipv6_addrs
         };
@@ -672,7 +628,6 @@ mod ovn_c {
         pub fn split_addresses(addresses: *const raw::c_char, ip4_addrs: *mut ovs_svec, ipv6_addrs: *mut ovs_svec);
         pub fn ip_address_and_port_from_lb_key(key: *const raw::c_char, ip_address: *mut *mut raw::c_char,
                                                port: *mut libc::uint16_t, addr_family: *mut raw::c_int);
-        pub fn ipv6_addr_is_routable_multicast(ip: *const in6_addr_c) -> bool;
         pub fn ovn_get_internal_version() -> *mut raw::c_char;
     }
 }
@@ -683,7 +638,7 @@ mod ovs {
     use super::in6_addr_c;
     use super::ovs_be32;
     use super::ovs_ds;
-    use super::eth_addr;
+    use super::eth_addr_c;
     use super::ovs_svec;
 
     /* functions imported from libopenvswitch */
@@ -694,19 +649,10 @@ mod ovs {
         pub fn ipv6_parse_masked(s: *const raw::c_char, ip: *mut in6_addr_c, mask: *mut in6_addr_c) -> *mut raw::c_char;
         pub fn ipv6_parse_cidr(s: *const raw::c_char, ip: *mut in6_addr_c, plen: *mut raw::c_uint) -> *mut raw::c_char;
         pub fn ipv6_parse(s: *const raw::c_char, ip: *mut in6_addr_c) -> bool;
-        pub fn ipv6_mask_is_any(mask: *const in6_addr_c) -> bool;
-        pub fn ipv6_is_cidr(mask: *const in6_addr_c) -> bool;
-        pub fn ipv6_is_zero(a: *const in6_addr_c) -> bool;
-        pub fn ipv6_multicast_to_ethernet(eth: *mut eth_addr, ip6: *const in6_addr_c);
         pub fn ip_parse_masked(s: *const raw::c_char, ip: *mut ovs_be32, mask: *mut ovs_be32) -> *mut raw::c_char;
         pub fn ip_parse_cidr(s: *const raw::c_char, ip: *mut ovs_be32, plen: *mut raw::c_uint) -> *mut raw::c_char;
         pub fn ip_parse(s: *const raw::c_char, ip: *mut ovs_be32) -> bool;
-        pub fn eth_addr_from_string(s: *const raw::c_char, ea: *mut eth_addr) -> bool;
-        pub fn eth_addr_to_uint64(ea: eth_addr) -> libc::uint64_t;
-        pub fn eth_addr_from_uint64(x: libc::uint64_t, ea: *mut eth_addr);
-        pub fn eth_addr_mark_random(ea: *mut eth_addr);
-        pub fn in6_generate_eui64(ea: eth_addr, prefix: *const in6_addr_c, lla: *mut in6_addr_c);
-        pub fn in6_generate_lla(ea: eth_addr, lla: *mut in6_addr_c);
+        pub fn eth_addr_from_string(s: *const raw::c_char, ea: *mut eth_addr_c) -> bool;
 
         // include/openvswitch/json.h
         pub fn json_string_escape(str: *const raw::c_char, out: *mut ovs_ds);
