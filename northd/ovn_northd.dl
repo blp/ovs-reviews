@@ -1683,6 +1683,7 @@ for (f in AggregatedFlow()) {
             .pipeline         = pipeline,
             .table_id         = f.stage.table_id,
             .priority         = f.priority,
+            .controller_meter = None,
             .__match          = f.__match,
             .actions          = f.actions,
             .external_ids     = external_ids)
@@ -1695,6 +1696,7 @@ for (f in AggregatedFlow()) {
                 .pipeline         = pipeline,
                 .table_id         = f.stage.table_id,
                 .priority         = f.priority,
+                .controller_meter = None,
                 .__match          = f.__match,
                 .actions          = f.actions,
                 .external_ids     = external_ids);
