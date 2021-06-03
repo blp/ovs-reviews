@@ -19,9 +19,9 @@ EXTRA_DIST += \
 	northd/ovn.rs \
 	northd/bitwise.rs \
 	northd/ovsdb2ddlog2c \
-	$(ddlog_sources)
+	$(northd_ddlog_sources)
 
-ddlog_sources = \
+northd_ddlog_sources = \
 	northd/ovn_northd.dl \
 	northd/lswitch.dl \
 	northd/lrouter.dl \
@@ -31,7 +31,7 @@ ddlog_sources = \
 	northd/ovn.rs \
 	northd/helpers.dl \
 	northd/bitwise.dl
-ddlog_nodist_sources = \
+northd_ddlog_nodist_sources = \
 	northd/OVN_Northbound.dl \
 	northd/OVN_Southbound.dl
 
@@ -72,7 +72,7 @@ cargo_verbose_ = $(cargo_verbose_$(AM_DEFAULT_VERBOSITY))
 cargo_verbose_0 =
 cargo_verbose_1 = --verbose
 
-DDLOGFLAGS = -L $(DDLOGLIBDIR) -L $(builddir)/northd $(DDLOG_EXTRA_FLAGS)
+northd_DDLOGFLAGS = -L $(DDLOGLIBDIR) -L $(builddir)/northd $(DDLOG_EXTRA_FLAGS)
 
 RUSTFLAGS = \
 	-L ../../lib/.libs \
@@ -81,14 +81,14 @@ RUSTFLAGS = \
 	$$LIBOVN_DEPS \
 	-Awarnings $(DDLOG_EXTRA_RUSTFLAGS)
 
-northd/ddlog.stamp: $(ddlog_sources) $(ddlog_nodist_sources)
-	$(AM_V_GEN)$(DDLOG) -i $< -o $(builddir)/northd $(DDLOGFLAGS)
+northd/ddlog.stamp: $(northd_ddlog_sources) $(northd_ddlog_nodist_sources)
+	$(AM_V_GEN)$(DDLOG) -i $< -o $(builddir)/northd $(northd_DDLOGFLAGS)
 	$(AM_V_at)touch $@
 
 NORTHD_LIB = 1
 NORTHD_CLI = 0
 
-ddlog_targets = $(northd_lib_$(NORTHD_LIB)) $(northd_cli_$(NORTHD_CLI))
+northd_ddlog_targets = $(northd_lib_$(NORTHD_LIB)) $(northd_cli_$(NORTHD_CLI))
 northd_lib_1 = northd/ovn_northd_ddlog/target/release/libovn_%_ddlog.la
 northd_cli_1 = northd/ovn_northd_ddlog/target/release/ovn_%_cli
 EXTRA_northd_ovn_northd_DEPENDENCIES = $(northd_cli_$(NORTHD_CLI))
@@ -99,7 +99,7 @@ cargo_build_10 = --lib
 cargo_build_11 = --features command-line
 
 libtool_deps = $(srcdir)/build-aux/libtool-deps
-$(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
+$(northd_ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.la
 	$(AM_V_GEN)LIBOVN_DEPS=`$(libtool_deps) lib/libovn.la` && \
 	LIBOPENVSWITCH_DEPS=`$(libtool_deps) $(OVS_LIBDIR)/libopenvswitch.la` && \
 	cd northd/ovn_northd_ddlog && \
@@ -107,16 +107,12 @@ $(ddlog_targets): northd/ddlog.stamp lib/libovn.la $(OVS_LIBDIR)/libopenvswitch.
 	    cargo build --release $(CARGO_VERBOSE) $(cargo_build) --no-default-features --features ovsdb,c_api
 endif
 
-CLEAN_LOCAL += clean-ddlog
-clean-ddlog:
+CLEAN_LOCAL += clean-northd-ddlog
+clean-northd-ddlog:
 	rm -rf northd/ovn_northd_ddlog northd/ddlog.stamp
 
 CLEANFILES += \
 	northd/ddlog.stamp \
-	northd/ovn_northd_ddlog/ddlog.h \
-	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.a \
-	northd/ovn_northd_ddlog/target/release/libovn_northd_ddlog.la \
-	northd/ovn_northd_ddlog/target/release/ovn_northd_cli \
 	northd/OVN_Northbound.dl \
 	northd/OVN_Southbound.dl \
 	northd/ovn-northd-ddlog-nb.inc \
