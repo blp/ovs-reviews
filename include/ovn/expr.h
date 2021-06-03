@@ -411,6 +411,12 @@ expr_from_node(const struct ovs_list *node)
     return CONTAINER_OF(node, struct expr, node);
 }
 
+void expr_references_from_lexer(struct lexer *, struct sset *addr_sets_ref,
+                                struct sset *port_groups_ref);
+char *expr_references_from_string(const char *,  struct sset *addr_sets_ref,
+                                  struct sset *port_groups_ref)
+    OVS_WARN_UNUSED_RESULT;
+
 void expr_format(const struct expr *, struct ds *);
 void expr_print(const struct expr *);
 size_t expr_size(const struct expr *);

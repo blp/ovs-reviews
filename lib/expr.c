@@ -606,6 +606,50 @@ type_check(struct expr_context *ctx, const struct expr_field *f,
     return true;
 }
 
+/* Extracts the address sets and port groups referenced by the expression
+ * obtained from 'lexer' and adds them to 'addr_sets_ref' and
+ * 'port_groups_ref', respectively.  These are the same references that
+ * expr_parse() would output.
+ *
+ * The caller should check lexer->error for an error.  If there is an error,
+ * then expr_parse() will fail (but expr_parse() might fail even if this
+ * function doesn't). */
+void
+expr_references_from_lexer(struct lexer *lexer, struct sset *addr_sets_ref,
+                           struct sset *port_groups_ref)
+{
+    while (lexer->token.type != LEX_T_END) {
+        if (lexer->token.type == LEX_T_PORT_GROUP) {
+            sset_add(port_groups_ref, lexer->token.s);
+        } else if (lexer->token.type == LEX_T_MACRO) {
+            sset_add(addr_sets_ref, lexer->token.s);
+        }
+        lexer_get(lexer);
+    }
+}
+
+/* Extracts the address sets and port groups referenced by the expression in
+ * 's' and adds them to 'addr_sets_ref' and 'port_groups_ref', respectively.
+ * These are the same references that expr_parse() would output.
+ *
+ * Returns NULL on success, otherwise a malloc()'d string describing the error.
+ * If there is an error, then expr_parse() will fail (but expr_parse() might
+ * fail even if this function doesn't). */
+char *
+expr_references_from_string(const char *s, struct sset *addr_sets_ref,
+                            struct sset *port_groups_ref)
+{
+    struct lexer lexer;
+
+    lexer_init(&lexer, s);
+    lexer_get(&lexer);
+    expr_references_from_lexer(&lexer, addr_sets_ref, port_groups_ref);
+    char *error = lexer_steal_error(&lexer);
+    lexer_destroy(&lexer);
+
+    return error;
+}
+
 static struct expr *
 make_cmp(struct expr_context *ctx,
          const struct expr_field *f, enum expr_relop r,
