@@ -1,4 +1,12 @@
 import OVN_Southbound as sb
 import OVS
+import ovsdb
 
 // Insert something useful here.
+
+// For now use some identity table so we can write the boilerpate.
+// Eventually, we need to create an output relation representing the desired_flow struct,
+// which is part of the desired_flow_table updated in ovn-controller.c
+output relation PortGroupSubset(_uuid : uuid, name: string)
+
+PortGroupSubset(_uuid, name) :- sb::Port_Group(_uuid, name, _).
