@@ -1659,17 +1659,17 @@ AggregatedFlow(.logical_datapaths = g.to_set(),
                .__match = __match,
                .actions = actions,
                .external_ids = external_ids) :-
+    UseLogicalDatapathGroups[true],
     Flow(logical_datapath, stage, priority, __match, actions, external_ids),
-    var g = logical_datapath.group_by((stage, priority, __match, actions, external_ids)),
-    UseLogicalDatapathGroups[true].
+    var g = logical_datapath.group_by((stage, priority, __match, actions, external_ids)).
 AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
                .stage = stage,
                .priority = priority,
                .__match = __match,
                .actions = actions,
                .external_ids = external_ids) :-
-    Flow(logical_datapath, stage, priority, __match, actions, external_ids),
-    UseLogicalDatapathGroups[false].
+    UseLogicalDatapathGroups[false],
+    Flow(logical_datapath, stage, priority, __match, actions, external_ids).
 
 for (f in AggregatedFlow()) {
     var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress" in
