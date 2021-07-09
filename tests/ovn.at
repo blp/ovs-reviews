@@ -17834,9 +17834,6 @@ OVN_FOR_EACH_NORTHD([
 AT_SETUP([controller event])
 AT_KEYWORDS([ovn_controller_event])
 
-dnl This test is not suported by ovn-northd-ddlog yet.
-AT_SKIP_IF([test NORTHD_TYPE = ovn-northd-ddlog && test "$RUN_ANYWAY" != yes])
-
 ovn_start
 
 # Create hypervisors hv[12].
