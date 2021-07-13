@@ -1697,7 +1697,7 @@ for (f in AggregatedFlow()) {
     if (f.logical_datapaths.size() == 1) {
         Some{var dp} = f.logical_datapaths.nth(0) in
         sb::Out_Logical_Flow(
-            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.controller_meter, f.external_ids)),
             .logical_datapath = Some{dp},
             .logical_dp_group = None,
             .pipeline         = pipeline,
@@ -1710,7 +1710,7 @@ for (f in AggregatedFlow()) {
     } else {
         var group_uuid = hash128(f.logical_datapaths) in {
             sb::Out_Logical_Flow(
-                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.controller_meter, f.external_ids)),
                 .logical_datapath = None,
                 .logical_dp_group = Some{group_uuid},
                 .pipeline         = pipeline,
