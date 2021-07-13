@@ -21,6 +21,7 @@ import multicast
 import helpers
 import ipam
 import vec
+import map
 
 function is_enabled(lsp: Intern<nb::Logical_Switch_Port>): bool { is_enabled(lsp.enabled) }
 function is_enabled(sp: SwitchPort): bool { sp.lsp.is_enabled() }
@@ -307,7 +308,8 @@ SwitchLB(sw_uuid, lb) :-
 /* Load balancer VIPs associated with switch */
 relation SwitchLBVIP(sw_uuid: uuid, lb: Intern<nb::Load_Balancer>, vip: string, backends: string)
 SwitchLBVIP(sw_uuid, lb, vip, backends) :-
-    SwitchLB(sw_uuid, lb@(&nb::Load_Balancer{.vips = vips})),
+    SwitchLB(sw_uuid, lb@(&nb::Load_Balancer{.vips = vips0})),
+    var vips = vips0.filter(|k, v| k == "4.0.0.100"),
     var kv = FlatMap(vips),
     (var vip, var backends) = kv.
 
@@ -334,7 +336,8 @@ relation LBVIP0(
     health_check: Intern<nb::Load_Balancer_Health_Check>)
 LBVIP0(lb, vip_key, backend_ips, health_check) :-
     lb in &nb::Load_Balancer(),
-    var vip = FlatMap(lb.vips),
+    var vips = lb.vips.filter(|k, v| k == "4.0.0.100"),
+    var vip = FlatMap(vips),
     (var vip_key, var backend_ips) = vip,
     health_check in &nb::Load_Balancer_Health_Check(.vip = vip_key),
     lb.health_check.contains(health_check._uuid).
@@ -348,7 +351,8 @@ LBVIP1(lb, vip_key, backend_ips, Some{health_check}) :-
     LBVIP0(lb, vip_key, backend_ips, health_check).
 LBVIP1(lb, vip_key, backend_ips, None) :-
     lb in &nb::Load_Balancer(),
-    var vip = FlatMap(lb.vips),
+    var vips = lb.vips.filter(|k, v| k == "4.0.0.100"),
+    var vip = FlatMap(vips),
     (var vip_key, var backend_ips) = vip,
     not LBVIP0(lb, vip_key, backend_ips, _).
 
