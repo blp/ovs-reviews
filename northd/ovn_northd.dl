@@ -1665,6 +1665,7 @@ TaggedFlow(
 
 /* If this option is 'true' northd will combine logical flows that differ by
  * logical datapath only by creating a datapath group. */
+/*
 relation UseLogicalDatapathGroups[bool]
 UseLogicalDatapathGroups[use_logical_dp_groups] :-
     nb in nb::NB_Global(),
@@ -1672,9 +1673,14 @@ UseLogicalDatapathGroups[use_logical_dp_groups] :-
 UseLogicalDatapathGroups[false] :-
     Unit(),
     not nb in nb::NB_Global().
+*/
 
+/* Group identical flows that exist in multiple datapaths.  The `logical_datapaths` map
+ * maps datapath ID to "weight", i.e., the number of times the flow has been derived for
+ * this datapath.  The weight is needed for the aggregation logic, described below, and
+ * is dropped when converting `AggregatedFlow` to `Out_Logical_Flow`. */
 relation AggregatedFlow (
-    logical_datapaths: Set<uuid>,
+    logical_datapaths: Map<uuid, isize>,
     stage:             Stage,
     priority:          integer,
     __match:           string,
@@ -1682,31 +1688,65 @@ relation AggregatedFlow (
     tags:              Map<string,string>,
     external_ids:      Map<string,string>
 )
-AggregatedFlow(.logical_datapaths = g.to_set(),
+
+/* `FlowFold` is an auxiliary relation used to compute `AggregatedFlow`.  We could easily
+ * compute `AggregatedFlow` by grouping the `Flow` relation by the
+ * `(stage, prio, match, action, external_ids)` tuple.  Unfortunately, this involves
+ * arranging `Flow` before aggregation, which can be expensive, as it can be a
+ * very large relation.  We therefore use the "streaming aggreagation" method supported by
+ * DDlog (see https://github.com/vmware/differential-datalog/blob/master/doc/tutorial/tutorial.md#streaming-aggregation-differentiation-and-delay-operators).
+ * The idea is to compute the aggregate incrementally by adjusting the aggregate computed
+ * during the previous transaction using the set of newly added or removed flows.  To
+ * this end we construct an intermediate relation as a concatenation of the previous
+ * aggregate (`AggregatedFlow-1`, where `-1` is DDlog's delay operator that refers
+ * to the previous contents of the relation) and the set of changes in the `Flow` relation
+ * (`Flow'`, where `'` is DDlog's differentiation operator, which transforms relation R
+ * into a relation that only contains changes to R added during the last transaction). */
+relation FlowFold[AggregatedFlow]
+
+FlowFold[flow] :- AggregatedFlow-1[flow].
+
+FlowFold[AggregatedFlow{map_singleton(logical_datapath, 1), stage, priority, __match, actions, tags, external_ids}] :-
+    TaggedFlow'(logical_datapath, stage, priority, __match, actions, tags, external_ids).
+
+AggregatedFlow(.logical_datapaths = new_logical_datapaths,
                .stage = stage,
                .priority = priority,
                .__match = __match,
                .actions = actions,
                .tags = tags,
                .external_ids = external_ids) :-
-    TaggedFlow(logical_datapath, stage, priority, __match, actions, tags, external_ids),
-    var g = logical_datapath.group_by((stage, priority, __match, actions, tags, external_ids)),
-    UseLogicalDatapathGroups[true].
-AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
-               .stage = stage,
-               .priority = priority,
-               .__match = __match,
-               .actions = actions,
-               .tags = tags,
-               .external_ids = external_ids) :-
-    TaggedFlow(logical_datapath, stage, priority, __match, actions, tags, external_ids),
-    UseLogicalDatapathGroups[false].
+    // Group the FlowFold relation.  Each resulting group `g` will contain all `FlowFold` records
+    // that share the same `(stage, prio, match, action, external_ids)` tuple.  Elements of `g`
+    // are DP-to-weight maps.
+    FlowFold[AggregatedFlow{logical_datapaths, stage, priority, __match, actions, tags, external_ids}],
+    var g = logical_datapaths.group_by((stage, priority, __match, actions, tags, external_ids)),
+    // Compute a union of all maps in `g`.  If datapath `dp` occurs in more than one map, sum up
+    // all associated weights.  If the resulting sum is >0, add the flow to the output map.
+    var new_logical_datapaths = {
+        var new_logical_datapaths = map_empty();
+        for ((dps, w1) in g) {
+            for ((dp, w2) in dps) {
+                var old_weight = new_logical_datapaths.get(dp).unwrap_or(0);
+                // Adjust the weight by w1 * w2 (the weight with which dp occurs in dps
+                // times the number of times dps occurs in g).
+                var new_weight = old_weight + w1 * w2;
+                if (new_weight == 0) {
+                    new_logical_datapaths.remove(dp);
+                } else {
+                    new_logical_datapaths.insert(dp, new_weight);
+                }
+            };
+        };
+        new_logical_datapaths
+    },
+    new_logical_datapaths.size() > 0.
 
 for (f in AggregatedFlow()) {
     var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress" in
     var external_ids = f.external_ids.insert_imm("stage-name", f.stage.table_name) in
     if (f.logical_datapaths.size() == 1) {
-        Some{var dp} = f.logical_datapaths.nth(0) in
+        Some{var dp} = f.logical_datapaths.keys().nth(0) in
         sb::Out_Logical_Flow(
             ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
             .logical_datapath = Some{dp},
@@ -1719,7 +1759,7 @@ for (f in AggregatedFlow()) {
             .tags             = f.tags,
             .external_ids     = external_ids)
     } else {
-        var group_uuid = hash128(f.logical_datapaths) in {
+        var group_uuid = hash128(f.logical_datapaths.keys()) in {
             sb::Out_Logical_Flow(
                 ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
                 .logical_datapath = None,
@@ -1731,7 +1771,7 @@ for (f in AggregatedFlow()) {
                 .actions          = f.actions,
                 .tags             = f.tags,
                 .external_ids     = external_ids);
-            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths)
+            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths.keys().to_set())
         }
     }
 }
