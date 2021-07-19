@@ -1680,13 +1680,13 @@ UseLogicalDatapathGroups[false] :-
  * this datapath.  The weight is needed for the aggregation logic, described below, and
  * is dropped when converting `AggregatedFlow` to `Out_Logical_Flow`. */
 relation AggregatedFlow (
-    logical_datapaths: Map<uuid, isize>,
+    logical_datapaths: Intern<Map<uuid, isize>>,
     stage:             Stage,
     priority:          integer,
-    __match:           string,
-    actions:           string,
+    __match:           istring,
+    actions:           istring,
     tags:              Map<string,string>,
-    external_ids:      Map<string,string>
+    external_ids:      Intern<Map<string,string>>
 )
 
 /* `FlowFold` is an auxiliary relation used to compute `AggregatedFlow`.  We could easily
@@ -1706,10 +1706,10 @@ relation FlowFold[AggregatedFlow]
 
 FlowFold[flow] :- AggregatedFlow-1[flow].
 
-FlowFold[AggregatedFlow{map_singleton(logical_datapath, 1), stage, priority, __match, actions, tags, external_ids}] :-
+FlowFold[AggregatedFlow{map_singleton(logical_datapath, 1).intern(), stage, priority, __match.intern(), actions.intern(), tags, external_ids.intern()}] :-
     TaggedFlow'(logical_datapath, stage, priority, __match, actions, tags, external_ids).
 
-AggregatedFlow(.logical_datapaths = new_logical_datapaths,
+AggregatedFlow(.logical_datapaths = new_logical_datapaths.intern(),
                .stage = stage,
                .priority = priority,
                .__match = __match,
@@ -1726,7 +1726,7 @@ AggregatedFlow(.logical_datapaths = new_logical_datapaths,
     var new_logical_datapaths = {
         var new_logical_datapaths = map_empty();
         for ((dps, w1) in g) {
-            for ((dp, w2) in dps) {
+            for ((dp, w2) in dps.ival()) {
                 var old_weight = new_logical_datapaths.get(dp).unwrap_or(0);
                 // Adjust the weight by w1 * w2 (the weight with which dp occurs in dps
                 // times the number of times dps occurs in g).
@@ -1744,9 +1744,9 @@ AggregatedFlow(.logical_datapaths = new_logical_datapaths,
 
 for (f in AggregatedFlow()) {
     var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress" in
-    var external_ids = f.external_ids.insert_imm("stage-name", f.stage.table_name) in
-    if (f.logical_datapaths.size() == 1) {
-        Some{var dp} = f.logical_datapaths.keys().nth(0) in
+    var external_ids = f.external_ids.ival().insert_imm("stage-name", f.stage.table_name) in
+    if (f.logical_datapaths.ival().size() == 1) {
+        Some{var dp} = f.logical_datapaths.ival().keys().nth(0) in
         sb::Out_Logical_Flow(
             ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
             .logical_datapath = Some{dp},
@@ -1754,12 +1754,12 @@ for (f in AggregatedFlow()) {
             .pipeline         = pipeline,
             .table_id         = f.stage.table_id,
             .priority         = f.priority,
-            .__match          = f.__match,
-            .actions          = f.actions,
+            .__match          = f.__match.ival(),
+            .actions          = f.actions.ival(),
             .tags             = f.tags,
             .external_ids     = external_ids)
     } else {
-        var group_uuid = hash128(f.logical_datapaths.keys()) in {
+        var group_uuid = hash128(f.logical_datapaths.ival().keys()) in {
             sb::Out_Logical_Flow(
                 ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
                 .logical_datapath = None,
@@ -1767,11 +1767,11 @@ for (f in AggregatedFlow()) {
                 .pipeline         = pipeline,
                 .table_id         = f.stage.table_id,
                 .priority         = f.priority,
-                .__match          = f.__match,
-                .actions          = f.actions,
+                .__match          = f.__match.ival(),
+                .actions          = f.actions.ival(),
                 .tags             = f.tags,
                 .external_ids     = external_ids);
-            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths.keys().to_set())
+            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths.ival().keys().to_set())
         }
     }
 }
