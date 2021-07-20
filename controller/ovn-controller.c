@@ -2564,13 +2564,17 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
-static bool print_records_callback(uintptr_t arg, const ddlog_record *rec, ssize_t weight) {
-    VLOG_INFO("Printing DDlog records\n");
+static bool print_records_callback(uintptr_t arg, const ddlog_record *rec, ssize_t weight)
+{
+    (void) arg;
+    (void) weight;
+
+    VLOG_INFO("Printing DDlog records");
     char *record_as_string = ddlog_dump_record(rec);
     if (record_as_string == NULL) {
-        VLOG_INFO(stderr, "failed to dump record\n");
+        VLOG_INFO("failed to dump record");
     }
-    VLOG_INFO("DDlog record: %s\n", record_as_string);
+    VLOG_INFO("DDlog record: %s", record_as_string);
     ddlog_string_free(record_as_string);
 
     return true;
@@ -2748,12 +2752,14 @@ main(int argc, char *argv[])
     }
 
     input_table = ddlog_get_table_id(prog, input_relation);
-    if (input_table == -1)
-        VLOG_INFO(" ddlog_get_table_id returned -1 for %s, %d\n", input_relation, input_table);
+    if (input_table == -1) {
+        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %ld", input_relation, input_table);
+    }
 
     output_table  = ddlog_get_table_id(prog, output_relation);
-    if (output_table == -1)
-        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %d\n", output_relation, output_table);
+    if (output_table == -1) {
+        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %ld", output_relation, output_table);
+    }
 
     /* Prepare the record to be inserted to OVN_Southbound::Port_Group */
     ddlog_record **struct_args;
@@ -2771,19 +2777,23 @@ main(int argc, char *argv[])
     ddlog_record *new_record = ddlog_struct(input_relation, struct_args, 3);
     /* Finished prepared record */
 
-    if (ddlog_transaction_start(prog) < 0)
-        VLOG_INFO("ddlog failed to start transaction\n");
+    if (ddlog_transaction_start(prog) < 0) {
+        VLOG_INFO("ddlog failed to start transaction");
+    }
 
     ddlog_cmd *cmd = ddlog_insert_cmd(input_table, new_record);
-    if (cmd == NULL)
-        VLOG_INFO("ddlog failed to create insert cmd\n");
+    if (cmd == NULL) {
+        VLOG_INFO("ddlog failed to create insert cmd");
+    }
 
-    if (ddlog_apply_updates(prog, &cmd, 1) < 0)
-        VLOG_INFO("ddlog failed to apply updates\n");
+    if (ddlog_apply_updates(prog, &cmd, 1) < 0) {
+        VLOG_INFO("ddlog failed to apply updates");
+    }
 
     ddlog_delta *changes = ddlog_transaction_commit_dump_changes(prog);
-    if (changes == NULL)
-        VLOG_INFO("ddlog failed to commit transaction\n");
+    if (changes == NULL) {
+        VLOG_INFO("ddlog failed to commit transaction");
+    }
 
     ddlog_dump_table(prog, output_table, &print_records_callback, (uintptr_t)(void*)(NULL));
 
