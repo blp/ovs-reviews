@@ -27,13 +27,15 @@ pub fn warn(msg: &String) {
 
 pub fn warn_(msg: &str) {
     unsafe {
-        ddlog_warn(ffi::CString::new(msg).unwrap().as_ptr());
+        let cstr = ffi::CString::new(msg).unwrap();
+        ddlog_warn(cstr.as_ptr());
     }
 }
 
 pub fn err_(msg: &str) {
     unsafe {
-        ddlog_err(ffi::CString::new(msg).unwrap().as_ptr());
+        let cstr = ffi::CString::new(msg).unwrap();
+        ddlog_err(cstr.as_ptr());
     }
 }
 
@@ -133,7 +135,8 @@ pub fn string_mapped(addr: &in6_addr) -> String {
 pub fn json_string_escape(s: &String) -> String {
     let mut ds = ovs_ds::new();
     unsafe {
-        ovs::json_string_escape(ffi::CString::new(s.as_str()).unwrap().as_ptr() as *const raw::c_char,
+        let cstr = ffi::CString::new(s.as_str()).unwrap();
+        ovs::json_string_escape(cstr.as_ptr() as *const raw::c_char,
                                 &mut ds as *mut ovs_ds);
     };
     unsafe{ds.into_string()}
