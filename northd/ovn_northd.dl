@@ -1665,7 +1665,6 @@ TaggedFlow(
 
 /* If this option is 'true' northd will combine logical flows that differ by
  * logical datapath only by creating a datapath group. */
-/*
 relation UseLogicalDatapathGroups[bool]
 UseLogicalDatapathGroups[use_logical_dp_groups] :-
     nb in nb::NB_Global(),
@@ -1673,7 +1672,6 @@ UseLogicalDatapathGroups[use_logical_dp_groups] :-
 UseLogicalDatapathGroups[false] :-
     Unit(),
     not nb in nb::NB_Global().
-*/
 
 /* Group identical flows that exist in multiple datapaths.  The `logical_datapaths` map
  * maps datapath ID to "weight", i.e., the number of times the flow has been derived for
@@ -1742,39 +1740,65 @@ AggregatedFlow(.logical_datapaths = new_logical_datapaths.intern(),
     },
     new_logical_datapaths.size() > 0.
 
-for (f in AggregatedFlow()) {
-    var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress" in
-    var external_ids = f.external_ids.ival().insert_imm("stage-name", f.stage.table_name) in
-    if (f.logical_datapaths.ival().size() == 1) {
-        Some{var dp} = f.logical_datapaths.ival().keys().nth(0) in
-        sb::Out_Logical_Flow(
-            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
-            .logical_datapath = Some{dp},
-            .logical_dp_group = None,
-            .pipeline         = pipeline,
-            .table_id         = f.stage.table_id,
-            .priority         = f.priority,
-            .__match          = f.__match.ival(),
-            .actions          = f.actions.ival(),
-            .tags             = f.tags,
-            .external_ids     = external_ids)
-    } else {
-        var group_uuid = hash128(f.logical_datapaths.ival().keys()) in {
-            sb::Out_Logical_Flow(
-                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
-                .logical_datapath = None,
-                .logical_dp_group = Some{group_uuid},
-                .pipeline         = pipeline,
-                .table_id         = f.stage.table_id,
-                .priority         = f.priority,
-                .__match          = f.__match.ival(),
-                .actions          = f.actions.ival(),
-                .tags             = f.tags,
-                .external_ids     = external_ids);
-            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths.ival().keys().to_set())
-        }
-    }
-}
+/* Compute Out_Logical_Flow.  Use datapath grouping when enabled. */
+
+// Case 1: Flows that belong to a single datapath don't required grouping.
+sb::Out_Logical_Flow(
+    ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+    .logical_datapath = Some{dp},
+    .logical_dp_group = None,
+    .pipeline         = pipeline,
+    .table_id         = f.stage.table_id,
+    .priority         = f.priority,
+    .__match          = f.__match.ival(),
+    .actions          = f.actions.ival(),
+    .tags             = f.tags,
+    .external_ids     = external_ids) :-
+    f in AggregatedFlow(),
+    f.logical_datapaths.ival().size() == 1,
+    Some{var dp} = f.logical_datapaths.ival().keys().nth(0),
+    var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress",
+    var external_ids = f.external_ids.ival().insert_imm("stage-name", f.stage.table_name).
+
+// Case 2: Flows that belong to more than one datapath are grouped when grouping is enabled
+//  (`UseLogicalDatapathGroups[true]`)
+sb::Out_Logical_Flow(
+    ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+    .logical_datapath = None,
+    .logical_dp_group = Some{group_uuid},
+    .pipeline         = pipeline,
+    .table_id         = f.stage.table_id,
+    .priority         = f.priority,
+    .__match          = f.__match.ival(),
+    .actions          = f.actions.ival(),
+    .tags             = f.tags,
+    .external_ids     = external_ids),
+sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths.ival().keys().to_set()) :-
+    f in AggregatedFlow(),
+    f.logical_datapaths.ival().size() > 1,
+    UseLogicalDatapathGroups[true],
+    var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress",
+    var external_ids = f.external_ids.ival().insert_imm("stage-name", f.stage.table_name),
+    var group_uuid = hash128(f.logical_datapaths.ival().keys()).
+
+// Case 3: Grouping is disabled; flatten shared flows into one-per-datapath.
+sb::Out_Logical_Flow(
+    ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.external_ids)),
+    .logical_datapath = Some{dp},
+    .logical_dp_group = None,
+    .pipeline         = pipeline,
+    .table_id         = f.stage.table_id,
+    .priority         = f.priority,
+    .__match          = f.__match.ival(),
+    .actions          = f.actions.ival(),
+    .tags             = f.tags,
+    .external_ids     = external_ids) :-
+    f in AggregatedFlow(),
+    f.logical_datapaths.ival().size() > 1,
+    UseLogicalDatapathGroups[false],
+    var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress",
+    var external_ids = f.external_ids.ival().insert_imm("stage-name", f.stage.table_name),
+    var dp = FlatMap(f.logical_datapaths.ival().keys()).
 
 /* Logical flows for forwarding groups. */
 Flow(.logical_datapath = sw._uuid,
