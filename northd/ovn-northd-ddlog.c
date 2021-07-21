@@ -643,7 +643,7 @@ northd_wait(struct northd_ctx *ctx)
 /* Generate OVSDB update command for delta-plus, delta-minus, and delta-update
  * tables. */
 static void
-ddlog_table_update_deltas(struct ds *ds, ddlog_prog ddlog, ddlog_delta *delta,
+ddlog_table_update_deltas(struct json *ops, ddlog_prog ddlog, ddlog_delta *delta,
                           const char *db, const char *table)
 {
     int error;
@@ -659,15 +659,12 @@ ddlog_table_update_deltas(struct ds *ds, ddlog_prog ddlog, ddlog_delta *delta,
         ddlog_free_json(updates);
         return;
     }
-
-    ds_put_cstr(ds, updates);
-    ds_put_char(ds, ',');
-    ddlog_free_json(updates);
+    json_array_add(ops, json_raw_create_nocopy(updates, ddlog_free_json));
 }
 
 /* Generate OVSDB update command for a output-only table. */
 static void
-ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog, ddlog_delta *delta,
+ddlog_table_update_output(struct json *ops, ddlog_prog ddlog, ddlog_delta *delta,
                           const char *db, const char *table)
 {
     int error;
@@ -687,10 +684,7 @@ ddlog_table_update_output(struct ds *ds, ddlog_prog ddlog, ddlog_delta *delta,
         ddlog_free_json(updates);
         return;
     }
-
-    ds_put_cstr(ds, updates);
-    ds_put_char(ds, ',');
-    ddlog_free_json(updates);
+    json_array_add(ops, json_raw_create_nocopy(updates, ddlog_free_json));
 }
 
 /* A set of UUIDs.
@@ -809,7 +803,7 @@ struct dump_index_data {
     ddlog_prog prog;
     struct hmap *rows_present;
     const char *table;
-    struct ds *ops_s;
+    struct json *ops;
 };
 
 static void OVS_UNUSED
@@ -847,8 +841,7 @@ index_cb(uintptr_t data_, const ddlog_record *rec)
                      data->table);
         return;
     }
-    ds_put_format(data->ops_s, "%s,", s);
-    ddlog_free_json(s);
+    json_array_add(data->ops, json_raw_create_nocopy(s, ddlog_free_json));
 }
 
 static struct json *
@@ -866,15 +859,13 @@ where_uuid_equals(const struct uuid *uuid)
 }
 
 static void
-add_delete_row_op(const char *table, const struct uuid *uuid, struct ds *ops_s)
+add_delete_row_op(const char *table, const struct uuid *uuid, struct json *ops)
 {
     struct json *op = json_object_create();
     json_object_put_string(op, "op", "delete");
     json_object_put_string(op, "table", table);
     json_object_put(op, "where", where_uuid_equals(uuid));
-    json_to_ds(op, 0, ops_s);
-    json_destroy(op);
-    ds_put_char(ops_s, ',');
+    json_array_add(ops, op);
 }
 
 static void
@@ -898,14 +889,9 @@ northd_update_sb_cfg_cb(
 static struct json *
 get_database_ops(struct northd_ctx *ctx)
 {
-    struct ds ops_s = DS_EMPTY_INITIALIZER;
-    ds_put_char(&ops_s, '[');
-    json_string_escape(ctx->db_name, &ops_s);
-    ds_put_char(&ops_s, ',');
-    size_t start_len = ops_s.length;
-
+    struct json *ops = json_array_create_1(json_string_create(ctx->db_name));
     for (const char **p = ctx->output_relations; *p; p++) {
-        ddlog_table_update_deltas(&ops_s, ctx->ddlog, ctx->delta,
+        ddlog_table_update_deltas(ops, ctx->ddlog, ctx->delta,
                                   ctx->db_name, *p);
     }
 
@@ -970,7 +956,7 @@ get_database_ops(struct northd_ctx *ctx)
             /* For each row in the index, update a corresponding OVSDB row, if
              * there is one, otherwise insert a new row. */
             struct dump_index_data cbdata = {
-                ctx->ddlog, &rows_present, table, &ops_s
+                ctx->ddlog, &rows_present, table, ops
             };
             ddlog_dump_index(ctx->ddlog, idxid, index_cb, (uintptr_t) &cbdata);
 
@@ -978,23 +964,23 @@ get_database_ops(struct northd_ctx *ctx)
              * but not DDlog.  Delete them from OVSDB. */
             struct uuidset_node *node;
             HMAP_FOR_EACH (node, hmap_node, &rows_present) {
-                add_delete_row_op(table, &node->uuid, &ops_s);
+                add_delete_row_op(table, &node->uuid, ops);
             }
             uuidset_destroy(&rows_present);
 
             /* Discard any queued output to this table, since we just
              * did a full sync to it. */
-            struct ds tmp = DS_EMPTY_INITIALIZER;
-            ddlog_table_update_output(&tmp, ctx->ddlog, ctx->delta,
+            struct json *tmp = json_array_create_empty();
+            ddlog_table_update_output(tmp, ctx->ddlog, ctx->delta,
                                       ctx->db_name, table);
-            ds_destroy(&tmp);
+            json_destroy(tmp);
         }
 
         json_destroy(ctx->output_only_data);
         ctx->output_only_data = NULL;
     } else {
         for (const char **p = ctx->output_only_relations; *p; p++) {
-            ddlog_table_update_output(&ops_s, ctx->ddlog, ctx->delta,
+            ddlog_table_update_output(ops, ctx->ddlog, ctx->delta,
                                       ctx->db_name, *p);
         }
     }
@@ -1020,22 +1006,23 @@ get_database_ops(struct northd_ctx *ctx)
         if (new_sb_cfg != old_sb_cfg) {
             old_sb_cfg = new_sb_cfg;
             old_sb_cfg_timestamp = time_wall_msec();
-            ds_put_format(&ops_s, "{\"op\":\"update\",\"table\":\"NB_Global\",\"where\":[],"
-                          "\"row\":{\"sb_cfg_timestamp\":%"PRId64"}},", old_sb_cfg_timestamp);
+
+            struct json *op = json_object_create();
+            json_object_put_string(op, "op", "update");
+            json_object_put_string(op, "table", "NB_Global");
+            json_object_put(op, "where", json_array_create_empty());
+            struct json *row = json_object_create();
+            json_object_put(row, "sb_cfg_timestamp",
+                            json_integer_create(old_sb_cfg_timestamp));
+            json_object_put(op, "row", row);
+            json_array_add(ops, op);
         }
     }
 
-    struct json *ops;
-    if (ops_s.length > start_len) {
-        ds_chomp(&ops_s, ',');
-        ds_put_char(&ops_s, ']');
-        ops = json_from_string(ds_cstr(&ops_s));
-    } else {
-        ops = NULL;
+    if (ops->array.n == 1) {
+        json_destroy(ops);
+        return NULL;
     }
-
-    ds_destroy(&ops_s);
-
     return ops;
 }
 
