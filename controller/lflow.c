@@ -36,6 +36,8 @@
 #include "simap.h"
 #include "sset.h"
 
+#include "ddlog.h"
+
 VLOG_DEFINE_THIS_MODULE(lflow);
 
 COVERAGE_DEFINE(lflow_run);
@@ -343,9 +345,10 @@ add_logical_flows(struct lflow_ctx_in *l_ctx_in,
     controller_event_opts_init(&controller_event_opts);
 
     SBREC_LOGICAL_FLOW_TABLE_FOR_EACH (lflow, l_ctx_in->logical_flow_table) {
+
         if (!consider_logical_flow(lflow, &dhcp_opts, &dhcpv6_opts,
-                                   &nd_ra_opts, &controller_event_opts,
-                                   l_ctx_in, l_ctx_out)) {
+                    &nd_ra_opts, &controller_event_opts,
+                    l_ctx_in, l_ctx_out)) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
             VLOG_ERR_RL(&rl, "Conjunction id overflow when processing lflow "
                         UUID_FMT, UUID_ARGS(&lflow->header_.uuid));
@@ -363,6 +366,23 @@ bool
 lflow_handle_changed_flows(struct lflow_ctx_in *l_ctx_in,
                            struct lflow_ctx_out *l_ctx_out)
 {
+    /** Some DDlog cruft **/
+    table_id input_table;
+    table_id output_table;
+    const char *input_relation = "OVN_Southbound::Logical_Flow";
+    const char *output_relation = "OVNFlows";
+
+    input_table = ddlog_get_table_id(DDLOG_PROG, input_relation);
+    if (input_table == -1) {
+        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %ld", input_relation, input_table);
+    }
+
+    output_table = ddlog_get_table_id(DDLOG_PROG, output_relation);
+    if (output_table == -1) {
+        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %ld", output_relation, output_table);
+    }
+    /** End of DDlog cruft **/
+
     bool ret = true;
     const struct sbrec_logical_flow *lflow;
 
@@ -418,8 +438,61 @@ lflow_handle_changed_flows(struct lflow_ctx_in *l_ctx_in,
         if (lflow) {
             VLOG_DBG("re-add lflow "UUID_FMT,
                      UUID_ARGS(&lflow->header_.uuid));
+
+            /* Prepare the record to be inserted to OVN_Southbound::Logical_Flow */
+            ddlog_record **struct_args = (ddlog_record **)malloc(9 * sizeof(ddlog_record *));;
+
+            ddlog_record *flow_uuid = ddlog_u128(lflow->header_.uuid.parts[0]);
+            ddlog_record *flow_garbage_ldp = ddlog_u128(0xdeadbeef);
+            ddlog_record *flow_garbage_ldpg = ddlog_u128(0x123456);
+            ddlog_record *flow_pipeline = ddlog_string(lflow->pipeline);
+            ddlog_record *flow_table_id = ddlog_i64(lflow->table_id);
+            ddlog_record *flow_priority = ddlog_i64(lflow->priority);
+            ddlog_record *flow_match = ddlog_string(lflow->match);
+            ddlog_record *flow_actions = ddlog_string(lflow->actions);
+
+            struct_args[0] = flow_uuid;
+            struct_args[1] = flow_garbage_ldp;
+            struct_args[2] = flow_garbage_ldpg;
+            struct_args[3] = flow_pipeline;
+            struct_args[4] = flow_table_id;
+            struct_args[5] = flow_priority;
+            struct_args[6] = flow_match;
+            struct_args[7] = flow_actions;
+            struct_args[8] = ddlog_map(NULL, 0);
+
+            ddlog_record *new_record = ddlog_struct(input_relation, struct_args, 9);
+
+            /* Finished prepared record */
+
+            if (ddlog_transaction_start(DDLOG_PROG) < 0) {
+                VLOG_INFO("ddlog failed to start transaction");
+            }
+
+            ddlog_cmd *cmd = ddlog_insert_cmd(input_table, new_record);
+            if (cmd == NULL) {
+                VLOG_INFO("ddlog failed to create insert cmd");
+            }
+
+            if (ddlog_apply_updates(DDLOG_PROG, &cmd, 1) < 0) {
+                VLOG_INFO("ddlog failed to apply updates");
+            }
+
+            ddlog_delta *changes = ddlog_transaction_commit_dump_changes(DDLOG_PROG);
+            if (changes == NULL) {
+                VLOG_INFO("ddlog failed to commit transaction");
+            }
+
+            ddlog_delta_enumerate(changes, &print_deltas_callback, (uintptr_t)(void*)(NULL));
+
+            VLOG_INFO("ddlog about to check if OVNFlows has anything..");
+            ddlog_dump_table(DDLOG_PROG, output_table, &print_records_callback, (uintptr_t)(void*)(NULL));
+
+            free(struct_args);
+            /*** End DDlog test code ***/
+
             if (!consider_logical_flow(lflow, &dhcp_opts, &dhcpv6_opts,
-                                       &nd_ra_opts, &controller_event_opts,
+                        &nd_ra_opts, &controller_event_opts,
                                        l_ctx_in, l_ctx_out)) {
                 ret = false;
                 break;
@@ -911,6 +984,8 @@ consider_logical_flow(const struct sbrec_logical_flow *lflow,
                       struct lflow_ctx_in *l_ctx_in,
                       struct lflow_ctx_out *l_ctx_out)
 {
+    VLOG_INFO("hello, in consider_logical_flow, match string: %s", lflow->match);
+
     const struct sbrec_logical_dp_group *dp_group = lflow->logical_dp_group;
     const struct sbrec_datapath_binding *dp = lflow->logical_datapath;
     bool ret = true;

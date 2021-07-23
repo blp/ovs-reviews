@@ -72,6 +72,7 @@
 #include "hmapx.h"
 
 #include "controller/ovn_controller_ddlog/ddlog.h"
+#include "ddlog.h"
 
 VLOG_DEFINE_THIS_MODULE(main);
 
@@ -2564,22 +2565,6 @@ check_northd_version(struct ovsdb_idl *ovs_idl, struct ovsdb_idl *ovnsb_idl,
     return true;
 }
 
-static bool print_records_callback(uintptr_t arg, const ddlog_record *rec, ssize_t weight)
-{
-    (void) arg;
-    (void) weight;
-
-    VLOG_INFO("Printing DDlog records");
-    char *record_as_string = ddlog_dump_record(rec);
-    if (record_as_string == NULL) {
-        VLOG_INFO("failed to dump record");
-    }
-    VLOG_INFO("DDlog record: %s", record_as_string);
-    ddlog_string_free(record_as_string);
-
-    return true;
-}
-
 int
 main(int argc, char *argv[])
 {
@@ -2738,67 +2723,8 @@ main(int argc, char *argv[])
     OVS_NODES
 #undef OVS_NODE
 
-    /*** Begin DDlog test code ***/
-    // DDlog vars
-    ddlog_prog prog;
-    table_id input_table;
-    table_id output_table;
-    const char *input_relation = "OVN_Southbound::Port_Group";
-    const char *output_relation = "PortGroupSubset";
-
-    prog = ddlog_run(1, true, NULL, NULL);
-    if (!prog) {
-        ovs_fatal(0, "DDlog instance could not be created");
-    }
-
-    input_table = ddlog_get_table_id(prog, input_relation);
-    if (input_table == -1) {
-        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %ld", input_relation, input_table);
-    }
-
-    output_table  = ddlog_get_table_id(prog, output_relation);
-    if (output_table == -1) {
-        VLOG_INFO("ddlog_get_table_id returned -1 for %s, %ld", output_relation, output_table);
-    }
-
-    /* Prepare the record to be inserted to OVN_Southbound::Port_Group */
-    ddlog_record **struct_args;
-    ddlog_record *uuid = ddlog_u128(123456);
-    ddlog_record *name = ddlog_string("teststring");
-    ddlog_record *port_set_0 = ddlog_string("port0");
-
-    ddlog_record *ports = ddlog_set(&port_set_0, 1);
-
-    struct_args = (ddlog_record**)malloc(3 * sizeof(ddlog_record*));
-    struct_args[0] = uuid;
-    struct_args[1] = name;
-    struct_args[2] = ports;
-
-    ddlog_record *new_record = ddlog_struct(input_relation, struct_args, 3);
-    /* Finished prepared record */
-
-    if (ddlog_transaction_start(prog) < 0) {
-        VLOG_INFO("ddlog failed to start transaction");
-    }
-
-    ddlog_cmd *cmd = ddlog_insert_cmd(input_table, new_record);
-    if (cmd == NULL) {
-        VLOG_INFO("ddlog failed to create insert cmd");
-    }
-
-    if (ddlog_apply_updates(prog, &cmd, 1) < 0) {
-        VLOG_INFO("ddlog failed to apply updates");
-    }
-
-    ddlog_delta *changes = ddlog_transaction_commit_dump_changes(prog);
-    if (changes == NULL) {
-        VLOG_INFO("ddlog failed to commit transaction");
-    }
-
-    ddlog_dump_table(prog, output_table, &print_records_callback, (uintptr_t)(void*)(NULL));
-
-    free(struct_args);
-    /*** End DDlog test code ***/
+    // Init the ovn-controller DDlog instance
+    init_ddlog();
 
     /* Add dependencies between inc-proc-engine nodes. */
 
@@ -3381,7 +3307,7 @@ loop_done:
     free(ovs_remote);
     service_stop();
 
-    ddlog_stop(prog);
+    stop_ddlog();
 
     exit(retval);
 }

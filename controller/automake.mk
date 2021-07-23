@@ -6,6 +6,8 @@ controller_ovn_controller_SOURCES = \
 	controller/binding.h \
 	controller/chassis.c \
 	controller/chassis.h \
+	controller/ddlog.c \
+	controller/ddlog.h \
 	controller/encaps.c \
 	controller/encaps.h \
 	controller/ha-chassis.c \
