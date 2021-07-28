@@ -6,6 +6,8 @@ controller_ovn_controller_SOURCES = \
 	controller/binding.h \
 	controller/chassis.c \
 	controller/chassis.h \
+	controller/ddlog.c \
+	controller/ddlog.h \
 	controller/encaps.c \
 	controller/encaps.h \
 	controller/ha-chassis.c \
@@ -47,7 +49,9 @@ EXTRA_DIST += \
 	$(controller_ddlog_sources)
 
 controller_ddlog_sources = \
-	controller/ovn_controller.dl
+	controller/ovn_controller.dl \
+    controller/helper.dl \
+    controller/helper.rs
 controller_ddlog_nodist_sources = \
 	controller/OVN_Southbound.dl \
 	controller/OVS.dl

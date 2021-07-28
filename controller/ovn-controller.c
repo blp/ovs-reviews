@@ -71,6 +71,9 @@
 #include "lib/inc-proc-eng.h"
 #include "hmapx.h"
 
+#include "controller/ovn_controller_ddlog/ddlog.h"
+#include "ddlog.h"
+
 VLOG_DEFINE_THIS_MODULE(main);
 
 static unixctl_cb_func ovn_controller_exit;
@@ -2720,6 +2723,9 @@ main(int argc, char *argv[])
     OVS_NODES
 #undef OVS_NODE
 
+    // Init the ovn-controller DDlog instance
+    init_ddlog();
+
     /* Add dependencies between inc-proc-engine nodes. */
 
     engine_add_input(&en_addr_sets, &en_sb_address_set,
@@ -3300,6 +3306,8 @@ loop_done:
 
     free(ovs_remote);
     service_stop();
+
+    stop_ddlog();
 
     exit(retval);
 }

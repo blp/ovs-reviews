@@ -1,4 +1,15 @@
 import OVN_Southbound as sb
 import OVS
+import ovsdb
+import helper
 
-// Insert something useful here.
+// Flow is match and actions
+output relation Logical_Flow_Dependencies(
+    flow : sb::Logical_Flow,
+    address_sets: Set<string>,
+    port_groups: Set<string>
+)
+
+Logical_Flow_Dependencies(flow, addr_set, pg) :- 
+    sb::Logical_Flow[flow],
+    (var addr_set, var pg) = expr_references(flow.__match).
