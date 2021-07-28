@@ -370,7 +370,7 @@ lflow_handle_changed_flows(struct lflow_ctx_in *l_ctx_in,
     table_id input_table;
     table_id output_table;
     const char *input_relation = "OVN_Southbound::Logical_Flow";
-    const char *output_relation = "OVNFlows";
+    const char *output_relation = "Logical_Flow_Dependencies";
 
     input_table = ddlog_get_table_id(DDLOG_PROG, input_relation);
     if (input_table == -1) {
@@ -484,9 +484,6 @@ lflow_handle_changed_flows(struct lflow_ctx_in *l_ctx_in,
             }
 
             ddlog_delta_enumerate(changes, &print_deltas_callback, (uintptr_t)(void*)(NULL));
-
-            VLOG_INFO("ddlog about to check if OVNFlows has anything..");
-            ddlog_dump_table(DDLOG_PROG, output_table, &print_records_callback, (uintptr_t)(void*)(NULL));
 
             free(struct_args);
             /*** End DDlog test code ***/

@@ -49,7 +49,9 @@ EXTRA_DIST += \
 	$(controller_ddlog_sources)
 
 controller_ddlog_sources = \
-	controller/ovn_controller.dl
+	controller/ovn_controller.dl \
+    controller/helper.dl \
+    controller/helper.rs
 controller_ddlog_nodist_sources = \
 	controller/OVN_Southbound.dl \
 	controller/OVS.dl
