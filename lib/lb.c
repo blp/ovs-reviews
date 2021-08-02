@@ -179,9 +179,6 @@ ovn_northd_lb_create(const struct nbrec_load_balancer *nbrec_lb)
     size_t n_vips = 0;
 
     SMAP_FOR_EACH (node, &nbrec_lb->vips) {
-        if (strcmp(node->key, "4.0.0.100"))
-            continue;
-
         struct ovn_lb_vip *lb_vip = &lb->vips[n_vips];
         struct ovn_northd_lb_vip *lb_vip_nb = &lb->vips_nb[n_vips];
 
