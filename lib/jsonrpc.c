@@ -270,6 +270,10 @@ jsonrpc_send(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
     length = ds.length;
     json_destroy(json);
 
+    if (length > 1000000) {
+        VLOG_INFO("%.1f GB", length / (1000. * 1000. * 1000.));
+    }
+
     buf = xmalloc(sizeof *buf);
     ofpbuf_use_ds(buf, &ds);
     ovs_list_push_back(&rpc->output, &buf->list_node);

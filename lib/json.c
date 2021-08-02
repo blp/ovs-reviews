@@ -146,6 +146,9 @@ json_type_to_string(enum json_type type)
     case JSON_STRING:
         return "string";
 
+    case JSON_RAW:
+        return "raw";
+
     case JSON_N_TYPES:
     default:
         return "<invalid>";
@@ -178,6 +181,37 @@ struct json *
 json_string_create(const char *s)
 {
     return json_string_create_nocopy(xstrdup(s));
+}
+
+static struct json *
+json_raw_create__(char *s, size_t length, void (*destruct)(char *))
+{
+    struct json *json = json_create(JSON_RAW);
+    json->raw = (struct json_raw) {
+        .raw = s,
+        .length = length,
+        .destruct = destruct,
+    };
+    return json;
+}
+
+struct json *
+json_raw_create_nocopy(char *s, void (*destruct)(char *))
+{
+    return json_raw_create__(s, strlen(s), destruct);
+}
+
+static void
+destruct_free(char *s)
+{
+    free(s);
+}
+
+struct json *
+json_raw_create(const char *s)
+{
+    size_t length = strlen(s);
+    return json_raw_create__(xmemdup0(s, length), length, destruct_free);
 }
 
 struct json *
@@ -365,6 +399,10 @@ json_destroy(struct json *json)
             free(json->string);
             break;
 
+        case JSON_RAW:
+            json->raw.destruct(json->raw.raw);
+            break;
+
         case JSON_NULL:
         case JSON_FALSE:
         case JSON_TRUE:
@@ -432,6 +470,10 @@ json_deep_clone(const struct json *json)
 
     case JSON_REAL:
         return json_real_create(json->real);
+
+    case JSON_RAW:
+        return json_raw_create__(xmemdup0(json->raw.raw, json->raw.length),
+                                 json->raw.length, destruct_free);
 
     case JSON_N_TYPES:
     default:
@@ -534,6 +576,9 @@ json_hash(const struct json *json, size_t basis)
     case JSON_REAL:
         return hash_double(json->real, basis);
 
+    case JSON_RAW:
+        return hash_bytes(json->raw.raw, json->raw.length, basis);
+
     case JSON_N_TYPES:
     default:
         OVS_NOT_REACHED();
@@ -597,6 +642,9 @@ json_equal(const struct json *a, const struct json *b)
 
     case JSON_STRING:
         return !strcmp(a->string, b->string);
+
+    case JSON_RAW:
+        return !strcmp(a->raw.raw, b->raw.raw);
 
     case JSON_NULL:
     case JSON_FALSE:
@@ -1561,6 +1609,10 @@ json_serialize(const struct json *json, struct json_serializer *s)
 
     case JSON_STRING:
         json_serialize_string(json->string, ds);
+        break;
+
+    case JSON_RAW:
+        ds_put_cstr(ds, json->raw.raw);
         break;
 
     case JSON_N_TYPES:

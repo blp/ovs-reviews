@@ -50,6 +50,7 @@ enum json_type {
     JSON_INTEGER,               /* 123. */
     JSON_REAL,                  /* 123.456. */
     JSON_STRING,                /* "..." */
+    JSON_RAW,                   /* string is unparsed JSON */
     JSON_N_TYPES
 };
 
@@ -59,6 +60,12 @@ const char *json_type_to_string(enum json_type);
 struct json_array {
     size_t n, n_allocated;
     struct json **elems;
+};
+
+struct json_raw {
+    char *raw;
+    size_t length;
+    void (*destruct)(char *);
 };
 
 /* A JSON value. */
@@ -71,6 +78,7 @@ struct json {
         long long int integer;
         double real;
         char *string;
+        struct json_raw raw;
     };
 };
 
@@ -78,6 +86,8 @@ struct json *json_null_create(void);
 struct json *json_boolean_create(bool);
 struct json *json_string_create(const char *);
 struct json *json_string_create_nocopy(char *);
+struct json *json_raw_create(const char *);
+struct json *json_raw_create_nocopy(char *, void (*destruct)(char *));
 struct json *json_integer_create(long long int);
 struct json *json_real_create(double);
 
