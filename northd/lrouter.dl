@@ -20,7 +20,6 @@ import ovsdb
 import ovn
 import helpers
 import lswitch
-import map
 
 function is_enabled(lr: nb::Logical_Router): bool { is_enabled(lr.enabled) }
 function is_enabled(lrp: Intern<nb::Logical_Router_Port>): bool { is_enabled(lrp.enabled) }
@@ -519,8 +518,7 @@ relation RouterLBVIP(
     backends: string)
 
 RouterLBVIP(router, lb, vip, backends) :-
-    RouterLB(router, lb@(&nb::Load_Balancer{.vips = vips0})),
-    var vips = vips0.filter(|k, v| k == "4.0.0.100"),
+    RouterLB(router, lb@(&nb::Load_Balancer{.vips = vips})),
     var kv = FlatMap(vips),
     (var vip, var backends) = kv.
 
