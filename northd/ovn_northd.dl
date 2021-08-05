@@ -3119,7 +3119,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority         = priority,
      .__match          = __match.intern(),
      .actions          = actions.intern(),
-     .stage_hint       = Some{lb._uuid}) :-
+     .stage_hint       = None) :-
     sw in &Switch(),
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
     sw.load_balancer.contains(lb._uuid),
@@ -4396,7 +4396,7 @@ Flow(.logical_datapath = sp.sw._uuid,
      .__match          = (fLAGBIT_NOT_VXLAN() ++
                           " && arp.op == 1 && arp.tpa == {${ipv4s}}").intern(),
      .actions          = i"outport = ${flood}; output;",
-     .stage_hint       = Some{sp.lsp._uuid}) :-
+     .stage_hint       = None) :-
     SwitchPortARPForward(.sp = sp, .ip = IPv4{ipv4}, .reachable = false),
     var ipv4s = ipv4.group_by(sp).to_vec().map(to_string).join(", "),
     var flood = json_string_escape(mC_FLOOD().0).
@@ -6294,7 +6294,7 @@ for (RouterLBVIP(
              .priority         = prio,
              .__match          = __match.intern(),
              .actions          = __actions,
-             .stage_hint       = Some{lb._uuid});
+             .stage_hint       = None);
 
         /* Higher priority rules are added for load-balancing in DNAT
          * table.  For every match (on a VIP[:port]), we add two flows
@@ -6338,7 +6338,7 @@ for (RouterLBVIP(
                  .priority         = prio,
                  .__match          = est_match.intern(),
                  .actions          = actions,
-                 .stage_hint       = Some{lb._uuid});
+                 .stage_hint       = None);
 
             if (nats_contain_vip(nats, ip_address)) {
                 /* The load balancer vip is also present in the NAT entries.
@@ -6415,7 +6415,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = priority,
      .__match          = __match.intern(),
      .actions          = actions.intern(),
-     .stage_hint       = Some{lb._uuid}) :-
+     .stage_hint       = None) :-
     r in &Router(),
     r.l3dgw_port.is_some() or r.is_gateway,
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
