@@ -659,10 +659,18 @@ for i in $(seq $n_northds); do
     if $ddlog && $ddlog_record; then
         northd_args=--ddlog-record=replay$inst.txt
     fi
-    rungdb $gdb_ovn_northd $gdb_ovn_northd_ex $OVN_NORTHD --detach \
-            --no-chdir --pidfile=$OVN_NORTHD$inst.pid -vconsole:off \
-            --log-file=$OVN_NORTHD$inst.log -vsyslog:off \
-            --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB" $northd_args
+    export LD_LIBRARY_PATH=$HOME/work/ovn/_build/lib/.libs:$HOME/work/ovs/_build/ovsdb/.libs:$HOME/work/ovs/_build/lib/.libs
+    if $ddlog && false; then
+	(cd "$sandbox" && valgrind --tool=callgrind $HOME/work/ovn/_build/northd/.libs/ovn-northd-ddlog \
+				   --no-chdir --pidfile=$OVN_NORTHD$inst.pid -vconsole:off \
+				   --log-file=$OVN_NORTHD$inst.log -vsyslog:off \
+				   --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB" $northd_args)&
+    else
+	rungdb $gdb_ovn_northd $gdb_ovn_northd_ex $OVN_NORTHD --detach \
+               --no-chdir --pidfile=$OVN_NORTHD$inst.pid -vconsole:off \
+               --log-file=$OVN_NORTHD$inst.log -vsyslog:off \
+               --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB" $northd_args
+    fi
 done
 for i in $(seq $n_controllers); do
     if [ $i -eq 1 ]; then inst=""; else inst=$i; fi
