@@ -4338,6 +4338,19 @@ relation SwitchPortARPForward(
     ip: v46_ip,
     reachable: bool
 )
+SwitchPortARPForward(sp, ip, true) :-
+    sp in &SwitchPort(.peer = Some{rp}),
+    rp.is_enabled(),
+    var ipv4 = FlatMap(rp.networks.ipv4_addrs),
+    var ip = IPv4{ipv4.addr}.
+SwitchPortARPForward(sp, ip, true) :-
+    sp in &SwitchPort(.peer = Some{rp}),
+    rp.is_enabled(),
+    var ipv6 = FlatMap(rp.networks.ipv6_addrs),
+    var ip = IPv6{ipv6.addr}.
+/* Check if the ovn port has a network configured on which we could
+ * expect ARP requests for the LB VIP.
+ */
 SwitchPortARPForward(sp, ip, reachable) :-
     sp in &SwitchPort(.peer = Some{rp}),
     rp.is_enabled(),
