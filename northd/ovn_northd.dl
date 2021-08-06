@@ -3121,8 +3121,8 @@ Flow(.logical_datapath = sw._uuid,
      .actions          = actions.intern(),
      .stage_hint       = None) :-
     sw in &Switch(),
-    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
-    sw.load_balancer.contains(lb._uuid),
+    var lb_uuid = FlatMap(sw.load_balancer),
+    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb@&nb::Load_Balancer{._uuid = lb_uuid}}],
     var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
     var actions = {
         /* Store the original destination IP to be used when generating
@@ -6431,8 +6431,8 @@ Flow(.logical_datapath = r._uuid,
      .stage_hint       = None) :-
     r in &Router(),
     r.l3dgw_port.is_some() or r.is_gateway,
-    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
-    r.load_balancer.contains(lb._uuid),
+    var lb_uuid = FlatMap(r.load_balancer),
+    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb@&nb::Load_Balancer{._uuid = lb_uuid}}],
     var __match
         = "ct.new && " ++
           get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true, true) ++
