@@ -3156,7 +3156,7 @@ Flow(.logical_datapath = sw._uuid,
      .actions          = actions.intern(),
      .io_port          = None,
      .controller_meter = meter,
-     .stage_hint       = stage_hint(lb._uuid)) :-
+     .stage_hint       = 0) :-
     sw in &Switch(),
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
     sw.load_balancer.contains(lb._uuid),
@@ -4580,7 +4580,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority         = 90,
      .__match          = i"${fLAGBIT_NOT_VXLAN()} && arp.op == 1 && arp.tpa == ${ipv4}",
      .actions          = i"outport = ${flood}; output;",
-     .stage_hint       = stage_hint(sp.lsp._uuid),
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
@@ -6648,7 +6648,7 @@ for (RouterLBVIP(
              .priority         = prio,
              .__match          = __match.intern(),
              .actions          = __actions,
-             .stage_hint       = stage_hint(lb._uuid),
+             .stage_hint       = 0,
              .io_port          = None,
              .controller_meter = None);
 
@@ -6694,7 +6694,7 @@ for (RouterLBVIP(
                  .priority         = prio,
                  .__match          = est_match.intern(),
                  .actions          = actions,
-                 .stage_hint       = stage_hint(lb._uuid),
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -6779,7 +6779,7 @@ Flow(.logical_datapath = r._uuid,
      .actions          = actions.intern(),
      .io_port          = None,
      .controller_meter = meter,
-     .stage_hint       = stage_hint(lb._uuid)) :-
+     .stage_hint       = 0) :-
     r in &Router(),
     r.l3dgw_port.is_some() or r.is_gateway,
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
