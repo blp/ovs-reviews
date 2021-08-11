@@ -1644,8 +1644,12 @@ relation Flow(
     actions:          string,
     io_port:          Option<string>,
     controller_meter: Option<string>,
-    stage_hint:       Option<uuid>
+    stage_hint:       bit<32>
 )
+
+function stage_hint(_uuid: uuid): bit<32> {
+    _uuid[127:96]
+}
 
 /* If this option is 'true' northd will combine logical flows that differ by
  * logical datapath only by creating a datapath group. */
@@ -1673,11 +1677,12 @@ function make_flow_tags(io_port: Option<string>): Map<string,string> {
         Some{s} -> [ "in_out_port" -> s ]
     }
 }
-function make_flow_external_ids(stage_hint: Option<uuid>, stage: Stage): Map<string,string> {
-    match (stage_hint) {
-        None -> ["stage-name" -> stage.table_name],
-        Some{uuid} -> ["stage-name" -> stage.table_name,
-                       "stage-hint" -> "${hex(uuid[127:96])}"]
+function make_flow_external_ids(stage_hint: bit<32>, stage: Stage): Map<string,string> {
+    if (stage_hint == 0) {
+        ["stage-name" -> stage.table_name]
+    } else {
+        ["stage-name" -> stage.table_name,
+         "stage-hint" -> "${hex(stage_hint)}"]
     }
 }
 AggregatedFlow(.logical_datapaths = g.to_set(),
@@ -1744,7 +1749,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority         = 50,
      .__match          = __match,
      .actions          = actions,
-     .stage_hint       = Some{fg_uuid},
+     .stage_hint       = stage_hint(fg_uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sw in &Switch(),
@@ -1776,7 +1781,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority         = 50,
      .__match          = __match,
      .actions          = actions,
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     sw in &Switch(),
@@ -1799,7 +1804,7 @@ for (sw in &Switch()) {
              .priority         = 100,
              .__match          = "vlan.present",
              .actions          = "drop;",
-             .stage_hint       = None /*TODO: check*/,
+             .stage_hint       = 0 /*TODO: check*/,
              .io_port          = None,
              .controller_meter = None)
     };
@@ -1810,7 +1815,7 @@ for (sw in &Switch()) {
          .priority         = 100,
          .__match          = "eth.src[40]",
          .actions          = "drop;",
-         .stage_hint       = None /*TODO: check*/,
+         .stage_hint       = 0 /*TODO: check*/,
          .io_port          = None,
          .controller_meter = None)
     /* Port security flows have priority 50 (see below) and will continue to the next table
@@ -1872,7 +1877,7 @@ for (&Switch(._uuid =ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -1880,7 +1885,7 @@ for (&Switch(._uuid =ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -1889,7 +1894,7 @@ for (&Switch(._uuid =ls_uuid)) {
          .priority         = 110,
          .__match          = "eth.dst == $svc_monitor_mac",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -1897,7 +1902,7 @@ for (&Switch(._uuid =ls_uuid)) {
          .priority         = 110,
          .__match          = "eth.src == $svc_monitor_mac",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -1912,7 +1917,7 @@ for (&SwitchACL(.sw = sw@&Switch{._uuid = ls_uuid}, .acl = &acl, .has_fair_meter
                      .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
                      .__match          = acl.__match,
                      .actions          = "next;",
-                     .stage_hint       = Some{acl._uuid},
+                     .stage_hint       = stage_hint(acl._uuid),
                      .io_port          = None,
                      .controller_meter = None)
             } else {
@@ -1921,7 +1926,7 @@ for (&SwitchACL(.sw = sw@&Switch{._uuid = ls_uuid}, .acl = &acl, .has_fair_meter
                      .priority         = acl.priority + oVN_ACL_PRI_OFFSET(),
                      .__match          = acl.__match,
                      .actions          = "next;",
-                     .stage_hint       = Some{acl._uuid},
+                     .stage_hint       = stage_hint(acl._uuid),
                      .io_port          = None,
                      .controller_meter = None)
             }
@@ -1953,7 +1958,7 @@ for (&SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "router"},
          .priority         = 110,
          .__match          = "ip && inport == ${lsp_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -1961,7 +1966,7 @@ for (&SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "router"},
          .priority         = 110,
          .__match          = "ip && outport == ${lsp_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -1974,7 +1979,7 @@ for (&SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "localnet"},
          .priority         = 110,
          .__match          = "ip && inport == ${lsp_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -1982,7 +1987,7 @@ for (&SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "localnet"},
          .priority         = 110,
          .__match          = "ip && outport == ${lsp_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -1998,7 +2003,7 @@ for (&Switch(._uuid = ls_uuid, .has_stateful_acl = true)) {
          .__match          = "nd || nd_rs || nd_ra || mldv1 || mldv2 || "
                              "(udp && udp.src == 546 && udp.dst == 547)",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2007,7 +2012,7 @@ for (&Switch(._uuid = ls_uuid, .has_stateful_acl = true)) {
          .__match          = "nd || nd_rs || nd_ra || mldv1 || mldv2 || "
                              "(udp && udp.src == 546 && udp.dst == 547)",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -2024,7 +2029,7 @@ for (&Switch(._uuid = ls_uuid, .has_stateful_acl = true)) {
          .priority         = 100,
          .__match          = "ip",
          .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2032,7 +2037,7 @@ for (&Switch(._uuid = ls_uuid, .has_stateful_acl = true)) {
          .priority         = 100,
          .__match          = "ip",
          .actions          = "${rEGBIT_CONNTRACK_DEFRAG()} = 1; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -2046,7 +2051,7 @@ for (&Switch(._uuid = ls_uuid)) {
              .priority         = 110,
              .__match          = __match,
              .actions          = "next;",
-             .stage_hint       = None,
+             .stage_hint       = 0,
              .io_port          = None,
              .controller_meter = None);
         Flow(.logical_datapath = ls_uuid,
@@ -2054,7 +2059,7 @@ for (&Switch(._uuid = ls_uuid)) {
              .priority         = 110,
              .__match          = __match,
              .actions          = "next;",
-             .stage_hint       = None,
+             .stage_hint       = 0,
              .io_port          = None,
              .controller_meter = None)
     };
@@ -2065,7 +2070,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 110,
          .__match          = "eth.dst == $svc_monitor_mac",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2073,7 +2078,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 110,
          .__match          = "eth.src == $svc_monitor_mac",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -2083,7 +2088,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2091,7 +2096,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -2103,7 +2108,7 @@ if (lsp.__type == "router" or lsp.__type == "localnet") {
          .priority         = 110,
          .__match          = "ip && inport == ${lsp_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2111,7 +2116,7 @@ if (lsp.__type == "router" or lsp.__type == "localnet") {
          .priority         = 110,
          .__match          = "ip && outport == ${lsp_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -2171,7 +2176,7 @@ Flow(.logical_datapath = sw._uuid,
      .actions          = __action,
      .io_port          = None,
      .controller_meter = sw.copp.get(cOPP_EVENT_ELB()),
-     .stage_hint       = Some{lb._uuid}) :-
+     .stage_hint       = stage_hint(lb._uuid)) :-
     SwitchLBVIP(.sw_uuid = sw_uuid, .lb = lb, .vip = vip, .backends = backends),
     LoadBalancerEmptyEvents(lb),
     not lb.options.get_bool_def("reject", false),
@@ -2214,7 +2219,7 @@ for (sw in &Switch(.has_lb_vip = true)) {
          .priority         = 100,
          .__match          = "ip",
          .actions          = "${rEGBIT_CONNTRACK_NAT()} = 1; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = sw._uuid,
@@ -2222,7 +2227,7 @@ for (sw in &Switch(.has_lb_vip = true)) {
          .priority         = 100,
          .__match          = "ip",
          .actions          = "${rEGBIT_CONNTRACK_NAT()} = 1; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -2240,7 +2245,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2248,7 +2253,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -2269,7 +2274,7 @@ for (&Switch(._uuid = ls_uuid)) {
              .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1 && ip4 && ${protocol}",
              .actions          = "${rEG_ORIG_DIP_IPV4()} = ip4.dst; "
                                  "${rEG_ORIG_TP_DPORT()} = ${protocol}.dst; ct_lb;",
-             .stage_hint       = None,
+             .stage_hint       = 0,
              .io_port          = None,
              .controller_meter = None);
         Flow(.logical_datapath = ls_uuid,
@@ -2278,7 +2283,7 @@ for (&Switch(._uuid = ls_uuid)) {
              .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1 && ip6 && ${protocol}",
              .actions          = "${rEG_ORIG_DIP_IPV6()} = ip6.dst; "
                                  "${rEG_ORIG_TP_DPORT()} = ${protocol}.dst; ct_lb;",
-             .stage_hint       = None,
+             .stage_hint       = 0,
              .io_port          = None,
              .controller_meter = None)
     };
@@ -2288,7 +2293,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 110,
          .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1",
          .actions          = "ct_lb;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -2297,7 +2302,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 110,
          .__match          = "${rEGBIT_CONNTRACK_NAT()} == 1",
          .actions          = "ct_lb;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -2308,7 +2313,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 100,
          .__match          = "${rEGBIT_CONNTRACK_DEFRAG()} == 1",
          .actions          = "ct_next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2316,7 +2321,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 100,
          .__match          = "${rEGBIT_CONNTRACK_DEFRAG()} == 1",
          .actions          = "ct_next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -2427,7 +2432,7 @@ for (Reject(lsuuid, pipeline, stage, acl, fair_meter, controller_meter,
          .actions          = actions,
          .io_port          = None,
          .controller_meter = controller_meter,
-         .stage_hint       = Some{acl._uuid})
+         .stage_hint       = stage_hint(acl._uuid))
 }
 
 /* build_acls */
@@ -2454,7 +2459,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                 .priority         = priority,
                 .__match          = "1",
                 .actions          = "next;",
-                .stage_hint       = None,
+                .stage_hint       = 0,
                 .io_port          = None,
                 .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2462,7 +2467,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                 .priority         = priority,
                 .__match          = "1",
                 .actions          = "next;",
-                .stage_hint       = None,
+                .stage_hint       = 0,
                 .io_port          = None,
                 .controller_meter = None)
         };
@@ -2494,7 +2499,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 1,
                  .__match          = "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
                  .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2502,7 +2507,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 1,
                  .__match          = "ip && (!ct.est || (ct.est && ct_label.blocked == 1))",
                  .actions          = "${rEGBIT_CONNTRACK_COMMIT()} = 1; next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -2518,7 +2523,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 65532,
                  .__match          = ct_inv_or ++ "(ct.est && ct.rpl && ct_label.blocked == 1)",
                  .actions          = "drop;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2526,7 +2531,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 65532,
                  .__match          = ct_inv_or ++ "(ct.est && ct.rpl && ct_label.blocked == 1)",
                  .actions          = "drop;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -2545,7 +2550,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .__match          = "ct.est && !ct.rel && !ct.new " ++ and_not_ct_inv ++
                                      "&& ct.rpl && ct_label.blocked == 0",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2554,7 +2559,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .__match          = "ct.est && !ct.rel && !ct.new " ++ and_not_ct_inv ++
                                      "&& ct.rpl && ct_label.blocked == 0",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -2575,7 +2580,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .__match          = "!ct.est && ct.rel && !ct.new " ++ and_not_ct_inv ++
                                      "&& ct_label.blocked == 0",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2584,7 +2589,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .__match          = "!ct.est && ct.rel && !ct.new " ++ and_not_ct_inv ++
                                      "&& ct_label.blocked == 0",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -2596,7 +2601,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 65532,
                  .__match          = "nd || nd_ra || nd_rs || mldv1 || mldv2",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2604,7 +2609,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 65532,
                  .__match          = "nd || nd_ra || nd_rs || mldv1 || mldv2",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None)
         };
@@ -2618,7 +2623,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 34000,
                  .__match          = "udp.src == 53",
                  .actions          = if has_stateful "ct_commit; next;" else "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None)
         };
@@ -2631,7 +2636,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 34000,
                  .__match          = "eth.dst == $svc_monitor_mac",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None);
             Flow(.logical_datapath = ls_uuid,
@@ -2639,7 +2644,7 @@ for (UseCtInvMatch[use_ct_inv_match]) {
                  .priority         = 34000,
                  .__match          = "eth.src == $svc_monitor_mac",
                  .actions          = "next;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -2665,7 +2670,7 @@ for (sw in &Switch(._uuid = ls_uuid)) {
     for (AclHintStages[stage]) {
         /* In any case, advance to the next stage. */
         var priority = if (not sw.has_acls and not sw.has_lb_vip) { 65535 } else { 0 } in
-        Flow(ls_uuid, stage, priority, "1", "next;", None, None, None)
+        Flow(ls_uuid, stage, priority, "1", "next;", None, None, 0)
     };
 
     for (AclHintStages[stage])
@@ -2677,7 +2682,7 @@ for (sw in &Switch(._uuid = ls_uuid)) {
         Flow(ls_uuid, stage, 7, "ct.new && !ct.est",
              "${rEGBIT_ACL_HINT_ALLOW_NEW()} = 1; "
              "${rEGBIT_ACL_HINT_DROP()} = 1; "
-             "next;", None, None, None);
+             "next;", None, None, 0);
 
         /* Already established connections in the "request" direction that
          * are already marked as "blocked" may hit either:
@@ -2690,13 +2695,13 @@ for (sw in &Switch(._uuid = ls_uuid)) {
         Flow(ls_uuid, stage, 6, "!ct.new && ct.est && !ct.rpl && ct_label.blocked == 1",
              "${rEGBIT_ACL_HINT_ALLOW_NEW()} = 1; "
              "${rEGBIT_ACL_HINT_DROP()} = 1; "
-             "next;", None, None, None);
+             "next;", None, None, 0);
 
         /* Not tracked traffic can either be allowed or dropped. */
         Flow(ls_uuid, stage, 5, "!ct.trk",
              "${rEGBIT_ACL_HINT_ALLOW()} = 1; "
              "${rEGBIT_ACL_HINT_DROP()} = 1; "
-             "next;", None, None, None);
+             "next;", None, None, 0);
 
         /* Already established connections in the "request" direction may hit
          * either:
@@ -2709,17 +2714,17 @@ for (sw in &Switch(._uuid = ls_uuid)) {
         Flow(ls_uuid, stage, 4, "!ct.new && ct.est && !ct.rpl && ct_label.blocked == 0",
              "${rEGBIT_ACL_HINT_ALLOW()} = 1; "
              "${rEGBIT_ACL_HINT_BLOCK()} = 1; "
-             "next;", None, None, None);
+             "next;", None, None, 0);
 
         /* Not established or established and already blocked connections may
          * hit drop ACLs.
          */
         Flow(ls_uuid, stage, 3, "!ct.est",
              "${rEGBIT_ACL_HINT_DROP()} = 1; "
-             "next;", None, None, None);
+             "next;", None, None, 0);
         Flow(ls_uuid, stage, 2, "ct.est && ct_label.blocked == 1",
              "${rEGBIT_ACL_HINT_DROP()} = 1; "
-             "next;", None, None, None);
+             "next;", None, None, 0);
 
         /* Established connections that were previously allowed might hit
          * drop ACLs in which case the connection must be committed with
@@ -2727,7 +2732,7 @@ for (sw in &Switch(._uuid = ls_uuid)) {
          */
         Flow(ls_uuid, stage, 1, "ct.est && ct_label.blocked == 0",
              "${rEGBIT_ACL_HINT_BLOCK()} = 1; "
-             "next;", None, None, None)
+             "next;", None, None, 0)
     }
 }
 
@@ -2738,7 +2743,7 @@ for (&SwitchACL(.sw = sw, .acl = acl, .has_fair_meter = fair_meter)) {
     var ingress = acl.direction == "from-lport" in
     var stage = if (ingress) { s_SWITCH_IN_ACL() } else { s_SWITCH_OUT_ACL() } in
     var pipeline = if ingress Ingress else Egress in
-    var stage_hint = Some{acl._uuid} in
+    var stage_hint = stage_hint(acl._uuid) in
     var acl_log = build_acl_log(acl, fair_meter) in
     if (acl.action == "allow" or acl.action == "allow-related") {
         /* If there are any stateful flows, we must even commit "allow"
@@ -2885,7 +2890,7 @@ for (SwitchPortDHCPv4Options(.port = &SwitchPort{.lsp = lsp, .sw = sw},
                              "&& ip4.src == ${server_id} && udp && udp.src == 67 "
                              "&& udp.dst == 68",
          .actions          = if (has_stateful) "ct_commit; next;" else "next;",
-         .stage_hint       = Some{dhcpv4_options._uuid},
+         .stage_hint       = stage_hint(dhcpv4_options._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -2907,7 +2912,7 @@ for (SwitchPortDHCPv6Options(.port = &SwitchPort{.lsp = lsp, .sw = sw},
                              "&& ip6.src == ${server_ip} && udp && udp.src == 547 "
                              "&& udp.dst == 546",
          .actions          = if (has_stateful) "ct_commit; next;" else "next;",
-         .stage_hint       = Some{dhcpv6_options._uuid},
+         .stage_hint       = stage_hint(dhcpv6_options._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -2926,7 +2931,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2934,7 +2939,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2942,7 +2947,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -2950,7 +2955,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -2967,7 +2972,7 @@ for (SwitchQoS(.sw = sw, .qos = qos)) {
                      .priority         = qos.priority,
                      .__match          = qos.__match,
                      .actions          = "ip.dscp = ${value_action}; next;",
-                     .stage_hint       = Some{qos._uuid},
+                     .stage_hint       = stage_hint(qos._uuid),
                      .io_port          = None,
                      .controller_meter = None)
             }
@@ -3003,7 +3008,7 @@ for (SwitchQoS(.sw = sw, .qos = qos)) {
                  .priority         = qos.priority,
                  .__match          = qos.__match,
                  .actions          = meter_action,
-                 .stage_hint       = Some{qos._uuid},
+                 .stage_hint       = stage_hint(qos._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -3019,7 +3024,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -3027,7 +3032,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -3040,7 +3045,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 100,
          .__match          = "${rEGBIT_CONNTRACK_COMMIT()} == 1",
          .actions          = "ct_commit { ct_label.blocked = 0; }; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -3048,7 +3053,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 100,
          .__match          = "${rEGBIT_CONNTRACK_COMMIT()} == 1",
          .actions          = "ct_commit { ct_label.blocked = 0; }; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -3153,7 +3158,7 @@ Flow(.logical_datapath = sw._uuid,
      .actions          = actions,
      .io_port          = None,
      .controller_meter = meter,
-     .stage_hint       = Some{lb._uuid}) :-
+     .stage_hint       = stage_hint(lb._uuid)) :-
     sw in &Switch(),
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
     sw.load_balancer.contains(lb._uuid),
@@ -3193,7 +3198,7 @@ Flow(.logical_datapath = ls_uuid,
      .priority = 0,
      .__match = "1",
      .actions = "next;",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None) :-
      &Switch(._uuid = ls_uuid),
@@ -3213,7 +3218,7 @@ for (&Switch(._uuid = ls_uuid, .has_lb_vip = true)) {
          .actions = "${rEGBIT_HAIRPIN()} = chk_lb_hairpin(); "
                     "${rEGBIT_HAIRPIN_REPLY()} = chk_lb_hairpin_reply(); "
                     "next;",
-         .stage_hint = Some{ls_uuid},
+         .stage_hint = stage_hint(ls_uuid),
          .io_port = None,
          .controller_meter = None);
 
@@ -3224,7 +3229,7 @@ for (&Switch(._uuid = ls_uuid, .has_lb_vip = true)) {
          .priority = 100,
          .__match = "ip && ct.new && ct.trk && ${rEGBIT_HAIRPIN()} == 1",
          .actions = "ct_snat_to_vip; next;",
-         .stage_hint = Some{ls_uuid},
+         .stage_hint = stage_hint(ls_uuid),
          .io_port = None,
          .controller_meter = None);
 
@@ -3236,7 +3241,7 @@ for (&Switch(._uuid = ls_uuid, .has_lb_vip = true)) {
          .priority = 100,
          .__match = "ip && ct.est && ct.trk && ${rEGBIT_HAIRPIN()} == 1",
          .actions = "ct_snat;",
-         .stage_hint = Some{ls_uuid},
+         .stage_hint = stage_hint(ls_uuid),
          .io_port = None,
          .controller_meter = None);
 
@@ -3246,7 +3251,7 @@ for (&Switch(._uuid = ls_uuid, .has_lb_vip = true)) {
          .priority = 90,
          .__match = "ip && ${rEGBIT_HAIRPIN_REPLY()} == 1",
          .actions = "ct_snat;",
-         .stage_hint = Some{ls_uuid},
+         .stage_hint = stage_hint(ls_uuid),
          .io_port = None,
          .controller_meter = None);
 
@@ -3259,7 +3264,7 @@ for (&Switch(._uuid = ls_uuid, .has_lb_vip = true)) {
          .priority = 1,
          .__match = "(${rEGBIT_HAIRPIN()} == 1 || ${rEGBIT_HAIRPIN_REPLY()} == 1)",
          .actions = "eth.dst <-> eth.src; outport = inport; flags.loopback = 1; output;",
-         .stage_hint = Some{ls_uuid},
+         .stage_hint = stage_hint(ls_uuid),
          .io_port = None,
          .controller_meter = None)
 }
@@ -3284,7 +3289,7 @@ for (&SwitchPort(.lsp = lsp, .sw = sw, .json_name = json_name, .ps_eth_addresses
              .priority         = 50,
              .__match          = __match,
              .actions          = actions,
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = Some{lsp.name},
              .controller_meter = None)
     }
@@ -3321,7 +3326,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
                  .priority         = 90,
                  .__match          = dhcp_match,
                  .actions          = "next;",
-                 .stage_hint       = Some{port.lsp._uuid},
+                 .stage_hint       = stage_hint(port.lsp._uuid),
                  .io_port          = Some{port.lsp.name},
                  .controller_meter = None)
         };
@@ -3346,7 +3351,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
                  .priority         = 90,
                  .__match          = __match,
                  .actions          = "next;",
-                 .stage_hint       = Some{port.lsp._uuid},
+                 .stage_hint       = stage_hint(port.lsp._uuid),
                  .io_port          = Some{port.lsp.name},
                  .controller_meter = None)
         }
@@ -3363,7 +3368,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
                  .priority         = 90,
                  .__match          = dad_match,
                  .actions          = "next;",
-                 .stage_hint       = Some{port.lsp._uuid},
+                 .stage_hint       = stage_hint(port.lsp._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         };
@@ -3375,7 +3380,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
                  .priority         = 90,
                  .__match          = __match,
                  .actions          = "next;",
-                 .stage_hint       = Some{port.lsp._uuid},
+                 .stage_hint       = stage_hint(port.lsp._uuid),
                  .io_port          = Some{port.lsp.name},
                  .controller_meter = None)
         }
@@ -3387,7 +3392,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
              .priority         = 80,
              .__match          = __match,
              .actions          = "drop;",
-             .stage_hint       = Some{port.lsp._uuid},
+             .stage_hint       = stage_hint(port.lsp._uuid),
              .io_port          = Some{port.lsp.name},
              .controller_meter = None)
     }
@@ -3437,7 +3442,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
                      .priority         = 90,
                      .__match          = __match,
                      .actions          = "next;",
-                     .stage_hint       = Some{port.lsp._uuid},
+                     .stage_hint       = stage_hint(port.lsp._uuid),
                      .io_port          = Some{port.lsp.name},
                      .controller_meter = None)
             }
@@ -3451,7 +3456,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
                      .priority         = 90,
                      .__match          = __match,
                      .actions          = "next;",
-                     .stage_hint       = Some{port.lsp._uuid},
+                     .stage_hint       = stage_hint(port.lsp._uuid),
                      .io_port          = Some{port.lsp.name},
                      .controller_meter = None)
             }
@@ -3461,7 +3466,7 @@ for (SwitchPortPSAddresses(.port = port@&SwitchPort{.sw = sw}, .ps_addrs = ps)
              .priority         = 80,
              .__match          = "inport == ${port.json_name} && (arp || nd)",
              .actions          = "drop;",
-             .stage_hint       = Some{port.lsp._uuid},
+             .stage_hint       = stage_hint(port.lsp._uuid),
              .io_port          = Some{port.lsp.name},
              .controller_meter = None)
     }
@@ -3475,7 +3480,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -3483,7 +3488,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -3500,7 +3505,7 @@ for (&SwitchPort(.lsp = lsp, .sw = sw, .json_name = json_name)
          .priority         = 100,
          .__match          = "inport == ${json_name}",
          .actions          = "next;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -3525,7 +3530,7 @@ function lsp_is_up(lsp: Intern<nb::Logical_Switch_Port>): bool = {
                           "((arp.op == 1 && arp.spa == ${virtual_ip} && arp.tpa == ${virtual_ip}) || "
                           "(arp.op == 2 && arp.spa == ${virtual_ip}))",
       .actions          = "bind_vport(${sp.json_name}, inport); next;",
-      .stage_hint       = Some{lsp._uuid},
+      .stage_hint       = stage_hint(lsp._uuid),
       .io_port          = Some{vp.lsp.name},
       .controller_meter = None) :-
     sp in &SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "virtual"}),
@@ -3569,7 +3574,7 @@ for (CheckLspIsUp[check_lsp_is_up]) {
                  .priority         = 50,
                  .__match          = __match,
                  .actions          = actions,
-                 .stage_hint       = Some{lsp._uuid},
+                 .stage_hint       = stage_hint(lsp._uuid),
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -3590,7 +3595,7 @@ for (CheckLspIsUp[check_lsp_is_up]) {
                  .priority         = 100,
                  .__match          = __match ++ " && inport == ${json_name}",
                  .actions          = "next;",
-                 .stage_hint       = Some{lsp._uuid},
+                 .stage_hint       = stage_hint(lsp._uuid),
                  .io_port          = Some{lsp.name},
                  .controller_meter = None)
         }
@@ -3602,7 +3607,7 @@ Flow(.logical_datapath = sw._uuid,
          .priority         = 50,
          .__match          = __match,
          .actions          = __actions,
-         .stage_hint       = Some{sp.lsp._uuid},
+         .stage_hint       = stage_hint(sp.lsp._uuid),
          .io_port          = None,
          .controller_meter = None) :-
 
@@ -3665,7 +3670,7 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
              .actions          = actions,
              .io_port          = None,
              .controller_meter = sw.copp.get(cOPP_ND_NA()),
-             .stage_hint       = Some{lsp._uuid});
+             .stage_hint       = stage_hint(lsp._uuid));
 
         /* Do not reply to a solicitation from the port that owns the
          * address (otherwise DAD detection will fail). */
@@ -3674,7 +3679,7 @@ for (SwitchPortIPv6Address(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
              .priority         = 100,
              .__match          = __match ++ " && inport == ${json_name}",
              .actions          = "next;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = Some{lsp.name},
              .controller_meter = None)
     }
@@ -3688,7 +3693,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -3709,7 +3714,7 @@ Flow(.logical_datapath = sp.sw._uuid,
                          "outport = inport; "
                          "flags.loopback = 1; "
                          "output;",
-     .stage_hint       = Some{lbvip.lb._uuid},
+     .stage_hint       = stage_hint(lbvip.lb._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     LBVIP[lbvip],
@@ -3930,7 +3935,7 @@ for (lsp in &SwitchPort
                                  .actions          = options_action,
                                  .io_port          = None,
                                  .controller_meter = lsp.sw.copp.get(cOPP_DHCPV4_OPTS()),
-                                 .stage_hint       = Some{lsp.lsp._uuid});
+                                 .stage_hint       = stage_hint(lsp.lsp._uuid));
 
                             /* Allow ip4.src = OFFER_IP and
                              * ip4.dst = {SERVER_IP, 255.255.255.255} for the below
@@ -3949,7 +3954,7 @@ for (lsp in &SwitchPort
                                  .actions          = options_action,
                                  .io_port          = None,
                                  .controller_meter = lsp.sw.copp.get(cOPP_DHCPV4_OPTS()),
-                                 .stage_hint       = Some{lsp.lsp._uuid});
+                                 .stage_hint       = stage_hint(lsp.lsp._uuid));
 
                             /* If REGBIT_DHCP_OPTS_RESULT is set, it means the
                              * put_dhcp_opts action  is successful. */
@@ -3961,7 +3966,7 @@ for (lsp in &SwitchPort
                                  .priority         = 100,
                                  .__match          = __match,
                                  .actions          = response_action,
-                                 .stage_hint       = Some{lsp.lsp._uuid},
+                                 .stage_hint       = stage_hint(lsp.lsp._uuid),
                                  .io_port          = None,
                                  .controller_meter = None)
                             // FIXME: is there a constraint somewhere that guarantees that build_dhcpv4_action
@@ -3992,7 +3997,7 @@ for (lsp in &SwitchPort
                                      .actions          = options_action,
                                      .io_port          = None,
                                      .controller_meter = lsp.sw.copp.get(cOPP_DHCPV6_OPTS()),
-                                     .stage_hint       = Some{lsp.lsp._uuid});
+                                     .stage_hint       = stage_hint(lsp.lsp._uuid));
 
                                 /* If REGBIT_DHCP_OPTS_RESULT is set to 1, it means the
                                  * put_dhcpv6_opts action is successful */
@@ -4001,7 +4006,7 @@ for (lsp in &SwitchPort
                                      .priority         = 100,
                                      .__match          = __match ++ " && ${rEGBIT_DHCP_OPTS_RESULT()}",
                                      .actions          = response_action,
-                                     .stage_hint       = Some{lsp.lsp._uuid},
+                                     .stage_hint       = stage_hint(lsp.lsp._uuid),
                                      .io_port          = None,
                                      .controller_meter = None)
                                 // FIXME: is there a constraint somewhere that guarantees that build_dhcpv4_action
@@ -4027,7 +4032,7 @@ for (LogicalSwitchHasDNSRecords(ls, true))
          .priority         = 100,
          .__match          = "udp.dst == 53",
          .actions          = "${rEGBIT_DNS_LOOKUP_RESULT()} = dns_lookup(); next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4039,7 +4044,7 @@ for (LogicalSwitchHasDNSRecords(ls, true))
          .priority         = 100,
          .__match          = "udp.dst == 53 && ${rEGBIT_DNS_LOOKUP_RESULT()}",
          .actions          = action,
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4051,7 +4056,7 @@ for (LogicalSwitchHasDNSRecords(ls, true))
          .priority         = 100,
          .__match          = "udp.dst == 53 && ${rEGBIT_DNS_LOOKUP_RESULT()}",
          .actions          = action,
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4070,7 +4075,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4079,7 +4084,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4088,7 +4093,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4097,7 +4102,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4106,7 +4111,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4116,7 +4121,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority = 110,
      .__match = "eth.dst == $svc_monitor_mac",
      .actions = "handle_svc_check(inport);",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None) :-
     sw in &Switch().
@@ -4149,7 +4154,7 @@ for (sw in &Switch(._uuid = ls_uuid, .mcast_cfg = mcast_cfg)
                          .actions          = "${igmp_act}",
                          .io_port          = None,
                          .controller_meter = controller_meter,
-                         .stage_hint       = None);
+                         .stage_hint       = 0);
 
                     /* Punt MLD traffic to controller. */
                     Flow(.logical_datapath = ls_uuid,
@@ -4159,7 +4164,7 @@ for (sw in &Switch(._uuid = ls_uuid, .mcast_cfg = mcast_cfg)
                          .actions          = "${igmp_act}",
                          .io_port          = None,
                          .controller_meter = controller_meter,
-                         .stage_hint       = None);
+                         .stage_hint       = 0);
 
                     /* Flood all IP multicast traffic destined to 224.0.0.X to
                      * all ports - RFC 4541, section 2.1.2, item 2.
@@ -4170,7 +4175,7 @@ for (sw in &Switch(._uuid = ls_uuid, .mcast_cfg = mcast_cfg)
                          .priority         = 85,
                          .__match          = "ip4.mcast && ip4.dst == 224.0.0.0/24",
                          .actions          = "outport = ${flood}; output;",
-                         .stage_hint       = None,
+                         .stage_hint       = 0,
                          .io_port          = None,
                          .controller_meter = None);
 
@@ -4183,7 +4188,7 @@ for (sw in &Switch(._uuid = ls_uuid, .mcast_cfg = mcast_cfg)
                          .priority         = 85,
                          .__match          = "ip6.mcast_flood",
                          .actions          = "outport = ${flood}; output;",
-                         .stage_hint       = None,
+                         .stage_hint       = 0,
                          .io_port          = None,
                          .controller_meter = None);
 
@@ -4225,7 +4230,7 @@ for (sw in &Switch(._uuid = ls_uuid, .mcast_cfg = mcast_cfg)
                              .__match          = "ip4.mcast || ip6.mcast",
                              .actions          =
                                 "${relay_act}${static_act}${drop_act}",
-                                        .stage_hint       = None,
+                                        .stage_hint       = 0,
                              .io_port          = None,
                              .controller_meter = None)
                     }
@@ -4282,7 +4287,7 @@ for (IgmpSwitchMulticastGroup(.address = address, .switch = sw)) {
                  .actions          =
                     "${relay_act} ${static_act} outport = \"${address}\"; "
                     "output;",
-                 .stage_hint       = None,
+                 .stage_hint       = 0,
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -4305,7 +4310,7 @@ Flow(.logical_datapath = sp.sw._uuid,
                           "!is_chassis_resident(${sp.json_name}) && "
                           "arp.tpa == ${rp_addr.addr} && arp.op == 1"),
      .actions          = "drop;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = Some{localnet_port.1},
      .controller_meter = None) :-
     sp in &SwitchPort(),
@@ -4324,7 +4329,7 @@ Flow(.logical_datapath = sp.sw._uuid,
                           "nd_ns && ip6.dst == {${rp_addr.addr}, ${rp_addr.solicited_node()}} && "
                           "nd.target == ${rp_addr.addr}"),
      .actions          = "drop;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = Some{localnet_port.1},
      .controller_meter = None) :-
     sp in &SwitchPort(),
@@ -4342,7 +4347,7 @@ Flow(.logical_datapath = sp.sw._uuid,
                           "eth.dst == ${ea} && "
                           "!is_chassis_resident(${sp.json_name})"),
      .actions          = "drop;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = Some{localnet_port.1},
      .controller_meter = None) :-
     sp in &SwitchPort(),
@@ -4362,7 +4367,7 @@ for (ls in nb::Logical_Switch) {
          .priority         = 70,
          .__match          = "eth.mcast",
          .actions          = "outport = ${mc_flood}; output;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4377,7 +4382,7 @@ for (SwitchPortStaticAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json
          .priority         = 50,
          .__match          = "eth.dst == ${addrs.ea}",
          .actions          = "outport = ${json_name}; output;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4420,7 +4425,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority         = 75,
      .__match          = __match,
      .actions          = actions,
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.sw = sw@&Switch{.has_non_router_port = true}, .peer = Some{rp}),
@@ -4547,7 +4552,7 @@ Flow(.logical_datapath = sw._uuid,
                          } else {
                              "outport = ${sp.json_name}; output;"
                          },
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
@@ -4566,7 +4571,7 @@ Flow(.logical_datapath = sw._uuid,
                          } else {
                              "outport = ${sp.json_name}; output;"
                          },
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
@@ -4581,7 +4586,7 @@ Flow(.logical_datapath = sw._uuid,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                         " && arp.op == 1 && arp.tpa == " ++ ipv4,
      .actions          = "outport = ${flood}; output;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
@@ -4596,7 +4601,7 @@ Flow(.logical_datapath = sw._uuid,
      .__match          = fLAGBIT_NOT_VXLAN() ++
                          " && nd_ns && nd.target == " ++ ipv6,
      .actions          = "outport = ${flood}; output;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.sw = sw, .peer = Some{rp}),
@@ -4613,7 +4618,7 @@ for (SwitchPortNewDynamicAddress(.port = &SwitchPort{.lsp = lsp, .json_name = js
          .priority         = 50,
          .__match          = "eth.dst == ${addrs.ea}",
          .actions          = "outport = ${json_name}; output;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4664,7 +4669,7 @@ for (&SwitchPort(.lsp = lsp,
              .priority         = 50,
              .__match          = __match,
              .actions          = "outport = ${json_name}; output;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = None,
              .controller_meter = None);
 
@@ -4682,7 +4687,7 @@ for (&SwitchPort(.lsp = lsp,
                          .priority         = 50,
                          .__match          = __match,
                          .actions          = "outport = ${json_name}; output;",
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 }
@@ -4706,7 +4711,7 @@ for (sw in &Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "outport = get_fdb(eth.dst); next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4720,7 +4725,7 @@ for (sw in &Switch(._uuid = ls_uuid)) {
                              } else {
                                  "drop;"
                              },
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -4729,7 +4734,7 @@ for (sw in &Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "output;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4742,7 +4747,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = ls_uuid,
@@ -4750,7 +4755,7 @@ for (&Switch(._uuid = ls_uuid)) {
          .priority         = 100,
          .__match          = "eth.mcast",
          .actions          = "output;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4760,7 +4765,7 @@ Flow(.logical_datapath = ls_uuid,
      .priority = 100,
      .__match = "inport == ${sp.json_name}",
      .actions = "$[rEGBIT_LKUP_FDB()} = lookup_fdb(inport, eth.src); next;",
-     .stage_hint = Some{lsp_uuid},
+     .stage_hint = stage_hint(lsp_uuid),
      .io_port = Some{sp.lsp.name},
      .controller_meter = None),
 Flow(.logical_datapath = ls_uuid,
@@ -4768,7 +4773,7 @@ Flow(.logical_datapath = ls_uuid,
      .priority = 100,
      .__match = "inport == ${sp.json_name} && ${rEGBIT_LKUP_FDB()} == 0",
      .actions = "put_fdb(inport, eth.src); next;",
-     .stage_hint = Some{lsp_uuid},
+     .stage_hint = stage_hint(lsp_uuid),
      .io_port = Some{sp.lsp.name},
      .controller_meter = None) :-
     LogicalSwitchPortWithUnknownAddress(ls_uuid, lsp_uuid),
@@ -4780,7 +4785,7 @@ Flow(.logical_datapath = ls_uuid,
      .priority         = 0,
      .__match          = "1",
      .actions          = "next;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None),
 Flow(.logical_datapath = ls_uuid,
@@ -4788,7 +4793,7 @@ Flow(.logical_datapath = ls_uuid,
      .priority         = 0,
      .__match          = "1",
      .actions          = "next;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     &Switch(._uuid = ls_uuid).
@@ -4807,7 +4812,7 @@ Flow(.logical_datapath = sw._uuid,
      .priority         = 50,
      .__match          = __match,
      .actions          = queue_action ++ "output;",
-     .stage_hint       = Some{lsp._uuid},
+     .stage_hint       = stage_hint(lsp._uuid),
      .io_port          = Some{lsp.name},
      .controller_meter = None) :-
     &SwitchPort(.sw = sw, .lsp = lsp, .json_name = json_name, .ps_eth_addresses = ps_eth_addresses),
@@ -4832,7 +4837,7 @@ for (&SwitchPort(.lsp = lsp, .json_name = json_name, .sw = sw)) {
              .priority         = 150,
              .__match          = "outport == {$json_name}",
              .actions          = "drop;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = Some{lsp.name},
              .controller_meter = None)
     }
@@ -4867,7 +4872,7 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
              .priority         = 90,
              .__match          = __match,
              .actions          = "next;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = Some{lsp.name},
              .controller_meter = None)
     };
@@ -4879,7 +4884,7 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
              .priority         = 90,
              .__match          = __match,
              .actions          = "next;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = Some{lsp.name},
              .controller_meter = None)
     };
@@ -4889,7 +4894,7 @@ for (SwitchPortPSAddresses(.port = &SwitchPort{.lsp = lsp, .json_name = json_nam
          .priority         = 80,
          .__match          = __match,
          .actions          = "drop;",
-         .stage_hint       = Some{lsp._uuid},
+         .stage_hint       = stage_hint(lsp._uuid),
          .io_port          = Some{lsp.name},
          .controller_meter = None)
 }
@@ -4903,7 +4908,7 @@ for (&Router(._uuid = lr_uuid)) {
          .priority         = 100,
          .__match          = "vlan.present || eth.src[40]",
          .actions          = "drop;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -4940,7 +4945,7 @@ for (&RouterPort(.lrp = lrp,
              .priority         = 50,
              .__match          = "eth.mcast && inport == ${json_name}",
              .actions          = actions,
-             .stage_hint       = Some{lrp._uuid},
+             .stage_hint       = stage_hint(lrp._uuid),
              .io_port          = None,
              .controller_meter = None);
 
@@ -4956,7 +4961,7 @@ for (&RouterPort(.lrp = lrp,
              .priority         = 50,
              .__match          = __match,
              .actions          = actions,
-             .stage_hint       = Some{lrp._uuid},
+             .stage_hint       = stage_hint(lrp._uuid),
              .io_port          = None,
              .controller_meter = None)
     }
@@ -5014,7 +5019,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
              "${rLNR} = lookup_arp(inport, arp.spa, arp.sha); " ++
              { if (learn_from_arp_request) "" else "${rLNIR} = 1; " } ++
              "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = lr_uuid,
@@ -5025,7 +5030,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
              "${rLNR} = lookup_nd(inport, nd.target, nd.tll); " ++
              { if (learn_from_arp_request) "" else "${rLNIR} = 1; " } ++
              "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = lr_uuid,
@@ -5037,7 +5042,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
              { if (learn_from_arp_request) "" else
                "${rLNIR} = lookup_nd_ip(inport, ip6.src); " } ++
              "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5048,7 +5053,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
          .priority         = 0,
          .__match          = "1",
          .actions          = "${rLNR} = 1; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5061,7 +5066,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
              "${rLNR} == 1" ++
              { if (learn_from_arp_request) "" else " || ${rLNIR} == 0" },
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = lr_uuid,
@@ -5071,7 +5076,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
          .actions          = "put_arp(inport, arp.spa, arp.sha); next;",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ARP()),
-         .stage_hint       = None);
+         .stage_hint       = 0);
     Flow(.logical_datapath = lr_uuid,
          .stage            = s_ROUTER_IN_LEARN_NEIGHBOR(),
          .priority         = 90,
@@ -5079,7 +5084,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
          .actions          = "put_nd(inport, nd.target, nd.tll); next;",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ND_NA()),
-         .stage_hint       = None);
+         .stage_hint       = 0);
     Flow(.logical_datapath = lr_uuid,
          .stage            = s_ROUTER_IN_LEARN_NEIGHBOR(),
          .priority         = 90,
@@ -5087,7 +5092,7 @@ var rLNIR = rEGBIT_LOOKUP_NEIGHBOR_IP_RESULT() in
          .actions          = "put_nd(inport, ip6.src, nd.sll); next;",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ND_NS()),
-         .stage_hint       = None)
+         .stage_hint       = 0)
 }
 
 /* Check if we need to learn mac-binding from ARP requests. */
@@ -5115,7 +5120,7 @@ for (RouterPortNetworksIPv4Addr(rp@&RouterPort{.router = router}, addr)) {
                  .priority         = 110,
                  .__match          = __match.join(" && "),
                  .actions          = actions,
-                 .stage_hint       = Some{rp.lrp._uuid},
+                 .stage_hint       = stage_hint(rp.lrp._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         };
@@ -5129,7 +5134,7 @@ for (RouterPortNetworksIPv4Addr(rp@&RouterPort{.router = router}, addr)) {
              .priority         = 100,
              .__match          = "${match0} && ${match1}",
              .actions          = actions,
-             .stage_hint       = Some{rp.lrp._uuid},
+             .stage_hint       = stage_hint(rp.lrp._uuid),
              .io_port          = None,
              .controller_meter = None)
     }
@@ -5151,7 +5156,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          "ip4.src == 0.0.0.0/8 || "
          "ip4.dst == 0.0.0.0/8",
          .actions          = "drop;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5165,7 +5170,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          .priority         = 85,
          .__match          = "arp || nd",
          .actions          = "drop;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5177,7 +5182,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          .priority         = 84,
          .__match          = "nd_rs || nd_ra",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5187,7 +5192,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          .priority         = 83,
          .__match          = "ip6.mcast_rsvd",
          .actions          = "drop;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5198,7 +5203,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          .priority         = 82,
          .__match          = "ip4.mcast || ip6.mcast",
          .actions          = mcast_action,
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5209,7 +5214,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          .priority         = 50,
          .__match          = "eth.bcast",
          .actions          = "drop;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5220,7 +5225,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
         .priority         = 30,
         .__match          = "ip4 && ip.ttl == {0, 1}",
         .actions          = "drop;",
-        .stage_hint       = None,
+        .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -5231,7 +5236,7 @@ for (router in &Router(._uuid = lr_uuid, .mcast_cfg = mcast_cfg)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -5320,7 +5325,7 @@ for (&RouterPort(.router = router, .networks = networks, .lrp = lrp)
          .priority         = 100,
          .__match          = __match,
          .actions          = "drop;",
-         .stage_hint       = Some{lrp._uuid},
+         .stage_hint       = stage_hint(lrp._uuid),
          .io_port          = None,
          .controller_meter = None);
 
@@ -5341,7 +5346,7 @@ for (&RouterPort(.router = router, .networks = networks, .lrp = lrp)
                              "icmp4.type = 0; "
                              "flags.loopback = 1; "
                              "next; ",
-         .stage_hint       = Some{lrp._uuid},
+         .stage_hint       = stage_hint(lrp._uuid),
          .io_port          = None,
          .controller_meter = None)
 }
@@ -5439,11 +5444,11 @@ relation LogicalRouterArpNdFlow(
     drop: bool,
     priority: integer)
 LogicalRouterArpFlow(router, lrp, "${ipv4}", mac, extra_match, drop, priority,
-                     Some{nat.nat._uuid}) :-
+                     stage_hint(nat.nat._uuid)) :-
     LogicalRouterArpNdFlow(router, nat@NAT{.external_ip = IPv4{ipv4}}, lrp,
                            mac, extra_match, drop, priority).
 LogicalRouterNdFlow(router, lrp, "nd_na", ipv6, true, mac, extra_match, drop, priority,
-                    Some{nat.nat._uuid}) :-
+                    stage_hint(nat.nat._uuid)) :-
     LogicalRouterArpNdFlow(router, nat@NAT{.external_ip = IPv6{ipv6}}, lrp,
                            mac, extra_match, drop, priority).
 
@@ -5455,7 +5460,7 @@ relation LogicalRouterArpFlow(
     extra_match: Option<string>,
     drop: bool,
     priority: integer,
-    stage_hint: Option<uuid>)
+    stage_hint: bit<32>)
 Flow(.logical_datapath = lr._uuid,
      .stage = s_ROUTER_IN_IP_INPUT(),
      .priority = priority,
@@ -5501,7 +5506,7 @@ relation LogicalRouterNdFlow(
     extra_match: Option<string>,
     drop: bool,
     priority: integer,
-    stage_hint: Option<uuid>)
+    stage_hint: bit<32>)
 Flow(.logical_datapath = lr._uuid,
      .stage = s_ROUTER_IN_IP_INPUT(),
      .priority = priority,
@@ -5563,7 +5568,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
                              "ip4.src = ${addr.addr}; "
                              "ip.ttl = 255; "
                              "next; };",
-         .stage_hint       = Some{lrp._uuid},
+         .stage_hint       = stage_hint(lrp._uuid),
          .io_port          = None,
          .controller_meter = None);
 
@@ -5590,7 +5595,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
                              .extra_match = Some{__match},
                              .drop = false,
                              .priority = 90,
-                             .stage_hint = Some{lrp._uuid})
+                             .stage_hint = stage_hint(lrp._uuid))
     }
 }
 
@@ -5612,7 +5617,7 @@ var residence_check = match (is_redirect) {
                                  .extra_match = residence_check,
                                  .drop = false,
                                  .priority = 90,
-                                 .stage_hint = None)
+                                 .stage_hint = 0)
         }
     };
     for (RouterLBVIP(.router = &Router{._uuid= lr_uuid}, .vip = vip)) {
@@ -5627,7 +5632,7 @@ var residence_check = match (is_redirect) {
                                 .extra_match = residence_check,
                                 .drop = false,
                                 .priority = 90,
-                                .stage_hint = None)
+                                .stage_hint = 0)
         }
     }
 }
@@ -5643,7 +5648,7 @@ Flow(.logical_datapath = lr_uuid,
      .priority = 60,
      .__match = "ip4.dst == {" ++ match_ips.join(", ") ++ "}",
      .actions = "drop;",
-     .stage_hint = Some{lrp_uuid},
+     .stage_hint = stage_hint(lrp_uuid),
      .io_port          = None,
      .controller_meter = None) :-
     &RouterPort(.lrp = &nb::Logical_Router_Port{._uuid = lrp_uuid},
@@ -5659,7 +5664,7 @@ Flow(.logical_datapath = lr_uuid,
      .priority = 60,
      .__match = "ip6.dst == {" ++ match_ips.join(", ") ++ "}",
      .actions = "drop;",
-     .stage_hint = Some{lrp_uuid},
+     .stage_hint = stage_hint(lrp_uuid),
      .io_port          = None,
      .controller_meter = None) :-
     &RouterPort(.lrp = &nb::Logical_Router_Port{._uuid = lrp_uuid},
@@ -5695,7 +5700,7 @@ for (RouterPortNetworksIPv4Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ICMP4_ERR()),
-         .stage_hint       = Some{lrp._uuid});
+         .stage_hint       = stage_hint(lrp._uuid));
 
     var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag && tcp" in
     Flow(.logical_datapath = lr_uuid,
@@ -5708,7 +5713,7 @@ for (RouterPortNetworksIPv4Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_TCP_RESET()),
-         .stage_hint       = Some{lrp._uuid});
+         .stage_hint       = stage_hint(lrp._uuid));
 
     var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag && sctp" in
     Flow(.logical_datapath = lr_uuid,
@@ -5721,7 +5726,7 @@ for (RouterPortNetworksIPv4Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_TCP_RESET()),
-         .stage_hint       = Some{lrp._uuid});
+         .stage_hint       = stage_hint(lrp._uuid));
 
     var __match = "ip4 && ip4.dst == ${addr.addr} && !ip.later_frag" in
     Flow(.logical_datapath = lr_uuid,
@@ -5737,7 +5742,7 @@ for (RouterPortNetworksIPv4Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ICMP4_ERR()),
-         .stage_hint       = Some{lrp._uuid})
+         .stage_hint       = stage_hint(lrp._uuid))
 }
 
 /* DHCPv6 reply handling */
@@ -5747,7 +5752,7 @@ Flow(.logical_datapath = rp.router._uuid,
      .__match          = "ip6.dst == ${ipv6_addr.addr} "
                          "&& udp.src == 547 && udp.dst == 546",
      .actions          = "reg0 = 0; handle_dhcpv6_reply;",
-     .stage_hint       = Some{rp.lrp._uuid},
+     .stage_hint       = stage_hint(rp.lrp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     rp in &RouterPort(),
@@ -5777,7 +5782,7 @@ for (&RouterPort(.router = router, .networks = networks, .lrp = lrp)
          "icmp6.type = 129; "
          "flags.loopback = 1; "
          "next; ",
-         .stage_hint       = Some{lrp._uuid},
+         .stage_hint       = stage_hint(lrp._uuid),
          .io_port          = None,
          .controller_meter = None)
 }
@@ -5808,7 +5813,7 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.lrp = lrp,
                         .extra_match = extra_match,
                         .drop = false,
                         .priority = 90,
-                        .stage_hint = Some{lrp._uuid})
+                        .stage_hint = stage_hint(lrp._uuid))
 }
 
 /* UDP/TCP/SCTP port unreachable */
@@ -5832,7 +5837,7 @@ for (RouterPortNetworksIPv6Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_TCP_RESET()),
-         .stage_hint       = Some{lrp._uuid});
+         .stage_hint       = stage_hint(lrp._uuid));
 
     var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag && sctp" in
     Flow(.logical_datapath = lr_uuid,
@@ -5845,7 +5850,7 @@ for (RouterPortNetworksIPv6Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_TCP_RESET()),
-         .stage_hint       = Some{lrp._uuid});
+         .stage_hint       = stage_hint(lrp._uuid));
 
     var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag && udp" in
     Flow(.logical_datapath = lr_uuid,
@@ -5861,7 +5866,7 @@ for (RouterPortNetworksIPv6Addr(
                             "next; };",
         .io_port          = None,
         .controller_meter = copp.get(cOPP_ICMP6_ERR()),
-        .stage_hint       = Some{lrp._uuid});
+        .stage_hint       = stage_hint(lrp._uuid));
 
     var __match = "ip6 && ip6.dst == ${addr.addr} && !ip.later_frag" in
     Flow(.logical_datapath = lr_uuid,
@@ -5877,7 +5882,7 @@ for (RouterPortNetworksIPv6Addr(
                              "next; };",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ICMP6_ERR()),
-         .stage_hint       = Some{lrp._uuid})
+         .stage_hint       = stage_hint(lrp._uuid))
 }
 
 /* ICMPv6 time exceeded */
@@ -5906,7 +5911,7 @@ for (RouterPortNetworksIPv6Addr(.port = &RouterPort{.router = router,
          .actions          = actions,
          .io_port          = None,
          .controller_meter = router.copp.get(cOPP_ICMP6_ERR()),
-         .stage_hint       = Some{lrp._uuid})
+         .stage_hint       = stage_hint(lrp._uuid))
 }
 
 /* NAT, Defrag and load balancing. */
@@ -5919,7 +5924,7 @@ function default_allow_flow(datapath: uuid, stage: Stage): Flow {
          .actions          = "next;",
          .io_port          = None,
          .controller_meter = None,
-         .stage_hint       = None}
+         .stage_hint       = 0}
 }
 for (r in &Router(._uuid = lr_uuid)) {
     /* Packets are allowed by default. */
@@ -5940,7 +5945,7 @@ for (r in &Router(._uuid = lr_uuid)) {
          .priority         = 120,
          .__match          = "nd_ns",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -5965,7 +5970,7 @@ for (r in &Router(._uuid = lr_uuid,
         .priority         = 50,
         .__match          = "ip && ct.new",
         .actions          = "ct_commit { } ; next; ",
-        .stage_hint       = None,
+        .stage_hint       = 0,
         .io_port          = None,
         .controller_meter = None);
 
@@ -5974,7 +5979,7 @@ for (r in &Router(._uuid = lr_uuid,
         .priority         = 50,
         .__match          = "ip",
         .actions          = "flags.loopback = 1; ct_dnat;",
-        .stage_hint       = None,
+        .stage_hint       = 0,
         .io_port          = None,
         .controller_meter = None)
 }
@@ -5984,7 +5989,7 @@ Flow(.logical_datapath = lr,
      .priority         = 120,
      .__match          = "flags.skip_snat_for_lb == 1 && ip",
      .actions          = "next;",
-     .stage_hint       = Some{lb._uuid},
+     .stage_hint       = stage_hint(lb._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     LogicalRouterLB(lr, lb),
@@ -6051,7 +6056,7 @@ function lrouter_nat_add_ext_ip_match(
                        .priority = priority,
                        .__match = "${__match} && ${ipX}.${dir} == $${__as.name}",
                        .actions = "next;",
-                       .stage_hint = Some{nat.nat._uuid},
+                       .stage_hint = stage_hint(nat.nat._uuid),
                        .io_port = None,
                        .controller_meter = None}})
         }
@@ -6067,7 +6072,7 @@ Flow(.logical_datapath = logical_router,
      .priority = 110,
      .__match = "${ipX} && ${ipX}.dst == ${ip}",
      .actions = "ct_snat;",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None),
 /* Higher priority rules to force SNAT with the IP addresses
@@ -6078,7 +6083,7 @@ Flow(.logical_datapath = logical_router,
      .priority = 100,
      .__match = "flags.force_snat_for_${context} == 1 && ${ipX}",
      .actions = "ct_snat(${ip});",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port = None,
      .controller_meter = None) :-
     LogicalRouterForceSnatFlows(.logical_router = logical_router,
@@ -6098,7 +6103,7 @@ for (rp in &RouterPort(.router = &Router{._uuid = lr_uuid, .options = lr_options
                  .priority = 110,
                  .__match = "inport == ${rp.json_name} && ip4.dst == ${ipv4.addr}",
                  .actions = "ct_snat;",
-                 .stage_hint = None,
+                 .stage_hint = 0,
                  .io_port = None,
                  .controller_meter = None);
 
@@ -6107,7 +6112,7 @@ for (rp in &RouterPort(.router = &Router{._uuid = lr_uuid, .options = lr_options
                  .priority = 110,
                  .__match = "flags.force_snat_for_lb == 1 && ip4 && outport == ${rp.json_name}",
                  .actions = "ct_snat(${ipv4.addr});",
-                 .stage_hint = None,
+                 .stage_hint = 0,
                  .io_port = None,
                  .controller_meter = None);
 
@@ -6127,7 +6132,7 @@ for (rp in &RouterPort(.router = &Router{._uuid = lr_uuid, .options = lr_options
                      .priority = 110,
                      .__match = "inport == ${rp.json_name} && ip6.dst == ${ipv6.addr}",
                      .actions = "ct_snat;",
-                     .stage_hint = None,
+                     .stage_hint = 0,
                      .io_port = None,
                      .controller_meter = None);
 
@@ -6136,7 +6141,7 @@ for (rp in &RouterPort(.router = &Router{._uuid = lr_uuid, .options = lr_options
                      .priority = 110,
                      .__match = "flags.force_snat_for_lb == 1 && ip6 && outport == ${rp.json_name}",
                      .actions = "ct_snat(${ipv6.addr});",
-                     .stage_hint = None,
+                     .stage_hint = 0,
                      .io_port = None,
                      .controller_meter = None);
 
@@ -6208,7 +6213,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = 90,
                          .__match          = "ip && ${ipX}.dst == ${nat.nat.external_ip}",
                          .actions          = actions,
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 };
@@ -6234,7 +6239,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = 100,
                          .__match          = __match,
                          .actions          = actions,
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 }
@@ -6279,7 +6284,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = 100,
                          .__match          = __match ++ ext_ip_match,
                          .actions          = flag_action ++ nat_actions,
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 };
@@ -6310,7 +6315,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = 100,
                          .__match          = __match ++ ext_ip_match,
                          .actions          = actions,
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 }
@@ -6327,7 +6332,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = 120,
                          .__match          = __match,
                          .actions          = "next;",
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 };
@@ -6344,7 +6349,7 @@ for (r in &Router(._uuid = lr_uuid,
                      .priority         = 100,
                      .__match          = __match,
                      .actions          = "eth.dst = ${dst_mac}; next;",
-                     .stage_hint       = Some{nat.nat._uuid},
+                     .stage_hint       = stage_hint(nat.nat._uuid),
                      .io_port          = None,
                      .controller_meter = None)
                 }
@@ -6382,7 +6387,7 @@ for (r in &Router(._uuid = lr_uuid,
                      .priority         = 100,
                      .__match          = __match,
                      .actions          = actions,
-                     .stage_hint       = Some{nat.nat._uuid},
+                     .stage_hint       = stage_hint(nat.nat._uuid),
                      .io_port          = None,
                      .controller_meter = None)
             };
@@ -6419,7 +6424,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = plen as bit<64> + 1,
                          .__match          = __match ++ ext_ip_match,
                          .actions          = actions,
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 };
@@ -6459,7 +6464,7 @@ for (r in &Router(._uuid = lr_uuid,
                          .priority         = priority + centralized_boost,
                          .__match          = __match ++ ext_ip_match,
                          .actions          = actions,
-                         .stage_hint       = Some{nat.nat._uuid},
+                         .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
                          .controller_meter = None)
                 }
@@ -6486,7 +6491,7 @@ for (r in &Router(._uuid = lr_uuid,
                  .priority         = 50,
                  .__match          = __match,
                  .actions          = actions,
-                 .stage_hint       = Some{nat.nat._uuid},
+                 .stage_hint       = stage_hint(nat.nat._uuid),
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -6515,7 +6520,7 @@ for (r in &Router(._uuid = lr_uuid,
                  .priority         = 100,
                  .__match          = __match,
                  .actions          = actions,
-                 .stage_hint       = Some{nat.nat._uuid},
+                 .stage_hint       = stage_hint(nat.nat._uuid),
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -6527,7 +6532,7 @@ for (r in &Router(._uuid = lr_uuid,
                     .__match          = "${ipX}.src == ${nat.nat.logical_ip} && "
                                         "outport == ${json_string_escape(gwport.name)}",
                     .actions          = "drop;",
-                    .stage_hint       = Some{nat.nat._uuid},
+                    .stage_hint       = stage_hint(nat.nat._uuid),
                     .io_port          = None,
                     .controller_meter = None)
             };
@@ -6567,7 +6572,7 @@ for (r in &Router(._uuid = lr_uuid,
                  .priority         = 100,
                  .__match          = __match,
                  .actions          = actions,
-                 .stage_hint       = Some{nat.nat._uuid},
+                 .stage_hint       = stage_hint(nat.nat._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -6621,7 +6626,7 @@ for (RouterLBVIP(
                  .actions          = __action,
                  .io_port          = None,
                  .controller_meter = r.copp.get(cOPP_EVENT_ELB()),
-                 .stage_hint       = Some{lb._uuid})
+                 .stage_hint       = stage_hint(lb._uuid))
         }
     };
 
@@ -6661,7 +6666,7 @@ for (RouterLBVIP(
              .priority         = prio,
              .__match          = __match,
              .actions          = __actions,
-             .stage_hint       = Some{lb._uuid},
+             .stage_hint       = stage_hint(lb._uuid),
              .io_port          = None,
              .controller_meter = None);
 
@@ -6707,7 +6712,7 @@ for (RouterLBVIP(
                  .priority         = prio,
                  .__match          = est_match,
                  .actions          = actions,
-                 .stage_hint       = Some{lb._uuid},
+                 .stage_hint       = stage_hint(lb._uuid),
                  .io_port          = None,
                  .controller_meter = None);
 
@@ -6731,7 +6736,7 @@ for (RouterLBVIP(
                      .priority         = 120,
                      .__match          = match3,
                      .actions          = "next;",
-                     .stage_hint       = Some{lb._uuid},
+                     .stage_hint       = stage_hint(lb._uuid),
                      .io_port          = None,
                      .controller_meter = None)
             };
@@ -6773,7 +6778,7 @@ for (RouterLBVIP(
                  .priority         = 120,
                  .__match          = undnat_match,
                  .actions          = action,
-                 .stage_hint       = Some{lb._uuid},
+                 .stage_hint       = stage_hint(lb._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -6792,7 +6797,7 @@ Flow(.logical_datapath = r._uuid,
      .actions          = actions,
      .io_port          = None,
      .controller_meter = meter,
-     .stage_hint       = Some{lb._uuid}) :-
+     .stage_hint       = stage_hint(lb._uuid)) :-
     r in &Router(),
     r.l3dgw_ports.len() > 0 or r.is_gateway,
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
@@ -6963,7 +6968,7 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@&nb::Logical_Router_Port{.peer = Non
                  .actions          = actions,
                  .io_port          = None,
                  .controller_meter = router.copp.get(cOPP_ND_RA_OPTS()),
-                 .stage_hint       = Some{lrp._uuid});
+                 .stage_hint       = stage_hint(lrp._uuid));
 
             var __match = "inport == ${json_name} && ip6.dst == ff02::2 && "
                           "nd_ra && ${rEGBIT_ND_RA_OPTS_RESULT()}" in
@@ -6977,7 +6982,7 @@ for (&RouterPort[port@RouterPort{.lrp = lrp@&nb::Logical_Router_Port{.peer = Non
                  .priority         = 50,
                  .__match          = __match,
                  .actions          = actions,
-                 .stage_hint       = Some{lrp._uuid},
+                 .stage_hint       = stage_hint(lrp._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -6994,7 +6999,7 @@ for (&Router(._uuid = lr_uuid))
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = lr_uuid,
@@ -7002,7 +7007,7 @@ for (&Router(._uuid = lr_uuid))
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -7066,7 +7071,7 @@ for (Route(.port        = port,
              .priority         = priority as integer,
              .__match          = __match,
              .actions          = "ip.ttl--; ${actions}",
-             .stage_hint       = Some{port.lrp._uuid},
+             .stage_hint       = stage_hint(port.lrp._uuid),
              .io_port          = None,
              .controller_meter = None);
 
@@ -7076,7 +7081,7 @@ for (Route(.port        = port,
                  .priority         = priority as integer + 1,
                  .__match          = "${__match} && udp.dst == 3784",
                  .actions          = actions,
-                 .stage_hint       = Some{port.lrp._uuid},
+                 .stage_hint       = stage_hint(port.lrp._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -7089,7 +7094,7 @@ Flow(.logical_datapath = router._uuid,
      .priority         = priority as integer,
      .__match          = ip_match,
      .actions          = "drop;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     r in RouterDiscardRoute_(.router = router, .key = key),
@@ -7125,7 +7130,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = 150,
      .__match          = "${rEG_ECMP_GROUP_ID()} == 0",
      .actions          = "next;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     r in &Router().
@@ -7208,7 +7213,7 @@ Flow(.logical_datapath = router._uuid,
      .priority         = route_priority,
      .__match          = route_match,
      .actions          = actions,
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     EcmpGroup(group_id, router, key, dsts, route_match, route_priority),
@@ -7230,7 +7235,7 @@ Flow(.logical_datapath = router._uuid,
      .priority         = 100,
      .__match          = __match,
      .actions          = actions,
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     EcmpGroup(group_id, router, key, dsts, _, _),
@@ -7265,7 +7270,7 @@ Flow(.logical_datapath = router._uuid,
      .priority = 100,
      .__match = __match,
      .actions = "ct_next;",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None) :-
     EcmpSymmetricReply(router, dst, route_match, _),
@@ -7282,7 +7287,7 @@ Flow(.logical_datapath = router._uuid,
      .priority = 100,
      .__match = __match,
      .actions = actions,
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None) :-
     EcmpSymmetricReply(router, dst, route_match, tunkey),
@@ -7304,7 +7309,7 @@ Flow(.logical_datapath = router._uuid,
                 "${xx}reg1 = ${dst.src_ip}; "
                 "outport = ${dst.port.json_name}; "
                 "next;",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None),
 /* Egress reply traffic for symmetric ECMP routes skips router policies. */
@@ -7313,7 +7318,7 @@ Flow(.logical_datapath = router._uuid,
      .priority = 65535,
      .__match = ecmp_reply,
      .actions = "next;",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None),
 Flow(.logical_datapath = router._uuid,
@@ -7321,7 +7326,7 @@ Flow(.logical_datapath = router._uuid,
      .priority = 200,
      .__match = ecmp_reply,
      .actions = "eth.dst = ct_label.ecmp_reply_eth; next;",
-     .stage_hint = None,
+     .stage_hint = 0,
      .io_port          = None,
      .controller_meter = None) :-
     EcmpSymmetricReply(router, dst, route_match, tunkey),
@@ -7340,7 +7345,7 @@ Flow(.logical_datapath = router._uuid,
      .priority         = 550,
      .__match          = "nd_rs || nd_ra",
      .actions          = "drop;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     router in &Router().
@@ -7369,7 +7374,7 @@ for (IgmpRouterMulticastGroup(address, rtr, ports)) {
              .actions          =
                 "${static_act}outport = ${json_string_escape(address)}; "
                 "ip.ttl--; next;",
-             .stage_hint       = None,
+             .stage_hint       = 0,
              .io_port          = None,
              .controller_meter = None)
     }
@@ -7395,7 +7400,7 @@ for (RouterMcastFloodPorts(rtr, flood_ports) if rtr.mcast_cfg.relay) {
          .priority         = 450,
          .__match          = "ip4.mcast || ip6.mcast",
          .actions          = actions,
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -7417,7 +7422,7 @@ for (&Router(._uuid = lr_uuid)) {
          .priority         = 0,
          .__match          = "1",
          .actions          = "${rEG_ECMP_GROUP_ID()} = 0; next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
 
@@ -7426,7 +7431,7 @@ for (&Router(._uuid = lr_uuid)) {
          .priority         = 150,
          .__match          = "${rEG_ECMP_GROUP_ID()} == 0",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -7445,7 +7450,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = policy.priority,
      .__match          = policy.__match,
      .actions          = actions,
-     .stage_hint       = Some{policy._uuid},
+     .stage_hint       = stage_hint(policy._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     r in &Router(),
@@ -7508,7 +7513,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = 100,
      .__match          = __match,
      .actions          = actions,
-     .stage_hint       = Some{policy._uuid},
+     .stage_hint       = stage_hint(policy._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     EcmpReroutePolicy(r, policy, ecmp_group_id),
@@ -7534,7 +7539,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = policy.priority,
      .__match          = policy.__match,
      .actions          = actions,
-     .stage_hint       = Some{policy._uuid},
+     .stage_hint       = stage_hint(policy._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     EcmpReroutePolicy(r, policy, ecmp_group_id),
@@ -7554,7 +7559,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = policy.priority,
      .__match          = policy.__match,
      .actions          = "drop;",
-     .stage_hint       = Some{policy._uuid},
+     .stage_hint       = stage_hint(policy._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     r in &Router(),
@@ -7566,7 +7571,7 @@ Flow(.logical_datapath = r._uuid,
      .priority         = policy.priority,
      .__match          = policy.__match,
      .actions          = pkt_mark_policy(policy.options) ++ "${rEG_ECMP_GROUP_ID()} = 0; next;",
-     .stage_hint       = Some{policy._uuid},
+     .stage_hint       = stage_hint(policy._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     r in &Router(),
@@ -7588,7 +7593,7 @@ for (&Router(._uuid = lr_uuid)) {
          .priority         = 500,
          .__match          = "ip4.mcast || ip6.mcast",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -7625,7 +7630,7 @@ for (rp in &RouterPort(.peer = PeerRouter{peer_port, _},
                  .priority         = 100,
                  .__match          = __match,
                  .actions          = "eth.dst = ${networks.ea}; next;",
-                 .stage_hint       = Some{rp.lrp._uuid},
+                 .stage_hint       = stage_hint(rp.lrp._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         };
@@ -7639,7 +7644,7 @@ for (rp in &RouterPort(.peer = PeerRouter{peer_port, _},
                  .priority         = 100,
                  .__match          = __match,
                  .actions          = "eth.dst = ${networks.ea}; next;",
-                 .stage_hint       = Some{rp.lrp._uuid},
+                 .stage_hint       = stage_hint(rp.lrp._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -7658,7 +7663,7 @@ Flow(.logical_datapath = router._uuid,
      .__match          = "outport == ${rp.json_name} && "
                          "!is_chassis_resident(${json_string_escape(chassis_redirect_name(l3dgw_port.name))})",
      .actions          = "eth.dst = ${rp.networks.ea}; next;",
-     .stage_hint       = Some{lrp._uuid},
+     .stage_hint       = stage_hint(lrp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     rp in &RouterPort(.lrp = lrp, .router = router),
@@ -7677,7 +7682,7 @@ Flow(.logical_datapath = lr_uuid,
      .priority = 1,
      .__match = "ip4.dst == {" ++ match_ips.join(", ") ++ "}",
      .actions = "drop;",
-     .stage_hint = Some{lrp_uuid},
+     .stage_hint = stage_hint(lrp_uuid),
      .io_port          = None,
      .controller_meter = None) :-
     &RouterPort(.lrp = &nb::Logical_Router_Port{._uuid = lrp_uuid},
@@ -7692,7 +7697,7 @@ Flow(.logical_datapath = lr_uuid,
      .priority = 1,
      .__match = "ip6.dst == {" ++ match_ips.join(", ") ++ "}",
      .actions = "drop;",
-     .stage_hint = Some{lrp_uuid},
+     .stage_hint = stage_hint(lrp_uuid),
      .io_port          = None,
      .controller_meter = None) :-
     &RouterPort(.lrp = &nb::Logical_Router_Port{._uuid = lrp_uuid},
@@ -7711,7 +7716,7 @@ Flow(.logical_datapath = peer.router._uuid,
      .priority = 100,
      .__match = "outport == ${peer.json_name} && " ++ rEG_NEXT_HOP() ++ " == {${ips}}",
      .actions = "eth.dst = ${addr.ea}; next;",
-     .stage_hint = Some{lrp._uuid},
+     .stage_hint = stage_hint(lrp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
      RouterPortRoutableAddresses(port, addresses),
@@ -7743,7 +7748,7 @@ for (SwitchPortIPv4Address(
              .__match          = "outport == ${peer.json_name} && "
                                  "${rEG_NEXT_HOP()} == ${addr.addr}",
              .actions          = "eth.dst = ${ea}; next;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = None,
              .controller_meter = None)
     }
@@ -7765,7 +7770,7 @@ for (SwitchPortIPv6Address(
              .__match          = "outport == ${peer.json_name} && "
                                  "xx${rEG_NEXT_HOP()} == ${addr.addr}",
              .actions          = "eth.dst = ${ea}; next;",
-             .stage_hint       = Some{lsp._uuid},
+             .stage_hint       = stage_hint(lsp._uuid),
              .io_port          = None,
              .controller_meter = None)
     }
@@ -7797,7 +7802,7 @@ Flow(.logical_datapath = peer.router._uuid,
      .__match          = "outport == ${peer.json_name} && "
                          "${rEG_NEXT_HOP()} == ${virtual_ip}",
      .actions          = "eth.dst = 00:00:00:00:00:00; next;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "virtual"}),
@@ -7814,7 +7819,7 @@ Flow(.logical_datapath = peer.router._uuid,
      .__match          = "outport == ${peer.json_name} && "
                          "${rEG_NEXT_HOP()} == ${virtual_ip}",
      .actions          = "eth.dst = ${address.ea}; next;",
-     .stage_hint       = Some{sp.lsp._uuid},
+     .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     sp in &SwitchPort(.lsp = lsp@&nb::Logical_Switch_Port{.__type = "virtual"}),
@@ -7853,7 +7858,7 @@ for (&SwitchPort(.lsp = lsp1,
                  .__match          = "outport == ${peer1.json_name} && "
                                      "${rEG_NEXT_HOP()} == ${format_v4_networks(peer2.networks, false)}",
                  .actions          = "eth.dst = ${peer2.networks.ea}; next;",
-                 .stage_hint       = Some{lsp1._uuid},
+                 .stage_hint       = stage_hint(lsp1._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         };
@@ -7865,7 +7870,7 @@ for (&SwitchPort(.lsp = lsp1,
                  .__match          = "outport == ${peer1.json_name} && "
                                      "xx${rEG_NEXT_HOP()} == ${format_v6_networks(peer2.networks)}",
                  .actions          = "eth.dst = ${peer2.networks.ea}; next;",
-                 .stage_hint       = Some{lsp1._uuid},
+                 .stage_hint       = stage_hint(lsp1._uuid),
                  .io_port          = None,
                  .controller_meter = None)
         }
@@ -7879,7 +7884,7 @@ for (&Router(._uuid = lr_uuid))
          .priority         = 0,
          .__match          = "ip4",
          .actions          = "get_arp(outport, ${rEG_NEXT_HOP()}); next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None);
     Flow(.logical_datapath = lr_uuid,
@@ -7887,7 +7892,7 @@ for (&Router(._uuid = lr_uuid))
          .priority         = 0,
          .__match          = "ip6",
          .actions          = "get_nd(outport, xx${rEG_NEXT_HOP()}); next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -7910,7 +7915,7 @@ Flow(.logical_datapath = lr_uuid,
      .priority         = 0,
      .__match          = "1",
      .actions          = "next;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     &Router(._uuid = lr_uuid).
@@ -7919,7 +7924,7 @@ Flow(.logical_datapath = lr_uuid,
      .priority         = 0,
      .__match          = "1",
      .actions          = "next;",
-     .stage_hint       = None,
+     .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
     &Router(._uuid = lr_uuid).
@@ -7929,7 +7934,7 @@ Flow(.logical_datapath = lr_uuid,
      .__match          = "outport == ${gw_mtu_rp.json_name}",
      .actions          = "${rEGBIT_PKT_LARGER()} = check_pkt_larger(${mtu}); "
                          "next;",
-     .stage_hint       = Some{gw_mtu_rp.lrp._uuid},
+     .stage_hint       = stage_hint(gw_mtu_rp.lrp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
     r in &Router(._uuid = lr_uuid),
@@ -7957,7 +7962,7 @@ Flow(.logical_datapath = lr_uuid,
                          "};",
      .io_port          = None,
      .controller_meter = r.copp.get(cOPP_ICMP4_ERR()),
-     .stage_hint       = Some{rp.lrp._uuid}) :-
+     .stage_hint       = stage_hint(rp.lrp._uuid)) :-
     r in &Router(._uuid = lr_uuid),
     gw_mtu_rp in &RouterPort(.router = r),
     var gw_mtu = gw_mtu_rp.lrp.options.get_int_def("gateway_mtu", 0),
@@ -7987,7 +7992,7 @@ Flow(.logical_datapath = lr_uuid,
                          "};",
      .io_port          = None,
      .controller_meter = r.copp.get(cOPP_ICMP4_ERR()),
-     .stage_hint       = Some{rp.lrp._uuid}) :-
+     .stage_hint       = stage_hint(rp.lrp._uuid)) :-
     r in &Router(._uuid = lr_uuid),
     gw_mtu_rp in &RouterPort(.router = r),
     var gw_mtu = gw_mtu_rp.lrp.options.get_int_def("gateway_mtu", 0),
@@ -8017,7 +8022,7 @@ Flow(.logical_datapath = lr_uuid,
                          "};",
      .io_port          = None,
      .controller_meter = r.copp.get(cOPP_ICMP6_ERR()),
-     .stage_hint       = Some{rp.lrp._uuid}) :-
+     .stage_hint       = stage_hint(rp.lrp._uuid)) :-
     r in &Router(._uuid = lr_uuid),
     gw_mtu_rp in &RouterPort(.router = r),
     var gw_mtu = gw_mtu_rp.lrp.options.get_int_def("gateway_mtu", 0),
@@ -8047,7 +8052,7 @@ Flow(.logical_datapath = lr_uuid,
                          "};",
      .io_port          = None,
      .controller_meter = r.copp.get(cOPP_ICMP6_ERR()),
-     .stage_hint       = Some{rp.lrp._uuid}) :-
+     .stage_hint       = stage_hint(rp.lrp._uuid)) :-
     r in &Router(._uuid = lr_uuid),
     gw_mtu_rp in &RouterPort(.router = r),
     var gw_mtu = gw_mtu_rp.lrp.options.get_int_def("gateway_mtu", 0),
@@ -8076,7 +8081,7 @@ for (&Router(._uuid = lr_uuid))
              .priority         = 50,
              .__match          = "outport == ${json_string_escape(lrp.name)}",
              .actions          = "outport = ${json_string_escape(chassis_redirect_name(lrp.name))}; next;",
-             .stage_hint       = Some{lrp._uuid},
+             .stage_hint       = stage_hint(lrp._uuid),
              .io_port          = None,
              .controller_meter = None)
     };
@@ -8087,7 +8092,7 @@ for (&Router(._uuid = lr_uuid))
          .priority         = 0,
          .__match          = "1",
          .actions          = "next;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -8104,7 +8109,7 @@ Flow(.logical_datapath = router._uuid,
      .actions          = actions,
      .io_port          = None,
      .controller_meter = router.copp.get(cOPP_ND_NS_RESOLVE()),
-     .stage_hint       = None) :-
+     .stage_hint       = 0) :-
     rsr in RouterStaticRoute(.router = router),
     var dst = FlatMap(rsr.dsts),
     IPv6{var gw_ip6} = dst.nexthop,
@@ -8135,7 +8140,7 @@ for (&Router(._uuid = lr_uuid, .copp = copp))
                              "};",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ARP_RESOLVE()),
-         .stage_hint       = None);
+         .stage_hint       = 0);
 
     Flow(.logical_datapath = lr_uuid,
          .stage            = s_ROUTER_IN_ARP_REQUEST(),
@@ -8147,14 +8152,14 @@ for (&Router(._uuid = lr_uuid, .copp = copp))
                              "};",
          .io_port          = None,
          .controller_meter = copp.get(cOPP_ND_NS_RESOLVE()),
-         .stage_hint       = None);
+         .stage_hint       = 0);
 
     Flow(.logical_datapath = lr_uuid,
          .stage            = s_ROUTER_IN_ARP_REQUEST(),
          .priority         = 0,
          .__match          = "1",
          .actions          = "output;",
-         .stage_hint       = None,
+         .stage_hint       = 0,
          .io_port          = None,
          .controller_meter = None)
 }
@@ -8181,7 +8186,7 @@ for (&RouterPort(.lrp = lrp,
              .__match          = "(ip4.mcast || ip6.mcast) && "
                                  "outport == ${json_name}",
              .actions          = "eth.src = ${lrp_networks.ea}; output;",
-             .stage_hint       = Some{lrp._uuid},
+             .stage_hint       = stage_hint(lrp._uuid),
              .io_port          = None,
              .controller_meter = None)
     };
@@ -8195,7 +8200,7 @@ for (&RouterPort(.lrp = lrp,
          .priority         = 100,
          .__match          = "outport == ${json_name}",
          .actions          = "output;",
-         .stage_hint       = Some{lrp._uuid},
+         .stage_hint       = stage_hint(lrp._uuid),
          .io_port          = None,
          .controller_meter = None)
 }
@@ -8836,7 +8841,7 @@ function lrouter_bfd_flows(lr_uuid: uuid,
           .priority         = 110,
           .__match          = "${ipX}.src == ${networks} && udp.dst == 3784",
           .actions          = "next; ",
-          .stage_hint       = Some{lrp_uuid},
+          .stage_hint       = stage_hint(lrp_uuid),
          .io_port          = None,
          .controller_meter = None},
      Flow{.logical_datapath = lr_uuid,
@@ -8846,7 +8851,7 @@ function lrouter_bfd_flows(lr_uuid: uuid,
           .actions          = "handle_bfd_msg(); ",
           .io_port          = None,
           .controller_meter = controller_meter,
-          .stage_hint       = Some{lrp_uuid}})
+          .stage_hint       = stage_hint(lrp_uuid)})
 }
 for (&RouterPort(.router = router, .networks = networks, .lrp = lrp, .has_bfd = true)) {
     var controller_meter = router.copp.get(cOPP_BFD()) in {
