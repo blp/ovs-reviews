@@ -661,7 +661,7 @@ for i in $(seq $n_northds); do
     fi
     export LD_LIBRARY_PATH=$HOME/work/ovn/_build/lib/.libs:$HOME/work/ovs/_build/ovsdb/.libs:$HOME/work/ovs/_build/lib/.libs
     if $ddlog && false; then
-	(cd "$sandbox" && valgrind --tool=callgrind $HOME/work/ovn/_build/northd/.libs/ovn-northd-ddlog \
+	(cd "$sandbox" && valgrind --tool=massif $HOME/work/ovn/_build/northd/.libs/ovn-northd-ddlog \
 				   --no-chdir --pidfile=$OVN_NORTHD$inst.pid -vconsole:off \
 				   --log-file=$OVN_NORTHD$inst.log -vsyslog:off \
 				   --ovnsb-db="$OVN_SB_DB" --ovnnb-db="$OVN_NB_DB" $northd_args)&

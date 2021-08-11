@@ -3087,18 +3087,15 @@ function ct_lb(backends: string,
 
     "ct_lb(" ++ args.join("; ") ++ ");"
 }
-function build_lb_vip_actions(lbvip: Intern<LBVIPWithStatus>,
+function build_lb_vip_actions(lbvip: Intern<LBVIP>,
                               stage: Intern<Stage>,
                               actions0: string): string {
     var up_backends = set_empty();
-    for (pair in lbvip.backends) {
-        (var backend, var up) = pair;
-        if (up) {
-            if (backend.port != 0) {
-                up_backends.insert("${backend.ip.to_bracketed_string()}:${backend.port}")
-            } else {
-                up_backends.insert("${backend.ip.to_bracketed_string()}")
-            }
+    for (backend in lbvip.backends) {
+        if (backend.port != 0) {
+            up_backends.insert("${backend.ip.to_bracketed_string()}:${backend.port}")
+        } else {
+            up_backends.insert("${backend.ip.to_bracketed_string()}")
         }
     };
 
@@ -3114,15 +3111,14 @@ function build_lb_vip_actions(lbvip: Intern<LBVIPWithStatus>,
                         lbvip.lb.protocol);
     actions0 ++ actions
 }
-Flow(.logical_datapath = sw._uuid,
+Flow(.logical_datapath = sw_uuid,
      .stage            = s_SWITCH_IN_STATEFUL(),
      .priority         = priority,
      .__match          = __match.intern(),
      .actions          = actions.intern(),
      .stage_hint       = None) :-
-    sw in &Switch(),
-    var lb_uuid = FlatMap(sw.load_balancer),
-    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb@&nb::Load_Balancer{._uuid = lb_uuid}}],
+    SwitchLB(sw_uuid, lb),
+    lbvip in &LBVIP(.lb = lb),
     var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
     var actions = {
         /* Store the original destination IP to be used when generating
@@ -6429,10 +6425,9 @@ Flow(.logical_datapath = r._uuid,
      .__match          = __match.intern(),
      .actions          = actions.intern(),
      .stage_hint       = None) :-
-    r in &Router(),
+    RouterLB(r, lb),
     r.l3dgw_port.is_some() or r.is_gateway,
-    var lb_uuid = FlatMap(r.load_balancer),
-    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb@&nb::Load_Balancer{._uuid = lb_uuid}}],
+    lbvip in &LBVIP(.lb = lb),
     var __match
         = "ct.new && " ++
           get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true, true) ++
