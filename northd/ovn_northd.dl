@@ -1654,19 +1654,15 @@ UseLogicalDatapathGroups[false] :-
     Unit(),
     not nb in nb::NB_Global().
 
-/* Group identical flows that exist in multiple datapaths.  The `logical_datapaths` map
- * maps datapath ID to "weight", i.e., the number of times the flow has been derived for
- * this datapath.  The weight is needed for the aggregation logic, described below, and
- * is dropped when converting `AggregatedFlow` to `Out_Logical_Flow`. */
 relation AggregatedFlow (
-    logical_datapaths: Map<uuid, isize>,
+    logical_datapaths: Set<uuid>,
     stage:             Intern<Stage>,
     priority:          integer,
     __match:           istring,
     actions:           istring,
-    io_port:           Option<string>,
+    tags:              Map<string,string>,
     controller_meter:  Option<string>,
-    stage_hint:        bit<32>
+    external_ids:      Map<string,string>
 )
 function make_flow_tags(io_port: Option<string>): Map<string,string> {
     match (io_port) {
@@ -1682,125 +1678,63 @@ function make_flow_external_ids(stage_hint: bit<32>, stage: Intern<Stage>): Map<
          "stage-hint" -> "${hex(stage_hint)}"]
     }
 }
-
-/* `FlowFold` is an auxiliary relation used to compute `AggregatedFlow`.  We could easily
- * compute `AggregatedFlow` by grouping the `Flow` relation by the
- * `(stage, prio, match, action, external_ids)` tuple.  Unfortunately, this involves
- * arranging `Flow` before aggregation, which can be expensive, as it can be a
- * very large relation.  We therefore use the "streaming aggreagation" method supported by
- * DDlog (see https://github.com/vmware/differential-datalog/blob/master/doc/tutorial/tutorial.md#streaming-aggregation-differentiation-and-delay-operators).
- * The idea is to compute the aggregate incrementally by adjusting the aggregate computed
- * during the previous transaction using the set of newly added or removed flows.  To
- * this end we construct an intermediate relation as a concatenation of the previous
- * aggregate (`AggregatedFlow-1`, where `-1` is DDlog's delay operator that refers
- * to the previous contents of the relation) and the set of changes in the `Flow` relation
- * (`Flow'`, where `'` is DDlog's differentiation operator, which transforms relation R
- * into a relation that only contains changes to R added during the last transaction). */
-relation FlowFold[AggregatedFlow]
-
-FlowFold[flow] :- AggregatedFlow-1[flow].
-
-FlowFold[AggregatedFlow{map_singleton(logical_datapath, 1), stage, priority, __match, actions, io_port, controller_meter, external_ids}] :-
-    Flow'(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, external_ids).
-
-AggregatedFlow(.logical_datapaths = new_logical_datapaths,
+AggregatedFlow(.logical_datapaths = g.to_set(),
                .stage = stage,
                .priority = priority,
                .__match = __match,
                .actions = actions,
-               .io_port = io_port,
+               .tags = make_flow_tags(io_port),
                .controller_meter = controller_meter,
-               .stage_hint = stage_hint) :-
-    // Group the FlowFold relation.  Each resulting group `g` will contain all `FlowFold` records
-    // that share the same `(stage, prio, match, action, external_ids)` tuple.  Elements of `g`
-    // are DP-to-weight maps.
-    FlowFold[AggregatedFlow{logical_datapaths, stage, priority, __match, actions, io_port, controller_meter, stage_hint}],
-    var g = logical_datapaths.group_by((stage, priority, __match, actions, io_port, controller_meter, stage_hint)),
-    // Compute a union of all maps in `g`.  If datapath `dp` occurs in more than one map, sum up
-    // all associated weights.  If the resulting sum is >0, add the flow to the output map.
-    var new_logical_datapaths = {
-        var new_logical_datapaths = map_empty();
-        for ((dps, w1) in g) {
-            for ((dp, w2) in dps) {
-                var old_weight = new_logical_datapaths.get(dp).unwrap_or(0);
-                // Adjust the weight by w1 * w2 (the weight with which dp occurs in dps
-                // times the number of times dps occurs in g).
-                var new_weight = old_weight + w1 * w2;
-                if (new_weight == 0) {
-                    new_logical_datapaths.remove(dp);
-                } else {
-                    new_logical_datapaths.insert(dp, new_weight);
-                }
-            };
-        };
-        new_logical_datapaths
-    },
-    new_logical_datapaths.size() > 0.
+               .external_ids = make_flow_external_ids(stage_hint, stage)) :-
+    UseLogicalDatapathGroups[true],
+    Flow(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, stage_hint),
+    var g = logical_datapath.group_by((stage, priority, __match, actions, io_port, controller_meter, stage_hint)).
+AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
+               .stage = stage,
+               .priority = priority,
+               .__match = __match,
+               .actions = actions,
+               .tags = make_flow_tags(io_port),
+               .controller_meter = controller_meter,
+               .external_ids = make_flow_external_ids(stage_hint, stage)) :-
+    UseLogicalDatapathGroups[false],
+    Flow(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, stage_hint).
 
-/* Compute Out_Logical_Flow.  Use datapath grouping when enabled. */
-
-function to_string(pipeline: Pipeline): string {
-    if (pipeline == Ingress) {
-        "ingress"
+for (f in AggregatedFlow()) {
+    var pipeline = if (f.stage.pipeline == Ingress) "ingress" else "egress" in
+    var external_ids = f.external_ids.insert_imm("stage-name", f.stage.table_name) in
+    if (f.logical_datapaths.size() == 1) {
+        Some{var dp} = f.logical_datapaths.nth(0) in
+        sb::Out_Logical_Flow(
+            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.controller_meter, f.external_ids)),
+            .logical_datapath = Some{dp},
+            .logical_dp_group = None,
+            .pipeline         = pipeline,
+            .table_id         = f.stage.table_id as integer,
+            .priority         = f.priority,
+            .controller_meter = f.controller_meter,
+            .__match          = f.__match.ival(),
+            .actions          = f.actions.ival(),
+            .tags             = f.tags,
+            .external_ids     = external_ids)
     } else {
-        "egress"
+        var group_uuid = hash128(f.logical_datapaths) in {
+            sb::Out_Logical_Flow(
+                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.controller_meter, f.external_ids)),
+                .logical_datapath = None,
+                .logical_dp_group = Some{group_uuid},
+                .pipeline         = pipeline,
+                .table_id         = f.stage.table_id as integer,
+                .priority         = f.priority,
+                .controller_meter = f.controller_meter,
+                .__match          = f.__match.ival(),
+                .actions          = f.actions.ival(),
+                .tags             = f.tags,
+                .external_ids     = external_ids);
+            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths)
+        }
     }
 }
-
-// Case 1: Flows that belong to a single datapath don't required grouping.
-sb::Out_Logical_Flow(
-    ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.io_port, f.controller_meter, f.stage_hint)),
-    .logical_datapath = Some{dp},
-    .logical_dp_group = None,
-    .pipeline         = f.stage.pipeline.to_string(),
-    .table_id         = f.stage.table_id as integer,
-    .priority         = f.priority,
-    .__match          = f.__match.ival(),
-    .actions          = f.actions.ival(),
-    .tags             = make_flow_tags(f.io_port),
-    .controller_meter = f.controller_meter,
-    .external_ids     = make_flow_external_ids(f.stage_hint, f.stage)) :-
-    f in AggregatedFlow(),
-    f.logical_datapaths.size() == 1,
-    Some{var dp} = f.logical_datapaths.keys().nth(0).
-
-// Case 2: Flows that belong to more than one datapath are grouped when grouping is enabled
-//  (`UseLogicalDatapathGroups[true]`)
-sb::Out_Logical_Flow(
-    ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.io_port, f.controller_meter, f.stage_hint)),
-    .logical_datapath = None,
-    .logical_dp_group = Some{group_uuid},
-    .pipeline         = f.stage.pipeline.to_string(),
-    .table_id         = f.stage.table_id as integer,
-    .priority         = f.priority,
-    .__match          = f.__match.ival(),
-    .actions          = f.actions.ival(),
-    .tags             = make_flow_tags(f.io_port),
-    .controller_meter = f.controller_meter,
-    .external_ids     = make_flow_external_ids(f.stage_hint, f.stage)),
-sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths.keys().to_set()) :-
-    f in AggregatedFlow(),
-    f.logical_datapaths.size() > 1,
-    UseLogicalDatapathGroups[true],
-    var group_uuid = hash128(f.logical_datapaths.keys()).
-
-// Case 3: Grouping is disabled; flatten shared flows into one-per-datapath.
-sb::Out_Logical_Flow(
-    ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.io_port, f.controller_meter, f.stage_hint)),
-    .logical_datapath = Some{dp},
-    .logical_dp_group = None,
-    .pipeline         = f.stage.pipeline.to_string(),
-    .table_id         = f.stage.table_id as integer,
-    .priority         = f.priority,
-    .__match          = f.__match.ival(),
-    .actions          = f.actions.ival(),
-    .tags             = make_flow_tags(f.io_port),
-    .controller_meter = f.controller_meter,
-    .external_ids     = make_flow_external_ids(f.stage_hint, f.stage)) :-
-    f in AggregatedFlow(),
-    f.logical_datapaths.size() > 1,
-    UseLogicalDatapathGroups[false],
-    var dp = FlatMap(f.logical_datapaths.keys()).
 
 /* Logical flows for forwarding groups. */
 Flow(.logical_datapath = sw._uuid,
