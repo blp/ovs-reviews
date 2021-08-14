@@ -6150,10 +6150,12 @@ test_dhcp() {
 compare_dhcp_packets() {
     received=$($PYTHON "$ovs_srcdir/utilities/ovs-pcap.in" hv1/vif$1-tx.pcap)
     expected=$(cat $1.expected)
+    echo "received=$received"
+    echo "expected=$expected"
 
     if test "$received" != "$expected"; then
-        AT_CHECK_UNQUOTED([echo "$received"; tcpdump_hex "$received"], [0],
-            [$(echo "$expected"; tcpdump_hex "$expected")])
+        (echo "$expected"; tcpdump_hex "$expected") > expout
+        AT_CHECK([echo "$received"; tcpdump_hex "$received"], [0], [expout])
     fi
 }
 
