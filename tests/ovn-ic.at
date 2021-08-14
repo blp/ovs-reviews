@@ -223,7 +223,13 @@ OVS_WAIT_WHILE([ovn_as az2 ovn-sbctl show | grep lsp-ts1-lr1])
 
 ovn-nbctl set logical_router_port lrp-lr1-ts1 mac="\"aa:aa:aa:aa:aa:02\"" \
               networks="169.254.100.2/24 169.254.200.3/24"
-OVS_WAIT_UNTIL([ovn_as az2 ovn-nbctl show | grep "aa:aa:aa:aa:aa:02 169.254.100.2/24 169.254.200.3/24"])
+OVS_WAIT_FOR_OUTPUT([ovn_as az2 ovn-nbctl show | uuidfilt], [0], [dnl
+switch <0> (ts1)
+    port lsp-ts1-lr1
+        type: remote
+        addresses: [["aa:aa:aa:aa:aa:02 169.254.100.2/24 169.254.200.3/24"]]
+])
+
 
 # Delete the router port from az1, the remote port in az2 should still remain
 # but just lost address.
