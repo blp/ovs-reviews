@@ -3201,15 +3201,11 @@ function ct_lb(backends: string,
 function build_lb_vip_actions(lbvip: Intern<LBVIPWithStatus>,
                               stage: Intern<Stage>,
                               actions0: string): (string, bool) {
-    var up_backends = set_empty();
+    var up_backends = vec_with_capacity(lbvip.backends.size());
     for (pair in lbvip.backends) {
         (var backend, var up) = pair;
         if (up) {
-            if (backend.port != 0) {
-                up_backends.insert("${backend.ip.to_bracketed_string()}:${backend.port}")
-            } else {
-                up_backends.insert("${backend.ip.to_bracketed_string()}")
-            }
+            up_backends.push((backend.ip, backend.port))
         }
     };
 
@@ -3221,8 +3217,11 @@ function build_lb_vip_actions(lbvip: Intern<LBVIPWithStatus>,
         } // else fall through
     };
 
-    var actions = ct_lb(up_backends.to_vec().join(","), lbvip.lb.selection_fields,
-                        lbvip.lb.protocol);
+    var up_backends_s = up_backends.sort_imm().map(|x| match (x) {
+        (ip, 0) -> "${ip.to_bracketed_string()}",
+        (ip, port) -> "${ip.to_bracketed_string()}:${port}"
+    }).join(",");
+    var actions = ct_lb(up_backends_s, lbvip.lb.selection_fields, lbvip.lb.protocol);
     (actions0 ++ actions, false)
 }
 Flow(.logical_datapath = sw._uuid,
