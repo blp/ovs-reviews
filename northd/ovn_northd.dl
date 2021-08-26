@@ -6686,6 +6686,42 @@ Flow(.logical_datapath = r._uuid,
     not r.l3dgw_ports.is_empty() or r.is_gateway,
     r.load_balancer.contains(lb._uuid).
 
+Flow(.logical_datapath = r._uuid,
+     .stage            = s_ROUTER_IN_DNAT(),
+     .priority         = prio,
+     .__match          = __match.intern(),
+     .actions          = actions,
+     .stage_hint       = 0,
+     .io_port          = None,
+     .controller_meter = None) :-
+    LBVIP[lbvip@&LBVIP{.vip_key = lb_key, .lb = lb}],
+    Some{(var ip, var port)} = ip_address_and_port_from_lb_key(lb_key.ival()),
+    var proto = match (lb.protocol) {
+        Some{proto} -> proto,
+        _ -> i"tcp"
+    },
+    /* Higher priority rules are added for load-balancing in DNAT
+     * table.  For every match (on a VIP[:port]), we add two flows
+     * via add_router_lb_flow().  One flow is for specific matching
+     * on ct.new with an action of "ct_lb($targets);".  The other
+     * flow is for ct.est with an action of "ct_dnat;". */
+    var match1 = "${ip.ipX()} && ${ip.xxreg()}${rEG_NEXT_HOP()} == ${ip}",
+    var prio = if (port != 0) { 120 } else { 110 },
+    var match0 = "ct.est && " ++ match1 ++ " && ct_label.natted == 1" ++
+        if (port != 0) { " && ${proto}" } else { "" },
+    r in &Router(),
+    not r.l3dgw_ports.is_empty() or r.is_gateway,
+    r.load_balancer.contains(lb._uuid),
+    var __match = match0 ++ match ((r.l3dgw_ports.nth(0), lbvip.backend_ips != i"" or lb.options.get_bool_def(i"reject", false))) {
+            (Some {var gw_port}, true) -> " && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
+            _ -> ""
+        },
+    var actions = match (snat_for_lb(r.options, lb)) {
+        SkipSNAT -> i"flags.skip_snat_for_lb = 1; next;",
+        ForceSNAT -> i"flags.force_snat_for_lb = 1; next;",
+        _ -> i"next;"
+    }.
+
 /* Load balancing and packet defrag are only valid on
  * Gateway routers or router with gateway port. */
 for (RouterLBVIP(
@@ -6742,32 +6778,6 @@ for (RouterLBVIP(
             } in
         var snat_for_lb = snat_for_lb(r.options, lb.lb) in
         {
-            /* A match and actions for established connections. */
-            var est_match = "ct.est && " ++ match1 ++ " && ct_label.natted == 1" ++
-                if (port != 0) {
-                    " && ${proto}"
-                } else {
-                    ""
-                } ++
-                match ((l3dgw_ports.nth(0), backends != i"" or lb.lb.options.get_bool_def(i"reject", false))) {
-                    (Some {var gw_port}, true) -> " && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
-                    _ -> ""
-                } in
-            var actions =
-                match (snat_for_lb) {
-                    SkipSNAT -> i"flags.skip_snat_for_lb = 1; next;",
-                    ForceSNAT -> i"flags.force_snat_for_lb = 1; next;",
-                    _ -> i"next;"
-                } in
-            Flow(.logical_datapath = lr_uuid,
-                 .stage            = s_ROUTER_IN_DNAT(),
-                 .priority         = prio,
-                 .__match          = est_match.intern(),
-                 .actions          = actions,
-                 .stage_hint       = 0,
-                 .io_port          = None,
-                 .controller_meter = None);
-
             if (nats_contain_vip(nats, ip_address)) {
                 /* The load balancer vip is also present in the NAT entries.
                  * So add a high priority lflow to advance the the packet
