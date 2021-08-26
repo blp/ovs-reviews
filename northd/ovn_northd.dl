@@ -6803,33 +6803,21 @@ Flow(.logical_datapath = r._uuid,
             _ -> i"ct_dnat;"
         }.
 
-/* Load balancing and packet defrag are only valid on
- * Gateway routers or router with gateway port. */
-for (RouterLBVIP(
-        .router = r@&Router{._uuid = lr_uuid,
-                            .l3dgw_ports = l3dgw_ports,
-                            .is_gateway = is_gateway,
-                            .nats = nats},
-        .lb = lb,
-        .vip = vip,
-        .backends = backends)
-     if not l3dgw_ports.is_empty() or is_gateway)
-{
-    if (backends == i"" and not lb.lb.options.get_bool_def(i"reject", false)) {
-        for (LoadBalancerEmptyEvents(lb.lb._uuid)) {
-            Some {(var __match, var __action)} =
-                build_empty_lb_event_flow(vip, lb.lb) in
-            Flow(.logical_datapath = lr_uuid,
-                 .stage            = s_ROUTER_IN_DNAT(),
-                 .priority         = 130,
-                 .__match          = __match,
-                 .actions          = __action,
-                 .io_port          = None,
-                 .controller_meter = r.copp.get(cOPP_EVENT_ELB()),
-                 .stage_hint       = stage_hint(lb.lb._uuid))
-        }
-    }
-}
+Flow(.logical_datapath = r._uuid,
+     .stage            = s_ROUTER_IN_DNAT(),
+     .priority         = 130,
+     .__match          = __match,
+     .actions          = __action,
+     .io_port          = None,
+     .controller_meter = r.copp.get(cOPP_EVENT_ELB()),
+     .stage_hint       = stage_hint(lb._uuid)) :-
+    LBVIP[lbvip@&LBVIP{.vip_key = lb_key, .lb = lb, .backend_ips = i""}],
+    not lb.options.get_bool_def(i"reject", false),
+    LoadBalancerEmptyEvents(lb._uuid),
+    Some {(var __match, var __action)} = build_empty_lb_event_flow(lb_key, lb),
+    r in &Router(),
+    not r.l3dgw_ports.is_empty() or r.is_gateway,
+    r.load_balancer.contains(lb._uuid).
 
 /* Higher priority rules are added for load-balancing in DNAT
  * table.  For every match (on a VIP[:port]), we add two flows
