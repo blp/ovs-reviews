@@ -6755,6 +6755,54 @@ Flow(.logical_datapath = r._uuid,
     r.load_balancer.contains(lb._uuid),
     nats_contain_vip(r.nats, ip).
 
+/* Add logical flows to UNDNAT the load balanced reverse traffic in
+ * the router egress pipleine stage - S_ROUTER_OUT_UNDNAT if the logical
+ * router has a gateway router port associated.
+ */
+Flow(.logical_datapath = r._uuid,
+     .stage            = s_ROUTER_OUT_UNDNAT(),
+     .priority         = 120,
+     .__match          = __match,
+     .actions          = action,
+     .stage_hint       = stage_hint(lb._uuid),
+     .io_port          = None,
+     .controller_meter = None) :-
+    LBVIP[lbvip@&LBVIP{.vip_key = lb_key, .lb = lb, .backend_ips = backends}],
+    Some{(var ip, var port)} = ip_address_and_port_from_lb_key(lb_key.ival()),
+    var proto = match (lb.protocol) {
+        Some{proto} -> proto,
+        _ -> i"tcp"
+    },
+    var conds = {
+        var conds = vec_empty();
+        for (ip_str in backends.split(",")) {
+            match (ip_address_and_port_from_lb_key(ip_str)) {
+                None -> () /* FIXME: put a break here */,
+                Some{(ip_, port_)} -> conds.push(
+                    "(${ipX}.src == ${ip_}" ++
+                    if (port_ != 0) {
+                        " && ${proto}.src == ${port_})"
+                    } else {
+                        ")"
+                    })
+            }
+        };
+        conds.join(" || ")
+    },
+    conds != "",
+    r in &Router(),
+    Some{var gwport} = r.l3dgw_ports.nth(0),
+    r.load_balancer.contains(lb._uuid),
+    var __match =
+        i"${ip.ipX()} && (${conds}) && "
+        "outport == ${json_escape(gwport.name)} && "
+        "is_chassis_resident(${json_escape(chassis_redirect_name(gwport.name))})",
+    var action = match (snat_for_lb(r.options, lb)) {
+            SkipSNAT -> i"flags.skip_snat_for_lb = 1; ct_dnat;",
+            ForceSNAT -> i"flags.force_snat_for_lb = 1; ct_dnat;",
+            _ -> i"ct_dnat;"
+        }.
+
 /* Load balancing and packet defrag are only valid on
  * Gateway routers or router with gateway port. */
 for (RouterLBVIP(
@@ -6779,78 +6827,6 @@ for (RouterLBVIP(
                  .io_port          = None,
                  .controller_meter = r.copp.get(cOPP_EVENT_ELB()),
                  .stage_hint       = stage_hint(lb.lb._uuid))
-        }
-    };
-
-    /* A set to hold all ips that need defragmentation and tracking. */
-
-    /* vip contains IP:port or just IP. */
-    Some{(var ip_address, var port)} = ip_address_and_port_from_lb_key(vip.ival()) in
-    var ipX = ip_address.ipX() in
-    var proto = match (lb.lb.protocol) {
-        Some{proto} -> proto,
-        _ -> i"tcp"
-    } in {
-        /* Higher priority rules are added for load-balancing in DNAT
-         * table.  For every match (on a VIP[:port]), we add two flows
-         * via add_router_lb_flow().  One flow is for specific matching
-         * on ct.new with an action of "ct_lb($targets);".  The other
-         * flow is for ct.est with an action of "ct_dnat;". */
-        var xx = ip_address.xxreg() in
-        var match1 = "${ipX} && ${xx}${rEG_NEXT_HOP()} == ${ip_address}" in
-        (var prio, var match2) =
-            if (port != 0) {
-                (120, " && ${proto} && ${proto}.dst == ${port}")
-            } else {
-                (110, "")
-            } in
-        var __match = match1 ++ match2 ++
-            match ((l3dgw_ports.nth(0), backends != i"" or lb.lb.options.get_bool_def(i"reject", false))) {
-                (Some{gw_port}, true) -> " && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
-                _ -> ""
-            } in
-        var snat_for_lb = snat_for_lb(r.options, lb.lb) in
-        {
-            Some{var gwport} = l3dgw_ports.nth(0) in
-            /* Add logical flows to UNDNAT the load balanced reverse traffic in
-             * the router egress pipleine stage - S_ROUTER_OUT_UNDNAT if the logical
-             * router has a gateway router port associated.
-             */
-            var conds = {
-                var conds = vec_empty();
-                for (ip_str in backends.split(",")) {
-                    match (ip_address_and_port_from_lb_key(ip_str)) {
-                        None -> () /* FIXME: put a break here */,
-                        Some{(ip_address_, port_)} -> conds.push(
-                            "(${ipX}.src == ${ip_address_}" ++
-                            if (port_ != 0) {
-                                " && ${proto}.src == ${port_})"
-                            } else {
-                                ")"
-                            })
-                    }
-                };
-                conds
-            } in
-            not conds.is_empty() in
-            var undnat_match =
-                "${ip_address.ipX()} && (" ++ conds.join(" || ") ++
-                ") && outport == ${json_escape(gwport.name)} && "
-                "is_chassis_resident(${json_escape(chassis_redirect_name(gwport.name))})" in
-            var action =
-                match (snat_for_lb) {
-                    SkipSNAT -> i"flags.skip_snat_for_lb = 1; ct_dnat;",
-                    ForceSNAT -> i"flags.force_snat_for_lb = 1; ct_dnat;",
-                    _ -> i"ct_dnat;"
-                } in
-            Flow(.logical_datapath = lr_uuid,
-                 .stage            = s_ROUTER_OUT_UNDNAT(),
-                 .priority         = 120,
-                 .__match          = undnat_match.intern(),
-                 .actions          = action,
-                 .stage_hint       = stage_hint(lb.lb._uuid),
-                 .io_port          = None,
-                 .controller_meter = None)
         }
     }
 }
