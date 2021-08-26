@@ -6804,27 +6804,29 @@ Flow(.logical_datapath = r._uuid,
 Flow(.logical_datapath = r._uuid,
      .stage            = s_ROUTER_IN_DNAT(),
      .priority         = priority,
-     .__match          = __match.intern(),
-     .actions          = actions.intern(),
+     .__match          = __match,
+     .actions          = actions,
      .io_port          = None,
      .controller_meter = meter,
      .stage_hint       = 0) :-
     LBVIPWithStatus(lbvip@&LBVIP{.lb = lb}, up_backends),
     var priority = if (lbvip.vip_port != 0) 120 else 110,
     (var actions0, var reject) = build_lb_vip_actions(lbvip, up_backends, s_ROUTER_OUT_SNAT(), ""),
+    var actions1 = actions0.intern(),
     var match0 = "ct.new && " ++
         get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true, true),
+    var match1 = match0.intern(),
     r in &Router(),
     r.l3dgw_ports.len() > 0 or r.is_gateway,
     r.load_balancer.contains(lb._uuid),
     var actions = match ((reject, snat_for_lb(r.options, lb))) {
-        (false, SkipSNAT) -> "flags.skip_snat_for_lb = 1; ",
-        (false, ForceSNAT) -> "flags.force_snat_for_lb = 1; ",
-        _ -> ""
-    } ++ actions0,
+        (false, SkipSNAT) -> i"flags.skip_snat_for_lb = 1; ${actions1}",
+        (false, ForceSNAT) -> i"flags.force_snat_for_lb = 1; ${actions1}",
+        _ -> actions1
+    },
     var __match = match (r.l3dgw_ports.nth(0)) {
-        Some{gw_port} -> "${match0} && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
-        _ -> match0
+        Some{gw_port} -> i"${match1} && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
+        _ -> match1
     },
     var meter = if (reject) {
         r.copp.get(cOPP_REJECT())
