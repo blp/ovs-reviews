@@ -3222,9 +3222,7 @@ Flow(.logical_datapath = sw._uuid,
      .io_port          = None,
      .controller_meter = meter,
      .stage_hint       = 0) :-
-    sw in &Switch(),
     LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
-    sw.load_balancer.contains(lb._uuid),
     var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
     (var actions, var reject) = {
         /* Store the original destination IP to be used when generating
@@ -3246,12 +3244,14 @@ Flow(.logical_datapath = sw._uuid,
 
         build_lb_vip_actions(lbvip, s_SWITCH_OUT_QOS_MARK(), actions0 ++ actions1)
     },
+    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false, false),
+    sw in &Switch(),
+    sw.load_balancer.contains(lb._uuid),
     var meter = if (reject) {
         sw.copp.get(cOPP_REJECT())
     } else {
         None
-    },
-    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false, false).
+    }.
 
 /* Ingress Pre-Hairpin/Nat-Hairpin/Hairpin tabled (Priority 0).
  * Packets that don't need hairpinning should continue processing.
@@ -6844,24 +6844,23 @@ Flow(.logical_datapath = r._uuid,
      .io_port          = None,
      .controller_meter = meter,
      .stage_hint       = 0) :-
+    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
+    var priority = if (lbvip.vip_port != 0) 120 else 110,
+    (var actions0, var reject) = build_lb_vip_actions(lbvip, s_ROUTER_OUT_SNAT(), ""),
+    var match0 = "ct.new && " ++
+        get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true, true),
     r in &Router(),
     r.l3dgw_ports.len() > 0 or r.is_gateway,
-    LBVIPWithStatus[lbvip@&LBVIPWithStatus{.lb = lb}],
     r.load_balancer.contains(lb._uuid),
-    var __match
-        = "ct.new && " ++
-          get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true, true) ++
-          match (r.l3dgw_ports.nth(0)) {
-              Some{gw_port} -> " && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
-              _ -> ""
-          },
-    var priority = if (lbvip.vip_port != 0) 120 else 110,
-    var force_snat = match (snat_for_lb(r.options, lb)) {
-        SkipSNAT -> "flags.skip_snat_for_lb = 1; ",
-        ForceSNAT -> "flags.force_snat_for_lb = 1; ",
+    var actions = match ((reject, snat_for_lb(r.options, lb))) {
+        (false, SkipSNAT) -> "flags.skip_snat_for_lb = 1; ",
+        (false, ForceSNAT) -> "flags.force_snat_for_lb = 1; ",
         _ -> ""
+    } ++ actions0,
+    var __match = match (r.l3dgw_ports.nth(0)) {
+        Some{gw_port} -> "${match0} && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
+        _ -> match0
     },
-    (var actions, var reject) = build_lb_vip_actions(lbvip, s_ROUTER_OUT_SNAT(), force_snat),
     var meter = if (reject) {
         r.copp.get(cOPP_REJECT())
     } else {
