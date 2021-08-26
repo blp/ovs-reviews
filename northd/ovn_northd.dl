@@ -3206,14 +3206,14 @@ function build_lb_vip_actions(lbvip: Intern<LBVIP>,
 Flow(.logical_datapath = sw._uuid,
      .stage            = s_SWITCH_IN_STATEFUL(),
      .priority         = priority,
-     .__match          = __match.intern(),
-     .actions          = actions.intern(),
+     .__match          = __match,
+     .actions          = actions,
      .io_port          = None,
      .controller_meter = meter,
      .stage_hint       = 0) :-
     LBVIPWithStatus(lbvip@&LBVIP{.lb = lb}, up_backends),
     var priority = if (lbvip.vip_port != 0) { 120 } else { 110 },
-    (var actions, var reject) = {
+    (var actions0, var reject) = {
         /* Store the original destination IP to be used when generating
          * hairpin flows.
          */
@@ -3233,7 +3233,8 @@ Flow(.logical_datapath = sw._uuid,
 
         build_lb_vip_actions(lbvip, up_backends, s_SWITCH_OUT_QOS_MARK(), actions0 ++ actions1)
     },
-    var __match = "ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false, false),
+    var actions = actions0.intern(),
+    var __match = ("ct.new && " ++ get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, false, false)).intern(),
     sw in &Switch(),
     sw.load_balancer.contains(lb._uuid),
     var meter = if (reject) {
