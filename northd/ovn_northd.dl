@@ -4601,10 +4601,10 @@ Flow(.logical_datapath = sw._uuid,
      .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
+    var mc_flood_l2 = json_escape(mC_FLOOD_L2().0),
     sp in &SwitchPort(.sw = sw, .peer = Some{rp@&RouterPort{.enabled = true}}),
     &SwitchPortARPForwards(.port = sp, .reachable_ips_v4 = ips_v4),
-    var ipv4 = FlatMap(ips_v4),
-    var mc_flood_l2 = json_escape(mC_FLOOD_L2().0).
+    var ipv4 = FlatMap(ips_v4).
 Flow(.logical_datapath = sw._uuid,
      .stage            = s_SWITCH_IN_L2_LKUP(),
      .priority         = 80,
@@ -4618,35 +4618,35 @@ Flow(.logical_datapath = sw._uuid,
      .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
+    var mc_flood_l2 = json_escape(mC_FLOOD_L2().0),
     sp in &SwitchPort(.sw = sw, .peer = Some{rp@&RouterPort{.enabled = true}}),
     &SwitchPortARPForwards(.port = sp, .reachable_ips_v6 = ips_v6),
-    var ipv6 = FlatMap(ips_v6),
-    var mc_flood_l2 = json_escape(mC_FLOOD_L2().0).
+    var ipv6 = FlatMap(ips_v6).
 
 Flow(.logical_datapath = sw._uuid,
      .stage            = s_SWITCH_IN_L2_LKUP(),
      .priority         = 90,
      .__match          = i"${fLAGBIT_NOT_VXLAN()} && arp.op == 1 && arp.tpa == ${ipv4}",
-     .actions          = i"outport = ${flood}; output;",
+     .actions          = actions,
      .stage_hint       = 0,
      .io_port          = None,
      .controller_meter = None) :-
+    var actions = i"outport = ${json_escape(mC_FLOOD().0)}; output;",
     sp in &SwitchPort(.sw = sw, .peer = Some{rp@&RouterPort{.enabled = true}}),
     &SwitchPortARPForwards(.port = sp, .unreachable_ips_v4 = ips_v4),
-    var ipv4 = FlatMap(ips_v4),
-    var flood = json_escape(mC_FLOOD().0).
+    var ipv4 = FlatMap(ips_v4).
 Flow(.logical_datapath = sw._uuid,
      .stage            = s_SWITCH_IN_L2_LKUP(),
      .priority         = 90,
      .__match          = i"${fLAGBIT_NOT_VXLAN()} && nd_ns && nd.target == ${ipv6}",
-     .actions          = i"outport = ${flood}; output;",
+     .actions          = actions,
      .stage_hint       = stage_hint(sp.lsp._uuid),
      .io_port          = None,
      .controller_meter = None) :-
+    var actions = i"outport = ${json_escape(mC_FLOOD().0)}; output;",
     sp in &SwitchPort(.sw = sw, .peer = Some{rp@&RouterPort{.enabled = true}}),
     &SwitchPortARPForwards(.port = sp, .unreachable_ips_v6 = ips_v6),
-    var ipv6 = FlatMap(ips_v6),
-    var flood = json_escape(mC_FLOOD().0).
+    var ipv6 = FlatMap(ips_v6).
 
 for (SwitchPortNewDynamicAddress(.port = &SwitchPort{.lsp = lsp, .json_name = json_name, .sw = sw},
                                  .address = Some{addrs})
