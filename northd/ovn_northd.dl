@@ -6649,6 +6649,38 @@ function nats_contain_vip(nats: Vec<NAT>, vip: v46_ip): bool {
     return false
 }
 
+/* If there are any load balancing rules, we should send
+ * the packet to conntrack for defragmentation and
+ * tracking.  This helps with two things.
+ *
+ * 1. With tracking, we can send only new connections to
+ *    pick a DNAT ip address from a group.
+ * 2. If there are L4 ports in load balancing rules, we
+ *    need the defragmentation to match on L4 ports. */
+Flow(.logical_datapath = r._uuid,
+     .stage            = s_ROUTER_IN_DEFRAG(),
+     .priority         = prio,
+     .__match          = __match,
+     .actions          = __actions,
+     .stage_hint       = 0,
+     .io_port          = None,
+     .controller_meter = None) :-
+    LBVIP[lbvip@&LBVIP{.vip_key = lb_key, .lb = lb}],
+    Some{(var ip, var port)} = ip_address_and_port_from_lb_key(lb_key.ival()),
+    var prio = if (port != 0) { 110 } else { 100 },
+    var proto_match = if (port != 0) {
+        var proto = match (lb.protocol) {
+            Some{proto} -> proto,
+            _ -> i"tcp"
+        };
+        " && ${proto}"
+    } else { "" },
+    var __match = ("ip && ${ip.ipX()}.dst == ${ip}" ++ proto_match).intern(),
+    var __actions = i"${ip.xxreg()}${rEG_NEXT_HOP()} = ${ip}; ct_dnat;",
+    r in &Router(),
+    not r.l3dgw_ports.is_empty() or r.is_gateway,
+    r.load_balancer.contains(lb._uuid).
+
 /* Load balancing and packet defrag are only valid on
  * Gateway routers or router with gateway port. */
 for (RouterLBVIP(
@@ -6685,37 +6717,6 @@ for (RouterLBVIP(
         Some{proto} -> proto,
         _ -> i"tcp"
     } in {
-        /* If there are any load balancing rules, we should send
-         * the packet to conntrack for defragmentation and
-         * tracking.  This helps with two things.
-         *
-         * 1. With tracking, we can send only new connections to
-         *    pick a DNAT ip address from a group.
-         * 2. If there are L4 ports in load balancing rules, we
-         *    need the defragmentation to match on L4 ports. */
-        var match1 = "ip && ${ipX}.dst == ${ip_address}" in
-        (var prio, var match2) =
-            if (port != 0) {
-                (110, " && ${proto}")
-            } else {
-                (100, "")
-            } in
-        var __match = match1 ++ match2 in
-        var xx = ip_address.xxreg() in
-        var __actions = i"${xx}${rEG_NEXT_HOP()} = ${ip_address}; ct_dnat;" in
-        /* One of these flows must be created for each unique LB VIP address.
-         * We create one for each VIP:port pair; flows with the same IP and
-         * different port numbers will produce identical flows that will
-         * get merged by DDlog. */
-        Flow(.logical_datapath = lr_uuid,
-             .stage            = s_ROUTER_IN_DEFRAG(),
-             .priority         = prio,
-             .__match          = __match.intern(),
-             .actions          = __actions,
-             .stage_hint       = 0,
-             .io_port          = None,
-             .controller_meter = None);
-
         /* Higher priority rules are added for load-balancing in DNAT
          * table.  For every match (on a VIP[:port]), we add two flows
          * via add_router_lb_flow().  One flow is for specific matching
