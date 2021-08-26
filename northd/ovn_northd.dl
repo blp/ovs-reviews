@@ -6722,6 +6722,39 @@ Flow(.logical_datapath = r._uuid,
         _ -> i"next;"
     }.
 
+/* The load balancer vip is also present in the NAT entries.
+ * So add a high priority lflow to advance the the packet
+ * destined to the vip (and the vip port if defined)
+ * in the S_ROUTER_IN_UNSNAT stage.
+ * There seems to be an issue with ovs-vswitchd. When the new
+ * connection packet destined for the lb vip is received,
+ * it is dnat'ed in the S_ROUTER_IN_DNAT stage in the dnat
+ * conntrack zone. For the next packet, if it goes through
+ * unsnat stage, the conntrack flags are not set properly, and
+ * it doesn't hit the established state flows in
+ * S_ROUTER_IN_DNAT stage. */
+Flow(.logical_datapath = r._uuid,
+     .stage            = s_ROUTER_IN_UNSNAT(),
+     .priority         = 120,
+     .__match          = __match,
+     .actions          = i"next;",
+     .stage_hint       = stage_hint(lb._uuid),
+     .io_port          = None,
+     .controller_meter = None) :-
+    LBVIP[lbvip@&LBVIP{.vip_key = lb_key, .lb = lb}],
+    Some{(var ip, var port)} = ip_address_and_port_from_lb_key(lb_key.ival()),
+    var proto = match (lb.protocol) {
+        Some{proto} -> proto,
+        _ -> i"tcp"
+    },
+    var port_match = if (port != 0) { " && ${proto}.dst == ${port}" } else { "" },
+    var __match = ("${ip.ipX()} && ${ip.ipX()}.dst == ${ip} && ${proto}" ++
+                   port_match).intern(),
+    r in &Router(),
+    not r.l3dgw_ports.is_empty() or r.is_gateway,
+    r.load_balancer.contains(lb._uuid),
+    nats_contain_vip(r.nats, ip).
+
 /* Load balancing and packet defrag are only valid on
  * Gateway routers or router with gateway port. */
 for (RouterLBVIP(
@@ -6778,31 +6811,6 @@ for (RouterLBVIP(
             } in
         var snat_for_lb = snat_for_lb(r.options, lb.lb) in
         {
-            if (nats_contain_vip(nats, ip_address)) {
-                /* The load balancer vip is also present in the NAT entries.
-                 * So add a high priority lflow to advance the the packet
-                 * destined to the vip (and the vip port if defined)
-                 * in the S_ROUTER_IN_UNSNAT stage.
-                 * There seems to be an issue with ovs-vswitchd. When the new
-                 * connection packet destined for the lb vip is received,
-                 * it is dnat'ed in the S_ROUTER_IN_DNAT stage in the dnat
-                 * conntrack zone. For the next packet, if it goes through
-                 * unsnat stage, the conntrack flags are not set properly, and
-                 * it doesn't hit the established state flows in
-                 * S_ROUTER_IN_DNAT stage. */
-                var match3 = "${ipX} && ${ipX}.dst == ${ip_address} && ${proto}" ++
-                             if (port != 0) { " && ${proto}.dst == ${port}" }
-                             else { "" } in
-                Flow(.logical_datapath = lr_uuid,
-                     .stage            = s_ROUTER_IN_UNSNAT(),
-                     .priority         = 120,
-                     .__match          = match3.intern(),
-                     .actions          = i"next;",
-                     .stage_hint       = stage_hint(lb.lb._uuid),
-                     .io_port          = None,
-                     .controller_meter = None)
-            };
-
             Some{var gwport} = l3dgw_ports.nth(0) in
             /* Add logical flows to UNDNAT the load balanced reverse traffic in
              * the router egress pipleine stage - S_ROUTER_OUT_UNDNAT if the logical
