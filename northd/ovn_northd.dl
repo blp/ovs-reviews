@@ -6677,7 +6677,7 @@ Flow(.logical_datapath = r._uuid,
 Flow(.logical_datapath = r._uuid,
      .stage            = s_ROUTER_IN_DNAT(),
      .priority         = prio,
-     .__match          = __match.intern(),
+     .__match          = __match,
      .actions          = actions,
      .stage_hint       = 0,
      .io_port          = None,
@@ -6692,16 +6692,16 @@ Flow(.logical_datapath = r._uuid,
      * via add_router_lb_flow().  One flow is for specific matching
      * on ct.new with an action of "ct_lb($targets);".  The other
      * flow is for ct.est with an action of "ct_dnat;". */
-    var match1 = "${ip.ipX()} && ${ip.xxreg()}${rEG_NEXT_HOP()} == ${ip}",
     var prio = if (port != 0) { 120 } else { 110 },
-    var match0 = "ct.est && " ++ match1 ++ " && ct_label.natted == 1" ++
+    var match0 = "ct.est && ${ip.ipX()} && ${ip.xxreg()}${rEG_NEXT_HOP()} == ${ip} && ct_label.natted == 1" ++
         if (port != 0) { " && ${proto}" } else { "" },
+    var match1 = match0.intern(),
     r in &Router(),
     not r.l3dgw_ports.is_empty() or r.is_gateway,
     r.load_balancer.contains(lb._uuid),
-    var __match = match0 ++ match ((r.l3dgw_ports.nth(0), lbvip.backend_ips != i"" or lb.options.get_bool_def(i"reject", false))) {
-            (Some {var gw_port}, true) -> " && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
-            _ -> ""
+    var __match = match ((r.l3dgw_ports.nth(0), lbvip.backend_ips != i"" or lb.options.get_bool_def(i"reject", false))) {
+            (Some {var gw_port}, true) -> i"${match1} && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
+            _ -> match1
         },
     var actions = match (snat_for_lb(r.options, lb)) {
         SkipSNAT -> i"flags.skip_snat_for_lb = 1; next;",
