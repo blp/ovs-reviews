@@ -5679,7 +5679,7 @@ var residence_check = match (is_redirect) {
     not all_ipv4s.is_empty() in
     LogicalRouterArpFlow(.lr = router,
                          .lrp = Some{lrp},
-                         .ip = i"{ ${all_ipv4s.map(ival).to_vec().join(\", \")} }",
+                         .ip = i"{ ${all_ipv4s.to_vec().join(\", \")} }",
                          .mac = rEG_INPORT_ETH_ADDR(),
                          .extra_match = residence_check,
                          .drop = false,
