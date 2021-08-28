@@ -56,10 +56,10 @@ LogicalRouterPort(lrp_uuid, lr_uuid) :-
     lrs.size() == 1,
     Some{var lr_uuid} = lrs.nth(0).
 
-relation RouterLB(router: Intern<Router>, lb_uuid: uuid)
-RouterLB(router, lb_uuid) :-
-    router in &Router(),
-    var lb_uuid = FlatMap(router.load_balancer).
+relation RouterLB(router_uuid: uuid, lb_uuid: uuid)
+RouterLB(router_uuid, lb_uuid) :-
+    nb::Logical_Router(._uuid = router_uuid, .load_balancer = lb_uuids),
+    var lb_uuid = FlatMap(lb_uuids).
 
 /*
  * Peer routers.

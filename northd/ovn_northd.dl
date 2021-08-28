@@ -5643,7 +5643,7 @@ for (RouterPortNetworksIPv4Addr(.port = &RouterPort{.lrp = lrp,
     }
 }
 
-LogicalRouterNdFlow(.lr = r,
+LogicalRouterNdFlow(.lr = router,
                     .lrp = Some{lrp},
                     .action = i"nd_na",
                     .ip = ip,
@@ -5654,8 +5654,8 @@ LogicalRouterNdFlow(.lr = r,
                     .priority = 90,
                     .stage_hint = 0) :-
     LBVIP[lbvip@&LBVIP{.vip_addr = IPv6{ip}, .lb = lb}],
-    RouterLB(r, lb._uuid),
-    &RouterPort(.router = r, .lrp = lrp, .is_redirect = is_redirect),
+    RouterLB(router_uuid, lb._uuid),
+    &RouterPort(.router = router@&Router{._uuid = router_uuid}, .lrp = lrp, .is_redirect = is_redirect),
     var residence_check = match (is_redirect) {
         true -> Some{i"is_chassis_resident(${json_escape(chassis_redirect_name(lrp.name))})"},
         false -> None
@@ -6685,7 +6685,8 @@ Flow(.logical_datapath = r._uuid,
             "ct_dnat;"
         },
     var __actions = (actions1 ++ actions2).intern(),
-    RouterLB(r, lb._uuid),
+    RouterLB(router_uuid, lb._uuid),
+    r in &Router(._uuid = router_uuid),
     not r.l3dgw_ports.is_empty() or r.is_gateway.
 
 /* Higher priority rules are added for load-balancing in DNAT
@@ -6714,7 +6715,8 @@ Flow(.logical_datapath = r._uuid,
     },
     var prio = if (port != 0) { 120 } else { 110 },
     var match0 = ("ct.est && " ++ match1 ++ match2 ++ " && ct_label.natted == 1").intern(),
-    RouterLB(r, lb._uuid),
+    RouterLB(router_uuid, lb._uuid),
+    r in &Router(._uuid = router_uuid),
     not r.l3dgw_ports.is_empty() or r.is_gateway,
     var __match = match ((r.l3dgw_ports.nth(0), lbvip.backend_ips != i"" or lb.options.get_bool_def(i"reject", false))) {
             (Some {var gw_port}, true) -> i"${match0} && is_chassis_resident(${json_escape(chassis_redirect_name(gw_port.name))})",
@@ -6753,7 +6755,8 @@ Flow(.logical_datapath = r._uuid,
     var port_match = if (port != 0) { " && ${proto}.dst == ${port}" } else { "" },
     var __match = ("${ip.ipX()} && ${ip.ipX()}.dst == ${ip} && ${proto}" ++
                    port_match).intern(),
-    RouterLB(r, lb._uuid),
+    RouterLB(router_uuid, lb._uuid),
+    r in &Router(._uuid = router_uuid),
     not r.l3dgw_ports.is_empty() or r.is_gateway,
     nats_contain_vip(r.nats, ip).
 
@@ -6783,7 +6786,8 @@ Flow(.logical_datapath = r._uuid,
         "(${b.ip.ipX()}.src == ${b.ip}" ++ port_match ++ ")"
     }).join(" || "),
     conds != "",
-    RouterLB(r, lb._uuid),
+    RouterLB(router_uuid, lb._uuid),
+    r in &Router(._uuid = router_uuid),
     Some{var gwport} = r.l3dgw_ports.nth(0),
     var __match =
         i"${ip.ipX()} && (${conds}) && "
@@ -6807,7 +6811,8 @@ Flow(.logical_datapath = r._uuid,
     not lb.options.get_bool_def(i"reject", false),
     LoadBalancerEmptyEvents(lb._uuid),
     Some {(var __match, var __action)} = build_empty_lb_event_flow(lb_key, lb),
-    RouterLB(r, lb._uuid),
+    RouterLB(router_uuid, lb._uuid),
+    r in &Router(._uuid = router_uuid),
     not r.l3dgw_ports.is_empty() or r.is_gateway.
 
 /* Higher priority rules are added for load-balancing in DNAT
@@ -6830,7 +6835,8 @@ Flow(.logical_datapath = r._uuid,
     var match0 = "ct.new && " ++
         get_match_for_lb_key(lbvip.vip_addr, lbvip.vip_port, lb.protocol, true, true, true),
     var match1 = match0.intern(),
-    RouterLB(r, lb._uuid),
+    RouterLB(router_uuid, lb._uuid),
+    r in &Router(._uuid = router_uuid),
     r.l3dgw_ports.len() > 0 or r.is_gateway,
     var actions = match ((reject, snat_for_lb(r.options, lb))) {
         (false, SkipSNAT) -> i"flags.skip_snat_for_lb = 1; ${actions1}",
