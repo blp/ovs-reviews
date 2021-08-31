@@ -1706,16 +1706,6 @@ UseLogicalDatapathGroups[false] :-
     Unit(),
     not nb in nb::NB_Global().
 
-relation AggregatedFlow (
-    logical_datapaths: Set<uuid>,
-    stage:             Intern<Stage>,
-    priority:          integer,
-    __match:           istring,
-    actions:           istring,
-    io_port:           Option<istring>,
-    controller_meter:  Option<istring>,
-    stage_hint:        bit<32>
-)
 function make_flow_tags(io_port: Option<istring>): Map<istring,istring> {
     match (io_port) {
         None -> map_empty(),
@@ -1730,29 +1720,20 @@ function make_flow_external_ids(stage_hint: bit<32>, stage: Intern<Stage>): Map<
          i"stage-hint" -> i"${hex(stage_hint)}"]
     }
 }
-AggregatedFlow(.logical_datapaths = g.to_set(),
-               .stage = stage,
-               .priority = priority,
-               .__match = __match,
-               .actions = actions,
-               .io_port = io_port,
-               .controller_meter = controller_meter,
-               .stage_hint = stage_hint) :-
-    UseLogicalDatapathGroups[true],
-    Flow(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, stage_hint),
-    var g = logical_datapath.group_by((stage, priority, __match, actions, io_port, controller_meter, stage_hint)).
 
-
-AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
-               .stage = stage,
-               .priority = priority,
-               .__match = __match,
-               .actions = actions,
-               .io_port = io_port,
-               .controller_meter = controller_meter,
-               .stage_hint = stage_hint) :-
-    UseLogicalDatapathGroups[false],
-    Flow(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, stage_hint).
+sb::Out_Logical_Flow(
+    ._uuid = hash128((dp, stage, priority, __match, actions)),
+    .logical_datapath = Some{dp},
+    .logical_dp_group = None,
+    .pipeline         = stage.pipeline.to_istring(),
+    .table_id         = stage.table_id as integer,
+    .priority         = priority,
+    .controller_meter = None,
+    .__match          = __match,
+    .actions          = actions,
+    .tags             = map_empty(),
+    .external_ids     = map_empty()) :-
+    Flow(dp, stage, priority, __match, actions, _, _, _).
 
 
 function to_istring(pipeline: Pipeline): istring {
@@ -1762,41 +1743,6 @@ function to_istring(pipeline: Pipeline): istring {
         i"egress"
     }
 }
-
-for (f in AggregatedFlow()) {
-    if (f.logical_datapaths.size() == 1) {
-        Some{var dp} = f.logical_datapaths.nth(0) in
-        sb::Out_Logical_Flow(
-            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions, f.controller_meter, f.io_port, f.stage_hint)),
-            .logical_datapath = Some{dp},
-            .logical_dp_group = None,
-            .pipeline         = f.stage.pipeline.to_istring(),
-            .table_id         = f.stage.table_id as integer,
-            .priority         = f.priority,
-            .controller_meter = f.controller_meter,
-            .__match          = f.__match,
-            .actions          = f.actions,
-            .tags             = make_flow_tags(f.io_port),
-            .external_ids     = make_flow_external_ids(f.stage_hint, f.stage))
-    } else {
-        var group_uuid = hash128(f.logical_datapaths) in {
-            sb::Out_Logical_Flow(
-                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions, f.controller_meter, f.io_port, f.stage_hint)),
-                .logical_datapath = None,
-                .logical_dp_group = Some{group_uuid},
-                .pipeline         = f.stage.pipeline.to_istring(),
-                .table_id         = f.stage.table_id as integer,
-                .priority         = f.priority,
-                .controller_meter = f.controller_meter,
-                .__match          = f.__match,
-                .actions          = f.actions,
-                .tags             = make_flow_tags(f.io_port),
-                .external_ids     = make_flow_external_ids(f.stage_hint, f.stage));
-            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths)
-        }
-    }
-}
-
 /* Logical flows for forwarding groups. */
 Flow(.logical_datapath = sw._uuid,
      .stage            = s_SWITCH_IN_ARP_ND_RSP(),
