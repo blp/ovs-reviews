@@ -1708,10 +1708,8 @@ UseLogicalDatapathGroups[false] :-
 
 relation AggregatedFlow (
     logical_datapaths: Set<uuid>,
-    stage:             Intern<Stage>,
-    priority:          integer,
-    __match:           istring,
-    actions:           istring,
+    value: (Intern<Stage>, integer, istring, istring),
+    value_hash: bit<128>
 )
 function make_flow_tags(io_port: Option<istring>): Map<istring,istring> {
     match (io_port) {
@@ -1728,12 +1726,12 @@ function make_flow_external_ids(stage_hint: bit<32>, stage: Intern<Stage>): Map<
     }
 }
 AggregatedFlow(.logical_datapaths = g.to_set(),
-               .stage = stage,
-               .priority = priority,
-               .__match = __match,
-               .actions = actions) :-
+               .value = value,
+               .value_hash = value_hash) :-
     Flow(logical_datapath, stage, priority, __match, actions, _, _, _),
-    var g = logical_datapath.group_by((stage, priority, __match, actions)).
+    var value = (stage, priority, __match, actions),
+    var value_hash = hash128(value),
+    var g = logical_datapath.group_by((value_hash, value)).
 
 function to_istring(pipeline: Pipeline): istring {
     if (pipeline == Ingress) {
@@ -1747,29 +1745,29 @@ for (f in AggregatedFlow()) {
     if (f.logical_datapaths.size() == 1) {
         Some{var dp} = f.logical_datapaths.nth(0) in
         sb::Out_Logical_Flow(
-            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions)),
+            ._uuid = hash128((dp, f.value_hash)),
             .logical_datapath = Some{dp},
             .logical_dp_group = None,
-            .pipeline         = f.stage.pipeline.to_istring(),
-            .table_id         = f.stage.table_id as integer,
-            .priority         = f.priority,
+            .pipeline         = f.value.0.pipeline.to_istring(),
+            .table_id         = f.value.0.table_id as integer,
+            .priority         = f.value.1,
             .controller_meter = None,
-            .__match          = f.__match,
-            .actions          = f.actions,
+            .__match          = f.value.2,
+            .actions          = f.value.3,
             .tags             = map_empty(),
             .external_ids     = map_empty())
     } else {
         var group_uuid = hash128(f.logical_datapaths) in {
             sb::Out_Logical_Flow(
-                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions)),
+                ._uuid = hash128((group_uuid, f.value_hash)),
                 .logical_datapath = None,
                 .logical_dp_group = Some{group_uuid},
-                .pipeline         = f.stage.pipeline.to_istring(),
-                .table_id         = f.stage.table_id as integer,
-                .priority         = f.priority,
+                .pipeline         = f.value.0.pipeline.to_istring(),
+                .table_id         = f.value.0.table_id as integer,
+                .priority         = f.value.1,
                 .controller_meter = None,
-                .__match          = f.__match,
-                .actions          = f.actions,
+                .__match          = f.value.2,
+                .actions          = f.value.3,
                 .tags             = map_empty(),
                 .external_ids     = map_empty());
             sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths)
