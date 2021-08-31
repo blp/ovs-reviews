@@ -1738,11 +1738,11 @@ AggregatedFlow(.logical_datapaths = g.to_set(),
                .io_port = io_port,
                .controller_meter = controller_meter,
                .stage_hint = stage_hint) :-
-    //UseLogicalDatapathGroups[true],
+    UseLogicalDatapathGroups[true],
     Flow(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, stage_hint),
     var g = logical_datapath.group_by((stage, priority, __match, actions, io_port, controller_meter, stage_hint)).
 
-/*
+
 AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
                .stage = stage,
                .priority = priority,
@@ -1753,7 +1753,7 @@ AggregatedFlow(.logical_datapaths = set_singleton(logical_datapath),
                .stage_hint = stage_hint) :-
     UseLogicalDatapathGroups[false],
     Flow(logical_datapath, stage, priority, __match, actions, io_port, controller_meter, stage_hint).
-*/
+
 
 function to_istring(pipeline: Pipeline): istring {
     if (pipeline == Ingress) {
