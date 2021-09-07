@@ -1692,6 +1692,8 @@ relation Flow(
     stage_hint:       bit<32>
 )
 
+relation Flow2[Flow]
+
 function stage_hint(_uuid: uuid): bit<32> {
     _uuid[127:96]
 }
@@ -1713,6 +1715,8 @@ relation AggregatedFlow (
     __match:           istring,
     actions:           istring,
 )
+
+relation AggregatedFlow2[AggregatedFlow]
 function make_flow_tags(io_port: Option<istring>): Map<istring,istring> {
     match (io_port) {
         None -> map_empty(),
@@ -1735,6 +1739,13 @@ AggregatedFlow(.logical_datapaths = g.to_set(),
     Flow(logical_datapath, stage, priority, __match, actions, _, _, _),
     var g = logical_datapath.group_by((stage, priority, __match, actions)).
 
+AggregatedFlow2[AggregatedFlow{.logical_datapaths = g.to_set(),
+                               .stage = stage,
+                               .priority = priority,
+                               .__match = __match,
+                               .actions = actions}] :-
+    Flow2[Flow{logical_datapath, stage, priority, __match, actions, _, _, _}],
+    var g = logical_datapath.group_by((stage, priority, __match, actions)).
 function to_istring(pipeline: Pipeline): istring {
     if (pipeline == Ingress) {
         i"ingress"
@@ -1744,6 +1755,40 @@ function to_istring(pipeline: Pipeline): istring {
 }
 
 for (f in AggregatedFlow()) {
+    if (f.logical_datapaths.size() == 1) {
+        Some{var dp} = f.logical_datapaths.nth(0) in
+        sb::Out_Logical_Flow(
+            ._uuid = hash128((dp, f.stage, f.priority, f.__match, f.actions)),
+            .logical_datapath = Some{dp},
+            .logical_dp_group = None,
+            .pipeline         = f.stage.pipeline.to_istring(),
+            .table_id         = f.stage.table_id as integer,
+            .priority         = f.priority,
+            .controller_meter = None,
+            .__match          = f.__match,
+            .actions          = f.actions,
+            .tags             = map_empty(),
+            .external_ids     = map_empty())
+    } else {
+        var group_uuid = hash128(f.logical_datapaths) in {
+            sb::Out_Logical_Flow(
+                ._uuid = hash128((group_uuid, f.stage, f.priority, f.__match, f.actions)),
+                .logical_datapath = None,
+                .logical_dp_group = Some{group_uuid},
+                .pipeline         = f.stage.pipeline.to_istring(),
+                .table_id         = f.stage.table_id as integer,
+                .priority         = f.priority,
+                .controller_meter = None,
+                .__match          = f.__match,
+                .actions          = f.actions,
+                .tags             = map_empty(),
+                .external_ids     = map_empty());
+            sb::Out_Logical_DP_Group(._uuid = group_uuid, .datapaths = f.logical_datapaths)
+        }
+    }
+}
+
+for (AggregatedFlow2[f]) {
     if (f.logical_datapaths.size() == 1) {
         Some{var dp} = f.logical_datapaths.nth(0) in
         sb::Out_Logical_Flow(
@@ -5978,7 +6023,7 @@ for (r in &Router(._uuid = lr_uuid)) {
     Flow[default_allow_flow(lr_uuid, s_ROUTER_IN_DEFRAG())];
     Flow[default_allow_flow(lr_uuid, s_ROUTER_IN_UNSNAT())];
     Flow[default_allow_flow(lr_uuid, s_ROUTER_OUT_SNAT())];
-    Flow[default_allow_flow(lr_uuid, s_ROUTER_IN_DNAT())];
+    Flow2[default_allow_flow(lr_uuid, s_ROUTER_IN_DNAT())];
     Flow[default_allow_flow(lr_uuid, s_ROUTER_OUT_UNDNAT())];
     Flow[default_allow_flow(lr_uuid, s_ROUTER_OUT_POST_UNDNAT())];
     Flow[default_allow_flow(lr_uuid, s_ROUTER_OUT_EGR_LOOP())];
@@ -6328,14 +6373,14 @@ for (r in &Router(._uuid = lr_uuid,
                         "flags.loopback = 1; "
                         "ct_dnat(${ip_and_ports});"
                     } in
-                    Flow(.logical_datapath = lr_uuid,
+                    Flow2[Flow{.logical_datapath = lr_uuid,
                          .stage            = s_ROUTER_IN_DNAT(),
                          .priority         = 100,
                          .__match          = (__match ++ ext_ip_match).intern(),
                          .actions          = (flag_action ++ nat_actions).intern(),
                          .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
-                         .controller_meter = None)
+                         .controller_meter = None}]
                 };
 
                 Some {var gwport} = l3dgw_ports.nth(0) in
@@ -6359,14 +6404,14 @@ for (r in &Router(._uuid = lr_uuid,
                     } else {
                         i"ct_dnat(${ip_and_ports});"
                     } in
-                    Flow(.logical_datapath = lr_uuid,
+                    Flow2[Flow{.logical_datapath = lr_uuid,
                          .stage            = s_ROUTER_IN_DNAT(),
                          .priority         = 100,
                          .__match          = (__match ++ ext_ip_match).intern(),
                          .actions          = actions,
                          .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
-                         .controller_meter = None)
+                         .controller_meter = None}]
                 }
             };
 
@@ -6468,14 +6513,14 @@ for (r in &Router(._uuid = lr_uuid,
                         i"ct_snat(${ip_and_ports});"
                     } in
                     Some{var plen} = mask.cidr_bits() in
-                    Flow(.logical_datapath = lr_uuid,
+                    Flow2[Flow{.logical_datapath = lr_uuid,
                          .stage            = s_ROUTER_OUT_SNAT(),
                          .priority         = plen as bit<64> + 1,
                          .__match          = (__match ++ ext_ip_match).intern(),
                          .actions          = actions,
                          .stage_hint       = stage_hint(nat.nat._uuid),
                          .io_port          = None,
-                         .controller_meter = None)
+                         .controller_meter = None}]
                 };
 
                 Some {var gwport} = l3dgw_ports.nth(0) in
@@ -6491,7 +6536,7 @@ for (r in &Router(._uuid = lr_uuid,
                     r, nat, __match, ipX, false, mask) in
                 {
                     /* Distributed router. */
-                    Some{var f} = ext_flow in Flow[f];
+                    Some{var f} = ext_flow in Flow2[f];
 
                     var actions =
                         match (mac) {
@@ -6696,14 +6741,14 @@ Flow(.logical_datapath = r._uuid,
  * via add_router_lb_flow().  One flow is for specific matching
  * on ct.new with an action of "ct_lb($targets);".  The other
  * flow is for ct.est with an action of "ct_dnat;". */
-Flow(.logical_datapath = r._uuid,
+Flow2[Flow{.logical_datapath = r._uuid,
      .stage            = s_ROUTER_IN_DNAT(),
      .priority         = prio,
      .__match          = __match,
      .actions          = actions,
      .stage_hint       = 0,
      .io_port          = None,
-     .controller_meter = None) :-
+     .controller_meter = None}] :-
     lbvip in &LBVIP(.vip_addr = ip, .vip_port = port, .lb = lb),
     var proto = match (lb.protocol) {
         Some{proto} -> proto,
@@ -6796,14 +6841,14 @@ Flow(.logical_datapath = r._uuid,
             _ -> i"ct_dnat;"
         }.
 
-Flow(.logical_datapath = r._uuid,
+Flow2[Flow{.logical_datapath = r._uuid,
      .stage            = s_ROUTER_IN_DNAT(),
      .priority         = 130,
      .__match          = __match,
      .actions          = __action,
      .io_port          = None,
      .controller_meter = r.copp.get(cOPP_EVENT_ELB()),
-     .stage_hint       = stage_hint(lb._uuid)) :-
+     .stage_hint       = stage_hint(lb._uuid)}] :-
     &LBVIP(.vip_key = lb_key, .lb = lb, .backend_ips = i""),
     not lb.options.get_bool_def(i"reject", false),
     LoadBalancerEmptyEvents(lb._uuid),
@@ -6815,14 +6860,14 @@ Flow(.logical_datapath = r._uuid,
  * via add_router_lb_flow().  One flow is for specific matching
  * on ct.new with an action of "ct_lb($targets);".  The other
  * flow is for ct.est with an action of "ct_dnat;". */
-Flow(.logical_datapath = r._uuid,
+Flow2[Flow{.logical_datapath = r._uuid,
      .stage            = s_ROUTER_IN_DNAT(),
      .priority         = priority,
      .__match          = __match,
      .actions          = actions,
      .io_port          = None,
      .controller_meter = meter,
-     .stage_hint       = 0) :-
+     .stage_hint       = 0}] :-
     LBVIPWithStatus(lbvip@&LBVIP{.lb = lb}, up_backends),
     var priority = if (lbvip.vip_port != 0) 120 else 110,
     (var actions0, var reject) = build_lb_vip_actions(lbvip, up_backends, s_ROUTER_OUT_SNAT(), ""),

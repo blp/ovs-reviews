@@ -22,7 +22,7 @@
 -o RBAC_Role
 -o SB_Global
 -o Service_Monitor
---output-only Logical_Flow
+-o Logical_Flow
 --ro IP_Multicast.seq_no
 --ro Port_Binding.chassis
 --ro Port_Binding.encap
